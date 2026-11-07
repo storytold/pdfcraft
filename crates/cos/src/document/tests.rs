@@ -749,6 +749,9 @@ fn an_unreadable_object_is_searched_for_once() {
     let mut edited = doc.clone();
     assert_eq!(edited.try_get(3), first);
     assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "searches for an object that isn't there");
+    let report = doc.unreadable_objects();
+    assert_eq!(report.len(), 1, "cached failures must stay listed exactly once: {report:?}");
+    assert_eq!(edited.unreadable_objects(), report, "clones retain the cached failure diagnostic");
     edited.set(ObjRef::new(3, 0), Object::Int(7));
     assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Int(7)));
     assert_eq!(doc.try_get(3), first, "the edit is the clone's alone");
@@ -2013,6 +2016,105 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
         let _ = tx.send(());
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
+}
+
+/// A file whose object 3 (its `/Info`) can't be parsed: the rest reads.
+fn with_unreadable_info() -> Vec<u8> {
+    build(
+        &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) /Author ) >>"],
+        "/Root 1 0 R /Info 3 0 R",
+    )
+}
+
+/// An object that can't be parsed reads as null and is listed once, by number and generation,
+/// with why. Clones and scans share the list, an edit takes the object off it (in that document
+/// only), and a sound file lists nothing.
+#[test]
+fn unreadable_objects_are_listed_with_the_reason() {
+    let doc = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    assert!(doc.unreadable_objects().is_empty(), "nothing has read object 3 yet");
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert!(doc.try_get(3).is_err());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "read twice, listed once: {lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+    let scanned = doc.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(doc.unreadable_objects(), lines, "the scan found the same object");
+    let unread = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    let scanned = unread.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(unread.unreadable_objects(), lines, "a clone's scan reaches the original");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(3, 0), Object::Dict(Dict::new()));
+    assert!(edited.unreadable_objects().is_empty(), "the edit replaced it");
+    assert_eq!(doc.unreadable_objects(), lines);
+    let sound =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) >>"], "/Root 1 0 R /Info 3 0 R");
+    let sound = Document::open(Arc::new(sound)).unwrap();
+    assert_eq!(sound.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 0);
+    assert!(sound.unreadable_objects().is_empty());
+}
+
+/// A file rebuilt from its object headers still lists an object the scan could not read.
+#[test]
+fn a_rebuilt_file_lists_the_objects_its_scan_could_not_read() {
+    let text = "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n3 0 obj\n<< /A ) >>\nendobj\n%%EOF\n";
+    let doc = Document::open(Arc::new(text.as_bytes().to_vec())).unwrap();
+    assert!(doc.repair_log().iter().any(|l| l.starts_with("rebuilt cross-reference index")), "{:?}", doc.repair_log());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+}
+
+/// The list keeps at most 100 objects and then says there were more; an object whose
+/// cross-reference offset holds no object is listed with that as its reason.
+#[test]
+fn the_unreadable_object_list_is_bounded() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 120));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    assert_eq!(doc.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 120);
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 101, "{:?}", lines.last());
+    assert!(lines[0].starts_with("object 3 0 could not be read"), "{}", lines[0]);
+    assert_eq!(lines[100], "more objects could not be read; only the first 100 are listed");
+
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let text = String::from_utf8_lossy(&base).into_owned();
+    let gone = text.replacen("3 0 obj\n(three)", "9 0 obj\n(three)", 1);
+    let doc = Document::open(Arc::new(gone.into_bytes())).unwrap();
+    assert!(doc.try_get(3).is_err());
+    assert_eq!(
+        doc.unreadable_objects(),
+        ["object 3 0 could not be read: no readable copy was found at its cross-reference offset or elsewhere in the file"]
+    );
+}
+
+/// The unreadable list is shared by clones, and each hides what it has edited. A clone that edited
+/// every listed object still lists its own failures: hidden entries don't use up its allowance.
+#[test]
+fn objects_a_clone_edited_do_not_use_up_its_unreadable_allowance() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 110));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    for num in 3..103 {
+        assert!(doc.try_get(num).is_err());
+    }
+    assert_eq!(doc.unreadable_objects().len(), 100);
+    let mut edited = doc.clone();
+    for num in 3..103 {
+        edited.set(ObjRef::new(num, 0), Object::Null);
+    }
+    for num in 103..113 {
+        assert!(edited.try_get(num).is_err());
+    }
+    let lines = edited.unreadable_objects();
+    assert_eq!(lines.len(), 10, "{lines:?}");
+    assert!(lines[0].starts_with("object 103 0 could not be read"), "{}", lines[0]);
+    let original = doc.unreadable_objects();
+    assert_eq!(original.len(), 101, "the original still shows at most 100, then says there were more");
+    assert_eq!(original[100], "more objects could not be read; only the first 100 are listed");
 }
 
 #[test]

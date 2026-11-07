@@ -90,6 +90,39 @@ impl Document {
         &self.repair_log
     }
 
+    /// Objects of the file that could not be read, lowest number first, as lines such as
+    /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
+    /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
+    /// unlike [`Self::repair_log`], nothing was repaired. Lists the objects read so far, by this
+    /// document, its clones or a scan of it, that have not since been edited; past 100, a last
+    /// line says there were more. Opening again, authenticating or rebuilding the index starts
+    /// the list afresh, as it does the object cache.
+    pub fn unreadable_objects(&self) -> Vec<String> {
+        let Ok(unreadable) = self.unreadable.lock() else { return Vec::new() };
+        unreadable.lines(|num| self.overlay.contains_key(&num))
+    }
+
+    /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file
+    /// whose broken object is asked for again and again pays for it once.
+    fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
+        // A poisoned lock only means the object goes unlisted; the read itself still fails.
+        let Ok(mut unreadable) = self.unreadable.lock() else { return };
+        let hidden = |n: u32| self.overlay.contains_key(&n);
+        if unreadable.wants(num, hidden) {
+            unreadable.note(num, self.generation(num), &reason(), hidden);
+        }
+    }
+
+    /// Why an object listed at `offset` could not be read: what parsing it there, without resolving
+    /// an indirect `/Length`, found. A best account, not the only one: the reader also tried
+    /// elsewhere.
+    fn why_unreadable(&self, offset: usize) -> String {
+        match parse_indirect_shared(&self.data, offset, &|_| None, &self.endstreams) {
+            Err(e) => e.to_string(),
+            Ok(_) => "no readable copy was found at its cross-reference offset or elsewhere in the file".into(),
+        }
+    }
+
     /// Add a line to [`Self::repair_log`]: a leniency applied while reading that the user should
     /// know about (fidelity: never silent).
     pub fn note_repair(&mut self, line: String) {
@@ -516,6 +549,11 @@ impl Document {
         let _scope = crate::security::FollowScope::enter();
         let edits_read = overlay_reads();
         let loaded = self.load(num, 0).map(Arc::new);
+        if let Err(e) = &loaded
+            && !matches!(e, CosError::Poisoned)
+        {
+            self.note_unreadable(num, || e.to_string());
+        }
         // A failure is kept like an object, or every read of a damaged object loads it again. A
         // poisoned lock says nothing about the object. Clones share the cache, so a load that read
         // this document's edits (an edited object stream or `/Length`) is not kept.
@@ -663,7 +701,10 @@ impl Document {
                     .or_else(|| if self.header_offset == 0 { None } else { at(off.saturating_add(self.header_offset)) })
                     .or_else(|| self.located.get(&num).and_then(|(o, _)| usize::try_from(*o).ok()).and_then(at))
                     .or_else(|| self.scan_for(num).map(|(id, o)| self.decrypted(id, o)))
-                    .ok_or(CosError::MissingObject(num))
+                    .ok_or_else(|| {
+                        self.note_unreadable(num, || self.why_unreadable(off));
+                        CosError::MissingObject(num)
+                    })
             }
             Some(XrefEntry::InStream { stream, index }) => {
                 let stm = self.objstm(stream)?;
