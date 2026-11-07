@@ -1,5 +1,6 @@
 use super::Zip;
 use super::as_html::esc;
+use super::clip::font_family;
 use super::layout::{Block, Field, FieldKind, Image, Item, Page, Shape, Table, body_size, items};
 
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
@@ -14,37 +15,18 @@ pub(crate) fn hex(c: [f64; 3]) -> Option<String> {
     (r | g | b != 0).then(|| format!("{r:02X}{g:02X}{b:02X}"))
 }
 
-/// The font family Word knows for a PDF font's base name: without its subset tag (`ABCDEF+`),
-/// style suffix (`-BoldMT`, `,Italic`) and PostScript tail (`MT`, `PSMT`), with a space before
-/// each capital that starts a word of a run-together name (`TimesNewRoman` → `Times New
-/// Roman`), and the standard 14 fonts by the families Word ships for them. `None` when nothing is
+/// The font family Word knows for a PDF font's base name: the first family [`font_family`]
+/// reads from it, as Copy with formatting names it (`ABCDEF+Arial-BoldMT` → `Arial`,
+/// `TimesNewRomanPSMT` → `Times New Roman`, `MS-Gothic` → `MS Gothic`), with the standard 14
+/// fonts by the families Word ships for them (`Helvetica` → `Arial`). `None` when nothing is
 /// left; at most 31 characters, Word's limit.
 pub(crate) fn word_font(base: &str) -> Option<String> {
-    let bytes = base.as_bytes();
-    let tagged = bytes.get(6) == Some(&b'+') && bytes.get(..6).is_some_and(|t| t.iter().all(u8::is_ascii_uppercase));
-    let name = if tagged { base.get(7..).unwrap_or(base) } else { base };
-    let name = name.split([',', '-']).next().unwrap_or(name).trim();
-    let name = ["PSMT", "MT", "PS"].iter().find_map(|tail| name.strip_suffix(tail).filter(|n| !n.is_empty())).unwrap_or(name);
-    let family = match name {
-        "Helvetica" | "Arial" => "Arial".to_string(),
-        "Times" | "TimesNewRoman" | "TimesRoman" => "Times New Roman".to_string(),
-        "Courier" | "CourierNew" => "Courier New".to_string(),
-        _ => {
-            let mut out = String::new();
-            let mut prev: Option<char> = None;
-            let mut chars = name.chars().filter(|c| !c.is_control()).peekable();
-            while let Some(c) = chars.next() {
-                // A capital after a lower-case letter starts a word, as does the last capital of
-                // an acronym before a lower-case letter (`SegoeUI`, `ITCAvantGarde`).
-                let next_lower = chars.peek().is_some_and(|n| n.is_lowercase());
-                if c.is_uppercase() && prev.is_some_and(|p| p.is_lowercase() || (p.is_uppercase() && next_lower)) {
-                    out.push(' ');
-                }
-                out.push(c);
-                prev = Some(c);
-            }
-            out
-        }
+    let family = font_family(base).into_iter().next()?;
+    let family = match family.as_str() {
+        "Helvetica" => "Arial".to_string(),
+        "Times" | "Times Roman" => "Times New Roman".to_string(),
+        "Courier" => "Courier New".to_string(),
+        _ => family,
     };
     let family: String = family.chars().take(31).collect();
     let family = family.trim();

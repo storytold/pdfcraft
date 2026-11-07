@@ -1195,6 +1195,10 @@ fn word_sets_text_in_the_family_of_its_pdf_font() {
         ("SegoeUI,Bold", Some("Segoe UI")),
         ("ABCDEF+MinionPro-Regular", Some("Minion Pro")),
         ("ITCAvantGarde", Some("ITC Avant Garde")),
+        // A hyphen before a family word stays in the name, as Copy with formatting reads it.
+        ("MS-Gothic", Some("MS Gothic")),
+        ("ABCDEF+MS-Mincho", Some("MS Mincho")),
+        ("Courier-Bold", Some("Courier New")),
         ("Symbol", Some("Symbol")),
         ("", None),
         ("ABCDEF+", None),
@@ -1215,7 +1219,9 @@ fn word_sets_text_in_the_family_of_its_pdf_font() {
         ),
         "{xml}"
     );
-    assert!(xml.contains("w:ascii=\"Bad&quot;&lt;Name&gt;\""), "names are escaped: {xml}");
+    // A family keeps only letters, digits, spaces and `-_.`: nothing in it needs escaping.
+    assert!(xml.contains("w:ascii=\"BadName\""), "{xml}");
+    assert!(!xml.contains("Bad&quot;") && !xml.contains("&lt;Name"), "{xml}");
     // Flowing pages and table cells carry it too.
     let mut flowing = page();
     flowing.blocks[0].font = "TimesNewRomanPSMT".into();

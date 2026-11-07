@@ -132,11 +132,13 @@ impl ClipBuilder {
 }
 
 /// The family names to try for a font's `/BaseFont`, best first: subset tag and style suffix
-/// removed, `PSMT`/`MT`/`PS` dropped. The first has camel case and hyphens spaced
-/// (`ABCDEF+TimesNewRomanPSMT` → `Times New Roman`, `MS-Gothic` → `MS Gothic`); the second,
-/// when it differs, is the name as spelt (`SimSun`). A hyphen ends the family only before a
-/// style word (`Arial-BoldMT`). Only letters, digits, spaces, `-`, `_` and `.` are kept, so a
-/// name cannot leave its CSS string. Empty when nothing is left.
+/// removed, `PSMT`/`MT`/`PS` dropped (unless that is the whole name). The first has camel case,
+/// acronyms and hyphens spaced (`ABCDEF+TimesNewRomanPSMT` → `Times New Roman`,
+/// `ITCAvantGarde` → `ITC Avant Garde`, `MS-Gothic` → `MS Gothic`); the second, when it
+/// differs, is the name as spelt (`SimSun`). A hyphen ends the family only before a style word
+/// (`Arial-BoldMT`). Only letters, digits, spaces, `-`, `_` and `.` are kept, so a name cannot
+/// leave its CSS string. Empty when nothing is left. Copy with formatting tries them all;
+/// Export ▸ Word takes the first.
 pub fn font_family(base_font: &str) -> Vec<String> {
     let name = match base_font.split_once('+') {
         Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
@@ -147,14 +149,18 @@ pub fn font_family(base_font: &str) -> Vec<String> {
         Some((family, style)) if STYLE_WORDS.iter().any(|w| style.starts_with(w)) => family,
         _ => name,
     };
-    let family = family.strip_suffix("PSMT").or_else(|| family.strip_suffix("MT")).or_else(|| family.strip_suffix("PS")).unwrap_or(family);
+    let family = ["PSMT", "MT", "PS"].iter().find_map(|tail| family.strip_suffix(tail).filter(|f| !f.is_empty())).unwrap_or(family);
     let mut spaced = String::with_capacity(family.len().min(MAX_FAMILY_CHARS * 2));
-    let mut prev_lower = false;
-    for c in family.chars().take(MAX_FAMILY_CHARS) {
-        if prev_lower && c.is_ascii_uppercase() {
+    let mut prev: Option<char> = None;
+    let mut chars = family.chars().take(MAX_FAMILY_CHARS).peekable();
+    while let Some(c) = chars.next() {
+        // A capital starts a word after a lower-case letter (`TimesNewRoman`), and so does the
+        // last capital of an acronym, the one before a lower-case letter (`ITCAvantGarde`).
+        let next_lower = chars.peek().is_some_and(char::is_ascii_lowercase);
+        if c.is_ascii_uppercase() && prev.is_some_and(|p| p.is_ascii_lowercase() || (p.is_ascii_uppercase() && next_lower)) {
             spaced.push(' ');
         }
-        prev_lower = c.is_ascii_lowercase();
+        prev = Some(c);
         spaced.push(if c == '-' { ' ' } else { c });
     }
     let spelt: String = family.chars().take(MAX_FAMILY_CHARS).collect();
@@ -347,6 +353,9 @@ mod tests {
         assert_eq!(f("MS-Gothic"), ["MS Gothic", "MS-Gothic"], "a hyphen before a family word stays in the name");
         assert_eq!(f("Segoe-UI-Bold"), ["Segoe UI", "Segoe-UI"], "the style is the last part");
         assert_eq!(f("SimSun"), ["Sim Sun", "SimSun"], "the name as spelt is tried too");
+        assert_eq!(f("ITCAvantGarde"), ["ITC Avant Garde", "ITCAvantGarde"], "an acronym is a word of its own");
+        assert_eq!(f("MSGothic"), ["MS Gothic", "MSGothic"]);
+        assert_eq!(f("MT"), ["MT"], "a name that is only a PostScript tail keeps it");
         assert_eq!(f("abcdef+Foo"), ["abcdefFoo"], "a lower-case prefix is not a subset tag");
         assert!(f("").is_empty());
         assert!(f("+'\"\\;").is_empty());
