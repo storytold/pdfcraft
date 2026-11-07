@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn a_wider_quick_bar_centres_by_its_own_width_and_needs_a_wider_margin() {
-        // Fill & Sign's Text tool widens the bar to 70 pt: it centres by that, and 72 pt no longer holds it.
+        // A 70 pt bar centres by that, and 72 pt no longer holds it.
         assert_eq!(quick_bar_offset(120.0, 70.0), 15.0);
         assert_eq!(quick_bar_offset(72.0, 70.0), 14.0);
     }
