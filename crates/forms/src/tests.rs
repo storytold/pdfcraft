@@ -5955,3 +5955,67 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+#[test]
+fn review2_auto_syriac_list_measures_labels_not_exports() {
+    if pdfcraft_fonts::document_syriac_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none());
+        return;
+    }
+    let mut doc = fixture();
+    let object = field(&fields(&doc), "toppings").obj;
+    let export = "\u{e000}";
+    let label = "\u{072b}\u{0720}\u{0721}\u{0710}";
+    doc.update_dict(object, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 0 Tf 0 g"));
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text(export).into(), PdfString::text(label).into()])]));
+        d.set(b"V".to_vec(), PdfString::text(export));
+    })
+    .unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &f.widgets[0], &f.value, true);
+    assert_eq!(missing, None, "a hidden unsupported export must not replace the supported label");
+    assert!(String::from_utf8(stream.decoded().unwrap()).unwrap().contains("/ActualText"));
+}
+
+#[test]
+fn review2_syriac_display_cache_reuses_shapes_and_rebinds_resources() {
+    if pdfcraft_fonts::document_syriac_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none());
+        return;
+    }
+    let mut doc = left_to_the_viewer(true);
+    for name in ["a", "b"] {
+        let f = field(&fields(&doc), name).obj;
+        doc.update_dict(f, |d| d.set(b"V".to_vec(), PdfString::text("\u{072b}\u{0720}\u{0721}\u{0710}"))).unwrap();
+    }
+    let mut cache = FieldAppearanceCache::default();
+    let first = with_field_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!(cache.builds(), 6, "Syriac shaping must also be cached");
+    // Force fresh display fonts to occupy different object numbers without changing field inputs.
+    for _ in 0..17 {
+        doc.add(Object::Null);
+    }
+    let second = with_field_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!((cache.builds(), cache.hits()), (6, 6));
+    for copy in [&first, &second, &reopen(&second)] {
+        for name in ["a", "b"] {
+            let f = field(&fields(copy), name).clone();
+            let widget = copy.get(f.widgets[0].obj);
+            let normal = widget.as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+            let appearance = copy.get(normal);
+            let Object::Stream(stream) = &*appearance else { panic!("appearance stream") };
+            let resources = stream.dict.get(b"Resources").unwrap().as_dict().unwrap();
+            let fonts = resources.get(b"Font").unwrap().as_dict().unwrap();
+            assert!(!fonts.is_empty());
+            for (_, font) in fonts.iter() {
+                let font = copy.resolve(font);
+                let font = font.as_dict().unwrap();
+                assert_eq!(font.name(b"Subtype"), Some(b"Type3".as_slice()));
+                for (_, proc) in font.get(b"CharProcs").unwrap().as_dict().unwrap().iter() {
+                    assert!(matches!(&*copy.resolve(proc), Object::Stream(_)), "cached glyph resources belong to this copy");
+                }
+            }
+        }
+    }
+}

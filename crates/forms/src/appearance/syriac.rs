@@ -227,7 +227,7 @@ pub(super) fn list_overflow(doc: &Document, f: &Field, w: &Widget) -> Result<Opt
 
 /// Build a bounded Syriac field appearance with the selected family and embedded cluster fonts.
 /// Handle choice highlights, comb cells, alignment and multiline baselines in widget layout space.
-pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Result<Stream, String> {
+pub(super) fn field(doc: &Document, font_doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Result<Stream, String> {
     let family = super::syriac_family(doc, f, w);
     let widget = doc.get(w.obj);
     let wd = widget.as_dict().cloned().unwrap_or_default();
@@ -272,7 +272,10 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
     } else {
         None
     };
-    let size = if let Some((cells, laid)) = &comb {
+    let size = if f.kind == FieldKind::List {
+        // List labels use rows.size; an export value is not drawn or measured.
+        0.0
+    } else if let Some((cells, laid)) = &comb {
         if da.size > 0.0 {
             da.size
         } else {
@@ -317,7 +320,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
             content.extend(format!("{}\n", da.color).bytes());
             let line = text::line_for_family(label, unicode_bidi_rtl(label), family)?;
             let baseline = y - (rows.row - (top - bottom) * rows.size) / 2.0 - top * rows.size;
-            content.extend(line.write(doc, &mut fonts, [x_for(&line, rows.size), baseline], rows.size)?);
+            content.extend(line.write(font_doc, &mut fonts, [x_for(&line, rows.size), baseline], rows.size)?);
             y -= rows.row;
         }
     } else if let Some((cells, laid)) = comb {
@@ -327,14 +330,19 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
         for (index, line) in laid.into_iter().take(cells).enumerate() {
             let (top, bottom) = line.vertical_extents()?;
             let y = (height - (top - bottom) * size) / 2.0 - bottom * size;
-            content.extend(line.write(doc, &mut fonts, [cell * index.saturating_add(start) as f64 + (cell - line.width * size) / 2.0, y], size)?);
+            content.extend(line.write(
+                font_doc,
+                &mut fonts,
+                [cell * index.saturating_add(start) as f64 + (cell - line.width * size) / 2.0, y],
+                size,
+            )?);
         }
     } else {
         let rows = layout(&value, size, inner_w, multiline, family)?;
         let (top, bottom) = extents(&rows)?;
         let mut y = if multiline { height - pad - top * size } else { (height - (top - bottom) * size) / 2.0 - bottom * size };
         for line in rows {
-            content.extend(line.write(doc, &mut fonts, [x_for(&line, size), y], size)?);
+            content.extend(line.write(font_doc, &mut fonts, [x_for(&line, size), y], size)?);
             y -= (top - bottom + 0.1).max(1.15) * size;
         }
     }

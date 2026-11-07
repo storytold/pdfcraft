@@ -54,11 +54,25 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // of an em apart.
         let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
+        let syriac_spaces = syriac_spaces(t, para, rtl);
+        let syriac_space = if syriac_spaces.is_empty() {
+            space
+        } else {
+            pdfcraft_fonts::shape_syriac_for_family(" ", true, t.syriac_family)
+                .map(|clusters| clusters.iter().map(|c| c.advance * t.size + t.char_spacing).sum())
+                .unwrap_or(space)
+        };
+        let mut word_start = 0usize;
         let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
+            let separator = if syriac_spaces.contains(&word_start.saturating_sub(1)) { syriac_space } else { space };
+            word_start = word_start.saturating_add(word.len()).saturating_add(1);
             let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let candidate_w =
-                if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
+            let candidate_w = if rtl_script || thai {
+                if line.is_empty() { measure(word) } else { line_w + separator + measure(word) }
+            } else {
+                measure(&candidate)
+            };
             if !line.is_empty() && candidate_w > width {
                 out.push((std::mem::take(&mut line), rtl, index));
                 line = word.to_string();
@@ -221,22 +235,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         // the faces lack) keeps the item's font.
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
-            let after_syriac = segments.last().is_some_and(|(kind, _)| kind.is_some_and(|kind| kind.syriac_family().is_some()));
-            let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
-            let script = if is_syriac(c)
-                || (after_syriac && matches!(c, '\u{200c}' | '\u{200d}'))
-                || (run_rtl && after_syriac && !c.is_alphanumeric() && pdfcraft_fonts::syriac_has_for_family(c, t.syriac_family))
-            {
-                Some(ShapedScript::for_syriac(t.syriac_family))
-            } else if is_thai(c) {
-                Some(ShapedScript::Thai)
-            } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
-                Some(ShapedScript::Hebrew)
-            } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
-                Some(ShapedScript::Arabic)
-            } else {
-                None
-            };
+            let script = shaped_script(t, c, run_rtl, segments.last().and_then(|(kind, _)| *kind));
             match segments.last_mut() {
                 Some((kind, s)) if *kind == script => s.push(c),
                 _ => segments.push((script, c.to_string())),
@@ -273,6 +272,50 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         })
         .sum();
     Ok((pieces, width))
+}
+
+/// Use exactly the same script context for separator measurement and drawing.
+fn shaped_script(t: &AddedText, c: char, run_rtl: bool, previous: Option<ShapedScript>) -> Option<ShapedScript> {
+    let after_syriac = previous.is_some_and(|kind| kind.syriac_family().is_some());
+    let after_hebrew = previous == Some(ShapedScript::Hebrew);
+    if is_syriac(c)
+        || (after_syriac && matches!(c, '\u{200c}' | '\u{200d}'))
+        || (run_rtl && after_syriac && !c.is_alphanumeric() && pdfcraft_fonts::syriac_has_for_family(c, t.syriac_family))
+    {
+        Some(ShapedScript::for_syriac(t.syriac_family))
+    } else if is_thai(c) {
+        Some(ShapedScript::Thai)
+    } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
+        Some(ShapedScript::Hebrew)
+    } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
+        Some(ShapedScript::Arabic)
+    } else {
+        None
+    }
+}
+
+/// Byte positions of separators that the paragraph draws with its selected Syriac face.
+fn syriac_spaces(t: &AddedText, paragraph: &str, rtl: bool) -> std::collections::HashSet<usize> {
+    let mut spaces = std::collections::HashSet::new();
+    if !paragraph.chars().any(is_syriac) {
+        return spaces;
+    }
+    let info = ParagraphBidiInfo::new(paragraph, Some(if rtl { Level::rtl() } else { Level::ltr() }));
+    let (levels, runs) = info.visual_runs(0..paragraph.len());
+    for run in runs {
+        let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
+        let start = run.start;
+        let Some(text) = paragraph.get(run) else { continue };
+        let mut previous = None;
+        for (offset, c) in text.char_indices().filter(|(_, c)| !is_bidi_control(*c)) {
+            let script = shaped_script(t, c, run_rtl, previous);
+            if c == ' ' && script.is_some_and(|kind| kind.syriac_family().is_some()) {
+                spaces.insert(start.saturating_add(offset));
+            }
+            previous = script;
+        }
+    }
+    spaces
 }
 
 /// The width of `s` in a shaped-text item; the item's font's estimate if it can't be shaped (drawing

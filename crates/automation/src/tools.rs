@@ -65,6 +65,11 @@ fn syriac_family() -> Value {
     json!({ "type": "string", "enum": ["estrangela", "eastern", "western"], "description": "Syriac document family (default Estrangela); preserves the stored choice when omitted during an edit. Applies only to supported text surfaces." })
 }
 
+/// Marks are created anew, including when replacing previous marks.
+fn syriac_mark_family() -> Value {
+    json!({ "type": "string", "enum": ["estrangela", "eastern", "western"], "description": "Syriac document family for text marks; defaults to Estrangela, including when replacing an existing mark." })
+}
+
 fn color() -> Value {
     json!({ "type": "string", "description": "#RRGGBB or a name: yellow, red, orange, green, blue, purple, pink, black, gray, white." })
 }
@@ -1133,7 +1138,7 @@ pub fn tools() -> Vec<ToolDef> {
         .cmd("edit.header_footer")
         .with(schema(
             json!({
-                "syriac_family": syriac_family(),
+                "syriac_family": syriac_mark_family(),
                 "doc": doc(),
                 "pages": pages("to mark (default: all)"),
                 "header_left": { "type": "string" }, "header_center": { "type": "string" }, "header_right": { "type": "string" },
@@ -1152,7 +1157,7 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("edit.watermark")
             .with(schema(
                 json!({
-                "syriac_family": syriac_family(),
+                "syriac_family": syriac_mark_family(),
                     "doc": doc(),
                     "pages": pages("to mark (default: all)"),
                     "text": { "type": "string", "minLength": 1 },

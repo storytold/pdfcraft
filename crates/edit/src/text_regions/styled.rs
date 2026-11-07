@@ -173,35 +173,41 @@ impl CharacterPreparation<'_> {
             let start = range.start;
             let span = draft.get(range).unwrap_or_default();
             let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-            let syriac = if requested.is_none() { resolver.syriac_font(source, span)? } else { None };
-            if let Some(name) = &syriac
-                && let Some(metrics) = resolver.metrics.get(name)
-                && pdfcraft_fonts::embedding::face_key(&metrics.base_font) != pdfcraft_fonts::embedding::face_key(&source.base_font)
-            {
-                substituted = Some(metrics.base_font.clone());
-            }
-            let requested = requested.or(syriac.as_deref());
-            for (offset, ch) in span.char_indices() {
-                if ch == '\n' {
-                    chars.push((ch, index, source.font.clone()));
-                    continue;
+            let mut row_start = 0usize;
+            for row in span.split_inclusive(['\n', '\r']) {
+                let syriac = if requested.is_none() { resolver.syriac_font(source, row.trim_end_matches(['\n', '\r']))? } else { None };
+                if let Some(name) = &syriac
+                    && let Some(metrics) = resolver.metrics.get(name)
+                    && pdfcraft_fonts::embedding::face_key(&metrics.base_font) != pdfcraft_fonts::embedding::face_key(&source.base_font)
+                {
+                    substituted = Some(metrics.base_font.clone());
                 }
-                if ch == '\r' {
-                    let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
-                    chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
-                    continue;
+                let requested = requested.or(syriac.as_deref());
+                for (local_offset, ch) in row.char_indices() {
+                    let offset = row_start.saturating_add(local_offset);
+                    if ch == '\n' {
+                        chars.push((ch, index, source.font.clone()));
+                        continue;
+                    }
+                    if ch == '\r' {
+                        let crlf =
+                            start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                        chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
+                        continue;
+                    }
+                    let text = ch.to_string();
+                    let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
+                        name
+                    } else if needs_type3(&text) {
+                        fallback.prepare(source, ch, &text, chars.len())?
+                    } else {
+                        let name = resolver.substitute_font(source);
+                        substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
+                        name
+                    };
+                    chars.push((ch, index, name));
                 }
-                let text = ch.to_string();
-                let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
-                    name
-                } else if needs_type3(&text) {
-                    fallback.prepare(source, ch, &text, chars.len())?
-                } else {
-                    let name = resolver.substitute_font(source);
-                    substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
-                    name
-                };
-                chars.push((ch, index, name));
+                row_start = row_start.saturating_add(row.len());
             }
         }
         drop(resolver);

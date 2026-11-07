@@ -62,25 +62,25 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 continue;
             }
             let inputs = appearance_inputs(doc, w);
-            let stream = if appearance::needs_syriac(doc, &f, w, &f.value) {
-                // Font objects allocated in one display copy cannot be reused in another.
-                let current = copy.get_or_insert_with(|| doc.clone());
-                appearance::field_appearance_drawn_in(current, &f, w, &f.value, true).0
-            } else {
-                match cache.get(w.obj, &inputs) {
-                    Some(stream) => stream,
-                    None => {
-                        let stream = match f.kind {
-                            FieldKind::CheckBox | FieldKind::Radio => appearance::button_state_shown(doc, &f, w, state.as_deref() != Some("Off")),
-                            FieldKind::PushButton => appearance::push_button_shown(doc, &f, w),
-                            _ => appearance::field_appearance_drawn(doc, &f, w, &f.value, true).0,
-                        };
-                        cache.insert(w.obj, inputs, &stream);
-                        stream
-                    }
+            let prepared = match cache.get(w.obj, &inputs) {
+                Some(prepared) => prepared,
+                None => {
+                    let legacy = || match f.kind {
+                        FieldKind::CheckBox | FieldKind::Radio => appearance::button_state_shown(doc, &f, w, state.as_deref() != Some("Off")),
+                        FieldKind::PushButton => appearance::push_button_shown(doc, &f, w),
+                        _ => appearance::field_appearance_drawn(doc, &f, w, &f.value, true).0,
+                    };
+                    let prepared = if appearance::needs_syriac(doc, &f, w, &f.value) {
+                        appearance::prepare_syriac(doc, &f, w, &f.value, true).unwrap_or_else(|_| appearance::PreparedAppearance::plain(legacy()))
+                    } else {
+                        appearance::PreparedAppearance::plain(legacy())
+                    };
+                    cache.insert(w.obj, inputs, &prepared);
+                    prepared
                 }
             };
             let target = copy.get_or_insert_with(|| doc.clone());
+            let stream = prepared.install(target);
             let ap = target.add(Object::Stream(stream));
             let mut fresh = Dict::new();
             match &state {
@@ -172,7 +172,7 @@ fn appearance_inputs(doc: &Document, w: &Widget) -> Vec<std::sync::Arc<Object>> 
 /// miss, never a stale hit.
 #[derive(Clone, Debug, Default)]
 pub struct FieldAppearanceCache {
-    entries: std::collections::HashMap<ObjRef, (Vec<std::sync::Arc<Object>>, pdfcraft_cos::Stream)>,
+    entries: std::collections::HashMap<ObjRef, (Vec<std::sync::Arc<Object>>, appearance::PreparedAppearance)>,
     bytes: usize,
     hits: u64,
     builds: u64,
@@ -187,7 +187,7 @@ impl FieldAppearanceCache {
         *self = Self::default();
     }
 
-    fn get(&mut self, w: ObjRef, inputs: &[std::sync::Arc<Object>]) -> Option<pdfcraft_cos::Stream> {
+    fn get(&mut self, w: ObjRef, inputs: &[std::sync::Arc<Object>]) -> Option<appearance::PreparedAppearance> {
         let (from, stream) = self.entries.get(&w)?;
         if from.len() != inputs.len() || !from.iter().zip(inputs).all(|(a, b)| std::sync::Arc::ptr_eq(a, b)) {
             return None;
@@ -196,14 +196,18 @@ impl FieldAppearanceCache {
         Some(stream.clone())
     }
 
-    fn insert(&mut self, w: ObjRef, inputs: Vec<std::sync::Arc<Object>>, stream: &pdfcraft_cos::Stream) {
+    fn insert(&mut self, w: ObjRef, inputs: Vec<std::sync::Arc<Object>>, stream: &appearance::PreparedAppearance) {
         self.builds += 1;
-        if self.bytes.saturating_add(stream.raw.len()) > Self::MAX_BYTES {
-            self.clear();
+        if stream.bytes() > Self::MAX_BYTES {
+            return;
         }
-        self.bytes = self.bytes.saturating_add(stream.raw.len());
+        if self.bytes.saturating_add(stream.bytes()) > Self::MAX_BYTES {
+            self.entries.clear();
+            self.bytes = 0;
+        }
+        self.bytes = self.bytes.saturating_add(stream.bytes());
         if let Some((_, old)) = self.entries.insert(w, (inputs, stream.clone())) {
-            self.bytes = self.bytes.saturating_sub(old.raw.len());
+            self.bytes = self.bytes.saturating_sub(old.bytes());
         }
     }
 

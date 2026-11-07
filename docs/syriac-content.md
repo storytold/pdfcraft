@@ -18,7 +18,7 @@ text can be displayed; no interface language or layout is added.
 
 ## Refocused validation (2026-11-07)
 
-With the pinned companion and `PDFCRAFT_REQUIRE_SYRIAC=1`, the refocused tree passes
+At `ff7cf600`, with the pinned companion and `PDFCRAFT_REQUIRE_SYRIAC=1`, the refocused tree passed
 four font/budget tests, all 102 annotation tests, 12 focused Syriac form tests and
 all four Syriac automation scenarios (122 tests). The automation cases cover
 rendered family differences, logical text/search, history, existing paragraph
@@ -31,6 +31,18 @@ The oval family-reselection regression failed before the inner-box correction;
 repeated oval/circle selection passes afterwards. The family-persistence fixture
 uses a 12-point comb value in its 15-point cells; it keeps asserting no warning.
 Separate form regressions retain the real fixed-size comb overflow check.
+
+## Review follow-up validation (2026-11-07)
+
+The six review corrections passed eight focused added-text tests, all 245 form
+library tests and all six Syriac automation scenarios (259 tests). Five new
+regressions reproduced the failures before correction: contextual separator
+widths, list export sizing, cache reuse/rebinding, separate-row font coverage and
+early mixed Hebrew/Syriac refusal. The separate-row fixture uses an independently
+supported Japanese row to guarantee coverage differs from the Syriac face. The
+existing added-text output fingerprint stays unchanged. Font and annotation
+qualification above remains the earlier checkpoint; those unchanged packages
+were not rerun for this follow-up.
 
 ## Font input and shaping
 
@@ -87,6 +99,18 @@ fonts and other vendors' editing interoperability are not qualified by this pack
 There are no new network, MCP or control-channel defaults.
 
 ## Limits and verification
+
+Existing-paragraph edits resolve an automatic Syriac face for each complete row,
+so another row can use a different supported face. An explicit font selection
+still applies as requested. Paragraphs mixing Hebrew and Syriac are refused
+before writer selection; no source-font coverage or style setting bypasses that
+restriction. Added page text continues to use its separate script-aware writer.
+
+Generated form appearances are staged as self-contained font resources. The
+display cache reuses their shaping and rebinds their references into each fresh
+copy; a failed draw leaves the working document unchanged. List appearances
+measure and draw option labels, not hidden exports. Replacing a header/footer or
+watermark without a family selector uses Estrangela for the replacement.
 
 Shared generated layout caps text at 262,144 UTF-8 bytes and 1,024 rows. Lines are
 wrapped at spaces; an overlong joining word is not split through its letters or

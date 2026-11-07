@@ -352,3 +352,38 @@ fn selected_families_persist_across_content_surfaces_and_refuse_irrelevant_selec
         assert_eq!(auto.render_pixels(re, 1, 1.0).unwrap().2, pixels, "saved {family} appearances must survive reopening");
     }
 }
+
+#[test]
+fn review2_syriac_and_other_rows_resolve_independently() {
+    if !available() {
+        return;
+    }
+    let face = pdfcraft_fonts::document_syriac_font().unwrap();
+    let other = "\u{65e5}";
+    assert!(!pdfcraft_fonts::embedding::covers(face.bytes, other));
+    assert!(pdfcraft_fonts::embedding::covers(pdfcraft_fonts::document_japanese_font().unwrap().bytes, other));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("source.pdf"), source_page()).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let id = call(&mut auto, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let draft = format!("\u{072b}\u{0720}\u{0721}\u{0710}\n{other}");
+    call(&mut auto, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":draft,"width":450}));
+    assert_eq!(extracted(&mut auto, id), draft);
+}
+
+#[test]
+fn review2_mixed_hebrew_syriac_is_refused_atomically() {
+    if !available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("source.pdf"), source_page()).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let id = call(&mut auto, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = extracted(&mut auto, id);
+    let error = auto
+        .call("text_edit", &json!({"doc":id,"page":1,"paragraph":1,"text":"\u{05d0}\u{0710}","width":450}))
+        .expect_err("unsupported mixed-script paragraph");
+    assert!(error.to_string().contains("mixing Hebrew and Syriac"), "reject before choosing a writer: {error}");
+    assert_eq!(extracted(&mut auto, id), before);
+}

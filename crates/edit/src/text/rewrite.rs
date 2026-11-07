@@ -232,6 +232,10 @@ fn choose_rewrite_path(
     // Hebrew is written back in drawing order by the single-style path. Styled regions do not
     // reorder right-to-left runs.
     let hebrew = text.unwrap_or(&block.text).chars().any(crate::bidi::is_hebrew);
+    let syriac = text.unwrap_or(&block.editor_text).chars().any(pdfcraft_fonts::source_shaping::is_syriac);
+    if hebrew && syriac {
+        return Err(EditError::Invalid("paragraphs mixing Hebrew and Syriac are not supported; edit them separately".into()));
+    }
     if hebrew && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid(
             "formatting part of right-to-left (Hebrew) text, or choosing a document font for it, isn't supported yet".into(),
@@ -244,7 +248,6 @@ fn choose_rewrite_path(
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
-    let syriac = text.unwrap_or(&block.editor_text).chars().any(pdfcraft_fonts::source_shaping::is_syriac);
     if syriac && (!upright || visual_indic) {
         return Err(EditError::Invalid(
             "Syriac paragraph editing needs upright Unicode source text; turned and legacy visual-order text are not supported".into(),

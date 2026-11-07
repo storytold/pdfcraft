@@ -27,7 +27,9 @@ use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi,
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
+mod resources;
 mod syriac;
+pub(crate) use resources::PreparedAppearance;
 
 /// The persisted Syriac content face, with a widget override before the field's choice.
 /// Older documents without private metadata use Estrangela.
@@ -72,14 +74,26 @@ pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, valu
     if f.kind == FieldKind::PushButton {
         return crate::author::button_appearance_in(doc, w, &f.da);
     }
-    let mut staged = doc.clone();
-    match syriac::field(&mut staged, f, w, values, format) {
-        Ok(stream) => {
-            *doc = staged;
-            (stream, None)
-        }
+    match prepare_syriac(doc, f, w, values, format) {
+        Ok(prepared) => (prepared.install(doc), None),
         Err(_) => field_appearance_drawn(doc, f, w, values, format),
     }
+}
+
+/// Cache only self-contained resources, never object numbers from a previous display copy.
+pub(crate) fn prepare_syriac(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Result<PreparedAppearance, String> {
+    if f.kind == FieldKind::PushButton {
+        return prepare_syriac_button(doc, w, &f.da);
+    }
+    PreparedAppearance::draw(|fonts| syriac::field(doc, fonts, f, w, values, format))
+}
+
+pub(crate) fn prepare_syriac_button(doc: &Document, w: &Widget, da: &str) -> Result<PreparedAppearance, String> {
+    PreparedAppearance::draw(|fonts| {
+        crate::author::button_appearance_syriac(doc, fonts, w, da)
+            .map(|(stream, _)| stream)
+            .ok_or_else(|| "the Syriac caption could not be shaped".into())
+    })
 }
 
 /// Format a number for content streams.

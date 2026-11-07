@@ -452,19 +452,15 @@ pub(crate) fn button_appearance_in(doc: &mut Document, w: &Widget, field_da: &st
     if !pdfcraft_fonts::content_text::contains_syriac(&caption) {
         return button_appearance(doc, w, field_da);
     }
-    let mut staged = doc.clone();
-    match button_appearance_syriac(&mut staged, w, field_da) {
-        Some(appearance) => {
-            *doc = staged;
-            appearance
-        }
-        None => button_appearance(doc, w, field_da),
+    match appearance::prepare_syriac_button(doc, w, field_da) {
+        Ok(prepared) => (prepared.install(doc), None),
+        Err(_) => button_appearance(doc, w, field_da),
     }
 }
 
 /// Build a shaped caption with the persisted family while preserving button frame and icon.
 /// Return None when the caption cannot be drawn so the caller retains its fallback policy.
-fn button_appearance_syriac(doc: &mut Document, w: &Widget, field_da: &str) -> Option<(Stream, Option<char>)> {
+pub(crate) fn button_appearance_syriac(doc: &Document, font_doc: &mut Document, w: &Widget, field_da: &str) -> Option<(Stream, Option<char>)> {
     let (mut c, place) = frame_only(doc, w);
     let (width, height) = (place.layout_w, place.layout_h);
     let wobj = doc.get(w.obj);
@@ -514,7 +510,8 @@ fn button_appearance_syriac(doc: &mut Document, w: &Widget, field_da: &str) -> O
         };
         content.extend(format!("{}\n", da.color).bytes());
         content.extend(
-            line.write(doc, &mut fonts, [(width - line.width * size) / 2.0, (height - (top - bottom) * size) / 2.0 - bottom * size], size).ok()?,
+            line.write(font_doc, &mut fonts, [(width - line.width * size) / 2.0, (height - (top - bottom) * size) / 2.0 - bottom * size], size)
+                .ok()?,
         );
     }
     let mut res = Dict::new();
