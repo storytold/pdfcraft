@@ -2452,6 +2452,9 @@ fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
     let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
     let Some(i) = pending else { return false };
     app.views[i].close_requested = false;
+    if app.hold_close_for_ocr_review(i) {
+        return true;
+    }
     if app.has_unsaved_work(i) {
         app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
     } else {
