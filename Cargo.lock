@@ -4628,9 +4628,11 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-forms",
  "pdfcraft-model",
+ "pdfcraft-organize",
  "pdfcraft-render",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
+ "roxmltree 0.20.0",
  "sha2 0.11.1",
  "thiserror 2.0.21",
 ]

@@ -18,9 +18,12 @@ pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
+pdfcraft-organize = { workspace = true }
 # CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
 pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
+# Already present in the lockfile: inspect XML values without searching markup names.
+roxmltree = "0.20"
 sha2 = "0.11"
 
 [dev-dependencies]
