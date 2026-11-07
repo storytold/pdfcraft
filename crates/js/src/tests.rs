@@ -2128,3 +2128,98 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }
+
+#[test]
+fn reset_captured_event_reference_reads_the_restored_event() {
+    let docs = vec!["var savedEvent = event; savedEvent.name = 'Wrong'; function savedName() { return savedEvent.name; }".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = savedName() + ':' + event.name;",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.value, "Calculate:Calculate");
+}
+
+#[test]
+fn reset_event_global_descriptor_variants_run_the_real_script() {
+    for initializer in [
+        "event = 'blocked';",
+        "delete this.event;",
+        "Object.defineProperty(this, 'event', { value: 'blocked', writable: false, configurable: true });",
+        "Object.defineProperty(this, 'event', { get() { console.println('getter'); return 'blocked'; }, set(_) { console.println('setter'); }, configurable: true });",
+        "Object.freeze(this);",
+    ] {
+        let outcome = run_shared_for_reset(
+            "event.value = event.name + ':' + event.targetName;",
+            &Event::field("Calculate", "total", "84"),
+            &doc(),
+            Arc::new(fields()),
+            &[initializer.into()],
+            Limits::default(),
+        );
+        assert_eq!(outcome.error, None, "{initializer}: {outcome:?}");
+        assert!(!outcome.event_restore_failed, "{initializer}: {outcome:?}");
+        assert!(outcome.doc_errors.is_empty(), "{initializer}: {outcome:?}");
+        assert_eq!(outcome.value, "Calculate:total", "{initializer}");
+        assert!(outcome.console.is_empty(), "a bootstrap accessor must not run during restoration: {initializer}: {outcome:?}");
+    }
+}
+
+#[test]
+fn reset_event_impossible_descriptors_fail_before_the_real_script() {
+    for initializer in [
+        "Object.defineProperty(this, 'event', { value: 'blocked', writable: false, configurable: false });",
+        "Object.defineProperty(this, 'event', { get() { console.println('getter'); return 'blocked'; }, configurable: false });",
+        "Object.freeze(event);",
+        "event.name = 'Wrong'; Object.defineProperty(event, 'name', { writable: false, configurable: false });",
+        "delete this.event; Object.preventExtensions(this);",
+    ] {
+        let outcome = run_shared_for_reset(
+            "console.println('real script ran'); event.value = '34';",
+            &Event::field("Calculate", "total", "84"),
+            &doc(),
+            Arc::new(fields()),
+            &[initializer.into()],
+            Limits::default(),
+        );
+        assert!(outcome.event_restore_failed, "{initializer}: {outcome:?}");
+        assert!(outcome.error.as_deref().is_some_and(|e| e.contains("reset event could not be restored")), "{initializer}: {outcome:?}");
+        assert!(!outcome.console.iter().any(|s| s == "real script ran"), "{initializer}: {outcome:?}");
+    }
+}
+
+#[test]
+fn reset_captured_event_keeps_extra_properties_and_survives_document_error() {
+    let docs = vec!["var saved = event; saved.name = 'Wrong'; saved.extra = 'kept'; function savedName() { return saved.name + ':' + saved.extra; } throw new Error('bootstrap failed');".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = savedName() + ':' + event.name;",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.value, "Calculate:kept:Calculate");
+    assert!(outcome.doc_errors.iter().any(|e| e.contains("bootstrap failed")));
+}
+
+#[test]
+fn reset_captured_event_shares_value_rc_and_change_with_the_real_event() {
+    let docs = vec!["var saved = event; saved.value = '0'; saved.rc = false; saved.change = 'wrong'; function savedState() { return [saved === event, saved.value, saved.rc, saved.change].join(':'); }".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = savedState(); event.change = 'real';",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.value, "true:84:true:");
+    assert_eq!(outcome.change, "real");
+}

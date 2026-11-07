@@ -383,3 +383,66 @@ fn reset_obeys_form_filling_permissions_without_committing_a_partial_edit() {
     assert_eq!(reader.get(id).unwrap().can_undo(), None);
     assert_eq!(reader.save_bytes(id).unwrap().as_ref(), protected.as_ref());
 }
+
+#[test]
+fn reset_captured_document_event_reference_stays_coherent() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+    pdfcraft_forms::set_field_script(&mut doc, "total", "calculate", Some("event.value = savedName() + ':' + event.name;")).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let (mut session, id) =
+        open(with_document_script(bytes, "var savedEvent = event; savedEvent.name = 'Wrong'; function savedName() { return savedEvent.name; }"));
+    session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["Calculate:Calculate".into()]));
+}
+
+#[test]
+fn reset_recalculates_when_document_event_is_configurably_nonwritable() {
+    let (mut session, id) = open(with_document_script(
+        form(false, false),
+        "Object.defineProperty(this, 'event', { value: 'blocked', writable: false, configurable: true });",
+    ));
+    session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+}
+
+#[test]
+fn unrestorable_reset_event_returns_an_error_without_committing_the_document() {
+    for initializer in [
+        "Object.defineProperty(this, 'event', { value: 'blocked', writable: false, configurable: false });",
+        "Object.defineProperty(this, 'event', { get() { return 'blocked'; }, configurable: false });",
+        "Object.freeze(event);",
+    ] {
+        let (mut session, id) = open(with_document_script(form(false, false), initializer));
+        let before = session.save_bytes(id).unwrap();
+        let error = session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap_err();
+        assert!(error.to_string().contains("reset event could not be restored"), "{initializer}: {error}");
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+        assert_eq!(session.save_bytes(id).unwrap().as_ref(), before.as_ref());
+        assert_eq!(session.get(id).unwrap().can_undo(), None);
+    }
+}
+
+#[test]
+fn reset_event_protection_does_not_leak_to_a_later_batch_field_edit() {
+    for all in [false, true] {
+        let (mut session, id) = open(with_document_script(form(all, false), "this.print();"));
+        let _ = session.take_js_output(id);
+        session
+            .apply(
+                id,
+                Edit::Batch {
+                    label: "Reset then write".into(),
+                    edits: vec![
+                        Edit::ResetForm { names: if all { None } else { Some(vec!["price".into()]) } },
+                        Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("43".into()) },
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["43".into()], vec!["86".into()]));
+        // This fixture has a Calculate action and no Format action: only the later edit prints.
+        assert_eq!(session.take_js_output(id).requests, [js::Request::Print]);
+        session.undo(id).unwrap();
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+    }
+}

@@ -284,6 +284,8 @@ pub struct Outcome {
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.
     pub error: Option<String>,
+    /// Reset bootstrap could not restore its event; the caller must abort the edit.
+    pub event_restore_failed: bool,
     /// Errors in the document-level scripts that ran first. Each is a script of its own: one
     /// that throws stops where it failed, and the others and the script itself still run (#3940).
     pub doc_errors: Vec<String>,

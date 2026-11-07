@@ -165,6 +165,8 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    /// A reset must fail atomically when document scripts make its event unrestorable.
+    reset_restore_error: Option<String>,
 }
 
 impl JsRunner {
@@ -180,7 +182,14 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner {
+            doc,
+            doc_scripts,
+            output: JsOutput::default(),
+            cos: cos.clone(),
+            displays: std::collections::HashMap::new(),
+            reset_restore_error: None,
+        }
     }
 }
 
@@ -229,7 +238,12 @@ impl Scripts for ResetScripts<'_> {
 
 impl JsRunner {
     pub(crate) fn for_reset(&mut self) -> ResetScripts<'_> {
+        self.reset_restore_error = None;
         ResetScripts(self)
+    }
+
+    pub(crate) fn take_reset_restore_error(&mut self) -> Option<String> {
+        self.reset_restore_error.take()
     }
 
     fn run_event(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], reset: bool) -> ScriptResult {
@@ -270,6 +284,9 @@ impl JsRunner {
         } else {
             pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default())
         };
+        if flags.reset && o.event_restore_failed {
+            self.reset_restore_error = o.error.clone();
+        }
         if flags.log {
             self.output.absorb(&o);
         }

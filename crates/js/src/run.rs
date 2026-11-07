@@ -1,7 +1,8 @@
 use super::globals::{event_object, install};
 use super::host::{Host, Shared, error, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
+use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsObject, JsResult, JsString, Realm, RefCell, Source, js_string};
+use boa_engine::property::PropertyDescriptor;
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -250,7 +251,7 @@ fn run_here(
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
-        let mut ev = event_object(&mut ctx, event);
+        let ev = event_object(&mut ctx, event);
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
@@ -260,11 +261,13 @@ fn run_here(
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
-        if !config.bootstrap_effects {
-            // A document initializer may have assigned to `event` as well as to a field.
-            // The actual Calculate/Format must start with its own original event values.
-            ev = event_object(&mut ctx, event);
-            ctx.global_object().set(js_string!("event"), ev.clone(), true, &mut ctx)?;
+        if !config.bootstrap_effects
+            && let Err(e) = restore_reset_event(&mut ctx, &ev, event)
+        {
+            // A non-configurable descriptor or frozen event can make restoration impossible.
+            // The engine must abort this reset, rather than silently leave Calculate undone.
+            out.event_restore_failed = true;
+            return Err(error(format!("the reset event could not be restored after document scripts: {e}")));
         }
         // A fresh context is used for each field event. Restore effects before the actual
         // script, even when a document initializer threw after defining useful globals.
@@ -297,4 +300,24 @@ fn run_here(
         }
     }
     out
+}
+
+/// The bootstrap and the actual field script share a realm so document helpers stay usable.
+/// Restore core fields on the original object: closures holding `event` then see the same
+/// values as the direct global. Extra properties installed by a document script remain intact.
+fn restore_reset_event(ctx: &mut Context, ev: &JsObject, event: &Event) -> JsResult<()> {
+    let fresh = event_object(ctx, event);
+    for key in fresh.own_property_keys(ctx)? {
+        let value = fresh.get(key.clone(), ctx)?;
+        ev.define_property_or_throw(key, PropertyDescriptor::builder().value(value).writable(true).enumerable(true).configurable(true), ctx)?;
+    }
+    let global = ctx.global_object();
+    let full = PropertyDescriptor::builder().value(ev.clone()).writable(true).enumerable(true).configurable(true);
+    if global.define_property_or_throw(js_string!("event"), full, ctx).is_err() {
+        // A frozen global may keep a non-writable `event` that already refers to `ev`.
+        // Defining the same value without changing its descriptor is legal; a different
+        // non-configurable value or accessor still fails, and the caller aborts the edit.
+        global.define_property_or_throw(js_string!("event"), PropertyDescriptor::builder().value(ev.clone()), ctx)?;
+    }
+    Ok(())
 }
