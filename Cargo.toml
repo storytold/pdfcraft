@@ -24,7 +24,7 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "93d7c7b57afc6d2d60a0b12485c4c9ca96884596" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
