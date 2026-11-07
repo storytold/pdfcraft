@@ -2387,6 +2387,8 @@ fn the_outline_shown_is_the_area_apply_removes() {
         by_reference[2] = Object::Ref(forty);
         let mut one_nan = OVER_1234;
         one_nan[5] = f64::NAN;
+        let mut one_huge = OVER_1234;
+        one_huge[5] = 4e38;
         vec![
             (reals(&[OVER_1234, OVER_CD].concat()), true),
             (name_inside, true),
@@ -2394,6 +2396,7 @@ fn the_outline_shown_is_the_area_apply_removes() {
             (by_reference, true),
             (vec![Object::name("oops"); 8], true),
             (reals(&[one_nan, OVER_CD].concat()), false),
+            (reals(&[one_huge, OVER_CD].concat()), true),
             (reals(&[f64::NAN; 8]), false),
         ]
     };

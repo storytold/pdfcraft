@@ -9,9 +9,11 @@
 ///
 /// A quadrilateral is usable only when all eight of its entries are present, numbers, and within
 /// the range of a PDF real (finite as an `f32`, Annex C), so the readers that keep `f32` see the
-/// same set as those that keep `f64`. An unusable one is skipped whole: the ones after it keep
-/// their coordinates, and it never becomes a folded box or zeros. A trailing partial group is
-/// dropped.
+/// same set as those that keep `f64`. Usable values come back on the `f32` grid (each one put
+/// through `f32` and back), so the readers fold the same numbers too: a value `f32` cannot hold
+/// exactly, like 67108869, is 67108872 for every reader, not just the ones that keep `f32`. An
+/// unusable one is skipped whole: the ones after it keep their coordinates, and it never becomes
+/// a folded box or zeros. A trailing partial group is dropped.
 pub fn usable_quads<I: IntoIterator<Item = Option<f64>>>(entries: I) -> Vec<[f64; 8]> {
     let entries: Vec<Option<f64>> = entries.into_iter().collect();
     entries
@@ -22,7 +24,7 @@ pub fn usable_quads<I: IntoIterator<Item = Option<f64>>>(entries: I) -> Vec<[f64
             let mut quad = [0.0; 8];
             for (slot, v) in quad.iter_mut().zip(q) {
                 // NaN and infinities stay non-finite as `f32`; so does a value past its range.
-                *slot = v.filter(|v| (*v as f32).is_finite())?;
+                *slot = v.filter(|v| (*v as f32).is_finite()).map(|v| (v as f32) as f64)?;
             }
             Some(quad)
         })
@@ -58,6 +60,18 @@ mod tests {
             q[3] = bad;
             assert_eq!(usable_quads(some(&[q, B].concat())), vec![B], "{bad}");
         }
+    }
+
+    #[test]
+    fn usable_values_come_back_on_the_f32_grid() {
+        let mut q = A;
+        q[0] = 67_108_869.0; // `f32` cannot hold it exactly: it rounds to 67108872 there.
+        q[1] = 0.1;
+        let got = usable_quads(some(&q));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0][0], (67_108_869.0f64 as f32) as f64);
+        assert_eq!(got[0][1], (0.1f64 as f32) as f64);
+        assert_ne!(got[0][0], q[0]);
     }
 
     #[test]
