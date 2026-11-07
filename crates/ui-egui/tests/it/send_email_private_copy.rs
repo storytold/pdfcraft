@@ -1,4 +1,4 @@
-//! File ▸ Send by email… with unsaved edits: the copy for the email app goes into a new folder of
+//! File ▸ Attach to email… with unsaved edits: the copy for the email app goes into a new folder of
 //! its own that only its owner can read, created fresh, so a folder or a link someone else put in
 //! the shared temp folder is never written through. Unix only (modes and symlinks); the email app
 //! is never asked: a stand-in takes the request. Its temporary files are named after the process

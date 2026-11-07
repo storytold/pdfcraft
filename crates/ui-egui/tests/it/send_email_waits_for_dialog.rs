@@ -1,4 +1,4 @@
-//! File ▸ Send by email… while the email app is slow: if the person opens another dialog before
+//! File ▸ Attach to email… while the email app is slow: if the person opens another dialog before
 //! the answer comes, a "couldn't attach" answer waits until that dialog is closed, instead of
 //! replacing it. The email app is never asked: a stand-in takes the request and answers when the
 //! test says. Its temporary files are named after the process and the test.
@@ -55,7 +55,7 @@ fn harness(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf) {
 }
 
 /// The answer that the file wasn't attached comes while Preferences is open: Preferences stays,
-/// and the answer is kept; once it is closed the Send by email dialog comes.
+/// and the answer is kept; once it is closed the Attach to email dialog comes.
 fn answer_while_another_dialog_is_open(test: &str, why: Why) {
     let (mut h, path) = harness(test);
     assert!(h.state_mut().execute("file.send_email"));

@@ -157,7 +157,7 @@ fn every_registered_command_is_implemented() {
                 author: String::new(),
             }));
         }
-        // Send by email would ask this computer's email app: a stand-in answers instead.
+        // Attach to email would ask this computer's email app: a stand-in answers instead.
         if spec.id == "file.send_email" {
             app.send_email.sender = |_, _| Err(pdfcraft_platform::mail::MailError::Unsupported);
         }

@@ -521,7 +521,7 @@ pub struct PdfCraftApp {
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
-    /// File ▸ Send by email: the request under way and the file that couldn't be attached.
+    /// File ▸ Attach to email: the request under way and the file that couldn't be attached.
     pub send_email: send_email_ui::SendEmailState,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.

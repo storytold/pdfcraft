@@ -142,9 +142,9 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
-    /// File ▸ Send by email: the file couldn't be attached.
+    /// File ▸ Attach to email: the file couldn't be attached.
     SendEmail,
-    /// File ▸ Send by email: the document has redaction marks that aren't applied.
+    /// File ▸ Attach to email: the document has redaction marks that aren't applied.
     SendEmailMarks,
     /// Link Properties.
     LinkProps,

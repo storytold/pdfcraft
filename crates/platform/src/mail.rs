@@ -1,4 +1,4 @@
-//! Send by email: a new message in the computer's default email program with a file attached,
+//! Attach to email: a new message in the computer's default email program with a file attached,
 //! the way Acrobat's *Attach to Email* works. Nothing is sent from here and nothing goes over the
 //! network: the message opens in the person's own email program for them to address and send.
 //!

@@ -1,4 +1,4 @@
-//! File ▸ Send by email… in the real shell (egui_kittest). The email app is never asked: a
+//! File ▸ Attach to email… in the real shell (egui_kittest). The email app is never asked: a
 //! stand-in takes the request and answers when the test says, and another stands in for the file
 //! manager. Its temporary files are named after the process and the test.
 
@@ -68,7 +68,7 @@ fn an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown() {
     crate::support::open_menu(&mut h, "File");
     // Pressed as a screen reader would: a pointer click on the File menu's lower items doesn't
     // reach them headless.
-    crate::support::menu_row(&h, "Send by email…").click_accesskit();
+    crate::support::menu_row(&h, "Attach to email…").click_accesskit();
     h.run_steps(2);
 
     let asked = sent();
