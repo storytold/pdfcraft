@@ -3202,8 +3202,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.number"]
 tools = ["page_number"]
-evidence = ["crates/organize/src/tests.rs::number_pages_like_acrobat", "crates/engine/src/tests.rs::number_pages_shows_in_the_viewer_and_undoes", "crates/ui-egui/tests/it/bookmarks.rs::number_pages_dialog_labels_the_selected_pages", "crates/automation/tests/it/automation.rs::numbering_pages_through_tools"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::number_pages_like_acrobat", "crates/organize/src/tests.rs::number_pages_preserves_indirect_label_style_and_start", "crates/organize/src/tests.rs::cyclic_label_style_or_start_is_refused_without_rewriting", "crates/engine/src/tests.rs::number_pages_shows_in_the_viewer_and_undoes", "crates/ui-egui/tests/it/bookmarks.rs::number_pages_dialog_labels_the_selected_pages", "crates/automation/tests/it/automation.rs::numbering_pages_through_tools"]
+notes = "Partial relabelling preserves untouched ranges whose style or starting number is indirect; reference cycles are refused before rewriting. Existing label size and number-tree limits still apply."
 
 [[feature]]
 id = "organize.page-boxes"

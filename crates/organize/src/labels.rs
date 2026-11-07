@@ -183,8 +183,17 @@ fn read_label_node(
                         // A prefix object shared by many ranges is copied into each: count every copy.
                         *prefix_left =
                             prefix_left.checked_sub(prefix.len()).ok_or_else(|| invalid_label("decoded prefixes exceed 4 MiB in total"))?;
-                        let style = spec.name(b"S").map_or(LabelStyle::None, LabelStyle::from_name);
-                        let first = spec.int(b"St").unwrap_or(1).max(1);
+                        // These scalar entries may be indirect too. Reading only direct values
+                        // would silently change untouched labels when an edit rewrites the tree.
+                        let style = match spec.get(b"S") {
+                            Some(style) => with_label_object(doc, style, |s| Ok(s.as_name().map_or(LabelStyle::None, LabelStyle::from_name)))?,
+                            None => LabelStyle::None,
+                        };
+                        let first = match spec.get(b"St") {
+                            Some(first) => with_label_object(doc, first, |s| Ok(s.as_int().unwrap_or(1)))?,
+                            None => 1,
+                        }
+                        .max(1);
                         let first = if style == LabelStyle::None {
                             // /St has no effect without /S; keep the existing compatibility clamp.
                             first.min(i64::from(u32::MAX)) as u32

@@ -2123,6 +2123,53 @@ fn page_label_limits_refuse_reference_only_cycles_without_rewriting() {
 }
 
 #[test]
+fn number_pages_preserves_indirect_label_style_and_start() {
+    for (indirect_style, indirect_start) in [(true, false), (false, true), (true, true)] {
+        let mut d = doc_a();
+        let style = d.add(Object::name("r"));
+        let style_alias = d.add(Object::Ref(style));
+        let first = d.add(Object::Int(4));
+        let first_alias = d.add(Object::Ref(first));
+        let mut spec = Dict::new();
+        spec.set(b"S".to_vec(), if indirect_style { Object::Ref(style_alias) } else { Object::name("r") });
+        spec.set(b"St".to_vec(), if indirect_start { Object::Ref(first_alias) } else { Object::Int(4) });
+        spec.set(b"P".to_vec(), Object::String(PdfString::text("Sec ")));
+        let mut tree = Dict::new();
+        tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+        d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Dict(tree))).unwrap();
+        let before = crate::page_labels(&d).unwrap();
+        crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+        assert_eq!(crate::page_labels(&d).unwrap(), ["1", "Sec v", "Sec vi"]);
+        assert_eq!(before, ["Sec iv", "Sec v", "Sec vi"]);
+        assert_eq!(*d.get(style), Object::name("r"), "shared style remains unchanged");
+        assert_eq!(*d.get(first), Object::Int(4), "shared starting number remains unchanged");
+        for saved in [write_incremental(&d, &SaveOptions::default()).unwrap(), write_full(&d, &SaveOptions::default()).unwrap()] {
+            assert_eq!(crate::page_labels(&open(saved)).unwrap(), ["1", "Sec v", "Sec vi"]);
+        }
+    }
+}
+
+#[test]
+fn cyclic_label_style_or_start_is_refused_without_rewriting() {
+    for key in [b"S".as_slice(), b"St".as_slice()] {
+        let mut d = doc_a();
+        let cycle = d.add(Object::Null);
+        d.set(cycle, Object::Ref(cycle));
+        let mut spec = Dict::new();
+        spec.set(b"S".to_vec(), Object::name("r"));
+        spec.set(b"St".to_vec(), Object::Int(4));
+        spec.set(key.to_vec(), Object::Ref(cycle));
+        let mut tree = Dict::new();
+        tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+        d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Dict(tree))).unwrap();
+        let before = d.modified_objects();
+        assert!(crate::page_labels(&d).unwrap_err().to_string().contains("cyclic"));
+        assert!(crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).is_err());
+        assert_eq!(d.modified_objects(), before);
+    }
+}
+
+#[test]
 fn page_label_limits_validate_the_same_ranges_that_are_written() {
     use crate::{LabelRange, LabelStyle};
     let mut d = doc_a();
