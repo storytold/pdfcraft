@@ -51,6 +51,12 @@ fn every_byte_value_in_hex_strings_octal_escapes_and_names() {
     assert_eq!(name, want);
 }
 
+#[test]
+fn whole_real_at_i32_min_stays_a_real_token() {
+    // -2^31 is outside the Annex C integer range (±2^31-1), so it keeps its trailing point.
+    assert_eq!(bytes_of(&Object::Real(f64::from(i32::MIN))), b"-2147483648.");
+}
+
 proptest! {
     #[test]
     fn integers_match_the_formatter(i in any::<i64>()) {
@@ -58,7 +64,7 @@ proptest! {
     }
 
     #[test]
-    fn whole_reals_match_the_formatter(i in any::<i32>()) {
+    fn whole_reals_match_the_formatter(i in -i32::MAX..=i32::MAX) {
         prop_assert_eq!(bytes_of(&Object::Real(f64::from(i))), format!("{i}").into_bytes());
     }
 
