@@ -118,8 +118,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/filters/src/lib.rs::chain_three_filters_with_predictor", "crates/filters/src/lzw.rs::spec_example", "crates/filters/src/predictor.rs::png_hand_vectors", "crates/filters/src/lib.rs::raw_flate_fallback_preserves_output_limits", "crates/cos/src/object.rs::raw_flate_fallback_streams_preserve_the_caller_limit"]
-notes = "Raw-deflate fallback preserves output limits in strict and tolerant decoding, including misleading zlib headers. Image codecs remain outside this general-purpose filter implementation."
+evidence = ["crates/filters/src/lib.rs::chain_three_filters_with_predictor", "crates/filters/src/lzw.rs::spec_example", "crates/filters/src/predictor.rs::png_hand_vectors", "crates/filters/src/lib.rs::raw_flate_fallback_preserves_output_limits", "crates/cos/src/object.rs::raw_flate_fallback_streams_preserve_the_caller_limit", "crates/render/src/raster/tests/tiff_predicted_images.rs::an_eight_bit_rgb_image_with_tiff_predicted_rows_draws_its_colours", "crates/render/src/raster/tests/tiff_predicted_images.rs::a_sixteen_bit_grey_image_with_tiff_predicted_rows_draws_its_levels"]
+notes = "Raw-deflate fallback preserves output limits in strict and tolerant decoding, including misleading zlib headers. The renderer undoes PNG predictors, and TIFF predictor 2 at 8 and 16 bits per component, a byte row at a time. Image codecs remain outside this general-purpose filter implementation."
 
 [[feature]]
 id = "core.image-filters"
