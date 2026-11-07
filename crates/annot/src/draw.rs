@@ -33,7 +33,7 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let page = appearance::is_text_markup(&d).then(|| page_box_listing(doc, r)).flatten();
+    let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
     let Some(stream) = build_appearance(doc, &d, page) else { return Err(AnnotError::Unsupported(subtype)) };
     apply_appearance(doc, r, &d, stream)
 }
@@ -44,7 +44,7 @@ fn page_box_listing(doc: &Document, r: ObjRef) -> Option<[f64; 4]> {
 }
 
 /// Draw the appearance for an annotation dictionary on a page whose visible region is `page`
-/// (used by text markup, [`appearance::build_on_page`]): the expensive half of [`set_appearance`].
+/// (used by annotations drawn through points of their own, [`appearance::build_on_page`]): the expensive half of [`set_appearance`].
 /// Pure from the dictionary, the objects it points at and the page, so [`AppearanceCache`] can
 /// reuse it.
 fn build_appearance(doc: &Document, d: &Dict, page: Option<[f64; 4]>) -> Option<Stream> {
@@ -68,7 +68,7 @@ fn build_appearance(doc: &Document, d: &Dict, page: Option<[f64; 4]>) -> Option<
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
-    // Text markup whose /QuadPoints reach past /Rect: its appearance covers them, so /Rect does too.
+    // Points (/QuadPoints, /L, /Vertices, /InkList) past /Rect: its appearance covers them, so /Rect does too.
     let markup_rect = appearance::widened_rect(d, &stream);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
@@ -173,7 +173,7 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
     // reads `doc`, which never gets the appearance, so every repeat used to add another stream to
     // the copy, and the display bytes grew with the number of listings.
     let mut seen = std::collections::HashSet::new();
-    // Pages' visible regions, read once and only when a text markup is drawn.
+    // Pages' visible regions, read once and only when an annotation drawn through its points is.
     let mut crops: Option<std::collections::HashMap<ObjRef, [f64; 4]>> = None;
     for page in page_refs(doc).ok()? {
         for r in annots(doc, page).iter().filter_map(Object::as_ref) {
@@ -200,7 +200,7 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let crop = appearance::is_text_markup(&d)
+            let crop = appearance::is_drawn_from_points(&d)
                 .then(|| crops.get_or_insert_with(|| pdfcraft_model::pages(doc).iter().map(|p| (p.obj, p.crop(doc))).collect()).get(&page).copied())
                 .flatten();
             let Some(stream) = build_appearance(doc, &d, crop).or_else(other_stamp) else { continue };

@@ -2906,6 +2906,118 @@ fn restyled_text_markup_saves_the_rect_its_appearance_covers() {
     assert_eq!(ap_bbox(&saved, &shown[2]), rect(&shown[2]));
 }
 
+/// A one-page document whose page lists `annots` (objects 4 on) and the display copy
+/// `with_missing_appearances` draws for it.
+fn displayed(annots: &[&[u8]]) -> (Document, Document) {
+    let kids: Vec<String> = (0..annots.len()).map(|i| format!("{} 0 R", i + 4)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" "));
+    let mut objs: Vec<&[u8]> =
+        vec![b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", page.as_bytes()];
+    objs.extend_from_slice(annots);
+    let doc = document_of(&objs);
+    let display = with_missing_appearances(&doc).expect("the annotations need an appearance");
+    (doc, display)
+}
+
+/// Ink strokes (`/InkList`, ISO 32000-2 Table 185) outside an ink annotation's `/Rect` are drawn:
+/// the display copy's `/Rect` and `/BBox` take in the strokes and half their width. Shaped like
+/// the pencil marks of `issue13447.pdf`, whose `/Rect` has x and y swapped. An ink annotation
+/// whose `/Rect` holds its points keeps it, even where its wide stroke reaches past it.
+#[test]
+fn ink_whose_strokes_reach_past_its_rect_is_drawn_through_them() {
+    let (doc, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Ink /Rect [109.25 260.01 21.25 313.51] /BS << /W 3 >> /C [1 0 0] /InkList [[260 502.75 300 537 330 520] [280 510]] >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [0 0 100 100] /BS << /W 30 >> /C [1 0 0] /InkList [[10 10 90 90]] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [21.25, 260.01, 331.5, 538.5], "the ink's /Rect takes in its strokes");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("260 502.75 m"), "the stroke is drawn");
+    assert_eq!(rect(&shown[1]), [0.0, 0.0, 100.0, 100.0], "a /Rect that holds the points stays as it is");
+    assert_eq!(rect(&list(&doc, 0)[0]), [109.25, 260.01, 21.25, 313.51], "the source document is unchanged");
+}
+
+/// A polyline's `/Vertices` (Table 181) outside its `/Rect` are drawn, with its line endings
+/// (`/LE`): the box takes in the arrow at the last vertex.
+#[test]
+fn polyline_whose_vertices_reach_past_its_rect_is_drawn_through_them() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /PolyLine /Rect [667.5 250.69 567.75 344.44] /BS << /W 2 >> /C [0 0 1] /Vertices [250 44 350 94 285 138] >>",
+        b"<< /Type /Annot /Subtype /PolyLine /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /LE [/None /OpenArrow] /Vertices [100 100 200 100 200 200] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [249.0, 43.0, 667.5, 344.44], "the polyline's /Rect takes in its vertices");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("250 44 m"), "the polyline is drawn");
+    // Half the width (1) and the arrow (6 + 3 × 2) past the vertices.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 213.0, 213.0], "and its arrow");
+}
+
+/// A polygon's `/Vertices` outside its `/Rect` are drawn, its cloudy border (§12.5.4) included.
+#[test]
+fn polygon_whose_vertices_reach_past_its_rect_is_drawn_through_them() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 1 >> /C [0 0 1] /IC [1 1 0] /Vertices [100 100 200 100 150 180] >>",
+        b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /BE << /S /C >> /Vertices [100 100 200 100 150 180] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 200.5, 180.5], "the polygon's /Rect takes in its vertices");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("100 100 m"), "the polygon is drawn");
+    // Half the width (1) and twice the cloud radius (2 × (6 + 1.5 × 2)) past the vertices.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 219.0, 199.0], "and its cloudy border");
+}
+
+/// A line's `/L` (Table 178) outside its `/Rect` is drawn, with its line ending and its leader
+/// lines. Shaped like the arrows of `issue13447.pdf`.
+#[test]
+fn line_whose_points_reach_past_its_rect_is_drawn_through_them() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Line /Rect [598.31 146.63 537 316.13] /BS << /W 6 >> /C [0 0 1] /LE [/None /ClosedArrow] /L [176 45 178 154] >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /L [100 100 200 100] /LL 20 /LLE 5 >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [90 90 210 110] /BS << /W 2 >> /C [0 0 1] /LE [/OpenArrow /OpenArrow] /L [100 100 200 100] >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    // Half the width (3) and the arrow (6 + 3 × 6) past `/L`.
+    assert_eq!(rect(&shown[0]), [149.0, 18.0, 598.31, 316.13], "the line's /Rect takes in /L and its arrow");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("176 45 m"), "the line is drawn");
+    // The leaders rise 20 + 5 above `/L`; half the width (1) past them.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 201.0, 126.0], "and its leader lines");
+    assert_eq!(rect(&shown[2]), [90.0, 90.0, 210.0, 110.0], "a /Rect that holds /L stays as it is");
+}
+
+/// Points past the caps (`appearance::MAX_REACH_POINTS`) leave `/Rect` as it is, as do points
+/// that aren't numbers; a restyle (the edit path) saves the widened `/Rect` of an ink annotation.
+#[test]
+fn path_reach_stops_at_the_point_cap_and_is_saved_on_restyle() {
+    let cap = appearance::MAX_REACH_POINTS;
+    let stroke = |n: usize| format!("[{}]", vec!["100 120"; n].join(" "));
+    let at_cap = format!("<< /Type /Annot /Subtype /Ink /Rect [10 10 20 20] /BS << /W 0 >> /C [1 0 0] /InkList [{} [200 200]] >>", stroke(cap - 1));
+    let past_cap = format!("<< /Type /Annot /Subtype /Ink /Rect [10 10 20 20] /BS << /W 0 >> /C [1 0 0] /InkList [{} [200 200]] >>", stroke(cap));
+    let (_, display) = displayed(&[at_cap.as_bytes(), past_cap.as_bytes()]);
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 200.0, 200.0], "as many points as the cap widen the box");
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 20.0, 20.0], "more points than the cap keep the /Rect");
+
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [109.25 260.01 21.25 313.51] /BS << /W 3 >> /C [1 0 0] /InkList [[260 502.75 300 537 330 520]] >>",
+    ]);
+    set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    let saved = reopen(&doc);
+    let shown = list(&saved, 0);
+    assert_eq!(rect(&shown[0]), [21.25, 260.01, 331.5, 538.5], "the saved /Rect takes in the strokes");
+    assert_eq!(ap_bbox(&saved, &shown[0]), rect(&shown[0]));
+}
+
 fn nums_of(d: &Dict, key: &[u8]) -> Vec<f64> {
     d.get(key).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|o| o.as_f64()).collect()).unwrap_or_default()
 }
