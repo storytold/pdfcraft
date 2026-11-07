@@ -2442,7 +2442,6 @@ fn detached_window_edit_commit_routes_to_target_view_without_modifying_docked_ta
     assert_eq!(tab_a_doc.info.pages[0].rotation, 0, "Docked Tab A must remain completely unmodified");
     assert!(!tab_a_doc.dirty, "Docked Tab A must remain clean");
 }
-}
 
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
