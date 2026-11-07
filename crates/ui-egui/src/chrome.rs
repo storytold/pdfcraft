@@ -470,8 +470,9 @@ fn tab(
     theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown })
 }
 
-/// Width the print, save and info buttons and their gaps take in the mode bar.
-const MODE_BAR_RIGHT: f32 = 3.0 * 32.0 + 2.0 * 4.0 + 8.0;
+/// Width the print, save and info buttons and their gaps take in the mode bar: three buttons, the
+/// 4 pt `item_spacing` after each of them (three gaps, not two), and the 8 pt spacer.
+const MODE_BAR_RIGHT: f32 = 3.0 * 32.0 + 3.0 * 4.0 + 8.0;
 /// Narrowest search field the mode bar shows; below it the field becomes an icon button.
 const MODE_BAR_SEARCH_MIN: f32 = 140.0;
 
