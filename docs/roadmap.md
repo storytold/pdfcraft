@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #6320: selection-bar Highlight offers the existing six-colour picker with a dropdown icon and remembers the chosen default; estimates unchanged)
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 

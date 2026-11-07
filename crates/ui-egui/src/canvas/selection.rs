@@ -167,12 +167,13 @@ impl DocView {
 #[derive(Clone, Copy)]
 enum SelectionAction {
     Note,
-    Markup(comments::CommentTool),
+    Markup(comments::CommentTool, Option<pdfcraft_engine::Rgb>),
     Replace,
     Copy,
 }
 
 /// Actions on an existing text selection, next to the selected words.
+/// Returns a Copy request and the chosen Highlight colour to remember as the tool default.
 pub(super) fn selection_actions(
     ui: &mut egui::Ui,
     viewport: Rect,
@@ -181,27 +182,27 @@ pub(super) fn selection_actions(
     prefs: &comments::CommentPrefs,
     can_comment: bool,
     can_copy: bool,
-) -> bool {
+) -> (bool, Option<pdfcraft_engine::Rgb>) {
     if ui.input(|input| input.pointer.is_decidedly_dragging()) {
-        return false;
+        return (false, None);
     }
     let Some(selection) = view.selection else {
         view.actions_dismissed = None;
-        return false;
+        return (false, None);
     };
     if view.actions_dismissed == Some(selection) {
-        return false;
+        return (false, None);
     }
-    let Some(text) = view.texts.get(&selection.page) else { return false };
-    let Some(xf) = view.page_xform(selection.page) else { return false };
-    let Some(last) = selection.rects(text).last().copied() else { return false };
+    let Some(text) = view.texts.get(&selection.page) else { return (false, None) };
+    let Some(xf) = view.page_xform(selection.page) else { return (false, None) };
+    let Some(last) = selection.rects(text).last().copied() else { return (false, None) };
     let selected = selection.text(text);
     if selected.is_empty() {
-        return false;
+        return (false, None);
     }
     let rect = xf.view_rect(last);
     if !viewport.intersects(rect) {
-        return false;
+        return (false, None);
     }
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
@@ -213,12 +214,30 @@ pub(super) fn selection_actions(
                 ui.horizontal(|ui| {
                     for (label, action) in [
                         (tl!("Add comment"), SelectionAction::Note),
-                        (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                        (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                        (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                        (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight, None)),
+                        (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline, None)),
+                        (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut, None)),
                         (tl!("Replace text"), SelectionAction::Replace),
                     ] {
-                        if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
+                        let picker = can_comment && matches!(action, SelectionAction::Markup(comments::CommentTool::Highlight, None));
+                        let mut button = egui::Button::new(label);
+                        if picker {
+                            button = button.right_text(crate::icons::image("chevron-down", 8.0, ui.visuals().text_color())).gap(4.0);
+                        }
+                        let response = ui.add_enabled(can_comment, button);
+                        if picker {
+                            egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                                ui.horizontal(|ui| {
+                                    let current = prefs.style(comments::CommentTool::Highlight).color;
+                                    for (name, colour) in comments::SWATCHES.iter().take(6) {
+                                        if comments::swatch(ui, *colour, current == *colour, tl!(name)).clicked() {
+                                            chosen = Some(SelectionAction::Markup(comments::CommentTool::Highlight, Some(*colour)));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            });
+                        } else if response.clicked() {
                             chosen = Some(action);
                         }
                     }
@@ -229,13 +248,13 @@ pub(super) fn selection_actions(
             });
         },
     );
-    let Some(action) = chosen else { return false };
+    let Some(action) = chosen else { return (false, None) };
     if let SelectionAction::Copy = action {
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
         view.actions_dismissed = Some(selection);
-        return true;
+        return (true, None);
     }
-    let Some((page, quads)) = view.selection_quads(info) else { return false };
+    let Some((page, quads)) = view.selection_quads(info) else { return (false, None) };
     let last = quads.last().copied().unwrap_or_default();
     let at = [last[2].max(last[6]), last[1].max(last[3])];
     view.clear_selection();
@@ -252,19 +271,24 @@ pub(super) fn selection_actions(
                 focus: true,
             });
         }
-        SelectionAction::Markup(tool) => {
+        SelectionAction::Markup(tool, colour) => {
+            let mut style = prefs.style(tool);
+            if let Some(colour) = colour {
+                style.color = colour;
+            }
             // Every markup button carries a markup tool; anything else adds nothing.
-            let Some(kind) = tool.markup() else { return false };
+            let Some(kind) = tool.markup() else { return (false, None) };
             view.pending_edit = Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                 page,
                 shape: pdfcraft_engine::Shape::TextMarkup { kind, quads },
-                style: prefs.style(tool),
+                style,
                 contents: String::new(),
                 author: prefs.author.clone(),
             }));
+            return (false, colour);
         }
         // Copy is dispatched through the app after the view borrow ends.
         SelectionAction::Copy => {}
     }
-    false
+    (false, None)
 }
