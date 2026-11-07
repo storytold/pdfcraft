@@ -8199,6 +8199,9 @@ mod icc_profile_cache;
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 
+// A Type 3 font without /Widths advances by its glyphs' d0/d1 widths (PDFBOX-2943).
+mod type3_proc_widths;
+
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
 fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
     let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
