@@ -1185,6 +1185,8 @@ struct PageEnv<'a> {
     initials: &'a Option<crate::fill_sign::SavedSig>,
     key_scroll: f32,
     key_side: f32,
+    /// This frame's keys as the pages see them.
+    keys: crate::page_keys::PageKeys,
     middle_gesture: bool,
     modal: bool,
     navigation_enabled: bool,
@@ -2581,7 +2583,7 @@ fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, author, avail, can_modify, doc, form, info, keys, prefs, t, today, tool, units, unobstructed, .. } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2597,20 +2599,20 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
-    if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
+    if let Some(e) = comments::composer(ui.ctx(), keys, view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), keys, view, info) {
         view.pending_edit = Some(e);
     }
     let text_box = crate::forms_ui::text_box(doc, view, form);
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, form, primary_down, text_box.as_ref(), today) {
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), keys, view, info, form, primary_down, text_box.as_ref(), today) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, author) {
+    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), keys, view, info, author) {
         view.pending_edit = Some(e);
     }
-    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, added);
+    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), keys, view, info, added);
     if typed.is_some() {
         view.pending_edit = typed;
     }
@@ -3097,6 +3099,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         initials: &initials,
         key_scroll,
         key_side,
+        keys,
         middle_gesture,
         modal,
         navigation_enabled,

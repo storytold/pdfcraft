@@ -112,3 +112,13 @@ pub fn skip_without_catalogs(name: &str) -> bool {
     }
     skip
 }
+
+/// Open Help ▸ Keyboard shortcuts with a click, as a user would, so whatever had the keyboard loses
+/// it as it does then.
+pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) {
+    use egui_kittest::kittest::Queryable;
+    open_menu(h, "Help");
+    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with("Keyboard shortcuts"))).click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_some(), "Keyboard shortcuts is open");
+}

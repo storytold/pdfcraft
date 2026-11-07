@@ -4377,3 +4377,22 @@ fn edit_delete_removes_the_selected_comment() {
     h.run_steps(4);
     assert!(comments(&h).is_empty());
 }
+
+/// The Escape that closes a dialog opened from a menu while a comment is being typed is the
+/// dialog's: the typing stays, in the composer or posted. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_comment_being_typed_keeps_the_typing() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("First line".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].comments.composer.as_ref().is_some_and(|c| c.text.contains("First line"));
+    let posted = comments(&h).iter().any(|c| c.contents.as_deref().is_some_and(|t| t.contains("First line")));
+    assert!(open || posted, "the typing stays");
+}

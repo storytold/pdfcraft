@@ -11,6 +11,7 @@ use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::theme::Tokens;
 
 mod scan;
@@ -602,7 +603,7 @@ pub enum FillAction {
 }
 
 /// The in-place editor for typed text. Returns the edit once committed.
-pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, author: &str) -> Option<Edit> {
+pub(crate) fn type_box(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, author: &str) -> Option<Edit> {
     let tb = view.fill_text.clone()?;
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
@@ -678,7 +679,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 t.focus = false;
             }
             // Taken here: the same press must not also leave the tool (one step back per press).
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if keys.take(ui.ctx(), egui::Key::Escape) {
                 cancel = true;
             } else if r.lost_focus() {
                 commit = true;

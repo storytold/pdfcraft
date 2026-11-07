@@ -5,9 +5,10 @@ use super::{
     Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
     theme,
 };
+use crate::page_keys::PageKeys;
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
-pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
     let c = view.comments.composer.as_ref()?;
     let page = c.page;
     let Some(xf) = view.page_xform(page) else {
@@ -79,7 +80,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 c.focus = false;
             }
             let enter = submit_key(ui, &edit, false);
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if keys.pressed(ui.ctx(), egui::Key::Escape) {
                 cancel = true;
             }
             ui.add_space(8.0);

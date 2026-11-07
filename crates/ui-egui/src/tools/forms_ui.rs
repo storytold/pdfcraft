@@ -15,6 +15,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 
@@ -766,8 +767,10 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 /// `text_box`, for a text field that doesn't scroll, is how its widget lays text out: the editor
 /// then takes no more than fits.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn overlay(
     ctx: &egui::Context,
+    keys: PageKeys,
     view: &mut DocView,
     info: &DocInfo,
     form: &[FormField],
@@ -857,9 +860,9 @@ pub(crate) fn overlay(
                         .accessible_name(f.name.clone());
                     settle_text_editor(ui, fx, &r, primary_down, laid_out, text_box.zip(before));
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
-                    let (enter, esc, tab, shift) = ui.input(|i| {
-                        (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift)
-                    });
+                    let (enter, esc, tab) =
+                        (keys.pressed(ctx, egui::Key::Enter), keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+                    let shift = ui.input(|i| i.modifiers.shift);
                     if esc {
                         close = true;
                     } else if tab {
@@ -913,8 +916,8 @@ pub(crate) fn overlay(
                     });
                 });
             let clicked_away = !resp.response.contains_pointer() && clicked_outside();
-            let (tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let (tab, shift) = (keys.pressed(ctx, egui::Key::Tab), ctx.input(|i| i.modifiers.shift));
+            if keys.pressed(ctx, egui::Key::Escape) {
                 close = true;
             } else if tab {
                 next = Some(!shift);
@@ -924,16 +927,10 @@ pub(crate) fn overlay(
             }
         }
         FormFieldKind::List => {
-            let (up, down, esc, tab, shift) = ctx.input_mut(|i| {
-                (
-                    // Consumed, so the arrows move the selection without also scrolling the page.
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                    i.key_pressed(egui::Key::Escape),
-                    i.key_pressed(egui::Key::Tab),
-                    i.modifiers.shift,
-                )
-            });
+            // Taken, so the arrows move the selection without also scrolling the page.
+            let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
+            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+            let shift = ctx.input(|i| i.modifiers.shift);
             if esc {
                 close = true;
             } else if tab {
@@ -969,20 +966,20 @@ pub(crate) fn overlay(
                 has_focus = r.has_focus();
             });
             view.forms.keys = Some((id, f.kind == FormFieldKind::Radio));
-            let (esc, tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift));
-            let space = has_focus && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+            let shift = ctx.input(|i| i.modifiers.shift);
+            let space = has_focus && keys.take(ctx, egui::Key::Space);
             let arrow = has_focus && f.kind == FormFieldKind::Radio;
-            let step = ctx.input(|i| {
-                if !arrow {
-                    None
-                } else if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowDown) {
-                    Some(true)
-                } else if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowUp) {
-                    Some(false)
-                } else {
-                    None
-                }
-            });
+            let pressed = |a, b| keys.pressed(ctx, a) || keys.pressed(ctx, b);
+            let step = if !arrow {
+                None
+            } else if pressed(egui::Key::ArrowRight, egui::Key::ArrowDown) {
+                Some(true)
+            } else if pressed(egui::Key::ArrowLeft, egui::Key::ArrowUp) {
+                Some(false)
+            } else {
+                None
+            };
             if esc || clicked_outside() {
                 close = true;
             } else if tab {

@@ -1541,3 +1541,24 @@ fn delete_and_escape_under_a_dialog_leave_the_selected_added_text() {
         assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
     }
 }
+
+/// The Escape that closes a dialog opened from a menu while added text is being typed is the
+/// dialog's: the typing stays, in the editor or added to the page. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Reviewed".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.is_some(), "the editor is open");
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].content.draft.as_ref().is_some_and(|d| d.text.contains("Reviewed"));
+    let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
+    assert!(open || added, "the typing stays");
+}

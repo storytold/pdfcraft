@@ -10768,3 +10768,32 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
         );
     }
 }
+
+/// The Escape that closes a dialog opened from a menu while a paragraph is being typed is the
+/// dialog's: the typing stays, in the open paragraph or applied to the page. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_paragraph_being_typed_keeps_the_typing() {
+    let mut h = open_source_font_fixture();
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let serif = egui::pos2(page.left() + 25.0 / 300.0 * page.width(), page.top() + (300.0 - 228.0) / 300.0 * page.height());
+    h.hover_at(serif);
+    h.run_steps(1);
+    h.drag_at(serif);
+    h.run_steps(1);
+    h.drop_at(serif);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open");
+    h.event(egui::Event::Text("typed ".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let s = h.state();
+    let open = s.views[0].line_editor.as_ref().is_some_and(|e| e.text.contains("typed"));
+    let applied = s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().any(|b| b.text.contains("typed"));
+    assert!(open || applied, "the typing stays");
+}
