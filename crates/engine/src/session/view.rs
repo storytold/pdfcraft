@@ -304,6 +304,7 @@ impl Session {
     }
 }
 
+/// Convert a view-space text line rectangle into a normalized, finite PDF user-space rectangle.
 fn line_user_rect(page: &pdfcraft_render::PageInfo, v: [f32; 4]) -> Option<[f64; 4]> {
     if !v.iter().all(|x| x.is_finite()) {
         return None;
@@ -319,9 +320,10 @@ mod tests {
     use pdfcraft_render::PageInfo;
     use std::sync::Arc;
 
+    /// Build a sample `PageInfo` with a non-origin crop box `[10.0, 20.0, 210.0, 320.0]` (`200 × 300`).
     fn sample_page(rotation: u16) -> PageInfo {
         let (width, height) = if rotation % 180 == 90 { (300.0, 200.0) } else { (200.0, 300.0) };
-        PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, 200.0, 300.0], rotation }
+        PageInfo { width, height, label: String::new(), crop: [10.0, 20.0, 210.0, 320.0], rotation }
     }
 
     #[test]
@@ -332,19 +334,32 @@ mod tests {
         assert_eq!(line_user_rect(&page, [10.0, 20.0, f32::INFINITY, 30.0]), None);
         assert_eq!(line_user_rect(&page, [10.0, f32::NEG_INFINITY, 50.0, 30.0]), None);
 
-        let mut bad_crop = sample_page(0);
-        bad_crop.crop = [f32::NAN, 0.0, 200.0, 300.0];
-        assert_eq!(line_user_rect(&bad_crop, [10.0, 20.0, 50.0, 40.0]), None);
+        for bad_crop_box in [[f32::NAN, 0.0, 200.0, 300.0], [0.0, f32::INFINITY, 200.0, 300.0], [0.0, 0.0, f32::NEG_INFINITY, 300.0]] {
+            let mut bad_crop = sample_page(0);
+            bad_crop.crop = bad_crop_box;
+            assert_eq!(line_user_rect(&bad_crop, [10.0, 20.0, 50.0, 40.0]), None);
+        }
+
+        // Finite inputs whose crop span overflows f32 during view-to-user mapping must also be rejected.
+        let overflow_page = PageInfo { width: 1.0, height: 1.0, label: String::new(), crop: [-f32::MAX, 0.0, f32::MAX, 300.0], rotation: 0 };
+        assert_eq!(line_user_rect(&overflow_page, [1.0, 10.0, 2.0, 20.0]), None);
     }
 
     #[test]
     fn line_user_rect_matches_view_rect_to_user_across_rotations() {
         let v = [12.0, 24.0, 96.0, 48.0];
-        for rotation in [0, 90, 180, 270] {
+        let cases = [
+            (0, [22.0, 272.0, 106.0, 296.0]),
+            (90, [34.0, 32.0, 58.0, 116.0]),
+            (180, [114.0, 44.0, 198.0, 68.0]),
+            (270, [162.0, 224.0, 186.0, 308.0]),
+        ];
+        for (rotation, expected) in cases {
             let page = sample_page(rotation);
             let got = line_user_rect(&page, v).expect("finite view rect maps to user space");
-            let expected = page.view_rect_to_user(v).map(f64::from);
-            assert_eq!(got, expected, "rotation {rotation}");
+            for (g, e) in got.into_iter().zip(expected) {
+                assert!((g - e).abs() < 1e-4, "rotation {rotation}: got {got:?}, expected {expected:?}");
+            }
         }
     }
 
@@ -375,14 +390,25 @@ mod tests {
 
         let mut session = Session::new();
         let id = session.open("urls.pdf", None, Arc::new(pdf), None).expect("opens");
-        session.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotates");
-        let urls = session.find_urls(id);
-        assert_eq!(urls.len(), 1);
-        assert_eq!(urls[0].0, 0);
-        assert_eq!(urls[0].2, "https://example.com");
-        assert_eq!(urls[0].1.len(), 1);
-        let r = urls[0].1[0];
-        assert!(r.iter().all(|c| c.is_finite()));
-        assert!(r[0] < r[2] && r[1] < r[3], "expected ordered user rect, got {r:?}");
+        let expected_rect = [46.004, 147.6, 153.38, 159.6];
+        let base_urls = session.find_urls(id);
+        assert_eq!(base_urls.len(), 1);
+        let base_rect = base_urls[0].1[0];
+        for (got, exp) in base_rect.into_iter().zip(expected_rect) {
+            assert!((got - exp).abs() < 1e-2, "0 deg: got {base_rect:?}, expected {expected_rect:?}");
+        }
+
+        for step in [90, 180, 270] {
+            session.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotates");
+            let urls = session.find_urls(id);
+            assert_eq!(urls.len(), 1);
+            assert_eq!(urls[0].0, 0);
+            assert_eq!(urls[0].2, "https://example.com");
+            assert_eq!(urls[0].1.len(), 1);
+            let r = urls[0].1[0];
+            for (got, exp) in r.into_iter().zip(expected_rect) {
+                assert!((got - exp).abs() < 1e-2, "rotation {step} deg: got {r:?}, expected {expected_rect:?}");
+            }
+        }
     }
 }
