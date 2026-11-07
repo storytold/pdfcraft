@@ -4183,6 +4183,349 @@ fn a_type3_text_layer_is_redacted_like_any_other() {
 }
 
 #[test]
+fn review_hidden_layer_configuration_uses_terminal_group_identities() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for (all, state, entry, visible) in [("8 0 R", "OFF", "7 0 R", false), ("7 0 R", "OFF", "8 0 R", false), ("8 0 R", "ON", "7 0 R", true)] {
+        let mut doc = one_page(
+            b"/OC /L BDC BT /F1 10 Tf 10 100 Td (LAYERPAYLOAD) Tj ET EMC",
+            "/Properties << /L 7 0 R >>",
+            vec![b"<< /Type /OCG /Name (Layer) >>".to_vec(), b"7 0 R".to_vec()],
+        );
+        let group = Object::Ref(ObjRef::new(7, 0));
+        let hop = Object::Ref(ObjRef::new(8, 0));
+        let mut defaults = Dict::new();
+        if visible {
+            defaults.set(b"BaseState".to_vec(), Object::name("OFF"));
+        }
+        defaults.set(state.as_bytes().to_vec(), Object::Array(vec![if entry == "7 0 R" { group.clone() } else { hop.clone() }]));
+        let oc = Dict::from_iter([
+            (b"OCGs".to_vec(), Object::Array(vec![if all == "7 0 R" { group } else { hop }])),
+            (b"D".to_vec(), Object::Dict(defaults)),
+        ]);
+        doc.update_dict(doc.root().unwrap(), |d| {
+            d.set(b"OCProperties".to_vec(), Object::Dict(oc));
+        })
+        .unwrap();
+        match remove_hidden(&mut doc, &[Hidden::HiddenLayers]) {
+            Ok(_) => {}
+            Err(RedactError::NothingToApply) if visible => {}
+            Err(error) => panic!("unexpected cleanup error: {error:?}"),
+        }
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let catalog = saved.get(saved.root().unwrap());
+        let oc = saved.resolve(catalog.as_dict().unwrap().get(b"OCProperties").unwrap());
+        let groups = saved.resolve(oc.as_dict().unwrap().get(b"OCGs").unwrap());
+        assert_eq!(groups.as_array().unwrap().len(), usize::from(visible));
+        assert_eq!(
+            pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|l| l.text.contains("LAYERPAYLOAD")),
+            visible,
+            "all={all}, {state}={entry}"
+        );
+    }
+}
+
+#[test]
+fn review_retained_off_group_aliases_keep_configuration_after_save() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for use_not in [false, true] {
+        let mut doc = one_page(
+            b"/OC /M BDC BT /F1 10 Tf 10 100 Td (VISIBLE) Tj ET EMC",
+            "/Properties << /M 9 0 R >>",
+            vec![
+                b"<< /Type /OCG /Name (Off) >>".to_vec(),
+                b"7 0 R".to_vec(),
+                if use_not { b"<< /VE [/Not 7 0 R] >>".to_vec() } else { b"<< /OCGs [7 0 R] /P /AnyOff >>".to_vec() },
+            ],
+        );
+        let alias = Object::Array(vec![Object::Ref(ObjRef::new(8, 0))]);
+        let defaults = Dict::from_iter([b"OFF".as_slice(), b"Order", b"Locked"].into_iter().map(|k| (k.to_vec(), alias.clone())));
+        let oc = Dict::from_iter([(b"OCGs".to_vec(), alias), (b"D".to_vec(), Object::Dict(defaults))]);
+        doc.update_dict(doc.root().unwrap(), |d| {
+            d.set(b"OCProperties".to_vec(), Object::Dict(oc));
+        })
+        .unwrap();
+        remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|l| l.text.contains("VISIBLE")));
+        let cat = saved.get(saved.root().unwrap());
+        let oc = saved.resolve(cat.as_dict().unwrap().get(b"OCProperties").unwrap());
+        let oc = oc.as_dict().unwrap();
+        let defaults = saved.resolve(oc.get(b"D").unwrap());
+        for (dict, key) in [
+            (oc, b"OCGs".as_slice()),
+            (defaults.as_dict().unwrap(), b"OFF"),
+            (defaults.as_dict().unwrap(), b"Order"),
+            (defaults.as_dict().unwrap(), b"Locked"),
+        ] {
+            let list = saved.resolve(dict.get(key).unwrap());
+            assert_eq!(list.as_array().unwrap().len(), 1, "{key:?}, Not={use_not}");
+            let hop = saved.resolve(&list.as_array().unwrap()[0]);
+            assert_eq!(saved.resolve(&hop).as_dict().unwrap().name(b"Type"), Some(b"OCG".as_slice()));
+        }
+    }
+}
+
+#[test]
+fn review_inheriting_forms_keep_drawn_xobjects_with_invalid_resources() {
+    for resources in ["", "/Resources null", "/Resources 42", "/Resources 9 0 R", "/Resources 10 0 R"] {
+        let mut doc = one_page(
+            b"/Fm Do",
+            "/XObject << /Fm 7 0 R /Im1 8 0 R >>",
+            vec![
+                stream(&format!("/Subtype /Form /BBox [0 0 300 300] {resources}"), b"/Im1 Do"),
+                stream("/Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"X"),
+                b"null".to_vec(),
+                b"<< >>".to_vec(),
+            ],
+        );
+        crate::interp::unlink_doomed(&mut doc, &[ObjRef::new(8, 0)], &[]).unwrap();
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(named_image(&saved, 0, b"Im1").is_some(), resources != "/Resources 10 0 R", "{resources}");
+    }
+}
+
+#[test]
+fn invalid_configured_layer_targets_do_not_hide_visible_content() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let invalid = [
+        b"42".to_vec(),
+        b"/NotAGroup".to_vec(),
+        b"[42]".to_vec(),
+        b"null".to_vec(),
+        b"7 0 R".to_vec(),
+        b"1000 3 R".to_vec(),
+        stream("/Type /OCG", b"not a group dictionary"),
+        b"<< /Type /NotAGroup >>".to_vec(),
+        b"<< /Type /OCMD /OCGs [] >>".to_vec(),
+    ];
+    for (case, target) in invalid.into_iter().enumerate() {
+        for base_off in [false, true] {
+            let mut doc = one_page(
+                b"/OC /Bad BDC BT /F1 10 Tf 10 100 Td (VISIBLE) Tj ET EMC /OC /Good BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC",
+                "/Properties << /Bad 7 0 R /Good 9 0 R >>",
+                vec![target.clone(), b"7 0 R".to_vec(), b"<< /Type /OCG /Name (Real off group) >>".to_vec()],
+            );
+            let mut defaults = Dict::new();
+            if base_off {
+                defaults.set(b"BaseState".to_vec(), Object::name("OFF"));
+            }
+            defaults.set(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(9, 0))]));
+            let oc = Dict::from_iter([
+                (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(9, 0))])),
+                (b"D".to_vec(), Object::Dict(defaults)),
+            ]);
+            doc.update_dict(doc.root().unwrap(), |d| {
+                d.set(b"OCProperties".to_vec(), Object::Dict(oc));
+            })
+            .unwrap();
+            remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+            let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let text = pdfcraft_edit::text_lines(&saved, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>().join(" ");
+            assert!(text.contains("VISIBLE"), "case={case}, base_off={base_off}: {text}");
+            assert!(!text.contains("SECRET"), "real off group must still be removed");
+            let cat = saved.get(saved.root().unwrap());
+            let oc = saved.resolve(cat.as_dict().unwrap().get(b"OCProperties").unwrap());
+            let oc = oc.as_dict().unwrap();
+            assert_eq!(saved.resolve(oc.get(b"OCGs").unwrap()).as_array().unwrap().len(), 1, "invalid configuration entry stays");
+            let defaults = saved.resolve(oc.get(b"D").unwrap());
+            assert_eq!(saved.resolve(defaults.as_dict().unwrap().get(b"OFF").unwrap()).as_array().unwrap().len(), 1, "invalid alias stays");
+        }
+    }
+}
+
+fn sanitize_chained_configuration_array(key: &[u8], visible: bool) {
+    let mut doc = one_page(
+        b"/OC /L BDC BT /F1 10 Tf 10 100 Td (LAYERPAYLOAD) Tj ET EMC",
+        "/Properties << /L 7 0 R >>",
+        vec![b"<< /Type /OCG /Name (Layer) >>".to_vec()],
+    );
+    let array = Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]);
+    let array_ref = doc.add(array.clone());
+    let hop = Object::Ref(doc.add(Object::Ref(array_ref)));
+    let mut defaults = Dict::new();
+    if visible {
+        defaults.set(b"BaseState".to_vec(), Object::name("OFF"));
+    }
+    let state = if visible { b"ON".as_slice() } else { b"OFF".as_slice() };
+    defaults.set(state.to_vec(), if key == state { hop.clone() } else { array.clone() });
+    defaults.set(b"Order".to_vec(), hop.clone());
+    defaults.set(b"Locked".to_vec(), hop.clone());
+    let oc = Dict::from_iter([(b"OCGs".to_vec(), if key == b"OCGs" { hop } else { array }), (b"D".to_vec(), Object::Dict(defaults))]);
+    doc.update_dict(doc.root().unwrap(), |d| {
+        d.set(b"OCProperties".to_vec(), Object::Dict(oc));
+    })
+    .unwrap();
+    crate::sanitize::sanitize(&mut doc).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let text = pdfcraft_edit::text_lines(&saved, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>().join(" ");
+    assert_eq!(text.contains("LAYERPAYLOAD"), visible, "{key:?}: {text}");
+    let cat = saved.get(saved.root().unwrap());
+    let oc = saved.resolve(cat.as_dict().unwrap().get(b"OCProperties").unwrap());
+    let oc = oc.as_dict().unwrap();
+    let defaults = saved.resolve(oc.get(b"D").unwrap());
+    for (dict, k) in [
+        (oc, b"OCGs".as_slice()),
+        (defaults.as_dict().unwrap(), state),
+        (defaults.as_dict().unwrap(), b"Order"),
+        (defaults.as_dict().unwrap(), b"Locked"),
+    ] {
+        let once = saved.resolve(dict.get(k).unwrap());
+        let array = saved.resolve(&once);
+        assert_eq!(array.as_array().unwrap().len(), usize::from(visible), "configuration {k:?}");
+    }
+}
+
+#[test]
+fn sanitize_resolves_chained_ocgs_array() {
+    sanitize_chained_configuration_array(b"OCGs", false);
+}
+#[test]
+fn sanitize_resolves_chained_off_array() {
+    sanitize_chained_configuration_array(b"OFF", false);
+}
+#[test]
+fn sanitize_resolves_chained_on_array() {
+    sanitize_chained_configuration_array(b"ON", true);
+}
+
+fn nested_layer_order_cleanup(chained: bool) {
+    for retained in [false, true] {
+        let mut doc = one_page(
+            b"BT /F1 10 Tf 10 200 Td (PUBLIC) Tj ET /OC /Layer BDC BT /F1 10 Tf 10 100 Td (LAYER) Tj ET EMC",
+            if retained { "/Properties << /Layer 9 0 R >>" } else { "/Properties << /Layer 7 0 R >>" },
+            vec![
+                b"<< /Type /OCG /Name (REMOVED_LAYER_SECRET_NAME) >>".to_vec(),
+                b"<< /Type /OCG /Name (Public layer) >>".to_vec(),
+                b"<< /Type /OCMD /OCGs [7 0 R] /P /AnyOff >>".to_vec(),
+            ],
+        );
+        let alias = doc.add(Object::Ref(ObjRef::new(7, 0)));
+        let mut nested =
+            Object::Array(vec![Object::String(pdfcraft_cos::PdfString::text("Subtree label")), Object::Ref(alias), Object::Ref(ObjRef::new(8, 0))]);
+        if chained {
+            let array = doc.add(nested);
+            nested = Object::Ref(doc.add(Object::Ref(array)));
+        }
+        let mut order = Object::Array(vec![Object::String(pdfcraft_cos::PdfString::text("Root label")), nested]);
+        if chained {
+            let array = doc.add(order);
+            order = Object::Ref(doc.add(Object::Ref(array)));
+        }
+        let defaults = Dict::from_iter([(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])), (b"Order".to_vec(), order)]);
+        let oc = Dict::from_iter([
+            (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+            (b"D".to_vec(), Object::Dict(defaults)),
+        ]);
+        doc.update_dict(doc.root().unwrap(), |d| {
+            d.set(b"OCProperties".to_vec(), Object::Dict(oc));
+        })
+        .unwrap();
+        let done = crate::sanitize::sanitize(&mut doc).unwrap();
+        assert!(done.iter().any(|(kind, count)| *kind == crate::sanitize::Hidden::HiddenLayers && *count > 0));
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let secret = saved.scan_objects().any(|(_, obj)| {
+            obj.as_dict().and_then(|d| d.get(b"Name")).and_then(Object::as_string).is_some_and(|s| s.to_text() == "REMOVED_LAYER_SECRET_NAME")
+        });
+        assert_eq!(secret, retained, "chained={chained}, retained={retained}: removed layer metadata survived");
+        let text = pdfcraft_edit::text_lines(&saved, 0).unwrap().into_iter().map(|line| line.text).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("PUBLIC"));
+        assert_eq!(text.contains("LAYER"), retained);
+        let cat = saved.get(saved.root().unwrap());
+        let oc = saved.resolve(cat.as_dict().unwrap().get(b"OCProperties").unwrap());
+        let defaults = saved.resolve(oc.as_dict().unwrap().get(b"D").unwrap());
+        let order = defaults.as_dict().unwrap().get(b"Order").unwrap();
+        let mut stack = vec![order.clone()];
+        let mut labels = Vec::new();
+        while let Some(value) = stack.pop() {
+            let value = saved.resolve(&value);
+            let value = saved.resolve(&value);
+            match &*value {
+                Object::Array(a) => stack.extend(a.iter().cloned()),
+                Object::String(s) => labels.push(s.to_text()),
+                _ => {}
+            }
+        }
+        labels.sort();
+        assert_eq!(labels, ["Root label", "Subtree label"]);
+    }
+}
+
+#[test]
+fn sanitize_removes_hidden_metadata_from_nested_direct_order() {
+    nested_layer_order_cleanup(false);
+}
+#[test]
+fn sanitize_removes_hidden_metadata_from_nested_chained_order() {
+    nested_layer_order_cleanup(true);
+}
+
+#[test]
+fn sanitize_omits_unwalkable_order_without_losing_visible_groups() {
+    for case in ["cycle", "depth", "work", "reference_limit"] {
+        let mut doc = one_page(
+            b"BT /F1 10 Tf 10 200 Td (PUBLIC) Tj ET /OC /Layer BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC",
+            "/Properties << /Layer 7 0 R >>",
+            vec![b"<< /Type /OCG /Name (REMOVED_LAYER_SECRET_NAME) >>".to_vec(), b"<< /Type /OCG /Name (Public layer) >>".to_vec()],
+        );
+        let secret = Object::Ref(ObjRef::new(7, 0));
+        let order = match case {
+            "cycle" => {
+                let cycle = doc.add(Object::Null);
+                doc.set(cycle, Object::Array(vec![secret, Object::Ref(cycle)]));
+                Object::Ref(cycle)
+            }
+            "depth" => {
+                let mut value = secret;
+                for _ in 0..66 {
+                    value = Object::Ref(doc.add(Object::Array(vec![value])));
+                }
+                value
+            }
+            "work" => Object::Array(vec![secret; 4097]),
+            _ => {
+                let mut value = Object::Array(vec![secret]);
+                for _ in 0..17 {
+                    value = Object::Ref(doc.add(value));
+                }
+                value
+            }
+        };
+        let oc = Dict::from_iter([
+            (b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))])),
+            (
+                b"D".to_vec(),
+                Object::Dict(Dict::from_iter([(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])), (b"Order".to_vec(), order)])),
+            ),
+        ]);
+        doc.update_dict(doc.root().unwrap(), |d| {
+            d.set(b"OCProperties".to_vec(), Object::Dict(oc));
+        })
+        .unwrap();
+        let done = crate::sanitize::sanitize(&mut doc).unwrap();
+        assert!(done.iter().any(|(kind, count)| *kind == crate::sanitize::Hidden::HiddenLayers && *count > 0));
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(
+            !saved.scan_objects().any(|(_, obj)| obj
+                .as_dict()
+                .and_then(|d| d.get(b"Name"))
+                .and_then(Object::as_string)
+                .is_some_and(|s| s.to_text() == "REMOVED_LAYER_SECRET_NAME")),
+            "{case}"
+        );
+        let cat = saved.get(saved.root().unwrap());
+        let oc = saved.resolve(cat.as_dict().unwrap().get(b"OCProperties").unwrap());
+        let oc = oc.as_dict().unwrap();
+        assert_eq!(saved.resolve(oc.get(b"OCGs").unwrap()).as_array().unwrap().len(), 1);
+        let defaults = saved.resolve(oc.get(b"D").unwrap());
+        assert!(!defaults.as_dict().unwrap().contains(b"Order"), "{case}");
+        assert!(saved.resolve(defaults.as_dict().unwrap().get(b"OFF").unwrap()).as_array().unwrap().is_empty());
+        let text = pdfcraft_edit::text_lines(&saved, 0).unwrap().into_iter().map(|line| line.text).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("PUBLIC"));
+        assert!(!text.contains("SECRET"));
+    }
+}
+
+#[test]
 fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
     // A form drawing invisible text whose dictionary repeats it in /PCAdded.
     let form = stream(
