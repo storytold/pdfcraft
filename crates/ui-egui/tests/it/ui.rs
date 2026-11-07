@@ -2443,6 +2443,77 @@ fn detached_window_edit_commit_routes_to_target_view_without_modifying_docked_ta
     assert!(!tab_a_doc.dirty, "Docked Tab A must remain clean");
 }
 
+#[test]
+fn main_window_keyboard_shortcuts_execute_during_detached_save_prompt() {
+    let mut h = harness(|app| {
+        app.open_bytes("tab_a.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("tab_b.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let tab_a_id = ids[0];
+    let tab_b_id = ids[1];
+
+    // Detach Tab B
+    h.state_mut().detach_tab(tab_b_id);
+    h.run_steps(3);
+
+    assert!(h.state().views[1].detached, "Tab B should be detached");
+    assert_eq!(h.state().active, Some(0), "Tab A should be active docked tab");
+    assert_eq!(h.state().views[0].id, tab_a_id);
+
+    // Mark Tab B dirty and request close for Tab B
+    h.state_mut().session.apply(tab_b_id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.state_mut().request_close_tab(1);
+    assert!(h.state().close_request.is_some());
+    h.run_steps(2);
+
+    // Set initial zoom of docked Tab A to a standard step
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(1);
+    let initial_zoom = h.state().views[0].zoom;
+    assert_eq!(initial_zoom, 1.0);
+
+    // Send shortcut Command + Equals (Zoom In) in the main window
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(2);
+
+    // Verify Tab A's zoom increased
+    let zoomed = h.state().views[0].zoom;
+    assert!(
+        zoomed > initial_zoom,
+        "Zoom shortcut in main window should execute while detached save prompt is active (initial: {initial_zoom}, current: {zoomed})"
+    );
+
+    // Send shortcut Command + Minus (Zoom Out) in the main window
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Minus);
+    h.run_steps(2);
+
+    assert_eq!(
+        h.state().views[0].zoom,
+        initial_zoom,
+        "Zoom out shortcut in main window should restore zoom while detached save prompt is active"
+    );
+
+    // View toggle shortcut: Command + 2 (Fit to Width)
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num2);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().views[0].fit,
+        pdfcraft_ui_egui::canvas::Fit::Width,
+        "View toggle shortcut (Fit to Width) should execute in main window while detached save prompt is active"
+    );
+
+    // Page navigation: ArrowRight turns the page in Tab A
+    assert_eq!(h.state().views[0].current, 0, "Tab A starts on page 0");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().views[0].current,
+        1,
+        "Page navigation shortcut should execute in main window while detached save prompt is active"
+    );
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]

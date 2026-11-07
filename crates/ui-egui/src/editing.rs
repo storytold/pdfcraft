@@ -260,7 +260,7 @@ impl PdfCraftApp {
 
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
-        self.active.map_or(false, |i| self.apply_edit_to(i, edit))
+        self.active.is_some_and(|i| self.apply_edit_to(i, edit))
     }
 
     /// Undo the last change: to the Combine files list while its tab shows, else the document.
@@ -703,7 +703,7 @@ impl PdfCraftApp {
 
     /// Make the active document say what its form shows (#166).
     pub(crate) fn commit_form_typing(&mut self) -> bool {
-        self.active.map_or(true, |i| self.commit_form_typing_in(i))
+        self.active.is_none_or(|i| self.commit_form_typing_in(i))
     }
 
     /// Apply the edit queued on tab `i`. Returns false only when it was a

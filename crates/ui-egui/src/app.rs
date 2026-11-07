@@ -385,8 +385,13 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        let close_modal = match self.close_request {
+            Some(crate::CloseRequest::Tab(id)) => self.views.iter().find(|v| v.id == id).is_some_and(|v| !v.detached),
+            Some(crate::CloseRequest::Quit | crate::CloseRequest::All) => true,
+            None => false,
+        };
         self.dialog.is_some()
-            || self.close_request.is_some()
+            || close_modal
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
@@ -650,16 +655,27 @@ impl eframe::App for PdfCraftApp {
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
+        let close_modal = match self.close_request {
+            Some(crate::CloseRequest::Tab(id)) => self.views.iter().find(|v| v.id == id).is_some_and(|v| !v.detached),
+            Some(crate::CloseRequest::Quit | crate::CloseRequest::All) => true,
+            None => false,
+        };
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
-            view.objects.set_input_blocked(blocked || self.active != Some(index));
-            if blocked || self.active != Some(index) {
+            let view_blocked = if view.detached {
+                self.close_request == Some(crate::CloseRequest::Tab(view.id))
+                    || matches!(self.close_request, Some(crate::CloseRequest::Quit | crate::CloseRequest::All))
+            } else {
+                blocked || self.active != Some(index)
+            };
+            view.objects.set_input_blocked(view_blocked);
+            if view_blocked {
                 view.auto_scroll.cancel();
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing
         // behind the user's back; so does a save prompt opened since.
-        if self.process_pending_edits() && self.close_request.is_none() {
+        if self.process_pending_edits() && !close_modal {
             for (id, doc) in deferred {
                 // Only in the document the shortcut was pressed in.
                 if self.active_ids().map(|(_, active)| active) == doc {
