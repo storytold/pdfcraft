@@ -1,4 +1,4 @@
-use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
+use super::{Binding, BookletSubset, Content, CutMarks, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -52,7 +52,7 @@ pub struct PrintDraft {
     pub binding: Binding,
     pub poster_scale: f64,
     pub overlap: f64,
-    pub cut_marks: bool,
+    pub cut_marks: CutMarks,
     pub orientation: Orientation,
     pub content: Content,
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
@@ -113,7 +113,7 @@ impl Default for PrintDraft {
             binding: Binding::Left,
             poster_scale: 200.0,
             overlap: 18.0,
-            cut_marks: true,
+            cut_marks: CutMarks::Corners,
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
             as_image: false,

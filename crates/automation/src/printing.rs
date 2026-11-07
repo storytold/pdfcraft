@@ -1,7 +1,7 @@
 //! Printing tools: list printers, and print (or save the print-ready PDF) with Acrobat's Print
 //! dialog options.
 
-use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
+use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, CutMarks, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
 use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
@@ -35,6 +35,23 @@ fn job_duplex(value: &str, layout: &Layout) -> Result<Option<spool::Duplex>> {
 /// An invalid-arguments error saying `m`.
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
+}
+
+/// `doc_print`'s `cut_marks`: the old boolean (`true` was corner ticks) or a choice; corner
+/// ticks when not given, as the Print dialog's default.
+fn cut_marks(v: Option<&Value>) -> Result<CutMarks> {
+    match v {
+        None => Ok(CutMarks::Corners),
+        Some(Value::Bool(true)) => Ok(CutMarks::Corners),
+        Some(Value::Bool(false)) => Ok(CutMarks::Off),
+        Some(Value::String(s)) => match s.as_str() {
+            "corners" => Ok(CutMarks::Corners),
+            "full" => Ok(CutMarks::Full),
+            "off" => Ok(CutMarks::Off),
+            s => Err(bad(format!("unknown cut_marks {s:?}; use corners (ticks), full (a line across the sheet at each side) or off"))),
+        },
+        Some(_) => Err(bad("cut_marks must be true/false or \"corners\", \"full\" or \"off\"")),
+    }
 }
 
 /// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
@@ -167,7 +184,7 @@ impl Automation {
             "poster" => Layout::Poster {
                 scale: a.opt_num("scale")?.unwrap_or(200.0),
                 overlap: a.opt_num("overlap")?.unwrap_or(18.0),
-                cut_marks: a.opt_bool("cut_marks")?.unwrap_or(true),
+                cut_marks: cut_marks(a.get("cut_marks"))?,
             },
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
@@ -249,6 +266,23 @@ mod tests {
         assert_eq!(duplex("short-edge", false).ok(), Some(Some(spool::Duplex::ShortEdge)));
         assert!(duplex("long-edge", true).is_err());
         assert!(duplex("sideways", false).is_err());
+    }
+
+    /// `doc_print`'s `cut_marks`: the old boolean still means corners/off, and the new choices.
+    #[test]
+    fn cut_marks_takes_the_old_boolean_and_the_choices() {
+        assert_eq!(cut_marks(None).ok(), Some(CutMarks::Corners));
+        for given in [json!(null), json!(true), json!("corners")] {
+            let args = json!({ "cut_marks": given });
+            assert_eq!(cut_marks(Args(&args).get("cut_marks")).ok(), Some(CutMarks::Corners), "{given}");
+        }
+        for given in [json!(false), json!("off")] {
+            let args = json!({ "cut_marks": given });
+            assert_eq!(cut_marks(Args(&args).get("cut_marks")).ok(), Some(CutMarks::Off), "{given}");
+        }
+        assert_eq!(cut_marks(Some(&json!("full"))).ok(), Some(CutMarks::Full));
+        assert!(matches!(cut_marks(Some(&json!("diagonal"))), Err(ToolError::InvalidArgs(m)) if m.contains("full")));
+        assert!(cut_marks(Some(&json!(7))).is_err());
     }
 
     /// #3752: `doc_print` to a printer sent no paper, so the queue's default paper stood in for

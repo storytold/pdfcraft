@@ -5167,6 +5167,15 @@ fn printing_through_tools() {
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": printed }))["document"]["pages"].as_u64(), Some(n.div_ceil(4)));
     let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "path": "poster.pdf" }));
     assert!(r["sheets"].as_u64().unwrap() > 1);
+    // Edge-to-edge cut marks; the old boolean still works; an unknown style is refused with an
+    // error an agent can act on.
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "cut_marks": "full", "path": "poster.pdf" }));
+    assert!(r["sheets"].as_u64().unwrap() > 1);
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "cut_marks": true, "path": "poster.pdf" }));
+    assert!(matches!(
+        a.call("doc_print", &json!({ "doc": doc, "pages": "1", "layout": "poster", "cut_marks": "diagonal", "path": "poster.pdf" })),
+        Err(ToolError::InvalidArgs(m)) if m.contains("cut_marks")
+    ));
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }

@@ -1,7 +1,7 @@
 use super::draft::{Handling, PrintDraft, Which};
 use super::{
-    Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
-    Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
+    Binding, BookletSubset, Color32, Content, CutMarks, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode,
+    Stroke, Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
 
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
@@ -333,7 +333,15 @@ pub(crate) fn body(
                         ui.add(egui::DragValue::new(&mut d.poster_scale).range(10.0..=1000.0).suffix(" %")).labelled_by(scale_label.id);
                         let overlap_label = ui.label(tl!("Overlap:"));
                         ui.add(egui::DragValue::new(&mut d.overlap).range(0.0..=144.0).suffix(" pt")).labelled_by(overlap_label.id);
-                        ui.add(widgets::checkbox(&mut d.cut_marks, tl!("Cut marks")));
+                        ui.label(tl!("Cut marks:"));
+                        combo(
+                            ui,
+                            "cut-marks",
+                            tl!("Cut marks:"),
+                            &mut d.cut_marks,
+                            &[(CutMarks::Corners, tl!("Corners")), (CutMarks::Full, tl!("Edge to edge")), (CutMarks::Off, tl!("None"))],
+                            140.0,
+                        );
                     });
                 }
                 Handling::Multiple => {

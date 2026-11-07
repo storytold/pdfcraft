@@ -853,6 +853,18 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
     assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_paper"], serde_json::Value::Null);
 }
 
+/// The Poster cut-marks choice (corner ticks, or lines across the whole sheet) reaches the
+/// engine settings, and corner ticks stay the default.
+#[test]
+fn poster_cut_marks_choice_reaches_the_settings() {
+    use pdfcraft_engine::print::{CutMarks, Layout};
+    use pdfcraft_ui_egui::PrintHandling;
+    let mut d = pdfcraft_ui_egui::PrintDraft { handling: PrintHandling::Poster, ..Default::default() };
+    assert_eq!(d.settings(1, &[]).unwrap().layout, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: CutMarks::Corners });
+    d.cut_marks = CutMarks::Full;
+    assert_eq!(d.settings(1, &[]).unwrap().layout, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: CutMarks::Full });
+}
+
 #[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};

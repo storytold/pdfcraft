@@ -220,13 +220,43 @@ fn booklets_pair_pages_for_folding() {
 #[test]
 fn posters_tile_with_overlap() {
     // A 200×300 page at 400% = 800×1200 on Letter with 18 pt margins (576×756 tiles), overlap 36.
-    let sheets = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: true })).unwrap();
+    let sheets = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: CutMarks::Corners })).unwrap();
     assert_eq!(sheets.len(), 4, "2 × 2 tiles");
     assert_eq!(sheets[0].lines.len(), 8, "cut marks");
     let c0 = sheets[0].placed[0].clip;
     let c1 = sheets[1].placed[0].clip;
     assert!(close(c0[2] - c1[0], 36.0 / 4.0), "neighbouring tiles share the overlap");
-    assert!(layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 400.0, cut_marks: false })).is_err());
+    assert!(layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 400.0, cut_marks: CutMarks::Off })).is_err());
+    // No marks, no lines.
+    assert!(
+        layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: CutMarks::Off })).unwrap()[0]
+            .lines
+            .is_empty()
+    );
+}
+
+/// Cut marks can run edge to edge: a line across the whole sheet at each side of the printed
+/// area, so a straight blade cuts a side in one pass instead of joining four corner ticks.
+#[test]
+fn poster_cut_marks_run_edge_to_edge() {
+    let sheets = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: CutMarks::Full })).unwrap();
+    let (w, h) = sheets[0].size;
+    let m = MARGIN;
+    assert_eq!(sheets[0].lines, [[0.0, m, w, m], [0.0, h - m, w, h - m], [m, 0.0, m, h], [w - m, 0.0, w - m, h]]);
+    // Every tile of a multi-tile poster carries the full lines, each one spanning its sheet.
+    for sheet in &sheets {
+        for l in &sheet.lines {
+            let (horizontal, vertical) = (l[1] == l[3], l[0] == l[2]);
+            assert!(horizontal ^ vertical, "a cut line is straight: {l:?}");
+            let spans = |a: f64, b: f64, along: (f64, f64)| a <= along.0 + 0.001 && b >= along.1 - 0.001;
+            if horizontal {
+                assert!(spans(l[0], l[2], (0.0, sheet.size.0)), "{l:?} stops short of the sheet's edges");
+            } else {
+                assert!(spans(l[1], l[3], (0.0, sheet.size.1)), "{l:?} stops short of the sheet's edges");
+            }
+        }
+        assert_eq!(sheet.lines.len(), 4, "one line at each side of the printed area");
+    }
 }
 
 /// Issue #1335: a scale so large that the tile counts saturate is refused with the sheet-limit
@@ -235,7 +265,7 @@ fn posters_tile_with_overlap() {
 fn huge_posters_are_refused_at_the_sheet_limit() {
     let refused = Err(PrintError::Invalid("the poster would need more than 1024 sheets".into()));
     for scale in [100_000.0, 1e22, f64::MAX] {
-        let poster = settings(vec![0], Layout::Poster { scale, overlap: 18.0, cut_marks: true });
+        let poster = settings(vec![0], Layout::Poster { scale, overlap: 18.0, cut_marks: CutMarks::Corners });
         assert_eq!(layout(&[(200.0, 300.0)], &poster), refused, "scale {scale}");
     }
 }
