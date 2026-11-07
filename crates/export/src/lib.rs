@@ -10,9 +10,11 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod epub;
 mod pptx;
 mod zip;
 
+pub use epub::{FixedPage, Meta as EpubMeta, Tags as EpubTags, TocEntry, epub, epub_fixed, iso_utc, urn_uuid};
 pub use pptx::pptx;
 pub use zip::Zip;
 
@@ -35,9 +37,9 @@ pub use as_markdown::markdown;
 use as_markdown::{emphasis, paragraph};
 pub use as_rtf::rtf;
 pub use layout::{Block, Cell, Image, Page, Table};
+pub(crate) use layout::{Item, Run, body_size, items, level, paragraphs, tables};
 #[cfg(test)]
-use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
-pub(crate) use layout::{Run, paragraphs, tables};
+use layout::{LOOKUP_STEPS, MAX_COLS};
 
 #[cfg(test)]
 mod tests;

@@ -110,7 +110,7 @@ pub(crate) fn body_size(pages: &[Page]) -> f64 {
 }
 
 /// Heading level for a block: 1 for ≥ 1.6× the body size, 2 for ≥ 1.25×, 0 for body text.
-fn level(b: &Block, body: f64) -> u8 {
+pub(crate) fn level(b: &Block, body: f64) -> u8 {
     let short = b.text.len() < 200;
     if short && b.size >= body * 1.6 {
         1
