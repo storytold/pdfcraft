@@ -335,8 +335,11 @@ fn other_candidates() -> Vec<PathBuf> {
 fn han_candidates(traditional: bool) -> Vec<PathBuf> {
     if cfg!(windows) {
         // Microsoft YaHei / JhengHei, then the older SimSun / MingLiU collections.
-        let files: &[&str] =
-            if traditional { &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc"] } else { &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc"] };
+        let files: &[&str] = if traditional {
+            &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc", "NotoSansCJK-Regular.ttc"]
+        } else {
+            &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc", "NotoSansCJK-Regular.ttc"]
+        };
         files.iter().map(|f| windows_fonts().join(f)).collect()
     } else if cfg!(target_os = "macos") {
         macos_han_candidates(traditional)
@@ -353,6 +356,10 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             "droid/DroidSansFallbackFull.ttf",
             "truetype/arphic/uming.ttc",
             "arphic-uming/uming.ttc",
+            "opentype/noto/NotoSansCJK-Regular.ttc",
+            "noto-cjk/NotoSansCJK-Regular.ttc",
+            "google-noto-cjk/NotoSansCJK-Regular.ttc",
+            "NotoSansCJK-Regular.ttc",
         ])
     }
 }
@@ -436,6 +443,23 @@ fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
             }
         }
     }
+    // Noto Sans CJK is a Han candidate, so try a fontconfig-installed copy of it even
+    // when the caller's list did not name it.
+    for file in [
+        "opentype/noto/NotoSansCJK-Regular.ttc",
+        "noto-cjk/NotoSansCJK-Regular.ttc",
+        "google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "NotoSansCJK-Regular.ttc",
+        "NotoSansCJKsc-Regular.otf",
+        "NotoSansCJKtc-Regular.otf",
+    ] {
+        let name = Path::new(file).file_name();
+        for path in installed.iter().filter(|p| p.file_name() == name) {
+            if !paths.contains(path) {
+                paths.push(path.clone());
+            }
+        }
+    }
     paths
 }
 
@@ -508,6 +532,15 @@ mod tests {
             assert!(!list.is_empty(), "{need:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{need:?}");
         }
+    }
+
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk() {
+        let list = han_candidates(false);
+        assert!(
+            list.iter().any(|p| p.to_string_lossy().contains("NotoSansCJK")),
+            "Simplified Chinese candidates must try an installed Noto Sans CJK face: {list:?}"
+        );
     }
 
     /// `script_fallback` honours the documented installed-font switch, under which it returns
