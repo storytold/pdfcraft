@@ -43,7 +43,9 @@ impl PdfCraftApp {
                 .collect()
         });
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
-        if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
+        let pages_focused = self.right == Some(RightPanel::Pages)
+            && self.views.get(i).and_then(|v| v.pages_focus_id).is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) || pages_focused {
             self.receive_pastes(i, pastes, false);
             return;
         }

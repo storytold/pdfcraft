@@ -113,6 +113,25 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
     {
         delete_pages(view, info.pages.len());
     }
+    // ⌘C / ⌘X / ⌘V copy, cut and paste pages when the Pages panel owns the keyboard.
+    if !modal && owns_keyboard {
+        let (copy, cut, paste) = ui.input_mut(|i| {
+            let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::C));
+            let cut = editable
+                && (i.events.iter().any(|e| matches!(e, egui::Event::Cut))
+                    || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::X)));
+            let paste = editable
+                && (i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                    || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::V)));
+            (copy, cut, paste)
+        });
+        if copy || cut {
+            view.pending_action = Some(crate::canvas::ViewAction::CopyPages { cut });
+        } else if paste {
+            view.pending_action = Some(crate::canvas::ViewAction::PastePages);
+        }
+    }
     // A new current page scrolls its thumbnail into view, as little as it takes (Acrobat), but
     // not while thumbnails are dragged: then the change counts as seen. A wheel turned or a
     // scroll bar dragged by the user already wins over a scroll to a place in egui.
@@ -363,5 +382,39 @@ mod page_moves {
         // Move [3] to the front: [3 0 1 2 4].
         let order: Vec<usize> = (0..5).map(|p| moved_index(p, &[3], 0)).collect();
         assert_eq!(order, [1, 2, 3, 0, 4]);
+    }
+
+    #[test]
+    fn copied_page_creates_new_pdf_from_clipboard_and_pages_panel_handles_copy_shortcut() {
+        use crate::{PdfCraftApp, RightPanel};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(300.0, 500.0, 2).unwrap();
+        app.open_bytes("source.pdf", None, (*bytes).clone()).unwrap();
+        app.right = Some(RightPanel::Pages);
+
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| app);
+        h.run_steps(3);
+
+        // Clicking Page 2 in the Pages panel focuses the panel; Event::Copy copies that page.
+        h.get_all_by_label("Page 2").find(|t| t.rect().left() > 800.0).expect("Page 2 thumbnail").click();
+        h.run_steps(2);
+        assert!(h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new("edit.copy")).enabled);
+        h.event(egui::Event::Copy);
+        h.run_steps(3);
+        assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![1]));
+        assert!(h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new(crate::menus::PASTE)).enabled);
+
+        // Create PDF from clipboard opens a new document with the copied page.
+        assert!(h.state_mut().execute("create.clipboard"));
+        assert_eq!(h.state().views.len(), 2);
+        let created_id = h.state().views[1].id;
+        let created = h.state().session.get(created_id).expect("created PDF");
+        assert_eq!(created.name, "Clipboard.pdf");
+        assert_eq!(created.info.pages.len(), 1);
+        assert!((created.info.pages[0].width - 300.0).abs() < 0.5);
+        assert!((created.info.pages[0].height - 500.0).abs() < 0.5);
     }
 }

@@ -470,7 +470,9 @@ impl PdfCraftApp {
     /// Whether a menu item's command can run now, and its checked or selected state.
     pub fn menu_state(&self, ctx: &egui::Context, command: &CommandRef) -> ItemState {
         let view = self.active.and_then(|i| self.views.get(i));
-        let organize = view.is_some_and(|v| v.organize);
+        let pages_focused =
+            self.right == Some(RightPanel::Pages) && view.and_then(|v| v.pages_focus_id).is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let organize = view.is_some_and(|v| v.organize) || pages_focused;
         let has_doc = view.is_some();
         let enabled_id = |id: &str| commands::command(id).is_some_and(|s| self.command_enabled(s));
         let index = param_index(command);

@@ -131,9 +131,16 @@ impl PdfCraftApp {
         Ok(())
     }
 
-    /// Create ▸ Clipboard: a new document from the image (one page, its size) or the text on
-    /// the clipboard, as Acrobat does.
+    /// Create ▸ Clipboard: a new document from copied pages, or from the image (one page, its
+    /// size) or the text on the clipboard, as Acrobat does.
     pub(crate) fn create_from_clipboard(&mut self) {
+        if let Some(clip) = self.page_clipboard.clone() {
+            let created = self.session.extract_from_bytes(&clip.name, &clip.bytes, &clip.pages).map_err(|e| e.to_string());
+            if let Err(e) = self.open_created_bytes("Clipboard.pdf", created) {
+                self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
+            }
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let clip = read_clipboard();
         #[cfg(target_arch = "wasm32")]
