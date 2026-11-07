@@ -1243,7 +1243,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e398084b63413aa5d872da43496f0c0822cb749a#e398084b63413aa5d872da43496f0c0822cb749a"
+source = "git+https://github.com/storytold/craft-libs?rev=93d7c7b57afc6d2d60a0b12485c4c9ca96884596#93d7c7b57afc6d2d60a0b12485c4c9ca96884596"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -1324,7 +1324,7 @@ dependencies = [
 [[package]]
 name = "craft-winprint-gdi"
 version = "0.1.0"
-source = "git+https://github.com/storytold/winprint.rs?rev=17f5f1e3c5038be6bd122df36fc5b5aa2672502c#17f5f1e3c5038be6bd122df36fc5b5aa2672502c"
+source = "git+https://github.com/storytold/winprint.rs?rev=b334ebbbfe2ddfdc8b2deb2a7b372f0cf0a0d3e7#b334ebbbfe2ddfdc8b2deb2a7b372f0cf0a0d3e7"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -8209,7 +8209,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=17f5f1e3c5038be6bd122df36fc5b5aa2672502c#17f5f1e3c5038be6bd122df36fc5b5aa2672502c"
+source = "git+https://github.com/storytold/winprint.rs?rev=b334ebbbfe2ddfdc8b2deb2a7b372f0cf0a0d3e7#b334ebbbfe2ddfdc8b2deb2a7b372f0cf0a0d3e7"
 dependencies = [
  "flate2",
  "fmt-derive",
