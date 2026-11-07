@@ -72,7 +72,7 @@ fn full_save_refuses_an_unreadable_reachable_object() {
 }
 
 #[test]
-fn reconstructed_full_saves_record_unreadable_objects_written_as_null() {
+fn reconstructed_full_saves_list_unreadable_objects_written_as_null() {
     let mut bytes = Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R /Custom 3 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").obj("[").build();
     let xref = bytes.windows(5).position(|w| w == b"xref\n").unwrap();
     bytes.truncate(xref);
@@ -86,8 +86,10 @@ fn reconstructed_full_saves_record_unreadable_objects_written_as_null() {
         let catalog = back.get(back.root().unwrap());
         assert!(matches!(*back.resolve(catalog.as_dict().unwrap().get(b"Custom").unwrap()), Object::Null));
     }
-    let notes = doc.repair_log().into_iter().filter(|line| line.contains("object 3 could not be read and was saved as null")).count();
-    assert_eq!(notes, 1, "{:?}", doc.repair_log());
+    let unreadable = doc.unreadable_objects();
+    assert_eq!(unreadable.len(), 1, "{unreadable:?}");
+    assert!(unreadable[0].starts_with("object 3 0 could not be read:"), "{unreadable:?}");
+    assert!(!doc.repair_log().iter().any(|line| line.contains("object 3")), "{:?}", doc.repair_log());
 }
 
 fn member_container_fixture(container: u32) -> Vec<u8> {

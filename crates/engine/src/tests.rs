@@ -8529,7 +8529,6 @@ fn a_reconstructed_page_tree_repair_survives_an_unreadable_object() {
     assert_eq!(doc.info.pages.len(), 2);
     let cos = &doc.editor.as_ref().unwrap().cos;
     assert_eq!(pdfcraft_organize::page_count(cos), Ok(2), "{:?}", doc.repair_log());
-    assert!(doc.repair_log().iter().any(|line| line.contains("object 99 could not be read and was saved as null")), "{:?}", doc.repair_log());
     assert!(doc.repair_log().iter().any(|line| line.contains("page tree is missing")), "{:?}", doc.repair_log());
     let catalog = cos.get(cos.root().unwrap());
     assert!(matches!(*cos.resolve(catalog.as_dict().unwrap().get(b"Custom").unwrap()), pdfcraft_cos::Object::Null));

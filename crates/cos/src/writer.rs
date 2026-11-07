@@ -316,7 +316,10 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
             {
                 continue;
             }
-            Err(_) if reader.document.reconstructed() => continue,
+            Err(_) if reader.document.reconstructed() => {
+                // `try_get` recorded this in the unreadable-object list shared with the source.
+                continue;
+            }
             Err(CosError::MissingObject(_)) => return Err(CosError::UnreadableObject(r.num)),
             Err(error) => return Err(error),
         };
