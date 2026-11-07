@@ -5503,6 +5503,22 @@ fn a_font_whose_post_version_has_swapped_halves_is_still_used() {
     assert_eq!(alternate([0, 0, 0, 2]), alternate([0, 2, 0, 0]), "and also with swapped halves");
 }
 
+/// A font dictionary whose `/Subtype` is missing or the empty name is read as a Type 1 font,
+/// so its `/BaseFont` picks the face (vendored hayro-interpret patch 94). `/Subtype` is required
+/// (ISO 32000-2 Table 109), but such a `/Courier-Bold` was drawn in the Helvetica fallback,
+/// shifting its columns (PDFBOX-1988).
+#[test]
+fn a_font_without_a_subtype_is_drawn_by_its_base_font() {
+    let render = |subtype: &str, base_font: &str| {
+        let resources = format!("<< /Font << /F1 << /Type /Font {subtype} /BaseFont /{base_font} >> >> >>");
+        render_first_page(image_cache_pdf("BT /F1 20 Tf 5 25 Td (iiiiii) Tj ET", &resources, &[])).rgba.to_vec()
+    };
+    let courier = render("/Subtype /Type1", "Courier-Bold");
+    assert_ne!(courier, render("/Subtype /Type1", "Helvetica"), "Courier Bold and Helvetica differ");
+    assert_eq!(render("/Subtype /", "Courier-Bold"), courier, "an empty /Subtype");
+    assert_eq!(render("", "Courier-Bold"), courier, "no /Subtype");
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]

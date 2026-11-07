@@ -244,8 +244,14 @@ impl<'a> Font<'a> {
         font_resolver: &FontResolverFn,
         cmap_resolver: &CMapResolverFn,
     ) -> Option<Self> {
-        let f_type = match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
-            TYPE1 | MM_TYPE1 => {
+        // PdfCraft patch (94): a font dictionary whose `/Subtype` is missing or the empty name
+        // (`/Subtype /`) is read as a Type 1 font, so its `/BaseFont` still picks the font: a
+        // `/Courier-Bold` was drawn in the Helvetica fallback (PDFBOX-1988). `/Subtype` is
+        // required (ISO 32000-2 §9.6.2.1, Table 109); other readers fall back to Type 1 this way.
+        let subtype = dict.get::<Name<'_>>(SUBTYPE);
+        let subtype: &[u8] = subtype.as_deref().unwrap_or(b"");
+        let f_type = match subtype {
+            b"" | TYPE1 | MM_TYPE1 => {
                 FontType::Type1(Rc::new(Type1Font::new(dict, font_resolver, cmap_resolver)?))
             }
             // PDFBOX-5463: PDF viewers seem to accept OpenType as well.
