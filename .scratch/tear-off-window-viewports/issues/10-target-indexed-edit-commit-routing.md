@@ -5,11 +5,11 @@ In-flight text box typing, form input, and queued edits originating from a detac
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] In `crates/ui-egui/src/editing.rs`, define `apply_edit_to(&mut self, view_index: usize, edit: Edit) -> bool` and make `apply_edit` delegate via `self.active`.
-- [ ] Define `commit_form_typing_in(&mut self, view_index: usize) -> bool`.
-- [ ] Define `commit_open_text_edits_in(&mut self, view_index: usize) -> bool` and `commit_open_fill_text_in(&mut self, view_index: usize) -> bool`.
-- [ ] Define `process_pending_edits_for(&mut self, view_index: usize) -> bool` and invoke it in `show_detached_windows` pass in `crates/ui-egui/src/app.rs`.
-- [ ] In `crates/ui-egui/src/editing.rs::commit_typing_in`, pass the target view index through the commit helpers.
-- [ ] Add integration test in `crates/ui-egui/tests/it/ui.rs`: with docked Tab A and detached Tab B, type in Tab B and verify edits apply to Tab B without modifying Tab A.
+- [x] In `crates/ui-egui/src/editing.rs`, define `apply_edit_to(&mut self, view_index: usize, edit: Edit) -> bool` and make `apply_edit` delegate via `self.active`.
+- [x] Define `commit_form_typing_in(&mut self, view_index: usize) -> bool`.
+- [x] Define `commit_open_text_edits_in(&mut self, view_index: usize) -> bool` and `commit_open_fill_text_in(&mut self, view_index: usize) -> bool`.
+- [x] Define `process_pending_edits_for(&mut self, view_index: usize) -> bool` and invoke it in `show_detached_windows` pass in `crates/ui-egui/src/app.rs`.
+- [x] In `crates/ui-egui/src/editing.rs::commit_typing_in`, pass the target view index through the commit helpers.
+- [x] Add integration test in `crates/ui-egui/tests/it/ui.rs`: with docked Tab A and detached Tab B, type in Tab B and verify edits apply to Tab B without modifying Tab A.

@@ -131,9 +131,11 @@ fn form_edit_pages(
 }
 
 impl PdfCraftApp {
-    /// Apply an edit to the active document. Returns `true` on success; failures are shown.
-    pub fn apply_edit(&mut self, edit: Edit) -> bool {
-        let Some((i, id)) = self.active_ids() else { return false };
+    /// Apply an edit to a specific document view. Returns `true` on success; failures are shown.
+    pub fn apply_edit_to(&mut self, view_index: usize, edit: Edit) -> bool {
+        let Some(view) = self.views.get(view_index) else { return false };
+        let id = view.id;
+        let i = view_index;
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
@@ -254,6 +256,11 @@ impl PdfCraftApp {
                 false
             }
         }
+    }
+
+    /// Apply an edit to the active document. Returns `true` on success; failures are shown.
+    pub fn apply_edit(&mut self, edit: Edit) -> bool {
+        self.active.map_or(false, |i| self.apply_edit_to(i, edit))
     }
 
     /// Undo the last change: to the Combine files list while its tab shows, else the document.
@@ -393,7 +400,7 @@ impl PdfCraftApp {
         }
         if let Some(ed) = view.line_editor.take()
             && let Some(edit) = crate::edit_text_ui::finished_edit(ed.clone())
-            && !self.apply_edit(edit)
+            && !self.apply_edit_to(i, edit)
         {
             if let Some(view) = self.views.get_mut(i) {
                 view.line_editor = Some(ed);
@@ -405,7 +412,7 @@ impl PdfCraftApp {
         // Finishing new text also asks for it to be selected once it exists: put that back too.
         let (draft, select_added) = (view.content.draft.clone(), view.content.select_added);
         if let Some(edit) = view.content.finish_draft(&added)
-            && !self.apply_edit(edit)
+            && !self.apply_edit_to(i, edit)
         {
             if let Some(view) = self.views.get_mut(i) {
                 (view.content.draft, view.content.select_added) = (draft, select_added);
@@ -464,8 +471,8 @@ impl PdfCraftApp {
 
     /// Apply any edit a view queued this frame (organize toolbar, keys).
     /// Returns false when a field refused the typing queued for it (its editor is open again).
-    pub(crate) fn process_pending_edits(&mut self) -> bool {
-        let Some(i) = self.active else { return true };
+    pub fn process_pending_edits_for(&mut self, view_index: usize) -> bool {
+        let i = view_index;
         let applied = self.apply_queued_edit(i);
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
@@ -476,7 +483,7 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
             Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(),
             Some(crate::canvas::ViewAction::Save) => {
-                self.save_active(SaveTarget::InPlace);
+                self.save_view(i, SaveTarget::InPlace);
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
@@ -491,7 +498,7 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::CameraRotate { clockwise }) => {
                 if let Some(done) = self.views.get(i).and_then(|v| v.camera_done) {
                     let degrees = if clockwise { 90 } else { -90 };
-                    if self.apply_edit(Edit::RotatePages { pages: vec![done.page], degrees })
+                    if self.apply_edit_to(i, Edit::RotatePages { pages: vec![done.page], degrees })
                         && let Some(d) = self.views.get_mut(i).and_then(|v| v.camera_done.as_mut())
                     {
                         d.turns += degrees;
@@ -507,6 +514,12 @@ impl PdfCraftApp {
             None => {}
         }
         applied
+    }
+
+    /// Apply any edit the active view queued this frame (organize toolbar, keys).
+    pub(crate) fn process_pending_edits(&mut self) -> bool {
+        let Some(i) = self.active else { return true };
+        self.process_pending_edits_for(i)
     }
 
     /// Enhance ▸ Camera image ▸ clean-up slider: undo the enhancement (and the turns made since)
@@ -654,7 +667,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Make the active document say what its form shows (#166): apply an edit still queued on
+    /// Make tab `view_index` say what its form shows (#166): apply an edit still queued on
     /// its tab, then commit the text in a field's open editor, which otherwise commits only on
     /// Enter, Tab or clicking away (the editor closes, as clicking away would). Run before
     /// anything reads the document: Save, Print, Export, Optimize, Sign, Extract, Split, Copy
@@ -663,8 +676,10 @@ impl PdfCraftApp {
     /// Returns false when the field rejects the value (a validation script or format; the user
     /// is told why). The editor stays open with the text, and the caller must stop: nothing is
     /// saved, printed or exported without it.
-    pub(crate) fn commit_form_typing(&mut self) -> bool {
-        let Some((i, id)) = self.active_ids() else { return true };
+    pub fn commit_form_typing_in(&mut self, view_index: usize) -> bool {
+        let Some(view) = self.views.get(view_index) else { return true };
+        let id = view.id;
+        let i = view_index;
         if !self.apply_queued_edit(i) {
             return false;
         }
@@ -675,7 +690,7 @@ impl PdfCraftApp {
         if let Some(view) = self.views.get_mut(i) {
             view.forms.focus = None;
         }
-        if self.apply_edit(edit) {
+        if self.apply_edit_to(i, edit) {
             return true;
         }
         if let Some(view) = self.views.get_mut(i) {
@@ -686,7 +701,12 @@ impl PdfCraftApp {
         false
     }
 
-    /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
+    /// Make the active document say what its form shows (#166).
+    pub(crate) fn commit_form_typing(&mut self) -> bool {
+        self.active.map_or(true, |i| self.commit_form_typing_in(i))
+    }
+
+    /// Apply the edit queued on tab `i`. Returns false only when it was a
     /// field's typing and the field refused it (#166): the editor reopens with the text, and the
     /// user has been told why, so the typing isn't lost and the caller can stop.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
@@ -697,7 +717,7 @@ impl PdfCraftApp {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(edit) {
+        if self.apply_edit_to(i, edit) {
             // Tab can wrap to the same field (including another widget of that field).
             // Its new editor was opened before this edit ran, so it still holds the old
             // value. Refresh from the accepted form before Save can commit that stale draft.
@@ -773,23 +793,24 @@ impl PdfCraftApp {
                 self.active = Some(i);
             }
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+        self.commit_form_typing_in(i) && self.commit_open_fill_text_in(i) && self.commit_open_text_edits_in(i)
     }
 
     /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
     /// click-away. Save does that first, so the typed text is in the file instead of being left
     /// open on the screen (#3496).
-    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    pub fn commit_open_text_edits_in(&mut self, view_index: usize) -> bool {
+        let Some(id) = self.views.get(view_index).map(|v| v.id) else { return true };
         let Some(doc) = self.session.get(id) else { return true };
-        let Some(view) = self.views.iter_mut().find(|v| v.id == id) else { return true };
+        let Some(view) = self.views.get_mut(view_index) else { return true };
         // Both are taken out of the view before either edit runs, so keep what is needed to put
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
         let added = view.content.finish_draft(doc.added());
         let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
-        let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
-        let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
-        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+        let added_ok = added.is_none_or(|edit| self.apply_edit_to(view_index, edit));
+        let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit_to(view_index, edit));
+        if let Some(view) = self.views.get_mut(view_index) {
             if !added_ok {
                 (view.content.draft, view.content.select_added) = (draft, select_added);
             }
@@ -800,14 +821,21 @@ impl PdfCraftApp {
         added_ok && paragraph_ok
     }
 
+    #[allow(dead_code)]
+    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        self.commit_open_text_edits_in(i)
+    }
+
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
     /// the file (and can be flattened) instead of being left on the screen.
-    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
-        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+    pub fn commit_open_fill_text_in(&mut self, view_index: usize) -> bool {
+        let Some(view) = self.views.get(view_index) else { return true };
+        let id = view.id;
+        let Some(tb) = view.fill_text.clone() else { return true };
         let text = tb.text.trim().to_string();
         if text.is_empty() {
-            if let Some(view) = self.views.get_mut(i) {
+            if let Some(view) = self.views.get_mut(view_index) {
                 view.fill_text = None;
             }
             return true;
@@ -816,14 +844,20 @@ impl PdfCraftApp {
         let rotation = self.session.get(id).map_or(0, |doc| crate::comments::page_rotation(&doc.info, tb.page));
         let look = crate::fill_sign::TypedLook { color: tb.color, border: tb.border };
         let edit = crate::fill_sign::typed_with(tb.page, tb.at, &text, tb.size, rotation, &author, look);
-        if self.apply_edit(edit) {
-            if let Some(view) = self.views.get_mut(i) {
+        if self.apply_edit_to(view_index, edit) {
+            if let Some(view) = self.views.get_mut(view_index) {
                 view.fill_text = None;
             }
             true
         } else {
             false
         }
+    }
+
+    #[allow(dead_code)]
+    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        self.commit_open_fill_text_in(i)
     }
 
     /// When the preference is on, bake Fill & Sign marks before the bytes are written.

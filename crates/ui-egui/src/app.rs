@@ -860,6 +860,8 @@ impl PdfCraftApp {
                     crate::canvas::document_area(self, idx, ui);
                 });
 
+                self.process_pending_edits_for(idx);
+
                 if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
                     if let Some(choice) = crate::dialogs::save_prompt_key(child_ui.ctx(), &mut self.save_prompt_button) {
                         self.resolve_close(child_ui.ctx(), choice);
