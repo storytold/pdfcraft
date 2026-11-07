@@ -2109,6 +2109,10 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
     const UNI: u16 = 0x3E;
     const UNNAMED: u16 = 0x3F;
     const LIGATURE: u16 = 0x40;
+    // 0x41 selects a glyph whose name is spelt `uni01cd`, lowercase: the glyph list
+    // specification's hex digits are uppercase (ISO 32000-2 §9.10.2), so the name stands for no
+    // text and the code reads as WinAnsi (`A`), not as U+01CD.
+    const LOWERCASE: u16 = 0x41;
     let font = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
     let face = skrifa::FontRef::new(font).expect("the test font parses");
     let charmap = face.charmap();
@@ -2131,6 +2135,9 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
     map.push((0xF000 + UNI, uni));
     map.push((0xF000 + UNNAMED, named("EMquad")));
     map.push((0xF000 + LIGATURE, named("less_equal.liga")));
+    let lowercase = named("uni01CD");
+    assert_ne!(lowercase, uni, "the lowercased name is not the `uniXXXX` glyph read above");
+    map.push((0xF000 + LOWERCASE, lowercase));
     map.sort_unstable();
     map.dedup();
     // A format 4 subtable: one segment per code, then the closing 0xFFFF segment.
@@ -2159,10 +2166,15 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
     let entry = (0..tables).map(|i| 12 + 16 * i).find(|&e| &font[e..e + 4] == b"cmap").expect("the test font has a cmap");
     program[entry + 8..entry + 12].copy_from_slice(&(at as u32).to_be_bytes());
     program[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+    // The `post` table's own spelling of the name, a Pascal string, lowercased in place.
+    let spelt = b"\x07uni01CD";
+    let spot = program.windows(spelt.len()).position(|w| w == spelt).expect("the post table spells the name");
+    assert_eq!(program.windows(spelt.len()).filter(|w| w == spelt).count(), 1);
+    program[spot..spot + spelt.len()].copy_from_slice(b"\x07uni01cd");
 
     let text_of = |encoding: &str| -> String {
         let codes: String = TEXT.chars().map(|c| format!("{:02X}", c as u8 - 29)).collect::<String>()
-            + &format!("{SUFFIXED:02X}{UNI:02X}{UNNAMED:02X}{LIGATURE:02X}");
+            + &format!("{SUFFIXED:02X}{UNI:02X}{UNNAMED:02X}{LIGATURE:02X}{LOWERCASE:02X}");
         let content = format!("BT /F1 14 Tf 10 40 Td <{codes}> Tj ET");
         let objects: Vec<Vec<u8>> = vec![
             b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
@@ -2191,11 +2203,11 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
         let page = r.filtered_text(0, crate::text::TextFilter::default()).expect("the page has text");
         page.glyphs.iter().map(|g| g.text.as_str()).collect()
     };
-    assert_eq!(text_of(""), format!("Solid stateW{uni_char}?<="));
+    assert_eq!(text_of(""), format!("Solid stateW{uni_char}?<=A"));
     // An encoding says what the codes are, so they read through it.
-    assert_eq!(text_of("/Encoding /WinAnsiEncoding "), "6ROLGVWDWH=>?@");
+    assert_eq!(text_of("/Encoding /WinAnsiEncoding "), "6ROLGVWDWH=>?@A");
     // `/Differences` still names its code: 0x36 reads `A`, not the glyph's `S`.
-    assert_eq!(text_of("/Encoding << /Differences [54 /A] >> "), format!("Aolid stateW{uni_char}?<="));
+    assert_eq!(text_of("/Encoding << /Differences [54 /A] >> "), format!("Aolid stateW{uni_char}?<=A"));
 }
 
 /// Issue #102: an A4 page (595.28×841.89 pt) rendered 595×841 at 72 dpi, dropping the last

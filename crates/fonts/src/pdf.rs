@@ -1282,9 +1282,23 @@ fn symbolic_glyph_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
                 let u = crate::encodings::WIN_ANSI.get(usize::try_from(code).ok()?).copied().filter(|u| *u != 0)?;
                 char::from_u32(u).map(String::from)
             };
-            Some((code, post_name(&post, &custom, glyph).and_then(glyph_text).or_else(winansi)?))
+            let text = post_name(&post, &custom, glyph).filter(|n| uppercase_hex_forms(n)).and_then(glyph_text);
+            Some((code, text.or_else(winansi)?))
         })
         .collect()
+}
+
+/// Whether the `uni` and `u` components of a glyph name spell their hex digits in uppercase, as
+/// the glyph list specification's forms do (ISO 32000-2 §9.10.2): `uni1eae` names nothing, so
+/// its glyph's code reads as WinAnsi, as the renderer reads it (vendored hayro-interpret patch
+/// (79)). A component that is a list name (`a`, `ecircumflex`) is read as such whatever its case.
+fn uppercase_hex_forms(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default();
+    stem.split('_').all(|part| {
+        // Outside the list, a component `glyph_text` reads is `u` or `uni` and hex digits, so a
+        // lowercase `a` to `f` in it is a lowercase digit.
+        crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)).is_ok() || !part.bytes().any(|b| matches!(b, b'a'..=b'f'))
+    })
 }
 
 /// The names a version 2.0 `post` table spells out, in order, read once. `Post::glyph_name` walks

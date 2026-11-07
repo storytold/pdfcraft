@@ -256,8 +256,22 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
             .collect();
         words.iter().flat_map(|w| w.to_be_bytes()).collect::<Vec<u8>>()
     };
-    // Symbol (3,0): 0xF020 → k, 0xF0C0 → é, 0xF0C1 → a.1, 0xF0C2 → x, 0xF0C4 → the unnamed glyph.
-    let symbol = format4(&[(0xF020, gid('k')), (0xF0C0, gid('é')), (0xF0C1, variant), (0xF0C2, gid('x')), (0xF0C3, gid('w')), (0xF0C4, unnamed)]);
+    // A glyph whose name the table spells `uni1eae`, lowercase, below: the glyph list
+    // specification's hex digits are uppercase (ISO 32000-2 §9.10.2), so it names nothing.
+    let lowercase = (1..face.maxp().unwrap().num_glyphs())
+        .find(|&g| post.glyph_name(skrifa::raw::types::GlyphId16::new(g)) == Some("uni1EAE"))
+        .expect("Inter has uni1EAE");
+    // Symbol (3,0): 0xF020 → k, 0xF0C0 → é, 0xF0C1 → a.1, 0xF0C2 → x, 0xF0C4 → the unnamed glyph,
+    // 0xF0C5 → the one spelt in lowercase.
+    let symbol = format4(&[
+        (0xF020, gid('k')),
+        (0xF0C0, gid('é')),
+        (0xF0C1, variant),
+        (0xF0C2, gid('x')),
+        (0xF0C3, gid('w')),
+        (0xF0C4, unnamed),
+        (0xF0C5, lowercase),
+    ]);
     // Unicode (3,1), after it: 0xC2 → z. The renderer reads the (3,0) record, offsets and
     // all, before this one, so code 0xC2 is `x`.
     let unicode = format4(&[(0xC2, gid('z'))]);
@@ -288,6 +302,11 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
     subset[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
     subset[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
     subset.extend_from_slice(&cmap);
+    // The `post` table's own spelling of that name, a Pascal string, lowercased in place.
+    let spelt = b"\x07uni1EAE";
+    assert_eq!(subset.windows(spelt.len()).filter(|w| w == spelt).count(), 1);
+    let spot = subset.windows(spelt.len()).position(|w| w == spelt).unwrap();
+    subset[spot..spot + spelt.len()].copy_from_slice(b"\x07uni1eae");
     let codes: Vec<u8> = TEXT.bytes().map(|b| b - 29).collect();
     let metrics = |flags: i64, encoding: Option<Object>| {
         let mut doc = Document::new_empty();
@@ -320,6 +339,7 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
     assert_eq!(Metrics::from_dict(&doc, &f).decode(&codes), TEXT, "a swapped post version");
     assert_eq!(symbolic.decode(&[0x20, 0xC0, 0xC1, 0xC2, 0xC3]), "kéaxw");
     assert_eq!(symbolic.decode(&[0xC4]), "Ä", "a glyph name with no text reads as WinAnsi, not Standard's `tilde`");
+    assert_eq!(symbolic.decode(&[0xC5]), "Å", "`uni1eae` names nothing, so the code reads as WinAnsi, not U+1EAE");
     assert_eq!(symbolic.encode("Solid").as_deref(), Some(&codes[..5]), "typing sets the same glyphs");
     // A named encoding, or the Nonsymbolic flag, says what the codes are: they read through it.
     assert_eq!(metrics(4, Some(Object::name("WinAnsiEncoding"))).decode(&codes), "6ROLGVWDWH");
@@ -344,6 +364,18 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
         ],
     );
     assert_eq!(Metrics::from_dict(&doc, &f).decode(&codes), "");
+}
+
+/// The glyph list specification's `uni` and `u` forms spell their hex digits in uppercase
+/// (ISO 32000-2 §9.10.2); list names keep their own case.
+#[test]
+fn glyph_names_with_lowercase_hex_digits_name_nothing() {
+    for name in ["uni1EAE", "u1F600", "a", "ecircumflex", "f_i", "a.ss01", "uni0041_uni0042"] {
+        assert!(uppercase_hex_forms(name), "{name}");
+    }
+    for name in ["uni1eae", "u1f600", "uni20ac.alt", "f_uni20ac", "uni0041_uni00e9"] {
+        assert!(!uppercase_hex_forms(name), "{name}");
+    }
 }
 
 fn metrics_with_flags(flags: Option<Object>) -> Metrics {

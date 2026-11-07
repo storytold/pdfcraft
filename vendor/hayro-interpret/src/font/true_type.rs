@@ -202,7 +202,9 @@ impl TrueTypeFont {
                 // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
                 // specification's full mapping (`f_i`, `hyphen.case`).
                 e.code_to_unicode_name(code as u8).and_then(|name| {
-                    glyph_name_to_unicode(name).map(BfString::Char).or_else(|| glyph_name_to_text(name))
+                    glyph_name_to_unicode(name)
+                        .map(BfString::Char)
+                        .or_else(|| glyph_name_to_text(name))
                 })
             }
             Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
@@ -230,8 +232,8 @@ struct EmbeddedKind {
     cached_mappings: RefCell<HashMap<u8, GlyphId>>,
     /// PostScript name from the PDF.
     postscript_name: Option<String>,
-    /// PdfCraft patch: (see vendor/README.md hayro-interpret (53)) the text each glyph's `post`
-    /// table name stands for, for the names that stand for any (`glyph_name_text`).
+    /// PdfCraft patch (79): the text each glyph's `post` table name stands for, for the names
+    /// that stand for any (`glyph_name_text`).
     text_names: HashMap<GlyphId, String>,
 }
 
@@ -462,15 +464,17 @@ pub(crate) enum Width {
 }
 
 /// PdfCraft patch (79): the text a glyph name stands for, by the rules of the Adobe Glyph List
-/// specification, as pdfcraft-fonts' `glyph_text` reads them for the editor: drop any suffix
-/// from the first `.` (`a.ss01` is `a`), then each `_`-separated component is a list name,
-/// `uni` and groups of four hex digits, or `u` and four to six. `None` when any component is
-/// none of these. Each component gives at least one character, so the text is never empty.
+/// specification (ISO 32000-2 §9.10.2): drop any suffix from the first `.` (`a.ss01` is `a`),
+/// then each `_`-separated component is a list name, `uni` and groups of exactly four
+/// uppercase hex digits, or `u` and four to six. A value in the surrogate range or past
+/// U+10FFFF is no character. `None` when any component is none of these (`uni20ac`, `uni65`,
+/// `u65`). Each component gives at least one character, so the text is never empty.
 fn glyph_name_text(name: &str) -> Option<String> {
     // An empty stem (`.notdef`) is no list name and no number, so it gives `None` below.
     let stem = name.split('.').next()?;
-    // `from_str_radix` alone would also take a sign, as in `uni+041`.
-    let hex = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
+    // `from_str_radix` alone would also take a sign (`uni+041`) and lowercase digits, which the
+    // specification's forms don't have.
+    let hex = |h: &str| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
     let mut out = String::new();
     for part in stem.split('_') {
         if let Some(text) = glyph_names::get(part) {
@@ -587,7 +591,7 @@ pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) 
 mod tests {
     use super::glyph_name_text;
 
-    /// PdfCraft patch (79): glyph names read as pdfcraft-fonts' `glyph_text` reads them.
+    /// PdfCraft patch (79): glyph names read by the glyph list specification's rules.
     #[test]
     fn glyph_names_read_by_the_adobe_glyph_list_rules() {
         for (name, expected) in [
@@ -616,6 +620,17 @@ mod tests {
             "u0000041",
             "u004G",
             "a_EMquad",
+            // PdfCraft patch (79): the glyph list specification's hex digits are uppercase only.
+            "uni20ac",
+            "uni004100e9",
+            "u1f600",
+            "u20ac",
+            "a_uni20ac",
+            "uni65",
+            "u65",
+            "uni+065",
+            "uDFFF",
+            "u110000",
         ] {
             assert_eq!(glyph_name_text(name), None, "{name}");
         }
