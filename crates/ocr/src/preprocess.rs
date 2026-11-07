@@ -16,10 +16,13 @@
 
 use crate::{MAX_PIXELS, MAX_SIDE, OcrError, OcrImage};
 
-/// The four opt-in steps. All off by default: a scan is passed through as rendered.
+/// The opt-in steps. All off by default: a scan is passed through as rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreprocessOptions {
-    /// Detect pages scanned at 90°/180°/270° and turn them upright.
+    /// Enlarge a scan under 300 dpi even with every other step off.
+    pub normalize_dpi: bool,
+    /// Detect pages scanned at 90°/180°/270° and turn them upright. A heuristic that can turn
+    /// upright sans and mono text upside down, so the engine's OCR job leaves it off.
     pub auto_rotate: bool,
     /// Straighten skewed text lines.
     pub deskew: bool,
@@ -32,7 +35,7 @@ pub struct PreprocessOptions {
 impl PreprocessOptions {
     /// Whether any step is on (and so the raster is normalized to 300 dpi first).
     pub fn any(&self) -> bool {
-        self.auto_rotate || self.deskew || self.denoise || self.binarize
+        self.normalize_dpi || self.auto_rotate || self.deskew || self.denoise || self.binarize
     }
 }
 
@@ -749,7 +752,8 @@ mod tests {
     #[test]
     fn blank_pages_are_a_noop() {
         let src = white(200, 200);
-        let p = preprocess(src, 300.0, &PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true }).unwrap();
+        let p = preprocess(src, 300.0, &PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true, ..Default::default() })
+            .unwrap();
         assert_eq!(p.inverse_transform, InverseTransform::identity());
     }
 
@@ -888,7 +892,7 @@ mod tests {
     #[test]
     fn hostile_inputs_never_panic() {
         let tiny = white(1, 1);
-        let all = PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true };
+        let all = PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true, ..Default::default() };
         let p = preprocess(tiny, 300.0, &all).unwrap();
         assert_eq!((p.image.width, p.image.height), (1, 1));
         // All-black: no paper, nothing to judge.

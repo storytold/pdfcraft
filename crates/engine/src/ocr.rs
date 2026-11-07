@@ -131,8 +131,9 @@ pub struct OcrSettings {
     pub engine: EngineChoice,
     /// How the engines' readings combine (see [`MergeStrategy`]).
     pub strategy: MergeStrategy,
-    /// Preprocessing, all off by default (a scan is passed through as rendered):
-    /// straighten pages scanned at 90°/180°/270°.
+    /// Turn pages scanned at 90°/180°/270° upright, in the document, as [`Self::rotate_pages`]
+    /// does. The preprocessing heuristic this once switched on turned upright sans and mono text
+    /// upside down, so OCR jobs no longer use it.
     pub auto_rotate: bool,
     /// Preprocessing: straighten skewed text lines.
     pub deskew: bool,
@@ -156,8 +157,7 @@ pub struct OcrSettings {
     /// searching the PATH. `None` means the PATH search decides.
     pub tesseract_path: Option<String>,
     /// Correct scanned pages: turn pages scanned at 90°/180°/270° upright, in the document
-    /// (the ocrs models' orientation classifier decides; unlike [`Self::auto_rotate`], which
-    /// only straightens the picture that is read).
+    /// (the ocrs models' orientation classifier decides, also for a job Tesseract reads).
     pub rotate_pages: bool,
     /// Correct scanned pages: straighten skewed pages in the document.
     pub straighten_pages: bool,
@@ -311,6 +311,9 @@ impl OcrPage {
 pub struct Recognizers {
     pub primary: Arc<dyn Recognizer>,
     pub secondary: Option<Arc<dyn Recognizer>>,
+    /// Says how a page is turned when neither reader can (the ocrs model, for a job Tesseract
+    /// reads). It reads nothing.
+    pub orienter: Option<Arc<dyn Recognizer>>,
 }
 
 impl Recognizers {
@@ -601,11 +604,11 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     }
     let ocrs = cache.ocrs.clone();
     match settings.engine {
-        EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None }),
-        EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None }),
+        EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None, orienter: None }),
+        EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None, orienter: ocrs }),
         EngineChoice::Auto => match (ocrs, tesseract) {
-            (Some(p), s) => Ok(Recognizers { primary: p, secondary: s }),
-            (None, Some(p)) => Ok(Recognizers { primary: p, secondary: None }),
+            (Some(p), s) => Ok(Recognizers { primary: p, secondary: s, orienter: None }),
+            (None, Some(p)) => Ok(Recognizers { primary: p, secondary: None, orienter: None }),
             (None, None) => Err(models_missing()),
         },
     }
@@ -869,12 +872,15 @@ impl OcrJob {
             // Preprocessing sits between the page raster and recognition; its word boxes come
             // back in processed coordinates and are mapped to the ORIGINAL raster's before
             // placement. The render dpi is the real one (pixels per point × 72), never a
-            // fixed value.
+            // fixed value. The orientation heuristic stays off: it turned upright sans and mono
+            // text upside down, and `correct_scan` has already turned a page that needed it.
+            // Tesseract reads a low-resolution scan far better enlarged; ocrs does not need it.
             let pre = pdfcraft_ocr::preprocess::preprocess(
                 image,
                 scale * 72.0,
                 &pdfcraft_ocr::preprocess::PreprocessOptions {
-                    auto_rotate: self.settings.auto_rotate,
+                    normalize_dpi: recognizers.primary.id() == "tesseract",
+                    auto_rotate: false,
                     deskew: self.settings.deskew,
                     denoise: self.settings.denoise,
                     binarize: self.settings.binarize,
@@ -994,7 +1000,7 @@ impl OcrJob {
     ) -> Result<ScanCorrection, String> {
         let (w, h) = (full.width(), full.height());
         let s = &self.settings;
-        if s.region.is_some() || !(s.auto_crop || s.rotate_pages || s.straighten_pages) {
+        if s.region.is_some() || !(s.auto_crop || s.rotate_pages || s.auto_rotate || s.straighten_pages) {
             return Ok(ScanCorrection { image: full, correction: Correction::default(), bounds: [0, 0, w, h], crop: None });
         }
         let rgb: Vec<u8> = full.rgba().as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
@@ -1017,13 +1023,22 @@ impl OcrJob {
         });
         let [left, top, right, bottom] = bounds.unwrap_or([0, 0, w, h]);
         let rgb = image::imageops::crop_imm(&rgb, left, top, right - left, bottom - top).to_image();
-        let rotation = if s.rotate_pages {
+        let rotation = if s.rotate_pages || s.auto_rotate {
             match recognizers.orientation(&rgb) {
                 Some(found) => found.map_err(|e| e.to_string())?,
-                None => {
-                    notes.push("the page's orientation was not checked: the chosen engine cannot tell it (the ocrs models can)".into());
-                    0
-                }
+                // No reader can tell. The orienter only helps, so its failure costs the page
+                // its turn, never the page itself.
+                None => match recognizers.orienter.as_ref().and_then(|o| o.orientation(&rgb)) {
+                    Some(Ok(turn)) => turn,
+                    Some(Err(e)) => {
+                        notes.push(format!("the page's orientation was not checked: {e}"));
+                        0
+                    }
+                    None => {
+                        notes.push("the page's orientation was not checked: the chosen engine cannot tell it (the ocrs models can)".into());
+                        0
+                    }
+                },
             }
         } else {
             0
@@ -1858,7 +1873,215 @@ mod tests {
 
     fn fake_recognizers() -> (Recognizers, Arc<Fake>) {
         let fake = Arc::new(Fake::new());
-        (Recognizers { primary: fake.clone(), secondary: None }, fake)
+        (Recognizers { primary: fake.clone(), secondary: None, orienter: None }, fake)
+    }
+
+    /// A recognizer that notes where the ink lies in the image it is handed, and says the turn
+    /// it was built with.
+    struct Observer {
+        name: &'static str,
+        turn: Option<u16>,
+        calls: std::sync::atomic::AtomicUsize,
+        ink_top: Mutex<Option<f64>>,
+        height: Mutex<u32>,
+    }
+
+    impl Observer {
+        fn new(turn: Option<u16>) -> Arc<Observer> {
+            Observer::named("observer", turn)
+        }
+        fn named(name: &'static str, turn: Option<u16>) -> Arc<Observer> {
+            Arc::new(Observer { name, turn, calls: std::sync::atomic::AtomicUsize::new(0), ink_top: Mutex::new(None), height: Mutex::new(0) })
+        }
+    }
+
+    impl Recognizer for Observer {
+        fn id(&self) -> &'static str {
+            self.name
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(&self, image: &pdfcraft_ocr::OcrImage, _options: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.height.lock().unwrap() = image.height();
+            let width = image.width().max(1) as usize;
+            let top = image.rgba().chunks_exact(4).position(|p| p.first().is_some_and(|v| *v < 128)).map(|at| at / width);
+            *self.ink_top.lock().unwrap() = top.map(|row| row as f64 / f64::from(image.height().max(1)));
+            Ok(Vec::new())
+        }
+        fn orientation(&self, _image: &image::RgbImage) -> Option<Result<u16, OcrError>> {
+            self.turn.map(Ok)
+        }
+    }
+
+    /// An upright scan with its lines in the top half, each carrying more ink at the top of the
+    /// line than at the bottom. That is what real sans and mono text can look like, and what
+    /// the preprocessing heuristic takes for a page scanned upside down.
+    fn top_heavy_scan() -> (Session, crate::DocId) {
+        let mut image = image::RgbImage::from_pixel(600, 800, image::Rgb([255, 255, 255]));
+        for line in 0..6u32 {
+            let top = 60 + line * 50;
+            for glyph in 0..12u32 {
+                let left = 40 + glyph * 44;
+                for y in top..top + 30 {
+                    let width = if y < top + 10 { 36 } else { 8 };
+                    for x in left..left + width {
+                        image.put_pixel(x, y, image::Rgb([0, 0, 0]));
+                    }
+                }
+            }
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let mut s = Session::new();
+        let pdf = s.create_from_images(&[("scan.png".into(), png.into_inner())]).unwrap();
+        let id = s.open("scan.pdf", None, pdf, None).unwrap();
+        (s, id)
+    }
+
+    fn read_top_heavy_scan(region: Option<[f32; 4]>, recognizers: &Recognizers) -> Vec<OcrPage> {
+        let (s, id) = top_heavy_scan();
+        let settings = OcrSettings { auto_crop: false, auto_rotate: true, straighten_pages: false, deskew: false, region, ..Default::default() };
+        s.ocr_job(id, &[], settings).unwrap().run(recognizers, |_, _| true)
+    }
+
+    /// With no engine able to tell how a page is turned, the page is read as it is. The
+    /// heuristic used to turn this one upside down, and report rotation 0.
+    #[test]
+    fn a_page_no_engine_can_orient_is_read_as_it_is() {
+        let reader = Observer::new(None);
+        let recognizers = Recognizers { primary: reader.clone(), secondary: None, orienter: None };
+        let pages = read_top_heavy_scan(None, &recognizers);
+        assert_eq!(pages[0].skipped, None);
+        assert_eq!(pages[0].correction.rotation, 0);
+        let top = reader.ink_top.lock().unwrap().unwrap();
+        assert!(top < 0.5, "the lines at the top of the page were moved: ink starts {top} of the way down");
+    }
+
+    /// A low-resolution scan is enlarged for Tesseract, and only for Tesseract, with the
+    /// orientation heuristic off: it read a 100 dpi page at 55% of its words without this.
+    #[test]
+    fn a_low_resolution_scan_is_enlarged_for_tesseract_only() {
+        let read = |name| {
+            let reader = Observer::named(name, None);
+            let recognizers = Recognizers { primary: reader.clone(), secondary: None, orienter: None };
+            read_top_heavy_scan(None, &recognizers);
+            *reader.height.lock().unwrap()
+        };
+        let (tesseract, ocrs) = (read("tesseract"), read("ocrs"));
+        assert!(ocrs > 0, "the page was read");
+        assert!(tesseract > ocrs * 3 / 2, "tesseract was handed {tesseract} rows, ocrs {ocrs}");
+    }
+
+    /// A selected region is read as it is on the page, whichever engine reads it, including one
+    /// that has an orientation model.
+    #[test]
+    fn a_region_is_read_as_it_is_on_the_page() {
+        let reader = Observer::new(Some(0));
+        let recognizers = Recognizers { primary: reader.clone(), secondary: None, orienter: None };
+        let pages = read_top_heavy_scan(Some([0.0, 0.0, 10_000.0, 10_000.0]), &recognizers);
+        assert_eq!(pages[0].skipped, None);
+        let top = reader.ink_top.lock().unwrap().unwrap();
+        assert!(top < 0.5, "the region was turned: ink starts {top} of the way down");
+    }
+
+    /// A reader with no orientation model asks the job's orientation engine, whose turn is
+    /// kept on the page and applied before reading. That engine reads nothing.
+    #[test]
+    fn a_reader_without_a_model_takes_the_turn_from_the_orientation_engine() {
+        let reader = Observer::new(None);
+        let oriented = Observer::new(Some(180));
+        let recognizers = Recognizers { primary: reader.clone(), secondary: None, orienter: Some(oriented.clone()) };
+        let pages = read_top_heavy_scan(None, &recognizers);
+        assert_eq!(pages[0].correction.rotation, 180);
+        assert_eq!(oriented.calls.load(std::sync::atomic::Ordering::SeqCst), 0, "the orientation engine read the page");
+        let top = reader.ink_top.lock().unwrap().unwrap();
+        assert!(top > 0.5, "the reader was not handed the turned page: ink starts {top} of the way down");
+    }
+
+    /// `auto_rotate` alone turns the page in the document, with `rotate_pages` off: it is what
+    /// the dialog's other rotation box and the `ocr_recognize` tool's flag ask for.
+    #[test]
+    fn the_auto_rotate_setting_alone_turns_the_page() {
+        let (s, id) = top_heavy_scan();
+        let reader = Observer::new(Some(180));
+        let recognizers = Recognizers { primary: reader.clone(), secondary: None, orienter: None };
+        let settings =
+            OcrSettings { auto_crop: false, rotate_pages: false, auto_rotate: true, straighten_pages: false, deskew: false, ..Default::default() };
+        let pages = s.ocr_job(id, &[], settings).unwrap().run(&recognizers, |_, _| true);
+        assert_eq!(pages[0].correction.rotation, 180);
+        let top = reader.ink_top.lock().unwrap().unwrap();
+        assert!(top > 0.5, "the reader was not handed the turned page: ink starts {top} of the way down");
+    }
+
+    /// Latin words a tight gap apart stay separate words after a save. Sized to a word's ink,
+    /// Helvetica has a larger em than the word's box, and extraction judges a gap against that
+    /// size: a 100 dpi Tesseract page kept 57 of its 232 words. Needs no models.
+    #[test]
+    fn tight_latin_words_stay_apart_in_the_text_layer() {
+        for (height, gap) in [(14.0, 3.0), (10.0, 2.5)] {
+            let (mut s, id) = top_heavy_scan();
+            let mut x = 40.0;
+            let mut words = Vec::new();
+            for (text, width) in [("some", 28.0), ("more", 26.0), ("was", 20.0), ("seen", 26.0)] {
+                words.push(pdfcraft_ocr::PlacedWord {
+                    text: text.into(),
+                    origin: [x, 300.0],
+                    across: [width, 0.0],
+                    up: [0.0, height],
+                    confidence: Some(95.0),
+                    source: "fake".into(),
+                });
+                x += width + gap;
+            }
+            s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+            let saved = s.save_bytes(id).unwrap();
+            let reopened = s.open("reopened.pdf", None, saved, None).unwrap();
+            let text = crate::tests::page_texts(&s, reopened)[0].clone();
+            assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["some", "more", "was", "seen"], "height {height}, gap {gap}");
+        }
+    }
+
+    /// The orientation engine only helps: when it fails the page is still read, as it is, and
+    /// the page says so. A reader's own orientation failure still skips the page.
+    #[test]
+    fn a_failing_orientation_engine_costs_the_turn_and_not_the_page() {
+        struct Failing;
+        impl Recognizer for Failing {
+            fn id(&self) -> &'static str {
+                "failing"
+            }
+            fn available(&self) -> bool {
+                true
+            }
+            fn languages(&self) -> Vec<(String, String)> {
+                Vec::new()
+            }
+            fn recognize(
+                &self,
+                _image: &pdfcraft_ocr::OcrImage,
+                _options: &pdfcraft_ocr::RecognizeOptions,
+            ) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+                Ok(Vec::new())
+            }
+            fn orientation(&self, _image: &image::RgbImage) -> Option<Result<u16, OcrError>> {
+                Some(Err(OcrError::Recognize("broken model".into())))
+            }
+        }
+        let reader = Observer::new(None);
+        let recognizers = Recognizers { primary: reader.clone(), secondary: None, orienter: Some(Arc::new(Failing)) };
+        let pages = read_top_heavy_scan(None, &recognizers);
+        assert_eq!(pages[0].skipped, None);
+        assert_eq!(pages[0].correction.rotation, 0);
+        assert!(pages[0].notes.iter().any(|n| n.contains("broken model")), "{:?}", pages[0].notes);
+        assert_eq!(reader.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let reader_fails = Recognizers { primary: Arc::new(Failing), secondary: None, orienter: None };
+        assert!(read_top_heavy_scan(None, &reader_fails)[0].skipped.as_deref().is_some_and(|why| why.contains("broken model")));
     }
 
     /// Skip-files: a file that already has text is passed over entirely — the engine never

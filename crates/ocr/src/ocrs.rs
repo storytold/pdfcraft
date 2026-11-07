@@ -1,6 +1,5 @@
 //! The pure-Rust engine: the ocrs crate with its pre-trained models, wrapped as a
-//! [`Recognizer`] (`OcrsRecognizer`). Reading is offline and local. English is read by the ocrs
-//! recognition model, which reports no confidence (`confidence: None`); the other languages by
+//! [`Recognizer`] (`OcrsRecognizer`). Reading is offline and local. Every language is read by
 //! PaddleOCR's multilingual recognizer over the lines ocrs detected, with its mean character
 //! confidence (0–100).
 
@@ -263,12 +262,11 @@ impl Recognizer for OcrsRecognizer {
     }
 
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
-        // English keeps the ocrs recognizer; the other languages need the multilingual one.
-        // An unknown code reads as English, the engine's default.
+        // Every language, English too, reads through the line recognizer: it straightens a
+        // skewed line before reading it, and reads clean English pages better than the ocrs
+        // model does. An unknown code falls back to English, as the trait documents.
         let language = options.language.trim();
-        if language == "en" || !LANGUAGES.iter().any(|l| l.0 == language) {
-            return self.engine.recognize(image.rgba(), image.width(), image.height());
-        }
+        let language = if LANGUAGES.iter().any(|l| l.0 == language) { language } else { "en" };
         let rgb: Vec<u8> = image.rgba().as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
         let rgb = image::RgbImage::from_raw(image.width(), image.height(), rgb).ok_or(OcrError::EmptyImage)?;
         self.engine.recognize_language(&rgb, language)

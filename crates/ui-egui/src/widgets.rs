@@ -33,6 +33,11 @@ pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) ->
     egui::Modal::new(egui::Id::unique(id)).frame(dialog_frame(ctx))
 }
 
+/// The height the contents of a [`modal`] can take in the window.
+pub fn dialog_room(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - 2.0 * f32::from(DIALOG_PAD_Y)).max(0.0)
+}
+
 /// Show [`modal`], outline its controls, and remember the card rect for layout checks.
 pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
     let stored = egui::Id::unique(id);

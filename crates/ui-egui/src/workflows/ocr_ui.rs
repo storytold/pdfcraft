@@ -257,12 +257,63 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
 }
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
+    /// What the dialog's title and buttons take, around the part that scrolls.
+    const AROUND: f32 = 78.0;
+    /// The part that scrolls never gets shorter than this, however short the window.
+    const LEAST: f32 = 96.0;
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
     ui.label(egui::RichText::new(tl!("Scan and text recognition")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
+    // The buttons stay outside the scroll area: they are what has to stay in the window.
+    let room = (widgets::dialog_room(ui.ctx()) - AROUND).max(LEAST);
+    // The minimum as well: an area lays out in last frame's size, so a list that once scrolled would
+    // otherwise never grow back. It still shrinks to what it holds.
+    let area = egui::ScrollArea::vertical().id_salt("ocr-settings").max_height(room).min_scrolled_height(room);
+    area.auto_shrink([false, true]).show(ui, |ui| {
+        settings(ui, d, pages, t);
+    });
+    ui.add_space(6.0);
+    let (mut go, mut cancel) = (false, false);
+    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .add_enabled_ui(can_run, |ui| widgets::pill_button(ui, if d.recognize { tl!("Recognize text") } else { tl!("Correct scans") }, true))
+                .inner
+                .clicked()
+            {
+                go = true;
+            }
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                cancel = true;
+            }
+        })
+    });
+    (go, cancel)
+}
+
+/// The dialog's settings as a read Edit starts by itself uses them.
+fn automatic_settings(mut settings: OcrSettings) -> OcrSettings {
+    // Only a page with no text of its own is read. Comments and text boxes over the picture do
+    // not count as its text (a scan with a few comments is still a scan, as in Acrobat), but
+    // a page with real text and a background picture is left alone.
+    settings.skip_text_pages = true;
+    settings.native_text_only = true;
+    // Reading only: the scan corrections the dialog may have left on would turn, straighten
+    // or crop the page in view unasked.
+    settings.recognize = true;
+    settings.rotate_pages = false;
+    settings.auto_rotate = false;
+    settings.straighten_pages = false;
+    settings.auto_crop = false;
+    settings
+}
+
+/// What the dialog asks, between its title and its buttons.
+fn settings(ui: &mut egui::Ui, d: &mut OcrDraft, pages: usize, t: &Tokens) {
     let group = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
         ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(13.0)));
         egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
@@ -326,7 +377,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             ui.end_row();
             ui.label(tl!("Output"));
             // Only exact output leaves the page image alone; the scan corrections change it.
-            let exact = d.recognize && !(d.rotate_pages || d.straighten_pages || d.auto_crop);
+            let exact = d.recognize && !(d.rotate_pages || d.auto_rotate || d.straighten_pages || d.auto_crop);
             let searchable = if exact { tl!("Searchable Image (Exact)") } else { tl!("Searchable Image") };
             let mode_name = match d.output_mode {
                 _ if !d.recognize => tl!("Corrected scan"),
@@ -416,24 +467,6 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.label(egui::RichText::new(text).small().color(t.text_muted));
         ui.add_space(6.0);
     }
-    ui.add_space(6.0);
-    let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add_enabled_ui(can_run, |ui| widgets::pill_button(ui, if d.recognize { tl!("Recognize text") } else { tl!("Correct scans") }, true))
-                .inner
-                .clicked()
-            {
-                go = true;
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                cancel = true;
-            }
-        })
-    });
-    (go, cancel)
 }
 
 impl PdfCraftApp {
@@ -469,23 +502,12 @@ impl PdfCraftApp {
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
-        let mut settings = self.ocr_draft.settings();
+        let settings = automatic_settings(self.ocr_draft.settings());
         if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some() {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
-        // Only a page with no text of its own is read. Comments and text boxes over the picture do
-        // not count as its text (a scan with a few comments is still a scan, as in Acrobat), but
-        // a page with real text and a background picture is left alone.
-        settings.skip_text_pages = true;
-        settings.native_text_only = true;
-        // Reading only: the scan corrections the dialog may have left on would turn, straighten
-        // or crop the page in view unasked.
-        settings.recognize = true;
-        settings.rotate_pages = false;
-        settings.straighten_pages = false;
-        settings.auto_crop = false;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
     }
 
@@ -1203,7 +1225,7 @@ mod tests {
         let pdf = s.create_from_text("t", "Already typed here").expect("fixture");
         let files = vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())];
         let progress = Mutex::new(BatchProgress { total: files.len(), cancel: true, ..Default::default() });
-        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None };
+        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None, orienter: None };
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let w = writes.clone();
         let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
@@ -1233,7 +1255,7 @@ mod tests {
         let pdf = s.create_from_text("t", "fake scan").expect("fixture");
         let files = vec![("scan.pdf".into(), pdf.to_vec()), ("clean.pdf".into(), pdf.to_vec())];
         let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
-        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 40.0 }), secondary: None };
+        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 40.0 }), secondary: None, orienter: None };
         // The fixtures are text PDFs standing in for scans; the default skip-text-pages option
         // would (correctly) leave them alone, so the batch here reads everything.
         let settings = OcrSettings { skip_text_pages: false, ..Default::default() };
@@ -1249,11 +1271,21 @@ mod tests {
 
     /// The batch note follows the settings' low-confidence threshold (60 by default), not a
     /// number of its own: a 40% word is flagged under 60 and under 40, and not under 30.
+    /// A read Edit starts by itself never changes the page in view, whatever the dialog left on.
+    #[test]
+    fn an_automatic_read_only_reads() {
+        let left_on =
+            OcrSettings { recognize: false, rotate_pages: true, auto_rotate: true, straighten_pages: true, auto_crop: true, ..Default::default() };
+        let s = super::automatic_settings(left_on);
+        assert!(s.recognize && s.skip_text_pages && s.native_text_only);
+        assert!(!s.rotate_pages && !s.auto_rotate && !s.straighten_pages && !s.auto_crop);
+    }
+
     #[test]
     fn the_batch_note_uses_the_settings_threshold() {
         let s = pdfcraft_engine::Session::new();
         let pdf = s.create_from_text("t", "fake scan").expect("fixture");
-        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 40.0 }), secondary: None };
+        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 40.0 }), secondary: None, orienter: None };
         let run = |threshold: f32| {
             let files = vec![("scan.pdf".into(), pdf.to_vec())];
             let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });

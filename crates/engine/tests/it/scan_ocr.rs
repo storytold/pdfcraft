@@ -212,6 +212,26 @@ fn scan_correction_handles_all_quarter_turns_and_stale_results() {
     }
 }
 
+/// Tesseract has no orientation model of its own: with the ocrs models installed its job takes
+/// the turn from theirs, so upright pages stay upright and turned ones are read the right way up.
+#[test]
+fn tesseract_jobs_take_the_turn_from_the_ocrs_model() {
+    // `recognizers` waits for the Tesseract probe; `engine_unavailable_reason` answers "still checking".
+    let tesseract = OcrSettings { engine: ocr::EngineChoice::Tesseract, deskew: false, ..Default::default() };
+    let ocrs = OcrSettings { engine: ocr::EngineChoice::Ocrs, ..Default::default() };
+    if ocr::recognizers(&tesseract).is_err() || ocr::recognizers(&ocrs).is_err() {
+        eprintln!("skipped: needs the models and Tesseract");
+        return;
+    }
+    let sentence = "Document orientation and searchable text\nThe quick brown fox jumps over the lazy dog.\nEvery page should be upright and easy to read.\nPlease keep this document for your records.\nA useful example with several lines of text.";
+    for rotation in [0, 90, 180, 270] {
+        let (mut s, id) = scan(sentence, rotation, 0.0);
+        let result = s.recognize_text(id, &[], tesseract.clone()).unwrap();
+        assert_eq!(result[0].correction.rotation, (360 - rotation) % 360, "{result:?}");
+        assert!(text(&s, id).to_lowercase().contains("orientation"), "{rotation}: {:?}", text(&s, id));
+    }
+}
+
 #[test]
 fn scan_deskew_without_ocr_persists_and_is_undoable() {
     if !ocr::available() {
@@ -260,17 +280,18 @@ fn skewed_lines_are_read_straightened_without_deskewing_the_page() {
     let sentence = "Quarterly invoice numbers match the signed delivery receipts.
 Warehouse staff confirmed every pallet before shipping.
 ";
-    let (mut s, id) = scan(&sentence.repeat(6), 0, 4.0);
-    // Lines are straightened by the multilingual recognizer, which reads every language but
-    // English (English is the ocrs model's); German reads this Latin text the same way.
-    let settings = OcrSettings { language: "de".into(), rotate_pages: false, straighten_pages: false, ..Default::default() };
-    let found = s.recognize_text(id, &[], settings).unwrap();
-    assert_eq!(found[0].correction.deskew, 0.0, "{found:?}");
-    let extracted = text(&s, id);
-    // Read from their bounding boxes, these lines each take in their neighbours and nothing
-    // survives; straightened, the recognizer still slips now and then, so most is enough.
-    for expected in ["Quarterly", "invoice", "delivery", "receipts.", "Warehouse", "confirmed", "pallet", "shipping."] {
-        assert!(extracted.matches(expected).count() >= 4, "{expected:?} in {extracted:?}");
+    // English too: it reads through the same line recognizer as every other language.
+    for language in ["en", "de"] {
+        let (mut s, id) = scan(&sentence.repeat(6), 0, 4.0);
+        let settings = OcrSettings { language: language.into(), rotate_pages: false, straighten_pages: false, ..Default::default() };
+        let found = s.recognize_text(id, &[], settings).unwrap();
+        assert_eq!(found[0].correction.deskew, 0.0, "{found:?}");
+        let extracted = text(&s, id);
+        // Read from their bounding boxes, these lines each take in their neighbours and nothing
+        // survives; straightened, the recognizer still slips now and then, so most is enough.
+        for expected in ["Quarterly", "invoice", "delivery", "receipts.", "Warehouse", "confirmed", "pallet", "shipping."] {
+            assert!(extracted.matches(expected).count() >= 4, "{language}: {expected:?} in {extracted:?}");
+        }
     }
 }
 

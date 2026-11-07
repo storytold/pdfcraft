@@ -6744,7 +6744,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/tests/it/scan_ocr.rs::unicode_ocr_survives_save_search_and_undo_without_changing_pixels"]
-notes = "Disable rotate_pages, straighten_pages and auto_crop (auto_rotate and deskew preprocessing only touches the raster that is read) for unchanged page pixels; OCR does not recompress the original image."
+notes = "Disable rotate_pages, auto_rotate, straighten_pages and auto_crop (deskew preprocessing only touches the raster that is read) for unchanged page pixels; OCR does not recompress the original image."
 
 [[feature]]
 id = "ocr.editable-text-output"
@@ -6791,8 +6791,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize", "ocr.correct_scan"]
 tools = ["ocr_recognize", "ocr_enhance"]
-evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_correction_handles_all_quarter_turns_and_stale_results", "crates/automation/tests/it/automation.rs::ocr_enhance_corrects_rotation_without_adding_text", "crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright"]
-notes = "Confidence-gated 90/180/270 degree correction using PP-LCNet. Blank and uncertain pages stay unchanged; correction alone or before OCR, undoable. Corrects the page in the document (rotate_pages), with the ocrs models. Separately, recognition-only preprocessing (auto_rotate): 0/90/180/270 detected from projection-profile banding (conservative: under 32 px, blank, or without a clear margin it is a no-op); word boxes map back to the scanned raster through the exact inverse. Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), but correction of a genuinely rotated page through the workflow is not yet covered by a cited end-to-end test."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_correction_handles_all_quarter_turns_and_stale_results", "crates/engine/tests/it/scan_ocr.rs::tesseract_jobs_take_the_turn_from_the_ocrs_model", "crates/automation/tests/it/automation.rs::ocr_enhance_corrects_rotation_without_adding_text", "crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright"]
+notes = "Confidence-gated 90/180/270 degree correction using PP-LCNet. Blank and uncertain pages stay unchanged; correction alone or before OCR, undoable. Corrects the page in the document (rotate_pages or auto_rotate), with the ocrs models, also for a job Tesseract reads; without those models a Tesseract job reads the page as it is and notes that it was not checked. OCR jobs do not use the projection-profile heuristic in preprocessing, which turned upright sans and mono text upside down. A selected region is read as it is, so a region on a turned page reads badly. Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), and correction of a genuinely rotated page through the job is covered end to end for a Tesseract job (needs the models and Tesseract); it is not covered through the dialog."
 
 [[feature]]
 id = "ocr.deskew"

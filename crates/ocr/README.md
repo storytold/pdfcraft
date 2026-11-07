@@ -56,10 +56,12 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   recorded note — a page is never skipped because a partner could not read it.
 - **Preprocessing between the raster and recognition**, a pure function in fixed order: DPI
   normalization to 300 (only when one of the steps below is on, since they are calibrated for
-  it; with all of them off the raster is read exactly as rendered, and a scan at or above 300
-  is left alone), then the opt-in steps —
+  it, or when `normalize_dpi` asks for it, as a job Tesseract reads does; otherwise the raster is
+  read exactly as rendered, and a scan at or above 300 is left alone), then the opt-in steps —
   orientation (90°/180°/270° from projection-profile banding), deskew (± 5°, shear-scored,
   below 0.1° is a no-op), denoise (3×3 median) and binarization (Sauvola, window 8, k 0.34).
+  The engine's job keeps the orientation step off: on real pages it turned upright sans and
+  mono text upside down. A whole page is turned by the ocrs orientation model before this step.
   Every geometric step composes one exact affine `InverseTransform`, and callers map every
   word box back to the original raster before placing it. The heuristics are conservative and
   panic-free: too small to judge, blank, or no clear winner is a no-op, never a guess.
@@ -109,9 +111,9 @@ beyond the available attributed faces.
 `ATTRIBUTION.toml`. No document is uploaded and no model is downloaded at runtime.
 Release packages ship these files beside the application.
 
-- The ocrs recognizer reads English; German, French, Spanish, Catalan, Italian, Dutch, Danish,
+- English, German, French, Spanish, Catalan, Italian, Dutch, Danish,
   Norwegian Bokmål, Swedish, Finnish, Portuguese, horizontal Japanese and Chinese
-  (traditional/simplified) use PaddlePaddle's
+  (traditional/simplified) all use PaddlePaddle's
   PP-OCRv6 small model through the existing Rust RTen runtime, over the lines ocrs detects,
   with a mean character confidence for the review overlay. Tesseract remains a separate engine.
 - PP-LCNet classifies quarter-turn orientation. Preprocessing centres on ink bounds,
@@ -166,7 +168,7 @@ language-specific spelling filter. Community French checks still found missed
 does not guarantee exact transcription. Search treats `'`, `’`, `‘`, `ʼ` and `＇` as one
 character in both case modes, so either apostrophe finds the other.
 
-In the multilingual recognizer (every language but English, which the ocrs model reads),
+In the multilingual recognizer,
 lines skewed by up to 20° whose baseline climbs more than a quarter of the line height
 from end to end (for example in photographed pages read without deskew) are resampled
 straight along their detected direction before recognition, so the recognizer sees neither

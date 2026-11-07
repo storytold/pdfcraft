@@ -561,3 +561,28 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
     assert!(moved, "Ctrl+Tab moves the focus");
     assert_eq!(h.state().ocr_verify.focus, start, "the ring returns after the four panes");
 }
+
+/// The dialog asks more than a short window holds: its title and buttons stay inside, and answer.
+/// Needs no models, unlike the tests above, which return before they reach the buttons without them.
+#[test]
+fn the_dialog_keeps_its_buttons_in_a_short_window() {
+    for height in [900.0, 740.0, 500.0] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, height)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("scan.pdf", None, scan()).unwrap();
+            app.run_inline = true;
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("ocr.recognize"));
+        h.run_steps(6);
+        assert!(h.get_by_label("Scan and text recognition").rect().top() >= 0.0, "{height}: the title");
+        let go = h.get_by_label("Recognize text").rect();
+        let cancel = h.get_by_label("Cancel").rect();
+        assert!(go.bottom() <= height && cancel.bottom() <= height, "{height}: the buttons end at {}", go.bottom());
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        assert!(h.query_by_label("Scan and text recognition").is_none(), "{height}: Cancel closes the dialog");
+    }
+}

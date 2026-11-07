@@ -32,15 +32,9 @@ pub(crate) fn validate_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>
 
 pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
     validate_words(words)?;
-    // Keep the existing Latin layout, including Helvetica's proportional advance widths.
-    if words.iter().all(|w| {
-        w.text
-            .chars()
-            .all(|c| matches!(c, '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' | '€' | '‚' | '„' | '…' | '‘' | '’' | '“' | '”' | '•' | '–' | '—' | '™'))
-    }) {
-        pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words, &pdfcraft_fonts::TextPlan::default()))?;
-        return Ok(());
-    }
+    // Latin too goes through the Type 3 font below. Helvetica sized to a word's ink has a larger
+    // em than the word's box, and extraction judges word gaps against that size, so neighbouring
+    // words on a tight scan ran together ("inBelgië").
     let p = pdfcraft_model::pages(doc).get(page).cloned().ok_or_else(|| EditError::Invalid("OCR page does not exist".into()))?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
