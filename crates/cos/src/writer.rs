@@ -843,14 +843,14 @@ pub fn pdf_date(unix_secs: i64) -> String {
     format!("D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day). Total for any `i64` count:
+/// dates past `NaiveDate`'s ±262143-year range keep their proleptic Gregorian year instead of
+/// falling back to the epoch.
 ///
-/// A `from_timestamp` epoch fallback would change dates past `NaiveDate`'s ±262143-year range,
-/// which the old hand-rolled converter formatted directly. The Gregorian calendar repeats every
-/// 400 years (146_097 days), so chrono converts the day within one cycle and whole cycles go back
-/// into the year (an `i128` so the extremes can't overflow), keeping chrono as the only calendar
-/// logic and reproducing the old result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+/// The Gregorian calendar repeats every 400 years (146_097 days), so chrono converts the day
+/// within one cycle and whole cycles go back into the year (an `i128` so the extremes can't
+/// overflow), keeping chrono as the only calendar logic. 1970-01-01 is `num_days_from_ce` 719_163.
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     use chrono::Datelike;
     let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
     // `rest + 719_163` is 719_163..865_259, always a valid CE day.
@@ -1002,6 +1002,12 @@ mod tests {
         // its sign, exactly as before).
         assert_eq!(pdf_date(10_000_000_000_000), "D:3188570520174640Z");
         assert_eq!(pdf_date(-10_000_000_000_000), "D:-3149180813061320Z");
+        assert_eq!(crate::civil_from_days(0), (1970, 1, 1));
+        assert_eq!(crate::civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(crate::civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(crate::civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(crate::civil_from_days(i64::MAX), (25_252_734_927_768_524, 7, 27));
+        assert_eq!(crate::civil_from_days(i64::MIN), (-25_252_734_927_764_585, 6, 7));
     }
 
     #[test]
