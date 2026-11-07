@@ -242,6 +242,7 @@ impl PdfCraftApp {
             comment_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
+            last_snapshot_of: None,
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,

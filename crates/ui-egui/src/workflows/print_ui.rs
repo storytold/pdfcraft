@@ -156,7 +156,7 @@ impl PdfCraftApp {
         // left over from another document falls back to the whole document.
         let which = match (selected.is_empty(), keep.which) {
             (false, _) => Which::Selected,
-            (true, Which::Selected) => Which::All,
+            (true, Which::Selected | Which::Area) => Which::All,
             (true, other) => other,
         };
         self.print_draft = PrintDraft {
@@ -171,6 +171,7 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            area: None,
             ..keep
         };
         self.dialog = Some(crate::Dialog::Print);
