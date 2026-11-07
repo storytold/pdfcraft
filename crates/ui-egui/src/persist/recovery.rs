@@ -320,6 +320,9 @@ impl PdfCraftApp {
                 RecoveryMeta { key, name: snap.name, path: snap.path, saved_at: now_secs(), encrypted: snap.encrypted, instance: store.instance() };
             if let Err(e) = store.write(&meta, &snap.bytes) {
                 log::warn!("autosave failed: {e}");
+                // Still due: the next autosave writes it. After `renew_recovery` there is no
+                // older snapshot to fall back on.
+                self.session.autosave_failed(snap.doc);
             }
         }
     }

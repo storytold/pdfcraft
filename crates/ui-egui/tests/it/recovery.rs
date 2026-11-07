@@ -168,6 +168,26 @@ fn applying_redactions_replaces_the_recovery_snapshot_at_once() {
     s.clear();
 }
 
+/// An autosave that could not be written leaves the document due, so the next one writes it.
+/// Renewing the snapshot after a redaction removes the old one first, so nothing else is left.
+#[test]
+fn a_failed_autosave_is_written_by_the_next_one() {
+    let s = store("retry");
+    // A file where the folder belongs: the folder can't be made, so nothing can be written.
+    std::fs::write(s.dir(), b"").unwrap();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.enable_recovery(s.clone());
+    app.open_bytes("a.pdf", None, fixture(1)).unwrap();
+    assert!(app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    app.autosave_now();
+    assert!(s.list().is_empty(), "the folder can't be made");
+    std::fs::remove_file(s.dir()).unwrap();
+    app.autosave_now();
+    assert_eq!(s.list().len(), 1, "the snapshot that failed is written by the next autosave");
+    s.clear();
+}
+
 #[test]
 fn quitting_cleanly_leaves_nothing_behind() {
     let s = store("quit");
