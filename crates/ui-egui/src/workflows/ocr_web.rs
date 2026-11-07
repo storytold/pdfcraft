@@ -144,7 +144,7 @@ struct Pool {
     /// When a page last went to or came back from a worker: the idle time runs from here.
     last_used: f64,
     /// Which run each page sent belongs to: single-file and multiple-file OCR share the workers.
-    router: Router<Result<Vec<Line>, String>>,
+    runs: Router<Result<Vec<Line>, String>>,
 }
 
 thread_local! {
@@ -192,7 +192,7 @@ impl Pool {
     /// the worker script or the browser refuses it.
     fn start(ctx: &egui::Context) -> Pool {
         let t = now();
-        let mut pool = Pool { members: Vec::new(), events: Rc::new(RefCell::new(Vec::new())), started: t, last_used: t, router: Router::default() };
+        let mut pool = Pool { members: Vec::new(), events: Rc::new(RefCell::new(Vec::new())), started: t, last_used: t, runs: Router::default() };
         let url = web_sys::window()
             .and_then(|w| w.document())
             .and_then(|d| d.query_selector(WORKER_META).ok().flatten())
@@ -292,7 +292,7 @@ impl Pool {
             self.last_used = now();
         }
         for (id, lines) in done {
-            self.router.deliver(id, lines);
+            self.runs.deliver(id, lines);
         }
     }
 
@@ -300,7 +300,7 @@ impl Pool {
     /// couldn't be sent.
     fn send(&mut self, i: usize, image: &OcrImage, inbox: &Inbox<Result<Vec<Line>, String>>) -> Option<u64> {
         let m = self.members.get_mut(i)?;
-        let id = self.router.send(inbox, |id| {
+        let id = self.runs.send(inbox, |id| {
             let pixels = js_sys::Uint8Array::from(image.rgba());
             let msg = message(&[
                 ("type", &"page".into()),
