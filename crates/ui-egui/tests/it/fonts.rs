@@ -417,6 +417,7 @@ fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
         ("ca", &catalog("ca")),
         ("ro", &catalog("ro")),
         ("nb", &catalog("nb")),
+        ("nl", &catalog("nl")),
     ] {
         // Vietnamese stacks its diacritics: the precomposed letters and the base letters they
         // combine with, including `đ` and the tone marks `ạ ả ấ ầ ẩ ẫ ậ ắ ằ ẳ ẵ ặ ế ề ể ễ ệ`.

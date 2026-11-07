@@ -3125,7 +3125,7 @@ sha256 = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5"
 [[build_input]]
 name = "craft-i18n"
 option = "CRAFT_I18N_DIR"
-title = "Interface translations: the craft-i18n catalogs (locales/<code>/common.tsv and pdfcraft.tsv) of the 34 languages PdfCraft offers besides English"
+title = "Interface translations: the craft-i18n catalogs (locales/<code>/common.tsv and pdfcraft.tsv) of the 35 languages PdfCraft offers besides English"
 author = "The craft-i18n translators, including every translator of PdfCraft's former in-repo catalogs (crates/ui-egui/src/i18n/*.tsv, migrated at pdfcraft@ecdd1e6)"
 source = "https://github.com/storytold/craft-i18n (pinned by commit in craft-i18n.rev, which CI, releases and the flatpak manifests read)"
 licence = "MIT OR Apache-2.0"
