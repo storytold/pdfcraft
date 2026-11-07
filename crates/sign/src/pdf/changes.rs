@@ -168,7 +168,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         let r = ObjRef { num, generation: doc.generation(num) };
         let new = doc.get(r);
         let before = old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null));
-        if before.as_deref() == Some(&*new) {
+        if before.as_deref().is_some_and(|b| same_object(b, &new)) {
             // The same content at a new place. That is true for the renderer as well only when
             // the entry locates the object itself: where this reader had to search for the
             // object, another reader may arrive at a different one.
@@ -238,7 +238,7 @@ fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'
     // Compared by content: an indirect /Perms rewritten in place keeps its reference (and, shared
     // with the trailer's /Info, would otherwise pass as a metadata change).
     let perms = |d: &Document| d.root().and_then(|r| d.get(r).as_dict().and_then(|c| c.get(b"Perms").map(|p| (*d.resolve(p)).clone())));
-    if perms(doc) != perms(old) && !disallowed.contains(&kind::STRUCTURE) {
+    if !same_entry(perms(doc).as_ref(), perms(old).as_ref()) && !disallowed.contains(&kind::STRUCTURE) {
         disallowed.push(kind::STRUCTURE);
     }
 }
@@ -269,7 +269,7 @@ fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
             continue;
         }
         // Unchanged since signing: the certification already covered it.
-        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).as_deref() == Some(&*new) {
+        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).is_some_and(|o| same_object(&o, &new)) {
             continue;
         }
         let value = if is_value { Some(d.clone()) } else { d.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) };
@@ -330,7 +330,7 @@ impl ChangedObjectClassifier<'_> {
     }
 
     fn keeps_previous_entries(&self, dict: &Dict, before: Option<&Object>) -> bool {
-        before.and_then(Object::as_dict).is_some_and(|previous| previous.iter().all(|(key, value)| dict.get(key) == Some(value)))
+        before.and_then(Object::as_dict).is_some_and(|previous| previous.iter().all(|(key, value)| same_entry(dict.get(key), Some(value))))
     }
 
     fn is_signed_annotation_array(&self, r: ObjRef, before: Option<&Object>) -> bool {
@@ -520,14 +520,14 @@ pub(crate) fn only_grew(doc: &Document, old: &Document, before: &Object, now: &O
             let refs = |a: &[Object]| a.iter().map(Object::as_ref).collect::<Option<HashSet<ObjRef>>>();
             match (refs(b), refs(n)) {
                 (Some(b), Some(n)) => b.is_subset(&n),
-                _ => b.len() <= MAX_COMPARED && n.len() <= MAX_COMPARED && b.iter().all(|x| n.contains(x)),
+                _ => b.len() <= MAX_COMPARED && n.len() <= MAX_COMPARED && b.iter().all(|x| n.iter().any(|y| same_object(x, y))),
             }
         }
         (Object::Dict(b), Object::Dict(n)) => b.iter().all(|(k, v)| match n.get(k) {
-            Some(nv) => nv == v || (depth < 4 && only_grew(doc, old, &old.resolve(v), &doc.resolve(nv), depth + 1)),
+            Some(nv) => same_object(nv, v) || (depth < 4 && only_grew(doc, old, &old.resolve(v), &doc.resolve(nv), depth + 1)),
             None => false,
         }),
-        _ => before == now,
+        _ => same_object(before, now),
     }
 }
 
@@ -651,25 +651,12 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
         return kind::OTHER;
     }
-    let strip = |d: &Dict| -> Vec<(Vec<u8>, Object)> {
-        let mut v: Vec<(Vec<u8>, Object)> =
-            d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Fields" | b"SigFlags")).map(|(k, o)| (k.to_vec(), o.clone())).collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
-    };
-    if strip(now) != strip(before) {
+    if !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
         return kind::FORM_FILL;
     }
     let old_fields = refs(old, before.get(b"Fields"));
     let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
     if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
-}
-
-/// Dictionary entries in a stable order, without `keys`.
-fn without(x: &Dict, keys: &[&[u8]]) -> Vec<(Vec<u8>, Object)> {
-    let mut v: Vec<(Vec<u8>, Object)> = x.iter().filter(|(k, _)| !keys.contains(&k.as_slice())).map(|(k, o)| (k.to_vec(), o.clone())).collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
-    v
 }
 
 /// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
@@ -692,12 +679,26 @@ fn same_entries(a: &Dict, b: &Dict, skip: &[&[u8]]) -> bool {
 }
 
 /// Object equality where dictionaries (and stream dictionaries) ignore key order; arrays keep it.
+/// A string is its bytes (ISO 32000-2 §7.3.4.1): written as a literal or as hexadecimal, it is the
+/// same string, so a later save that respells one changes nothing it says. References compare by
+/// object and generation, and stream data byte for byte as stored. The recursion follows the
+/// parsed nesting, which the parser bounds.
 fn same_object(a: &Object, b: &Object) -> bool {
     match (a, b) {
+        (Object::String(a), Object::String(b)) => a.bytes == b.bytes,
         (Object::Dict(a), Object::Dict(b)) => same_entries(a, b, &[]),
         (Object::Stream(a), Object::Stream(b)) => a.raw == b.raw && same_entries(&a.dict, &b.dict, &[]),
         (Object::Array(a), Object::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(v, w)| same_object(v, w)),
         _ => a == b,
+    }
+}
+
+/// [`same_object`] for an entry that may be absent: both absent, or both present and the same.
+fn same_entry(a: Option<&Object>, b: Option<&Object>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_object(a, b),
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -798,7 +799,7 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
     let was = b.get(b"Extensions").map(|e| old.resolve(e)).and_then(|e| e.as_dict().cloned());
     match (was, now) {
         (None, _) => true,
-        (Some(was), Some(now)) => was.iter().all(|(k, v)| now.get(k) == Some(v)),
+        (Some(was), Some(now)) => was.iter().all(|(k, v)| same_entry(now.get(k), Some(v))),
         (Some(_), None) => false,
     }
 }
@@ -806,18 +807,18 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
 /// A change to the signed catalog `b`, now `d`.
 fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static str {
     let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
-    if without(d, keys) != without(b, keys) {
+    if !same_entries(d, b, keys) {
         kind::STRUCTURE
     } else if !extensions_kept(doc, old, d, b) {
         // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A writer
         // adding a /DSS also declares the ESIC extension it belongs to, so a declaration may be
         // added, but none that was signed may change or go.
         kind::STRUCTURE
-    } else if d.get(b"AcroForm") != b.get(b"AcroForm") {
+    } else if !same_entry(d.get(b"AcroForm"), b.get(b"AcroForm")) {
         // Compare the forms themselves, inline or not.
         let now = acroform(doc).unwrap_or_default();
         acroform_kind(doc, old, &now, None)
-    } else if b.get(b"Perms") != d.get(b"Perms") {
+    } else if !same_entry(b.get(b"Perms"), d.get(b"Perms")) {
         kind::SIGNATURE
     } else {
         kind::METADATA
@@ -869,7 +870,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     // so relabelling the widget now does not change that.
     if before.is_some_and(|b| {
         b.name(b"Subtype") == Some(b"Widget") && b.name(b"FT") == Some(b"Sig") && b.get(b"V").is_some_and(|v| old.resolve(v).as_dict().is_some())
-    }) && before != Some(d)
+    }) && !before.is_some_and(|b| same_entries(d, b, &[]))
     {
         return kind::PAGE_CONTENT;
     }
@@ -883,7 +884,9 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     }
     // Where a signed widget sits and whether it shows are what the page shows: filling the form
     // changes its value and appearance, never its rectangle or its flags.
-    if before.is_some_and(|b| b.name(b"Subtype") == Some(b"Widget") && (d.get(b"Rect") != b.get(b"Rect") || d.get(b"F") != b.get(b"F"))) {
+    if before.is_some_and(|b| {
+        b.name(b"Subtype") == Some(b"Widget") && (!same_entry(d.get(b"Rect"), b.get(b"Rect")) || !same_entry(d.get(b"F"), b.get(b"F")))
+    }) {
         return kind::PAGE_CONTENT;
     }
     match ty {

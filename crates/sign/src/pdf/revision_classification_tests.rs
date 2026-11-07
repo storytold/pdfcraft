@@ -282,3 +282,80 @@ fn a_repaired_slot_rewritten_cleanly_is_judged_by_its_references() {
     let now = signed.clone().revision(&[(4, Row::Obj(0, 0, &filled))]);
     assert!(matches!(verdict(&now.open(), signed.open(), Some(2)), Modification::Disallowed(_)));
 }
+
+/// A signed catalog and text field whose strings a later save respells, given the catalog `extra`
+/// entries and the field's `/T` as written in each revision.
+fn respelled(signed_extra: &str, now_extra: &str, signed_t: &str, now_t: &str) -> (Document, Document) {
+    let catalog = |extra: &str| format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >> {extra} >>");
+    let field = |t: &str| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T {t} /V (Ann) /Rect [20 20 120 40] /P 3 0 R >>");
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, &catalog(signed_extra))),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, &field(signed_t))),
+    ]);
+    let now = signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog(now_extra))), (5, Row::Obj(0, 0, &field(now_t)))]);
+    (now.open(), signed.open())
+}
+
+/// A string is its bytes (ISO 32000-2 §7.3.4.1): a later save that writes the catalog's /Lang in
+/// hexadecimal instead of as a literal changes nothing, under every permission level.
+#[test]
+fn a_string_respelled_in_hex_is_no_change() {
+    for p in [Some(1), Some(2), Some(3), None] {
+        let (doc, old) = respelled("/Lang (en-US)", "/Lang <656E2D5553>", "(Name)", "(Name)");
+        assert_eq!(verdict(&doc, old, p), Modification::Allowed(Vec::new()), "P={p:?}");
+    }
+}
+
+/// The same holds for strings nested in dictionaries and arrays (a name tree's keys), with the
+/// entries also in another order, and for a signed field's /T.
+#[test]
+fn nested_strings_respelled_and_reordered_are_no_change() {
+    let (doc, old) = respelled(
+        "/Names << /Dests << /Names [(intro) [3 0 R /Fit]] >> >> /Lang (en-US)",
+        "/Lang <656e2d5553> /Names << /Dests << /Names [<696E74726F> [3 0 R /Fit]] >> >>",
+        "(Name)",
+        "<4E616D65>",
+    );
+    assert_eq!(verdict(&doc, old, Some(1)), Modification::Allowed(Vec::new()));
+}
+
+/// Different bytes are a different string however they are written: a catalog whose /Lang (or a
+/// string deep in its name tree) now says something else is still a structure change.
+#[test]
+fn a_string_whose_bytes_change_is_still_a_change() {
+    for (signed, now) in [
+        ("/Lang (en-US)", "/Lang <64652D4445>"),
+        ("/Names << /Dests << /Names [(intro) [3 0 R /Fit]] >> >>", "/Names << /Dests << /Names [<6F75747472> [3 0 R /Fit]] >> >>"),
+    ] {
+        let (doc, old) = respelled(signed, now, "(Name)", "(Name)");
+        assert_eq!(verdict(&doc, old, Some(2)), Modification::Disallowed(vec![super::kind::STRUCTURE]), "{now}");
+    }
+}
+
+/// A save that adds a signature field and respells the catalog's and the form's strings on the
+/// way is judged by the field it added: the respelled /Lang and /DA are not a structure or form
+/// change.
+#[test]
+fn a_signature_added_with_respelled_strings_is_signing() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /Lang (en-US) /AcroForm << /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, TEXT_FIELD)),
+    ]);
+    let catalog =
+        |lang: &str, da: &str| format!("<< /Type /Catalog /Pages 2 0 R /Lang {lang} /AcroForm << /DA {da} /Fields [5 0 R 6 0 R] /SigFlags 3 >> >>");
+    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [0 0 0 0] /P 4 0 R >>";
+    let now = |lang: &str, da: &str| {
+        signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog(lang, da))), (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))), (6, Row::Obj(0, 0, sig))])
+    };
+    let respelled = now("<656E2D5553>", "<2F48656C76203020546620302067>");
+    assert_eq!(verdict(&respelled.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
+    // A /DA that now says something else is a form change, however it is spelled.
+    let restyled = now("<656E2D5553>", "<2F48656C7620313220546620302067>");
+    assert_eq!(verdict(&restyled.open(), signed.open(), None), Modification::Allowed(vec![super::kind::FORM_FILL, super::kind::SIGNATURE]));
+}
