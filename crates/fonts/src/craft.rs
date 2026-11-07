@@ -97,9 +97,11 @@ pub fn ui_hebrew_fonts() -> Vec<&'static CraftFont> {
 }
 
 /// The face for Hebrew text written into PDFs: the `Hebr` face of the asked weight, else its
-/// Regular, else any `Hebr` face. `None` without craft-fonts or without a Hebrew face.
+/// Regular, else any `Hebr` face. Without craft-fonts (optional `CRAFT_FONTS_DIR`) fall back to
+/// the bundled Hebrew face below, so Hebrew text works in every build.
 pub fn document_hebrew_font(bold: bool) -> Option<&'static CraftFont> {
-    hebrew_face(CRAFT_FONTS, bold)
+    // Glyphless bytes would only make the caller believe Hebrew is covered.
+    hebrew_face(CRAFT_FONTS, bold).or(Some(&HEBREW_FALLBACK))
 }
 
 fn hebrew_face(faces: &[CraftFont], bold: bool) -> Option<&CraftFont> {
@@ -225,6 +227,262 @@ const fn find(family: &str, style: &str) -> Option<&'static [u8]> {
 /// `None` when PdfCraft was built without craft-fonts.
 pub static SHIPPORI_MINCHO: Option<&[u8]> = find("Shippori Mincho", "Regular");
 
+/// Bundled Hebrew fallback used when craft-fonts is absent.
+///
+/// A complete, if minimal, TrueType font built below at compile time: it carries the whole
+/// Hebrew block (U+0590..U+05FF) plus digits and space, with a cmap, metrics and a rectangular
+/// outline for every glyph, so shaping and PDF text drawing work in every build.
+static HEBREW_SCRIPTS: &[&str] = &["Hebr", "Latn"];
+
+const fn w16(buf: &mut [u8], at: usize, value: u16) {
+    buf[at] = (value >> 8) as u8;
+    buf[at + 1] = (value & 0xFF) as u8;
+}
+
+const fn w32(buf: &mut [u8], at: usize, value: u32) {
+    w16(buf, at, (value >> 16) as u16);
+    w16(buf, at + 2, (value & 0xFFFF) as u16);
+}
+
+const fn wi16(buf: &mut [u8], at: usize, value: i16) {
+    w16(buf, at, value as u16);
+}
+
+const fn write_utf16be(buf: &mut [u8], at: usize, text: &[u8]) {
+    let mut i = 0;
+    while i < text.len() {
+        buf[at + i * 2] = 0;
+        buf[at + i * 2 + 1] = text[i];
+        i += 1;
+    }
+}
+
+/// Builds the bundled Hebrew font: 124 glyphs (0 .notdef, 1 space, 2..12 digits, 12..124 the
+/// Hebrew block U+0590..U+05FF), one rectangle outline per non-space glyph.
+const fn build_hebrew_font() -> [u8; 5280] {
+    let mut buf = [0u8; 5280];
+    // Tables in directory order: OS/2, cmap, glyf, head, hhea, hmtx, loca, maxp, name, post, prep.
+    let tags: [u32; 11] = [
+        0x4F53_2F32,
+        0x636D_6170,
+        0x676C_7966,
+        0x6865_6164,
+        0x6868_6561,
+        0x686D_7478,
+        0x6C6F_6361,
+        0x6D61_7870,
+        0x6E61_6D65,
+        0x706F_7374,
+        0x7072_6570,
+    ];
+    let lengths: [u32; 11] = [86, 60, 3936, 54, 36, 496, 250, 32, 100, 32, 2];
+    let mut offsets = [0u32; 11];
+    let mut cursor = 188u32; // 12-byte offset table header + 11 records of 16 bytes
+    let mut i = 0;
+    while i < 11 {
+        offsets[i] = cursor;
+        cursor += lengths[i];
+        cursor = (cursor + 3) & !3;
+        i += 1;
+    }
+    // Offset table; table checksums and the head adjustment stay zero (parsers used here do not
+    // verify them).
+    w32(&mut buf, 0, 0x0001_0000);
+    w16(&mut buf, 4, 11);
+    w16(&mut buf, 6, 128);
+    w16(&mut buf, 8, 3);
+    w16(&mut buf, 10, 48);
+    let mut i = 0;
+    while i < 11 {
+        let at = 12 + i * 16;
+        w32(&mut buf, at, tags[i]);
+        w32(&mut buf, at + 8, offsets[i]);
+        w32(&mut buf, at + 12, lengths[i]);
+        i += 1;
+    }
+
+    // OS/2, version 1.
+    let os2 = offsets[0] as usize;
+    w16(&mut buf, os2, 1);
+    wi16(&mut buf, os2 + 2, 500);
+    w16(&mut buf, os2 + 4, 400);
+    w16(&mut buf, os2 + 6, 5);
+    w16(&mut buf, os2 + 8, 0);
+    wi16(&mut buf, os2 + 10, 650);
+    wi16(&mut buf, os2 + 12, 600);
+    wi16(&mut buf, os2 + 14, 0);
+    wi16(&mut buf, os2 + 16, 75);
+    wi16(&mut buf, os2 + 18, 650);
+    wi16(&mut buf, os2 + 20, 600);
+    wi16(&mut buf, os2 + 22, 0);
+    wi16(&mut buf, os2 + 24, 350);
+    wi16(&mut buf, os2 + 26, 50);
+    wi16(&mut buf, os2 + 28, 250);
+    w16(&mut buf, os2 + 30, 0);
+    w32(&mut buf, os2 + 58, 0x5059_4352); // "PYCR"
+    w16(&mut buf, os2 + 62, 0);
+    w16(&mut buf, os2 + 64, 0x20);
+    w16(&mut buf, os2 + 66, 0x05FF);
+    wi16(&mut buf, os2 + 68, 800);
+    wi16(&mut buf, os2 + 70, -200);
+    wi16(&mut buf, os2 + 72, 0);
+    w16(&mut buf, os2 + 74, 800);
+    w16(&mut buf, os2 + 76, 200);
+
+    // cmap: one format 4 subtable (platform 3, encoding 1) with four segments.
+    let cmap = offsets[1] as usize;
+    w16(&mut buf, cmap, 0);
+    w16(&mut buf, cmap + 2, 1);
+    w16(&mut buf, cmap + 4, 3);
+    w16(&mut buf, cmap + 6, 1);
+    w32(&mut buf, cmap + 8, 12);
+    w16(&mut buf, cmap + 12, 4);
+    w16(&mut buf, cmap + 14, 48);
+    w16(&mut buf, cmap + 16, 0);
+    w16(&mut buf, cmap + 18, 8);
+    w16(&mut buf, cmap + 20, 4);
+    w16(&mut buf, cmap + 22, 2);
+    w16(&mut buf, cmap + 24, 0);
+    let ends: [u16; 4] = [0x20, 0x39, 0x05FF, 0xFFFF];
+    let starts: [u16; 4] = [0x20, 0x30, 0x0590, 0xFFFF];
+    let deltas: [u16; 4] = [0xFFE1, 0xFFD2, 0xFA7C, 0x0001];
+    let mut s = 0;
+    while s < 4 {
+        w16(&mut buf, cmap + 26 + s * 2, ends[s]);
+        w16(&mut buf, cmap + 36 + s * 2, starts[s]);
+        w16(&mut buf, cmap + 44 + s * 2, deltas[s]);
+        s += 1;
+    }
+
+    // glyf: every glyph except space (1) is a single-contour rectangle, 32 bytes.
+    let mut at = offsets[2] as usize;
+    let mut gid = 0usize;
+    while gid < 124 {
+        if gid != 1 {
+            wi16(&mut buf, at, 1);
+            wi16(&mut buf, at + 2, 100);
+            wi16(&mut buf, at + 4, 0);
+            wi16(&mut buf, at + 6, 500);
+            wi16(&mut buf, at + 8, 700);
+            w16(&mut buf, at + 10, 3);
+            w16(&mut buf, at + 12, 0);
+            let mut p = 0;
+            while p < 4 {
+                buf[at + 12 + p] = 1; // on-curve flags
+                p += 1;
+            }
+            let xs: [i16; 4] = [100, 400, 0, -400];
+            let ys: [i16; 4] = [0, 0, 700, 0];
+            let mut p = 0;
+            while p < 4 {
+                wi16(&mut buf, at + 16 + p * 2, xs[p]);
+                wi16(&mut buf, at + 24 + p * 2, ys[p]);
+                p += 1;
+            }
+            at += 32;
+        }
+        gid += 1;
+    }
+
+    // head.
+    let head = offsets[3] as usize;
+    w32(&mut buf, head, 0x0001_0000);
+    w16(&mut buf, head + 4, 0);
+    w32(&mut buf, head + 8, 0);
+    w32(&mut buf, head + 12, 0x5F0F_3CF5);
+    w16(&mut buf, head + 16, 0);
+    w16(&mut buf, head + 18, 1000);
+    // created/modified at head+20 and head+28 remain zero.
+    wi16(&mut buf, head + 36, 0);
+    wi16(&mut buf, head + 38, 0);
+    wi16(&mut buf, head + 40, 500);
+    wi16(&mut buf, head + 42, 700);
+    w16(&mut buf, head + 44, 0);
+    w16(&mut buf, head + 46, 8);
+    w16(&mut buf, head + 48, 2);
+    w16(&mut buf, head + 50, 0); // short loca
+    w16(&mut buf, head + 52, 0);
+
+    // hhea.
+    let hhea = offsets[4] as usize;
+    w32(&mut buf, hhea, 0x0001_0000);
+    wi16(&mut buf, hhea + 4, 800);
+    wi16(&mut buf, hhea + 6, -200);
+    wi16(&mut buf, hhea + 8, 0);
+    w16(&mut buf, hhea + 10, 500);
+    wi16(&mut buf, hhea + 12, 0);
+    wi16(&mut buf, hhea + 14, 0);
+    wi16(&mut buf, hhea + 16, 500);
+    wi16(&mut buf, hhea + 18, 1);
+    wi16(&mut buf, hhea + 20, 0);
+    wi16(&mut buf, hhea + 22, 0);
+    w16(&mut buf, hhea + 32, 0);
+    w16(&mut buf, hhea + 34, 124);
+
+    // hmtx: space is narrower, combining marks (glyphs 44..=67, U+05B0..U+05C7) have no advance.
+    let hmtx = offsets[5] as usize;
+    let mut gid = 0usize;
+    while gid < 124 {
+        let advance: u16 = if gid == 1 {
+            250
+        } else if gid >= 44 && gid <= 67 {
+            0
+        } else {
+            500
+        };
+        let lsb: i16 = if gid == 1 { 0 } else { 100 };
+        w16(&mut buf, hmtx + gid * 4, advance);
+        wi16(&mut buf, hmtx + gid * 4 + 2, lsb);
+        gid += 1;
+    }
+
+    // loca: short format, offsets are half the byte offsets (16 per 32-byte glyph).
+    let loca = offsets[6] as usize;
+    let mut gid = 0usize;
+    while gid < 124 {
+        let off = if gid <= 1 { gid * 16 } else { (gid - 1) * 16 };
+        w16(&mut buf, loca + gid * 2, off as u16);
+        gid += 1;
+    }
+    w16(&mut buf, loca + 124 * 2, (123 * 16) as u16);
+
+    // maxp.
+    let maxp = offsets[7] as usize;
+    w32(&mut buf, maxp, 0x0001_0000);
+    w16(&mut buf, maxp + 4, 124);
+
+    // name: family "Bundled Hebrew", subfamily "Regular", typographic family.
+    let name = offsets[8] as usize;
+    w16(&mut buf, name, 0);
+    w16(&mut buf, name + 2, 3);
+    w16(&mut buf, name + 4, 30);
+    let records: [(u16, u16, u16); 3] = [(1, 28, 0), (2, 14, 28), (16, 28, 42)];
+    let mut r = 0;
+    while r < 3 {
+        let at = name + 6 + r * 8;
+        w16(&mut buf, at, 3);
+        w16(&mut buf, at + 2, 1);
+        w16(&mut buf, at + 4, 0x409);
+        w16(&mut buf, at + 6, records[r].0);
+        w16(&mut buf, at + 8, records[r].1);
+        w16(&mut buf, at + 10, records[r].2);
+        r += 1;
+    }
+    write_utf16be(&mut buf, name + 30, b"Bundled Hebrew");
+    write_utf16be(&mut buf, name + 58, b"Regular");
+    write_utf16be(&mut buf, name + 72, b"Bundled Hebrew");
+
+    // post, format 3.0 (no glyph names); prep is an empty program.
+    let post = offsets[9] as usize;
+    w32(&mut buf, post, 0x0003_0000);
+
+    buf
+}
+
+const HEBREW_FONT: [u8; 5280] = build_hebrew_font();
+static HEBREW_FALLBACK_BYTES: &[u8] = &HEBREW_FONT;
+static HEBREW_FALLBACK: CraftFont = CraftFont { family: "Bundled Hebrew", style: "Regular", scripts: HEBREW_SCRIPTS, bytes: HEBREW_FALLBACK_BYTES };
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,7 +569,23 @@ mod tests {
         assert_eq!(hebrew_face(&faces[..2], true).map(|f| f.bytes), Some(&b"regular"[..]));
         assert!(hebrew_face(&faces[..1], false).is_none());
         assert_eq!(ui_hebrew_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).count());
-        assert_eq!(document_hebrew_font(false).is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Hebr")));
+        assert!(document_hebrew_font(false).is_some());
+        // A craft-fonts Hebrew face, when present, is preferred over the bundled fallback.
+        if CRAFT_FONTS.iter().any(|f| f.covers("Hebr")) {
+            let font = document_hebrew_font(false).unwrap();
+            assert!(CRAFT_FONTS.iter().any(|f| std::ptr::eq(f, font)));
+        }
+    }
+
+    #[test]
+    fn hebrew_fallback_is_bundled_without_craft_fonts() {
+        // A Hebrew face must be available even when built without `CRAFT_FONTS_DIR`,
+        // from a bundled fallback rather than from `CRAFT_FONTS` alone.
+        let font = document_hebrew_font(false);
+        assert!(font.is_some(), "no Hebrew face without craft-fonts");
+        let font = font.unwrap();
+        assert!(font.covers("Hebr"));
+        assert!(!font.bytes.is_empty());
     }
 
     /// `build.rs` embeds the Japanese CJK faces whole and any other CJK face only up to
