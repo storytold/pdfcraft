@@ -1269,6 +1269,9 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
                 out.encoding.insert(code as u32, c.to_string());
             }
         }
+        if base_name.is_none() && !symbolic_builtin {
+            out.encoding.extend(symbolic_mac_roman_texts(doc, font));
+        }
         if let Some(Object::Dict(d)) = enc.as_deref()
             && let Some(diffs) = d.get(b"Differences").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
         {
@@ -1327,6 +1330,74 @@ fn identity_to_unicode() -> Vec<u8> {
         cmap.push_str("endbfrange\n");
     }
     cmap.into_bytes()
+}
+
+/// What each code of an embedded TrueType font that isn't flagged non-symbolic, names no base
+/// encoding and doesn't name its glyphs shows when two things say the code is Mac OS Roman: its
+/// Macintosh Roman (1, 0) `cmap` subtable selects the glyph the code draws (ISO 32000-2 §9.6.5.4:
+/// single bytes "look up the associated glyph descriptions" there, and a (3, 0) subtable maps "the
+/// single-byte codes in the (1, 0) subtable" prepended with 0xF0), and the glyph sits where the
+/// standard Macintosh glyph order (the 258 names of a version 1.0 `post` table) puts that Mac OS
+/// Roman character. So code 0x88 drawn with glyph 106, `agrave`, is `à`, where Standard has
+/// nothing and WinAnsi `ˆ`, while a Windows subset in the same order whose codes are WinAnsi (0x92
+/// drawn with glyph 183, `quoteright`) keeps its reading. The glyph drawn is found the way the
+/// renderer finds it: the Windows (3, 0) and (3, 1) subtables first, with the code and the code at
+/// 0xF000, 0xF100 and 0xF200, then the Macintosh and Unicode-platform ones. The renderer's text
+/// layer reads the same codes the same way (vendored hayro-interpret patch (101)).
+fn symbolic_mac_roman_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
+    use skrifa::GlyphId;
+    use skrifa::raw::{TableProvider as _, tables::cmap::PlatformId, tables::post::DEFAULT_GLYPH_NAMES, types::Tag};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
+    // Flag bit 6, Nonsymbolic (ISO 32000-2 Table 121).
+    if descriptor_flags(doc, &descriptor) & 32 != 0 {
+        return Vec::new();
+    }
+    let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
+    let object = doc.resolve(object);
+    let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
+    let Ok(bytes) = stream.decoded_within(MAX_SFNT) else { return Vec::new() };
+    let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
+    // A CFF program in `/FontFile2` selects its glyphs by name, not through the `cmap`. A `post`
+    // table of version 1.0 or 2.0 (also with its 16-bit halves swapped, as the renderer reads it)
+    // names the glyphs, and a font that names them needn't keep the order: a Wingdings subset
+    // draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`.
+    let named = face
+        .table_data(Tag::new(b"post"))
+        .is_some_and(|data| matches!(data.as_bytes().get(..4), Some([0, 1, 0, 0] | [0, 2, 0, 0] | [0, 0, 0, 1] | [0, 0, 0, 2])));
+    if face.cff().is_ok() || named {
+        return Vec::new();
+    }
+    let Ok(cmap) = face.cmap() else { return Vec::new() };
+    let records = cmap.encoding_records();
+    let lookup = |code: u32, windows: bool| {
+        records.iter().find_map(|record| {
+            let offsets: &[u32] = match (record.platform_id(), record.encoding_id()) {
+                (PlatformId::Windows, 0 | 1) if windows => &[0, 0xF000, 0xF100, 0xF200],
+                (PlatformId::Macintosh | PlatformId::Unicode, 0) if !windows => &[0],
+                _ => return None,
+            };
+            let subtable = record.subtable(cmap.offset_data()).ok()?;
+            offsets.iter().find_map(|o| subtable.map_codepoint(code + o).filter(|g| *g != GlyphId::NOTDEF))
+        })
+    };
+    (0..=255u32)
+        .filter_map(|code| {
+            let drawn = lookup(code, true).or_else(|| lookup(code, false))?;
+            let mac = records.iter().find_map(|record| {
+                (record.platform_id() == PlatformId::Macintosh && record.encoding_id() == 0)
+                    .then(|| record.subtable(cmap.offset_data()).ok()?.map_codepoint(code))
+                    .flatten()
+            })?;
+            if mac != drawn {
+                return None;
+            }
+            let c = char::from_u32(*crate::encodings::MAC_ROMAN.get(usize::try_from(code).ok()?)?).filter(|c| *c != '\0')?;
+            let standard = *DEFAULT_GLYPH_NAMES.get(usize::try_from(drawn.to_u32()).ok()?)?;
+            // Mac OS Roman 0xCA reads as a space, for the reason WinAnsi 0xA0 does (`MAC_ROMAN`).
+            let at_its_place = glyph_unicode(standard) == Some(c) || (code == 0xCA && standard == "nonbreakingspace");
+            at_its_place.then(|| (code, c.to_string()))
+        })
+        .collect()
 }
 
 #[cfg(test)]
