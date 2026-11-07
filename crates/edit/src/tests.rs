@@ -9518,6 +9518,12 @@ fn word_export_spacing_of_a_few_thousandths_of_an_em_stays_on_its_line() {
     assert_eq!(texts(&page("0.0235 Tc", "-0.036 Tc")), ["Yukarida esas dosyada"]);
     // Word's largest nudge, in opposite directions on the line's first and last run.
     assert_eq!(texts(&page("0.0413 Tc", "-0.0413 Tc")), ["Yukarida esas dosyada"]);
+    assert_eq!(texts(&page("0.03 Tw", "-0.03 Tw")), ["Yukarida esas dosyada"]);
+    // The limit is ten thousandths of an em, 0.1104 at 11.04 pt: just under it joins, just over splits.
+    assert_eq!(texts(&page("", "0.10 Tc")), ["Yukarida esas dosyada"]);
+    assert_eq!(texts(&page("", "0.12 Tc")), ["Yukarida esas dosya", "da"]);
+    assert_eq!(texts(&page("", "0.10 Tw")), ["Yukarida esas dosyada"]);
+    assert_eq!(texts(&page("", "0.12 Tw")), ["Yukarida esas dosya", "da"]);
 
     // Visible tracking or word spacing still keeps a run apart.
     assert_eq!(texts(&page("0.5 Tc", "")), ["Yu", "karida esas dosyada"]);
