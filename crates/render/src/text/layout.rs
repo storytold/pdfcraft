@@ -130,12 +130,23 @@ fn rides_on(p: &TextGlyph, m: &TextGlyph) -> bool {
         && m.rect[0] <= p.rect[2] + reach
 }
 
-/// Glyph `i` continues the run of glyph `i - 1`: when it is a combining mark on that glyph, it joins its cluster.
+/// How far, as a fraction of its letter's height, a combining mark's em box may sit above or below the letter's and
+/// still ride on it. A tone mark lifted over an upper vowel can be drawn more than half an em higher, past where a
+/// glyph of its own would start a new line.
+const MARK_RISE: f32 = 1.0;
+
+/// Whether glyph `m`, drawn right after glyph `p` (a letter, or a mark riding on letter `a`), rides on that cluster:
+/// on `p` itself, or, for a mark stacked on another one, on its letter `a`.
+fn rides_on_cluster(glyphs: &[&TextGlyph], p: usize, a: usize, m: &TextGlyph) -> bool {
+    glyphs.get(p).is_some_and(|pg| rides_on(pg, m)) || (a != p && glyphs.get(a).is_some_and(|ag| rides_on(ag, m)))
+}
+
+/// Glyph `i` continues the run of glyph `i - 1`: when it is a combining mark on that glyph's cluster, it joins it.
 fn attach_mark(glyphs: &[&TextGlyph], anchor: &mut [usize], i: usize) {
     let Some(p) = i.checked_sub(1) else { return };
-    if let (Some(pg), Some(mg)) = (glyphs.get(p), glyphs.get(i))
-        && rides_on(pg, mg)
-        && let Some(&a) = anchor.get(p)
+    let Some(&a) = anchor.get(p) else { return };
+    if let Some(mg) = glyphs.get(i)
+        && rides_on_cluster(glyphs, p, a, mg)
         && let Some(slot) = anchor.get_mut(i)
     {
         *slot = a;
@@ -221,7 +232,13 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         let g = glyphs[i].rect;
         let hi = height(i);
         let cont = segs.last().is_some_and(|s| {
-            let Some(p) = s.first.end.checked_sub(1) else { return false };
+            let Some(last) = s.first.end.checked_sub(1) else { return false };
+            // A glyph after a combining mark continues from the mark's letter, and a mark on that letter's cluster
+            // stays on its line even when drawn raised or lowered by up to an em (`MARK_RISE`).
+            let p = anchor.get(last).copied().unwrap_or(last);
+            if rides_on_cluster(&glyphs, last, p, glyphs[i]) && (cy(i) - cy(p)).abs() < height(p) * MARK_RISE {
+                return true;
+            }
             let ph = height(p).min(hi);
             let sh = s.h.min(hi);
             let gap = g[0] - glyphs[p].rect[2];

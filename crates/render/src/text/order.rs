@@ -161,8 +161,9 @@ pub(super) struct Scratch {
 }
 
 /// Fills `sc.cluster_gap` with the gap left of each glyph of `sc.placed`, between clusters: a combining mark riding on a
-/// glyph has none (no word ever starts at it), and its cluster ends at the base's right edge or the furthest mark start.
-/// A zero-advance mark's box is no measure of where the pen went (`draw_glyph` widens it to its outline or half an em).
+/// glyph has none (no word ever starts at it), and its cluster ends at the base's right edge. A zero-advance mark's box
+/// is no measure of where the pen went (`draw_glyph` widens it to its outline or half an em), and its start is only
+/// the base's advance moved by a mark-positioning offset.
 pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
     sc.cluster_gap.clear();
     let mut right = f32::NEG_INFINITY;
@@ -172,7 +173,6 @@ pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
             continue;
         };
         if anchor_of(&sc.anchor, c) != c {
-            right = right.max(g.rect[0]);
             sc.cluster_gap.push(None);
         } else {
             sc.cluster_gap.push((w > 0).then_some(g.rect[0] - right));
@@ -304,14 +304,15 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     } else {
         collide(glyphs, height, s.h, sc);
     }
-    // Each mark goes before the first placed glyph whose x is greater than its own. Marks are visited in x order, and
-    // that position never moves back, so one pass over `placed` puts all of them in.
-    sc.marks.sort_by(|a, b| x0(*a).total_cmp(&x0(*b)));
+    // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
+    // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
+    // over `placed` puts all of them in.
+    sc.marks.sort_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     if !sc.marks.is_empty() {
         sc.merged.clear();
         let mut next = 0;
         for &m in &sc.marks {
-            while next < sc.placed.len() && x0(anchor_of(&sc.anchor, sc.placed[next])) <= x0(m) {
+            while next < sc.placed.len() && x0(anchor_of(&sc.anchor, sc.placed[next])) <= x0(anchor_of(&sc.anchor, m)) {
                 sc.merged.push(sc.placed[next]);
                 next += 1;
             }

@@ -2064,3 +2064,33 @@ fn a_mark_moves_with_its_letter_in_a_line_drawn_backwards() {
     let v = vec![g("a", 12.0, 10.0, 18.0), g("b", 18.0, 10.0, 24.0), g("c", 24.0, 10.0, 30.0), g("\u{301}", 13.0, 10.0, 18.0)];
     assert_eq!(layout(v).plain_text(), "a\u{301}bc");
 }
+
+/// A second mark stacked on a letter rides on the letter, not only on the mark before it: a mark drawn back over its
+/// base, then a tone mark a hair past the base's advance, both stay before the next letter.
+#[test]
+fn a_stacked_mark_rides_on_its_base_letter() {
+    let v = vec![g("ก", 12.0, 10.0, 18.0), g("\u{e34}", 10.0, 10.0, 15.0), g("\u{e48}", 19.5, 10.0, 24.5), g("ข", 18.0, 10.0, 24.0)];
+    assert_eq!(layout(v).plain_text(), "ก\u{e34}\u{e48}ข");
+}
+
+/// A mark drawn raised by more than half an em over its letter (a tone mark lifted above an upper vowel) stays on the
+/// letter's line and before the next letter.
+#[test]
+fn a_raised_mark_stays_with_its_letter() {
+    let v = vec![g("ก", 12.0, 10.0, 18.0), g("\u{e48}", 18.4, 16.0, 23.4), g("ข", 18.0, 10.0, 24.0), g("ค", 24.0, 10.0, 30.0)];
+    assert_eq!(layout(v).plain_text(), "ก\u{e48}ขค");
+}
+
+/// A word gap after a mark is measured from its letter's advance: a mark drawn a hair past the pen does not narrow it.
+#[test]
+fn a_word_gap_after_a_mark_is_measured_from_its_letter() {
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("b", 6.0, 10.0, 12.0), g("\u{301}", 12.4, 10.0, 17.4), g("c", 13.8, 10.0, 19.8), g("d", 19.8, 10.0, 25.8)];
+    assert_eq!(layout(v).plain_text(), "ab\u{301} cd");
+}
+
+/// In a run squeezed to no width, a mark still follows its letter, even when it is drawn past the next letter.
+#[test]
+fn a_mark_in_a_zero_width_run_follows_its_letter() {
+    let v = vec![g("a", 10.0, 10.0, 10.0), g("\u{301}", 10.6, 10.0, 10.6), g("b", 10.3, 10.0, 10.3)];
+    assert_eq!(layout(v).plain_text(), "a\u{301}b");
+}
