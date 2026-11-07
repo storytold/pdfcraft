@@ -181,7 +181,11 @@ mod update_translation_tests {
         let he = crate::i18n::Lang::from_code("he").unwrap_or(crate::i18n::Lang::EN);
         assert_eq!(he.code(), "he");
         assert_eq!(
-            translate_update_for(he, "{app} {version} is available with the latest features and bug fixes.", &[("app", "PdfCraft"), ("version", "0.19.0")]),
+            translate_update_for(
+                he,
+                "{app} {version} is available with the latest features and bug fixes.",
+                &[("app", "PdfCraft"), ("version", "0.19.0")],
+            ),
             "גרסה 0.19.0 של PdfCraft זמינה עם תכונות חדשות ותיקוני באגים."
         );
         assert_eq!(translate_update_for(he, "What's new", &[]), "מה חדש");
