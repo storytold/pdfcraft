@@ -246,15 +246,26 @@ impl Automation {
             }
         }
         let skipped = files.len().saturating_sub(completed + failed_count);
-        let log = files
-            .iter()
-            .filter_map(|f| match (f.get("path")?.as_str()?, f.get("status")?.as_str()?) {
-                (path, "error") => Some(format!("{path}: {}", f.get("error")?.as_str()?)),
-                (path, "skipped") => Some(format!("{path}: skipped: {}", f.get("reason")?.as_str()?)),
-                (path, _) => Some(path.to_string()),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let escape = |text: &str| text.replace('\r', "\\r").replace('\n', "\\n");
+        let mut lines = Vec::new();
+        for f in &files {
+            let (Some(path), Some(status)) = (f.get("path").and_then(|v| v.as_str()), f.get("status").and_then(|v| v.as_str())) else {
+                continue;
+            };
+            let path = escape(path);
+            match status {
+                "error" => lines.push(format!("{path}: error: {}", escape(f.get("error").and_then(|v| v.as_str()).unwrap_or("")))),
+                "skipped" => lines.push(format!("{path}: skipped: {}", escape(f.get("reason").and_then(|v| v.as_str()).unwrap_or("")))),
+                "ok" => {
+                    let output = escape(f.get("output").and_then(|v| v.as_str()).unwrap_or(""));
+                    let steps = f.get("steps").map(|v| escape(&v.to_string())).unwrap_or_default();
+                    lines.push(format!("{path}: ok: output: {output} steps: {steps}"));
+                }
+                _ => lines.push(path),
+            }
+        }
+        lines.push(format!("completed: {completed}, failed: {failed_count}, skipped: {skipped}"));
+        let log = lines.join("\n");
         Ok(json!({"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files,"log":log}))
     }
 }
@@ -318,11 +329,63 @@ mod tests {
         let args = Args(&args_value);
         let result = automation.doc_batch(&args).expect("batch should return a report even when a file fails");
         let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
-            assert!(false, "batch result should carry a plain-text per-file log: {result}");
-            return;
+            panic!("batch result should carry a plain-text per-file log: {result}");
         };
         assert!(log.contains("broken.pdf"), "log should name the failed file: {log}");
         assert!(log.contains("optimize"), "log should name the failed step: {log}");
         assert!(log.contains(&process_error), "log should give the failure reason: {log}");
+    }
+
+    #[test]
+    fn batch_log_reports_success_error_and_escaped_paths() {
+        let pdf_bytes = Session::new().create_from_text("Original", "Original text").expect("pdf fixture").as_ref().clone();
+
+        let input_dir = tempfile::tempdir().expect("input dir");
+        let out_dir = tempfile::tempdir().expect("out dir");
+        let good = input_dir.path().join("good.pdf");
+        std::fs::write(&good, &pdf_bytes).expect("good input");
+        let good_str = good.to_str().expect("input path is UTF-8");
+        let out_str = out_dir.path().to_str().expect("out path is UTF-8");
+        let automation = Automation::new();
+        let args_value = json!({"steps":["optimize"],"paths":[good_str],"out_dir":out_str});
+        let args = Args(&args_value);
+        let result = automation.doc_batch(&args).expect("batch should succeed for a valid pdf");
+        let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
+            panic!("batch result should carry a plain-text per-file log: {result}");
+        };
+        assert!(log.contains(out_str), "log should name the published output: {log}");
+        assert!(log.contains("optimize"), "log should report the successful step result: {log}");
+        assert!(log.contains("ok"), "log should mark the successful file: {log}");
+        let lower = log.to_ascii_lowercase();
+        assert!(lower.contains("completed"), "log should report final completed count: {log}");
+        assert!(lower.contains("failed"), "log should report final failed count: {log}");
+        assert!(lower.contains("skipped"), "log should report final skipped count: {log}");
+
+        let broken = input_dir.path().join("broken.pdf");
+        std::fs::write(&broken, b"broken").expect("broken input");
+        let broken_str = broken.to_str().expect("input path is UTF-8");
+        let args_value = json!({"steps":["optimize"],"paths":[broken_str],"out_dir":out_str});
+        let args = Args(&args_value);
+        let result = automation.doc_batch(&args).expect("batch should return a report even when a file fails");
+        let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
+            panic!("batch result should carry a plain-text per-file log: {result}");
+        };
+        assert!(log.contains("error"), "log should explicitly mark the failed file as an error: {log}");
+
+        // Newlines are valid in POSIX filenames but Windows rejects control
+        // characters in filenames, so the escaped-path check only runs there.
+        if cfg!(unix) {
+            let escaped = input_dir.path().join("a\nb.pdf");
+            std::fs::write(&escaped, b"broken").expect("escaped input");
+            let escaped_str = escaped.to_str().expect("input path is UTF-8");
+            let args_value = json!({"steps":["optimize"],"paths":[escaped_str],"out_dir":out_str});
+            let args = Args(&args_value);
+            let result = automation.doc_batch(&args).expect("batch should return a report for a newline path");
+            let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
+                panic!("batch result should carry a plain-text per-file log: {result}");
+            };
+            assert!(log.contains(r"a\nb.pdf"), "log should escape newlines in paths: {log}");
+            assert!(!log.contains("a\nb.pdf"), "log should not contain a raw newline in a path: {log}");
+        }
     }
 }
