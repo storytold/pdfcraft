@@ -1158,7 +1158,7 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
             "a CMYK entry not a number",
             vec![
                 (b"Color", real(&[0.0; 3])),
-                (b"CMYK", Object::Array(vec![Object::Real(0.0), Object::name("Bad"), Object::Real(0.0), Object::Real(0.0), Object::Real(1.0)])),
+                (b"CMYK", Object::Array(vec![Object::Real(0.0), Object::name("Bad"), Object::Real(0.0), Object::Real(1.0)])),
             ],
         ),
         (

@@ -5265,6 +5265,30 @@ fn added_text_takes_a_cmyk_or_gray_ink_through_tools() {
         assert!(matches!(a.call("page_add_text", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
     }
     assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 2, "nothing refused was added");
+    // content_update refuses them too, an image takes no ink, and a refused update changes nothing.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    let before = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    for (index, bad) in [
+        (1, json!({ "gray": 0.5, "cmyk": [0, 0, 0, 1] })),
+        (2, json!({ "color": "red", "gray": 0.5 })),
+        (1, json!({ "size": 30, "cmyk": [0, 0, 0, 2] })),
+        (2, json!({ "bold": true, "gray": -1 })),
+        (3, json!({ "gray": 0.5 })),
+        (3, json!({ "cmyk": [0, 0, 0, 1] })),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "index": index });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(matches!(a.call("content_update", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"], before, "a refused update changed nothing");
 }
 
 /// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
