@@ -272,11 +272,11 @@ fn unsupported_handlers_are_reported() {
 
 #[test]
 fn permission_bits_follow_table_22() {
-    let p = Permissions { bits: -3904, owner: false }; // 0xFFFFF0C0: only reserved bits set
+    let p = Permissions { bits: -3904, owner: false, revision: 3 }; // 0xFFFFF0C0: only reserved bits set
     assert!(!p.print() && !p.modify() && !p.copy() && !p.annotate() && !p.assemble());
-    let p = Permissions { bits: -1, owner: false };
+    let p = Permissions { bits: -1, owner: false, revision: 3 };
     assert!(p.print() && p.modify() && p.copy() && p.annotate() && p.assemble() && p.fill_forms());
-    let p = Permissions { bits: 0, owner: true };
+    let p = Permissions { bits: 0, owner: true, revision: 3 };
     assert!(p.modify(), "owners ignore /P");
 }
 

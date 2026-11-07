@@ -7,7 +7,7 @@ thread_local! {
     /// Indirect `/Length` values resolved during the current outermost load: a damaged file
     /// retries a parse several ways, and each retry would resolve the same lengths again
     /// (exponential in the chain of streams whose lengths point at further streams).
-    pub(super) static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
 }
 
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
@@ -65,6 +65,9 @@ pub(super) fn objstm_member(num: i64, offset: i64, first: Option<usize>, len: us
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Slot {
     Set(u16, Arc<Object>),
+    /// Both generations accepted from a damaged live source slot survive a repair-aware edit.
+    /// A full rewrite is required: a new xref slot cannot encode two generations.
+    RepairedSet(u16, u16, Arc<Object>),
     Freed(u16),
 }
 
@@ -112,6 +115,7 @@ impl ReadState {
                 a == b
                     && match (x, y) {
                         (Slot::Set(g, o), Slot::Set(h, p)) => g == h && Arc::ptr_eq(o, p),
+                        (Slot::RepairedSet(g, a, o), Slot::RepairedSet(h, b, p)) => g == h && a == b && Arc::ptr_eq(o, p),
                         (Slot::Freed(g), Slot::Freed(h)) => g == h,
                         _ => false,
                     }
@@ -142,7 +146,7 @@ impl ObjectReader {
     }
 
     pub(crate) fn try_get(&mut self, reference: ObjRef) -> Result<Arc<Object>, CosError> {
-        let object = self.document.try_get(reference.num);
+        let object = self.document.try_get_reference(reference);
         // A missed eviction here only costs a re-parse, so never fail the read on a poisoned
         // lock. The editing-cache evictors propagate instead; they guard user edits.
         if let Ok(mut streams) = self.document.objstms.lock() {
