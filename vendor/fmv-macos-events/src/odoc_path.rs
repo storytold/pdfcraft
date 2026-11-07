@@ -11,7 +11,7 @@
 //! This module decodes the descriptor's data directly, with no Objective-C, so the
 //! decoding is unit-testable on every platform; the four tests that create real
 //! files are Unix-only. Delivery is best-effort and never silent for each item of
-//! the event's direct-object list (the contract asked for by the review on #6334):
+//! the event's direct object (the contract asked for by the review on #6334):
 //! bytes that name an existing file are preferred, the NSURL chain of the
 //! published crate comes next, and an item nothing could verify is still
 //! delivered — its decoded string, unverified — so a failed open reaches the app
@@ -20,8 +20,9 @@
 //! path: a bookmark in which no chain joins (`join_components`: two or more
 //! component records, each non-empty and NUL-free), a `'furl'` that is not a
 //! `file://` URL or has no `/` after the prefix, or a descriptor of any other
-//! type. As in the published crate, a direct object that is not a list yields no
-//! item at all (the handler walks the list's items only). Every parse is total:
+//! type. A direct object that is not a list is decoded as the event's one item
+//! ([`event_paths`](crate::odoc_path::event_paths)), where the published crate
+//! walked list items only and queued nothing for it. Every parse is total:
 //! malformed or truncated data returns `None`. The bookmark component layout
 //! (`[length u32 LE][01 01 00 00][utf-8 bytes][NUL padding to a 4-byte boundary]`,
 //! records contiguous) was reverse-engineered from Ventura captures; see the
@@ -41,6 +42,27 @@ const MAX_COMPONENTS: usize = 128;
 /// The longest single component name accepted: well past macOS's 255-name limit, so
 /// a longer "record" is noise in the blob, not a name.
 const MAX_COMPONENT_BYTES: usize = 1024;
+
+/// The paths one odoc event delivers, in order: each item of the direct object
+/// decoded by `decode` (the handler's is [`item_path`] with the NSURL chain), an
+/// item that decodes to no path left out. `count` is the direct object's
+/// `numberOfItems` and `item_at` its 1-based `descriptorAtIndex`. A direct object
+/// with no items is decoded as the one item: a descriptor that is not a list
+/// counts none (on macOS 13.3 a `'furl'`, `'alis'`, `'bmrk'` or `'utxt'`; AppleScript
+/// sends one for `open POSIX file "…"` without braces), and the published crate,
+/// walking `1..=count` alone, queued nothing for it. An empty list, taken the same
+/// way, decodes to no path, so it still queues nothing. List items are not
+/// flattened: a list inside the list is one item, which takes step 2 of
+/// [`item_path`] alone.
+pub(crate) fn event_paths<D>(
+    direct: D,
+    count: isize,
+    item_at: impl FnMut(isize) -> Option<D>,
+    decode: impl FnMut(&D) -> Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let items = if count < 1 { vec![direct] } else { (1..=count).filter_map(item_at).collect() };
+    items.iter().filter_map(decode).collect()
+}
 
 /// The path of one odoc item, best-effort and never silent. A `'bmrk'` or
 /// `'furl'` item has a raw decode of its own, tried in three steps:
@@ -260,7 +282,7 @@ fn join_components(components: &[&[u8]]) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bookmark_chain, file_url_path, item_path, percent_decode};
+    use super::{bookmark_chain, event_paths, file_url_path, item_path, percent_decode};
     use std::path::PathBuf;
 
     /// Append a bookmark-style record: `[length u32 LE][magic u16 LE + 00 00][bytes]`,
@@ -536,10 +558,10 @@ mod tests {
         assert_eq!(item_path(furl, missing, || None), Some(PathBuf::from("/definitely/missing/nowhere.pdf")));
     }
 
-    /// A partial multi-file open reports every item: the handler collects one
-    /// decode per item, so a mix of a verified file and an unverifiable one
-    /// delivers both — the app's open error covers the failed one instead of it
-    /// being skipped without notice.
+    /// A partial multi-file open reports every item: the handler's fold,
+    /// [`event_paths`], collects one decode per item, so a mix of a verified file
+    /// and an unverifiable one delivers both — the app's open error covers the
+    /// failed one instead of it being skipped without notice.
     #[cfg(unix)]
     #[test]
     fn a_multi_item_open_delivers_verified_and_unverified_items_alike() {
@@ -551,16 +573,54 @@ mod tests {
         let nfd_full_path = file.to_str().expect("UTF-8").replace('\u{00c1}', "A\u{0301}");
         let missing = "/definitely/missing/nowhere.pdf";
         let bookmark = u32::from_be_bytes(*b"bmrk");
-        // The handler's own fold: one decode per item, dropped only when it
-        // decodes to nothing (macos.rs collects exactly this way).
+        // The handler's own fold over a two-item list: one decode per item,
+        // dropped only when it decodes to nothing.
         let items = [
             (bookmark, blob(&components_of(&file), &nfd_full_path)),
             (bookmark, blob(&["definitely", "missing", "nowhere.pdf"], missing)),
         ];
-        let delivered =
-            items.into_iter().filter_map(|(t, data)| item_path(t, &data, || None)).collect::<Vec<_>>();
+        let list = (u32::from_be_bytes(*b"list"), Vec::new());
+        let item_at = |index: isize| items.get(usize::try_from(index - 1).ok()?).cloned();
+        let delivered = event_paths(list, 2, item_at, |(t, data)| item_path(*t, data, || None));
         assert_eq!(delivered, [file, PathBuf::from(missing)]);
         std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// A direct object that is not a list counts no items and is decoded as the
+    /// one item (AppleScript `open POSIX file "…"` without braces; the published
+    /// crate queued nothing). A list is walked instead — its items, never the list
+    /// itself, even when one item is all it holds — and an empty list decodes to
+    /// no path, so it still queues nothing.
+    #[test]
+    fn a_direct_object_that_is_not_a_list_is_decoded_as_the_one_item() {
+        let furl = u32::from_be_bytes(*b"furl");
+        let bookmark = u32::from_be_bytes(*b"bmrk");
+        let list = u32::from_be_bytes(*b"list");
+        // (descriptor type, data, what NSURL says of it)
+        type Item = (u32, Vec<u8>, Option<&'static str>);
+        let decode = |(t, data, nsurl): &Item| item_path(*t, data, || nsurl.map(str::to_owned));
+        let missing = "/definitely/missing/nowhere.pdf";
+        let direct: Item = (furl, b"file:///definitely/missing/nowhere.pdf".to_vec(), Some(missing));
+        assert_eq!(event_paths(direct, 0, |_| None, decode), [PathBuf::from(missing)]);
+        // A two-item list: its items, in order; the list itself has no path.
+        let two: [Item; 2] = [(furl, b"file:///a/one.pdf".to_vec(), None), (furl, b"file:///a/two.pdf".to_vec(), None)];
+        let item_at = |index: isize| two.get(usize::try_from(index - 1).ok()?).cloned();
+        assert_eq!(
+            event_paths((list, Vec::new(), None), 2, item_at, decode),
+            [PathBuf::from("/a/one.pdf"), PathBuf::from("/a/two.pdf")]
+        );
+        // A one-item list is walked too, and its item delivered once: a list of one
+        // 'furl' answers fileURLValue with that file, but the list is not an item.
+        let one: [Item; 1] = [(furl, b"file:///a/one.pdf".to_vec(), None)];
+        let item_at = |index: isize| one.get(usize::try_from(index - 1).ok()?).cloned();
+        assert_eq!(event_paths((list, Vec::new(), Some("/a/one.pdf")), 1, item_at, decode), [PathBuf::from("/a/one.pdf")]);
+        // A one-item list of an NFC bookmark (a Finder double-click): the list's own
+        // fileURLValue is nil, so only its item's chain delivers the path.
+        let finder: [Item; 1] = [(bookmark, blob(&["definitely", "missing", "nowhere.pdf"], missing), None)];
+        let item_at = |index: isize| finder.get(usize::try_from(index - 1).ok()?).cloned();
+        assert_eq!(event_paths((list, Vec::new(), None), 1, item_at, decode), [PathBuf::from(missing)]);
+        // An empty list is its own item and decodes to no path: nothing is queued.
+        assert_eq!(event_paths((list, Vec::new(), None), 0, |_| None, decode), Vec::<PathBuf>::new());
     }
 
     /// With nothing from NSURL, a bookmark in which no chain joins is dropped. The

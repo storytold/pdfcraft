@@ -1,7 +1,7 @@
 //! The Objective-C adapter: the Apple-event handler, its registration, and the edit
 //! menu. This is upstream `fmv-macos-events` 0.1.0 except for the open-documents
-//! handler's item decode, which recovers paths from the items' raw descriptor bytes
-//! (`crate::odoc_path`, the PdfCraft patch for #6324).
+//! handler's item walk and decode, [`odoc_paths`], which recovers paths from the
+//! items' raw descriptor bytes (`crate::odoc_path`, the PdfCraft patch for #6324).
 #![cfg(target_os = "macos")]
 
 use objc2::rc::Retained;
@@ -64,27 +64,9 @@ define_class!(
                 msg_send![event, paramDescriptorForKeyword: u32::from_be_bytes(*b"----")]
             };
             let Some(list) = list else { return; };
-            // PdfCraft patch (#6324): odoc items arrive as 'bmrk' binary bookmarks
-            // whose embedded full-path string is NFD-normalized while the on-disk
-            // names may be NFC; fileURLValue() then returns nil and the published
-            // crate's `?` silently dropped the item, so the open showed nothing.
-            // Decode each item's raw bytes instead (byte-exact components, gated on
-            // the result naming an existing file), with the NSURL chain kept as the
-            // fallback. An item of the list that nothing verifies but whose bytes
-            // decode to a path is still delivered, unverified (never drop, review
-            // on #6334), so the app's own open error reports it. As in the
-            // published crate, a direct object that is not a list yields no item.
-            let paths = (1..=list.numberOfItems()).filter_map(|index| {
-                let item = list.descriptorAtIndex(index)?;
-                // SAFETY: `descriptorType` takes no argument and returns a DescType
-                // (a FourCharCode, whose ABI is u32).
-                let descriptor_type: u32 = unsafe { msg_send![&item, descriptorType] };
-                odoc_path::item_path(descriptor_type, &item.data().to_vec(), || {
-                    let url = item.fileURLValue()?;
-                    if !url.isFileURL() { return None; }
-                    url.path().map(|path| path.to_string())
-                })
-            }).collect::<Vec<_>>();
+            // PdfCraft patch (#6324): the published crate walked the list's items
+            // and silently dropped each one fileURLValue() could not resolve.
+            let paths = odoc_paths(&list);
             if !paths.is_empty() { self.ivars().push(Event::Open(paths)); }
         }
 
@@ -98,6 +80,32 @@ define_class!(
         }
     }
 );
+
+/// PdfCraft patch (#6324): the paths one odoc event delivers, from its direct
+/// object. On macOS 13 the items arrive as 'bmrk' binary bookmarks whose
+/// embedded full-path string is NFD-normalized while the on-disk names may be
+/// NFC; fileURLValue() then returns nil, and the published crate's `?` dropped
+/// the item, so the open showed nothing. Each item's raw bytes are decoded
+/// instead (byte-exact components, gated on the result naming an existing file),
+/// with the NSURL chain kept as the fallback. An item that nothing verifies but
+/// whose bytes decode to a path is still delivered, unverified (never drop,
+/// review on #6334), so the app's own open error reports it. A direct object
+/// that is not a list (AppleScript `open POSIX file "…"` without braces) is
+/// decoded as the one item; the published crate walked list items only and
+/// queued nothing for it.
+pub(crate) fn odoc_paths(direct: &Retained<NSAppleEventDescriptor>) -> Vec<PathBuf> {
+    let item_at = |index| direct.descriptorAtIndex(index);
+    odoc_path::event_paths(direct.clone(), direct.numberOfItems(), item_at, |item| {
+        // SAFETY: `descriptorType` takes no argument and returns a DescType
+        // (a FourCharCode, whose ABI is u32).
+        let descriptor_type: u32 = unsafe { msg_send![item, descriptorType] };
+        odoc_path::item_path(descriptor_type, &item.data().to_vec(), || {
+            let url = item.fileURLValue()?;
+            if !url.isFileURL() { return None; }
+            url.path().map(|path| path.to_string())
+        })
+    })
+}
 
 /// Add responder-chain shortcuts required by native text fields in file dialogs.
 /// Disabled native items leave the viewer's own egui keyboard handling intact.
