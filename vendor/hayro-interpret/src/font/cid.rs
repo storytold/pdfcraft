@@ -6,7 +6,6 @@ use crate::font::{
 };
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
 use hayro_cmap::{BfString, CMap, CharacterCollection, CidFamily, WritingMode};
-use std::sync::OnceLock;
 use hayro_syntax::object;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
@@ -21,6 +20,7 @@ use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub(crate) struct Type0Font {
@@ -141,9 +141,16 @@ impl Type0Font {
             .as_ref()
             .and_then(|cc| cc.family.ucs2_cmap())
             .and_then(|name| (cmap_resolver)(name))
-            .map(|data| Ucs2 { data, resolver: cmap_resolver.clone(), map: OnceLock::new() });
+            .map(|data| Ucs2 {
+                data,
+                resolver: cmap_resolver.clone(),
+                map: OnceLock::new(),
+            });
         // If there is no ToUnicode map, try to get the UCS2 CMap.
-        if fallback && to_unicode.is_none() && let Some(ucs2_cmap) = ucs2.take().and_then(|u| u.parse()) {
+        if fallback
+            && to_unicode.is_none()
+            && let Some(ucs2_cmap) = ucs2.take().and_then(|u| u.parse())
+        {
             to_unicode = Some(ucs2_cmap);
             to_unicode_is_cid_indexed = true;
         }
@@ -476,7 +483,9 @@ impl Type0Font {
         }
         // PdfCraft patch (84): then the collection's UCS2 CMap, by the code's CID.
         if let Some(ucs2) = self.ucs2.as_ref().and_then(Ucs2::cmap)
-            && let Some(s) = self.code_to_cid(code).and_then(|cid| ucs2.lookup_bf_string(cid))
+            && let Some(s) = self
+                .code_to_cid(code)
+                .and_then(|cid| ucs2.lookup_bf_string(cid))
         {
             return Some(s);
         }
@@ -506,7 +515,9 @@ impl Ucs2 {
 
 impl std::fmt::Debug for Ucs2 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Ucs2").field("bytes", &self.data.len()).finish_non_exhaustive()
+        f.debug_struct("Ucs2")
+            .field("bytes", &self.data.len())
+            .finish_non_exhaustive()
     }
 }
 
