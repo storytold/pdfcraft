@@ -55,6 +55,10 @@ pub struct DataNode {
     pub name: String,
     pub text: String,
     pub children: Vec<DataNode>,
+    /// Whether the element is a data group even with no children: marked
+    /// `xfa:dataNode="dataGroup"` (XFA 3.3 p. 150), or a multi-select list's group emptied of its
+    /// picks here, which the packet writer marks so.
+    pub group: bool,
 }
 
 /// A path into the data: `(name, index among same-named siblings)` per level.
@@ -125,10 +129,21 @@ impl DataNode {
     pub fn apply(&mut self, op: &DataOp) {
         match op {
             DataOp::Value { path, text } => {
-                if let Some(n) = self.ensure(path)
-                    && n.children.is_empty()
-                {
-                    n.text = text.clone();
+                if let Some(n) = self.ensure(path) {
+                    // A multi-select list's picks, one `value` each (see `value_at`), told apart
+                    // as the packet writer does: `value` leaves only, or a group holding none.
+                    let picks = if n.children.is_empty() { n.group } else { n.children.iter().all(|c| c.name == "value" && c.children.is_empty()) };
+                    if picks {
+                        n.children = text
+                            .split('\n')
+                            .filter(|v| !v.is_empty())
+                            .map(|v| DataNode { name: "value".into(), text: v.to_string(), ..Default::default() })
+                            .collect();
+                        // Emptied, it is still a group, and takes picks again.
+                        n.group = true;
+                    } else if n.children.is_empty() {
+                        n.text = text.clone();
+                    }
                 }
             }
             DataOp::Instances { parent, name, count } => {
