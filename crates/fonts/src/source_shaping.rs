@@ -29,7 +29,9 @@ pub fn required(text: &str) -> bool {
     // kerning applies to the whole run.
     let mut needs_shaping = false;
     let mut thai_base_with_latin = false;
-    let has_latin = text.chars().any(|c| c.is_ascii_alphabetic());
+    let has_latin = text.chars().any(|c| {
+        c.is_ascii_alphabetic() || (matches!(u32::from(c), 0x00a0..=0x00ff | 0x0100..=0x024f) && c.is_alphabetic())
+    });
     for c in text.chars() {
         if matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
         {
@@ -135,6 +137,15 @@ mod tests {
         assert!(required("\u{0e01}\u{0e31}"), "a base with a combining mark still shapes");
         assert!(!required("\u{0e01}"), "a Thai base alone still writes unshaped");
         assert!(!required("AV"), "plain Latin still writes unshaped");
+    }
+
+    #[test]
+    fn extended_latin_with_thai_base_requires_shaping() {
+        assert!(required("\u{00c0}\u{0e01}"), "a Latin-1 Supplement letter joins a Thai base in the same shaped run");
+        assert!(required("\u{0e01}\u{0100}"), "a Latin Extended letter joins a Thai base in the same shaped run");
+        assert!(required("\u{00e9}\u{0e01}"), "a Latin-1 Supplement letter joins a Thai base in the same shaped run");
+        assert!(!required("\u{00c0}"), "extended Latin alone still writes unshaped");
+        assert!(!required("\u{0e01}"), "a Thai base alone still writes unshaped");
     }
 
     #[cfg(test)]
