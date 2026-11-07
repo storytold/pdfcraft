@@ -106,6 +106,12 @@ impl<'a> Type3<'a> {
         (w * self.matrix.as_coeffs()[0] as f32) * UNITS_PER_EM
     }
 
+    /// PdfCraft patch (90): whether the font has no `/Widths` (or `/FirstChar`/`/LastChar`), so
+    /// that `glyph_width` falls back on the glyph procedures' `d0`/`d1` widths.
+    pub(crate) fn widths_missing(&self) -> bool {
+        self.widths.is_empty()
+    }
+
     /// PdfCraft patch (90): the horizontal width `wx` that the glyph procedure for `code`
     /// sets with `d0` or `d1`, in glyph space. `None` when the code has no procedure, the
     /// procedure sets no width or its width isn't finite. A procedure the page's content

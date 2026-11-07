@@ -11,6 +11,7 @@
 //! (`b`, set by `d0`, advance 700), shown at 100 pt from x = 20.
 
 use super::render_first_page;
+use crate::RenderWarning;
 use crate::text::extract_page;
 use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_interpret::hayro_syntax::Pdf;
@@ -113,4 +114,17 @@ fn a_code_without_a_usable_procedure_width_still_advances_nothing() {
     // b's d0 has a name for its width and c has no procedure: neither advances, and neither
     // panics.
     assert_eq!(glyph_lefts(type3_page_with("", "bcb", "/x 0 d0 0 0 600 600 re f")), [20, 20]);
+}
+
+#[test]
+fn a_type3_font_without_widths_is_reported() {
+    // The page draws, and says once that a font's /Widths was missing; a font with /Widths
+    // (even one that leaves `b` out) says nothing.
+    for widths in ["", "/FirstChar 97 /LastChar 98 /WXdths [300 300]"] {
+        let page = render_first_page(type3_page(widths));
+        assert_eq!(page.warnings, [RenderWarning::Type3WidthsMissing], "{widths:?}");
+    }
+    for widths in ["/FirstChar 97 /LastChar 98 /Widths [300 300]", "/FirstChar 97 /LastChar 97 /Widths [300]"] {
+        assert!(render_first_page(type3_page(widths)).warnings.is_empty(), "{widths:?}");
+    }
 }
