@@ -226,6 +226,11 @@ pub fn send(compose: Compose, wake: impl FnOnce() + Send + 'static) -> Result<Re
 /// [`std::env::consts::OS`] names them) when its default email program is `default`. A default
 /// that doesn't belong to `os` is treated as one that can't be handed a file.
 pub fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Plan, MailError> {
+    plan_with_root(os, default, compose, std::env::var_os("SystemRoot").as_deref())
+}
+
+/// [`plan_for`] with Windows' `SystemRoot` given, so a test needn't set it.
+fn plan_with_root(os: &str, default: &DefaultMail, compose: &Compose, system_root: Option<&std::ffi::OsStr>) -> Result<Plan, MailError> {
     let path = compose.path.to_string_lossy().into_owned();
     let offer = |program: Option<String>, why: Why| Plan { program, route: Route::Fallback { why, fallback: fallback(compose) } };
     match (os, default) {
@@ -247,15 +252,19 @@ pub fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Pl
             program: Some("Outlook".into()),
             route: Route::MessageFile { program: olk.clone(), message: message_dir().join(message_name(&compose.path)) },
         }),
-        ("windows", DefaultMail::Mapi(name)) => Ok(Plan {
-            program: Some(name.clone()),
-            route: Route::Run {
-                command: system_program("WindowsPowerShell\\v1.0\\powershell.exe"),
-                args: powershell_args(&mapi_script(std::process::id())),
-                stdin: Some(mapi_input(compose)),
-                watch: Watch::Answers,
-            },
-        }),
+        ("windows", DefaultMail::Mapi(name)) => match system_program(system_root, "WindowsPowerShell\\v1.0\\powershell.exe") {
+            Some(command) => Ok(Plan {
+                program: Some(name.clone()),
+                route: Route::Run {
+                    command,
+                    args: powershell_args(&mapi_script(std::process::id())),
+                    stdin: Some(mapi_input(compose)),
+                    watch: Watch::Answers,
+                },
+            }),
+            // No System32 to name, and no search of PATH for a stand-in: the person is told instead.
+            None => Ok(offer(Some(name.clone()), Why::CantAttach)),
+        },
         ("linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", DefaultMail::XdgEmail(xdg)) => {
             let mut args = vec!["--utf8".into(), "--subject".into(), compose.subject.clone(), "--body".into(), compose.body.clone()];
             args.extend(["--attach".into(), path]);
@@ -364,7 +373,7 @@ fn macos_default(text: &str) -> DefaultMail {
 }
 
 fn detect_windows() -> DefaultMail {
-    let reg = system_program("reg.exe");
+    let Some(reg) = system_program(std::env::var_os("SystemRoot").as_deref(), "reg.exe") else { return DefaultMail::Nothing };
     let query = |args: &[&str]| output(Command::new(&reg).arg("query").args(args));
     let key = "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\mailto";
     let prog_id = query(&[&format!("{key}\\UserChoiceLatest\\ProgId"), "/v", "ProgId"])
@@ -426,11 +435,9 @@ fn find_program(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
 }
 
 /// A program in Windows' System32 folder, by full path, so one beside PdfCraft can't stand in.
-fn system_program(name: &str) -> PathBuf {
-    match std::env::var_os("SystemRoot") {
-        Some(root) => PathBuf::from(root).join("System32").join(name),
-        None => PathBuf::from(name.rsplit('\\').next().unwrap_or(name)),
-    }
+/// Without `SystemRoot` there is no such folder to name, and the program is not looked for on `PATH`.
+fn system_program(system_root: Option<&std::ffi::OsStr>, name: &str) -> Option<PathBuf> {
+    system_root.map(|root| PathBuf::from(root).join("System32").join(name))
 }
 
 /// A command's standard output when it ran and succeeded.
@@ -851,7 +858,7 @@ exit 0
 
 /// PowerShell's arguments for a script: no profile, no window, no prompt, the script encoded.
 fn powershell_args(script: &str) -> Vec<String> {
-    ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]
+    ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand"]
         .iter()
         .map(|a| a.to_string())
         .chain(std::iter::once(encode_powershell(script)))
@@ -1000,7 +1007,7 @@ mod tests {
         let p = plan_for("windows", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose()).unwrap();
         assert_eq!(p.program.as_deref(), Some("Mozilla Thunderbird"));
         let (command, args, stdin, watch) = run_of(&p);
-        assert!(command.ends_with("powershell.exe") && stdin.is_some_and(|s| s.lines().count() == 5) && watch == Watch::Answers);
+        assert!(command.to_string_lossy().ends_with("powershell.exe") && stdin.is_some_and(|s| s.lines().count() == 5) && watch == Watch::Answers);
         assert_eq!(args[args.len() - 2], "-EncodedCommand");
         let encoded = &args[args.len() - 1];
         assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
@@ -1080,6 +1087,27 @@ mod tests {
         assert_eq!(mapi_answer("failed Access denied"), Some(Some(Why::Failed("Access denied".into()))));
         assert_eq!(mapi_answer("code x"), None);
         assert_eq!(mapi_answer("WARNING: something"), None);
+    }
+
+    /// The tests' plans, as on a Windows machine whose `SystemRoot` is `C:\\Windows`.
+    fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Plan, MailError> {
+        plan_with_root(os, default, compose, Some("C:\\Windows".as_ref()))
+    }
+
+    #[test]
+    fn without_a_system_folder_the_mapi_route_is_not_taken_from_the_path() {
+        let p = plan_with_root("windows", &DefaultMail::Mapi("Outlook".into()), &compose(), None).unwrap();
+        assert_eq!(fallback_of(&p).0, &Why::CantAttach);
+        let p = plan_with_root("windows", &DefaultMail::Mapi("Outlook".into()), &compose(), Some("C:\\Windows".as_ref())).unwrap();
+        assert!(run_of(&p).0.to_string_lossy().starts_with("C:\\Windows"));
+    }
+
+    #[test]
+    fn powershell_is_not_asked_to_bypass_the_execution_policy() {
+        // `-EncodedCommand` is not a script file, so the policy does not apply; the flag only widens the call.
+        let args = powershell_args("exit 0");
+        assert!(!args.iter().any(|a| a.eq_ignore_ascii_case("-ExecutionPolicy") || a.eq_ignore_ascii_case("Bypass")), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some(encode_powershell("exit 0").as_str()));
     }
 
     #[test]
