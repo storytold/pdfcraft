@@ -222,17 +222,21 @@ pub(crate) fn page_refs(doc: &Document) -> Vec<ObjRef> {
 /// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
 /// never one entry per child, so a child listed many times or shared between nodes is skipped by
 /// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
-/// Cycles end at the seen check and at most a million nodes are visited.
+/// Cycles end at the seen check, a `/Kids` array object shared by several nodes is read once
+/// (as `pdfcraft_annot`'s walk reads it), and at most a million nodes and four million `/Kids`
+/// entries are read.
 pub(crate) struct PageWalk<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<ObjRef>,
     pub(crate) pending: Vec<(std::sync::Arc<Object>, usize)>,
+    /// `/Kids` entries read so far.
+    pub(crate) examined: usize,
 }
 
 impl<'a> PageWalk<'a> {
     pub(crate) fn new(doc: &'a Document, top: ObjRef) -> Self {
         let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
-        Self { doc, seen: Default::default(), pending: vec![(top, 0)] }
+        Self { doc, seen: Default::default(), pending: vec![(top, 0)], examined: 0 }
     }
 }
 
@@ -247,11 +251,12 @@ impl Iterator for PageWalk<'_> {
             };
             let node = kid.as_ref();
             *next += 1;
+            self.examined = self.examined.saturating_add(1);
             // A kid may be a reference to an object that holds only a reference (ISO 32000-2
             // §7.3.10): the node or page is where the chain ends, as `pdfcraft_model::pages` and
             // the renderer read it, so widget page indices agree.
             let Some(node) = node.map(|r| final_ref(self.doc, r)) else { continue };
-            if self.seen.len() >= 1_000_000 {
+            if self.seen.len() >= 1_000_000 || self.examined > 4_000_000 {
                 self.pending.clear();
                 return None;
             }
@@ -260,10 +265,17 @@ impl Iterator for PageWalk<'_> {
             }
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
-            // The node's /Kids array, direct or indirect (through a chain of references, as far
-            // as `Document::resolve` follows one); anything else (absent, null, which is the same
-            // as absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
-            let kids = d.get(b"Kids").map(|k| self.doc.resolve(k)).filter(|k| k.as_array().is_some());
+            // The node's /Kids array, direct or indirect (through a chain of references), with
+            // the object it is read from; anything else (absent, null, which is the same as
+            // absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
+            let kids = match d.get(b"Kids") {
+                Some(Object::Ref(array)) => {
+                    let array = final_ref(self.doc, *array);
+                    Some((self.doc.get(array), Some(array))).filter(|(k, _)| k.as_array().is_some())
+                }
+                Some(kids @ Object::Array(_)) => Some((std::sync::Arc::new(kids.clone()), None)),
+                _ => None,
+            };
             // A node is /Type /Pages, or has a /Kids array and is not /Type /Page; anything else
             // is a page, whatever its /Type says (the rule `pdfcraft_model::pages` and the
             // renderer walk by). /Type is read through references too.
@@ -283,8 +295,16 @@ impl Iterator for PageWalk<'_> {
             if !is_node {
                 return Some(node);
             }
-            if let Some(kids) = kids {
-                self.pending.push((kids, 0));
+            match kids {
+                // A `/Kids` array object shared by several nodes is read under the first: under
+                // the others it would only list nodes already seen, once per node.
+                Some((kids, Some(array))) => {
+                    if self.seen.insert(array) {
+                        self.pending.push((kids, 0));
+                    }
+                }
+                Some((kids, None)) => self.pending.push((kids, 0)),
+                None => {}
             }
         }
         None
