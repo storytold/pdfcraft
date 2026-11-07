@@ -922,9 +922,8 @@ fn booklet_with_printer_without_two_sided_support_is_refused() {
     use pdfcraft_engine::print::BookletSubset;
     use pdfcraft_engine::print::spool::Printer;
     let mut h = harness();
-    h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
-        vec![Printer { name: "Office PS".into(), default: true, two_sided: Some(false), description: String::new() }]
-    }));
+    h.state_mut().printer_source =
+        Some(std::sync::Arc::new(|| vec![Printer { name: "Office PS".into(), default: true, two_sided: Some(false), description: String::new() }]));
     assert!(h.state_mut().execute("print.dialog"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while h.state().print_draft.printers.is_empty() && std::time::Instant::now() < deadline {
