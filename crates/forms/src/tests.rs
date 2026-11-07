@@ -2375,6 +2375,107 @@ fn a_radio_choice_by_the_name_turns_one_button_on_in_kids_without_a_page_that_di
     }
 }
 
+/// A radio group whose field dictionary is merged with a zero-area widget and also lists four
+/// widget kids, as some form exporters write it: field and widget may be merged only "when a field
+/// has only a single associated widget annotation" (ISO 32000-2 §12.7.4), so the kids are the
+/// buttons. Two such groups: each lists its four options, and choosing one by the name turns on
+/// exactly that button, across a save, and leaves the other group alone.
+#[test]
+fn a_field_merged_with_a_widget_that_lists_widget_kids_has_the_kids_as_buttons() {
+    const OPTIONS: [&str; 4] = ["Not#20Satisfied", "Somewhat", "Satisfied", "Very#20Satisfied"];
+    let group = |t: &str, first: u32| {
+        let kids: Vec<String> = (first..first + 4).map(|n| format!("{n} 0 R")).collect();
+        format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 0 0] /FT /Btn /Ff 49152 /Kids [{}] /V /Off /T ({t}) >>", kids.join(" "))
+    };
+    let kid = |parent: u32, i: usize, y: u32| {
+        let state = OPTIONS.get(i).copied().unwrap_or("X");
+        let x = 100 + 100 * u32::try_from(i).unwrap_or(0);
+        format!(
+            "<< /Type /Annot /Subtype /Widget /F 4 /FT /Btn /Ff 49152 /Parent {parent} 0 R /Rect [{x} {y} {} {}] /P 3 0 R /AS /Off /AP << /N << /{state} 14 0 R /Off 14 0 R >> >> >>",
+            x + 12,
+            y + 12
+        )
+    };
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >>".into(), // 3
+        group("typeA15[0]", 6),                                                           // 4
+        group("typeA15[1]", 10),                                                          // 5
+    ];
+    objs.extend((0..4).map(|i| kid(4, i, 600))); // 6-9
+    objs.extend((0..4).map(|i| kid(5, i, 560))); // 10-13
+    objs.push("<< /Length 0 >>\nstream\n\nendstream".into()); // 14
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert_eq!(all.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["typeA15[0]", "typeA15[1]"]);
+    let want: Vec<String> = ["Not Satisfied", "Somewhat", "Satisfied", "Very Satisfied"].map(String::from).to_vec();
+    for f in &all {
+        assert_eq!(f.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), want, "{}", f.name);
+        assert!(f.widgets.iter().all(|w| w.page == Some(0) && w.rect[2] > w.rect[0]), "{}: the kids, on the page", f.name);
+    }
+    let st = |doc: &Document, n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+    for (name, choice, on) in [("typeA15[0]", "Satisfied", 8), ("typeA15[1]", "Very Satisfied", 13), ("typeA15[0]", "Not Satisfied", 6)] {
+        set_value(&mut doc, name, &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("{name} = {choice}: {e}"));
+        doc = reopen(&doc);
+        let first = if name == "typeA15[0]" { 6 } else { 10 };
+        for n in first..first + 4 {
+            let want = if n == on { choice.as_bytes().to_vec() } else { b"Off".to_vec() };
+            assert_eq!(st(&doc, n), Some(want), "{name} = {choice}: widget {n}");
+        }
+    }
+    assert_eq!(st(&doc, 13), Some(b"Very Satisfied".to_vec()), "the other group keeps its choice");
+    let values: Vec<Vec<String>> = fields(&doc).into_iter().map(|f| f.value).collect();
+    assert_eq!(values, [vec!["Not Satisfied".to_string()], vec!["Very Satisfied".to_string()]]);
+}
+
+/// Radio buttons named `2` listed straight in `/Fields`, some fields of their own (`/T (2)`, no
+/// `/Parent`) and some nameless widgets of an unlisted field `2` whose `/Kids` mix both: "A
+/// field's children in the hierarchy may also include widget annotations" (ISO 32000-2 §12.7.4).
+/// Every option is listed under the name `2`, and each, including the nameless widgets', can be
+/// chosen by the name, leaving exactly that button on across a save.
+#[test]
+fn nameless_widgets_of_an_unlisted_field_are_options_of_its_name() {
+    let named = |state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (2) /V /Off /AS /Off /Rect [{x} 700 {} 712] /P 3 0 R /AP << /N << /{state} 9 0 R /Off 9 0 R >> >> >>",
+            x + 12
+        )
+    };
+    let nameless = |state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /AS /Off /Rect [{x} 700 {} 712] /P 3 0 R /AP << /N << /{state} 9 0 R /Off 9 0 R >> >> >>",
+            x + 12
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),                   // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),                   // 3
+        "<< /FT /Btn /Ff 49152 /T (2) /Kids [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),                     // 4 unlisted
+        named("0", 50),                                                                               // 5
+        named("1", 100),                                                                              // 6
+        nameless("2", 150),                                                                           // 7
+        nameless("6", 200),                                                                           // 8
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                // 9
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert!(all.iter().all(|f| f.name == "2"), "{:?}", all.iter().map(|f| &f.name).collect::<Vec<_>>());
+    let mut options: Vec<String> = all.iter().flat_map(|f| &f.widgets).filter_map(|w| w.on_state.clone()).collect();
+    options.sort();
+    assert_eq!(options, ["0", "1", "2", "6"]);
+    let st = |doc: &Document, n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+    for (choice, on) in [("6", 8), ("1", 6), ("2", 7), ("0", 5)] {
+        set_value(&mut doc, "2", &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("2 = {choice}: {e}"));
+        doc = reopen(&doc);
+        for n in 5..=8 {
+            let want = if n == on { choice.as_bytes().to_vec() } else { b"Off".to_vec() };
+            assert_eq!(st(&doc, n), Some(want), "2 = {choice}: widget {n}");
+        }
+    }
+}
+
 #[test]
 fn locked_fields_only_take_unlocking() {
     let mut doc = one_page();

@@ -392,7 +392,11 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     if let Some(af) = &af {
         for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = f.as_ref() {
-                walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
+                // A `/Fields` entry that is a nameless kid of a field `/Fields` doesn't list is
+                // read through that field, which names it (ISO 32000-2 §12.7.4.2).
+                let nameless_kid = doc.get(r).as_dict().is_some_and(|d| !d.contains(b"T") && d.contains(b"Parent"));
+                let start = if nameless_kid { unlisted_root(doc, r, &seen.fields).unwrap_or(r) } else { r };
+                walk(doc, start, &base, &page_of, &mut seen, &mut out, 0);
             }
         }
     }
@@ -512,10 +516,11 @@ fn walk(
         // An explicit zero also clears an inherited limit rather than inheriting it again.
         inh.max_len = usize::try_from(m).ok().filter(|limit| *limit > 0);
     }
-    let kids: Vec<ObjRef> =
+    let mut kids: Vec<ObjRef> =
         d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
     // Kids with /T are fields; kids without are this field's widgets.
-    let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
+    let (field_kids, widget_kids): (Vec<ObjRef>, Vec<ObjRef>) =
+        kids.iter().copied().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
     if !field_kids.is_empty() {
         for k in field_kids {
             // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
@@ -530,7 +535,13 @@ fn walk(
                 walk(doc, k, &own, page_of, seen, out, depth + 1);
             }
         }
-        return;
+        // "A field's children in the hierarchy may also include widget annotations" (ISO 32000-2
+        // §12.7.4): widget annotations listed beside named kids are still this field's widgets,
+        // read as a field of this name next to the named kids.
+        kids = widget_kids.into_iter().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.name(b"Subtype") == Some(b"Widget"))).collect();
+        if kids.is_empty() {
+            return;
+        }
     }
     // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
     // field listing them then reads.
@@ -545,7 +556,12 @@ fn walk(
         Some(b"Sig") => FieldKind::Signature,
         _ => return,
     };
-    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
+    // A field's widgets are its widget kids. The field dictionary is its own widget only when it
+    // has none: field and widget are merged "when a field has only a single associated widget
+    // annotation" (ISO 32000-2 §12.7.4), so a merged dictionary that also lists widget kids is a
+    // field whose buttons are those kids, not one more (often zero-area) button.
+    let has_widget_kids = kids.iter().any(|k| doc.get(*k).as_dict().is_some());
+    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") && !has_widget_kids { vec![r] } else { kids };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
