@@ -32,6 +32,11 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
     let mut bytes_left = 16usize << 20;
     let mut visits = 0usize;
     let mut decode = pdfcraft_cos::DecodeBudget::new(16 << 20, 0);
+    // Forms found to be artwork, or refused for a reason in the form itself (`Refusal::intrinsic`):
+    // a later pass leaves their placements as they are without reading or counting them again.
+    // Only placements that are read count against the limit, so a page of logos doesn't use it
+    // up pass after pass. A form refused only where it is drawn is read again where it appears.
+    let mut settled = std::collections::HashSet::new();
     // One pass opens one level of every placement; the last pass only reports what is deeper.
     for pass in 0..=MAX_LEVELS {
         let p = page_dict(&next, page)?;
@@ -50,6 +55,7 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
         let mut merged = resources;
         let mut pending_path = false;
         let mut in_text = false;
+        let (mut refused_here, mut expanded_here) = (std::collections::HashSet::new(), std::collections::HashSet::new());
         for (at, op) in ops.iter().enumerate() {
             match op.op.as_slice() {
                 b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" | b"W" | b"W*" => pending_path = true,
@@ -59,23 +65,33 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                 _ => {}
             }
             let Some(image) = images.get(&at) else { continue };
-            visits = visits.saturating_add(1);
-            if visits > 64 {
-                return Err(EditError::Invalid("too many grouped text placements on this page (limit 64); the page was left unchanged".into()));
+            if image.object.is_some_and(|o| settled.contains(&o)) {
+                continue;
             }
             if pending_path || in_text {
                 result.refused.push(format!("{}: the group is drawn inside an unfinished path or text object", image.name));
                 continue;
             }
+            // The renderer draws a `Do`'s last operand; `image` was found by its first. With more
+            // than one they can be different forms, so this placement is left as it is.
+            if op.operands.len() != 1 {
+                result.refused.push(format!("{}: the group is drawn with an operand too many", image.name));
+                continue;
+            }
+            visits = visits.saturating_add(1);
+            if visits > 64 {
+                return Err(EditError::Invalid("too many grouped text placements on this page (limit 64); the page was left unchanged".into()));
+            }
             let translucent = expand::translucent_at(&next, &merged, &ops, at);
-            // The resource name exactly as the `Do` writes it: a name need not be UTF-8, and
-            // `image.name` is only its display form.
+            // The resource name exactly as the `Do` writes it (its only operand): a name need not
+            // be UTF-8, and `image.name` is only its display form.
             let name = op.last_name().map_or_else(|| image.name.as_bytes().to_vec(), <[u8]>::to_vec);
             match expand::ungroup_ops(&next, &merged, &name, translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
                 Ok(expand::Ungrouped { ops: inline, resources: mut res, patterns, shows_text }) => {
                     // Vector and image artwork needs no preparation. Nested text groups are
                     // visited on the next pass, with their inherited placement and clip in force.
                     if !shows_text {
+                        settled.extend(image.object);
                         continue;
                     }
                     if pass == MAX_LEVELS {
@@ -96,10 +112,17 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                     merged = res;
                     replacements.insert(at, inline);
                     result.expanded += 1;
+                    expanded_here.extend(image.object);
                 }
-                Err(error) => result.refused.push(format!("{}: {error}", image.name)),
+                Err(refusal) => {
+                    result.refused.push(format!("{}: {}", image.name, refusal.error));
+                    if refusal.intrinsic {
+                        refused_here.extend(image.object);
+                    }
+                }
             }
         }
+        settled.extend(refused_here.difference(&expanded_here).copied());
         if replacements.is_empty() {
             break;
         }

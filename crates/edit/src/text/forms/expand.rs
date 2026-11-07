@@ -59,6 +59,16 @@ pub(crate) struct Ungrouped {
     pub(crate) shows_text: bool,
 }
 
+/// Why [`ungroup_ops`] left a placement grouped.
+pub(crate) struct Refusal {
+    pub(crate) error: EditError,
+    /// The form itself is the reason (malformed, tagged, a knockout group, and so on), so every
+    /// placement of it is refused the same way. Otherwise something about this placement or the
+    /// page so far is: its translucency or matrix, the resources it would merge into (which grow
+    /// as other groups are prepared), or the decode budget left.
+    pub(crate) intrinsic: bool,
+}
+
 /// Ungroup form `name` from the page's `resources`. `translucent` says whether the graphics state
 /// at the `Do` is translucent, blended or soft-masked, which a transparency group composites as a
 /// whole. `page_space` is the page group's blending colour space ([`page_blend_space`]).
@@ -72,8 +82,12 @@ pub(crate) fn ungroup_ops(
     page_space: Option<&Object>,
     placement: Matrix,
     budget: &mut DecodeBudget,
-) -> Result<Ungrouped, EditError> {
-    let refuse = |why: &str| EditError::Invalid(format!("this artwork can't be ungrouped: {why}"));
+) -> Result<Ungrouped, Refusal> {
+    let refusal = |why: &str, intrinsic: bool| Refusal { error: EditError::Invalid(format!("this artwork can't be ungrouped: {why}")), intrinsic };
+    // Something about this placement or the page so far is the reason.
+    let refuse = |why: &str| refusal(why, false);
+    // The form itself is the reason: every placement of it is refused the same way.
+    let invalid = |why: &str| refusal(why, true);
     let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).ok_or_else(|| refuse("it is missing"))?;
     let form = xobjects.get(name).ok_or_else(|| refuse("it is missing"))?;
     let Object::Stream(s) = &*doc.resolve(form) else { return Err(refuse("it is not a Form XObject")) };
@@ -88,32 +102,32 @@ pub(crate) fn ungroup_ops(
         let v: Vec<f64> = a.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
         (v.len() == n && v.iter().all(|x| x.is_finite())).then_some(v)
     };
-    let bbox = numbers(b"BBox", 4).ok_or_else(|| refuse("its bounding box is missing or unreadable"))?;
+    let bbox = numbers(b"BBox", 4).ok_or_else(|| invalid("its bounding box is missing or unreadable"))?;
     let matrix = match s.dict.get(b"Matrix") {
         None => None,
         Some(_) => Some(Matrix(
-            <[f64; 6]>::try_from(numbers(b"Matrix", 6).ok_or_else(|| refuse("its matrix is unreadable"))?)
-                .map_err(|_| refuse("its matrix is unreadable"))?,
+            <[f64; 6]>::try_from(numbers(b"Matrix", 6).ok_or_else(|| invalid("its matrix is unreadable"))?)
+                .map_err(|_| invalid("its matrix is unreadable"))?,
         )),
     };
     let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
     if s.dict.get(b"Resources").is_some() && own.is_none() {
-        return Err(refuse("its resources cannot be read"));
+        return Err(invalid("its resources cannot be read"));
     }
     // A form without its own resources uses the ones it is drawn with (PDF 1.1).
     let form_res = own.clone().unwrap_or_else(|| resources.clone());
 
     // A tagged form's content is a structure element's: drawn inline it would lose that link.
     if s.dict.get(b"StructParent").is_some() || s.dict.get(b"StructParents").is_some() {
-        return Err(refuse("it is tagged content (Tags panel); edit its text in a copy without tags"));
+        return Err(invalid("it is tagged content (Tags panel); edit its text in a copy without tags"));
     }
     let group = s.dict.get(b"Group").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).filter(|g| is_name(doc, g, b"S", b"Transparency"));
     if s.dict.get(b"Group").is_some() && group.is_none() {
-        return Err(refuse("its group dictionary cannot be read"));
+        return Err(invalid("its group dictionary cannot be read"));
     }
     if let Some(group) = &group {
         if group.get(b"K").is_some_and(|k| matches!(*doc.resolve(k), Object::Bool(true))) {
-            return Err(refuse("it is a knockout transparency group"));
+            return Err(invalid("it is a knockout transparency group"));
         }
         if translucent {
             return Err(refuse("it is a transparency group drawn translucent, blended or under a soft mask"));
@@ -123,7 +137,7 @@ pub(crate) fn ungroup_ops(
         if let Some(cs) = group.get(b"CS")
             && !same_blend_space(doc, cs, page_space)
         {
-            return Err(refuse("it is a transparency group that blends in a colour space of its own"));
+            return Err(invalid("it is a transparency group that blends in a colour space of its own"));
         }
     }
 
@@ -131,9 +145,17 @@ pub(crate) fn ungroup_ops(
     let data = budget.decode_strict(s).map_err(|e| refuse(&format!("its content can't be read ({e})")))?;
     let parsed = parse(&data);
     if parsed.skipped > 0 {
-        return Err(refuse("its content has parts that can't be read"));
+        return Err(invalid("its content has parts that can't be read"));
     }
     let mut ops = parsed.ops;
+    // A name is renamed at a fixed operand position below, but the renderer takes operands from
+    // the end and ignores surplus ones before them: with a surplus operand the drawn name would
+    // keep its old spelling while its resource moved, and draw nothing or the wrong thing. The
+    // parser keeps such operands without counting them as skipped. Checked before the nested
+    // walk, which can only call it unverifiable.
+    if ops.iter().any(|op| takes_operands(&op.op).is_some_and(|n| op.operands.len() > n)) {
+        return Err(invalid("its content gives an operator more operands than it takes"));
+    }
     let shows_text = {
         // Check every form, including non-group forms, for recursive/unsupported content.
         // The form itself is being read: drawing itself again counts as blending.
@@ -151,7 +173,7 @@ pub(crate) fn ungroup_ops(
         for cat in CATEGORIES {
             let Some(theirs) = form_res.get(cat).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) else { continue };
             if theirs.len() > 4096 {
-                return Err(refuse("too many resources"));
+                return Err(invalid("too many resources"));
             }
             let mut mine = merged.get(cat).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
             if mine.len() > 4096 {
@@ -203,19 +225,12 @@ pub(crate) fn ungroup_ops(
     for op in &mut ops {
         match op.op.as_slice() {
             b"BDC" | b"BMC" => marked = marked.saturating_add(1),
-            b"EMC" => marked = marked.checked_sub(1).ok_or_else(|| refuse("its content ends marked content it didn't begin"))?,
-            b"BT" if in_text => return Err(refuse("its content begins a text object inside another")),
+            b"EMC" => marked = marked.checked_sub(1).ok_or_else(|| invalid("its content ends marked content it didn't begin"))?,
+            b"BT" if in_text => return Err(invalid("its content begins a text object inside another")),
             b"BT" => in_text = true,
-            b"ET" if !in_text => return Err(refuse("its content ends a text object it didn't begin")),
+            b"ET" if !in_text => return Err(invalid("its content ends a text object it didn't begin")),
             b"ET" => in_text = false,
             _ => {}
-        }
-        // A name is renamed at the operand position below, but the renderer takes operands from
-        // the end and ignores surplus ones before them: with a surplus operand the drawn name
-        // would keep its old spelling while its resource moved, and draw nothing or the wrong
-        // thing. The parser keeps such operands without counting them as skipped.
-        if takes_operands(&op.op).is_some_and(|n| op.operands.len() > n) {
-            return Err(refuse("its content gives an operator more operands than it takes"));
         }
         let slot: Option<(&[u8], usize)> = match op.op.as_slice() {
             b"Tf" | b"Do" | b"gs" | b"sh" | b"cs" | b"CS" => {
@@ -232,13 +247,13 @@ pub(crate) fn ungroup_ops(
             b"BDC" | b"DP" => Some((&b"Properties"[..], 1)),
             b"q" => {
                 if depth >= 4096 {
-                    return Err(refuse("graphics state is too deeply nested"));
+                    return Err(invalid("graphics state is too deeply nested"));
                 }
                 depth += 1;
                 None
             }
             b"Q" => {
-                depth = depth.checked_sub(1).ok_or_else(|| refuse("its content restores more graphics states than it saves"))?;
+                depth = depth.checked_sub(1).ok_or_else(|| invalid("its content restores more graphics states than it saves"))?;
                 None
             }
             _ => None,
@@ -262,7 +277,7 @@ pub(crate) fn ungroup_ops(
     }
 
     if marked > 0 || in_text {
-        return Err(refuse("its content leaves marked content or a text object open"));
+        return Err(invalid("its content leaves marked content or a text object open"));
     }
 
     // Patterns keep their place relative to the shapes they fill: each one the form selects is
@@ -351,7 +366,7 @@ pub(crate) fn ungroup_ops(
     if let Some(m) = matrix {
         out.push(Op::new("cm", m.0.iter().copied().map(num).collect()));
     }
-    let [a, b, c, d] = <[f64; 4]>::try_from(bbox).map_err(|_| refuse("invalid form bounds"))?;
+    let [a, b, c, d] = <[f64; 4]>::try_from(bbox).map_err(|_| invalid("invalid form bounds"))?;
     let (x0, y0, x1, y1) = (a.min(c), b.min(d), a.max(c), b.max(d));
     out.push(Op::new("re", vec![num(x0), num(y0), num(x1 - x0), num(y1 - y0)]));
     out.push(Op::new("W", Vec::new()));

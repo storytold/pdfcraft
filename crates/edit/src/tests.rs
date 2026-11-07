@@ -10947,6 +10947,80 @@ fn grouped_image_artwork_is_not_prepared() {
     assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "inner"));
 }
 
+/// Artwork and groups refused for what they are (knockout groups, content with an operand too
+/// many) are read once, not again on every pass: 10 logo forms and 30 such groups beside a text
+/// group are 41 reads, within the 64-placement limit, where reading either again on the second
+/// pass would pass it and prepare nothing.
+#[test]
+fn artwork_and_refused_groups_count_once_against_the_placement_limit() {
+    for knockout in [true, false] {
+        let refused_body = if knockout { "BT /F1 14 Tf 40 500 Td (kept) Tj ET" } else { "BT /F1 14 Tf 40 500 Td (kept) Tj ET 0 /Im Do" };
+        let mut forms: Vec<(String, String)> = (1..=10).map(|i| (format!("Logo{i}"), "q 10 0 0 10 0 0 cm /Im Do Q".to_string())).collect();
+        forms.extend((1..=30).map(|i| (format!("Refused{i}"), refused_body.to_string())));
+        forms.push(("Body".into(), "BT /F1 14 Tf 40 300 Td (body) Tj ET".into()));
+        let content: String = forms.iter().map(|(name, _)| format!("/{name} Do\n")).collect();
+        let mut doc = page_with_forms(&content, &forms);
+        // Forms are objects 7 onwards, in order: the refused groups follow the 10 logos.
+        for i in 0..30u32 {
+            let r = pdfcraft_cos::ObjRef::new(7 + 10 + i, 0);
+            let Object::Stream(mut s) = doc.get(r).as_ref().clone() else { panic!("fixture") };
+            if knockout {
+                let group = build(&["<< /S /Transparency /K true >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+                s.dict.set(b"Group".to_vec(), Object::Dict(group));
+            }
+            doc.set(r, Object::Stream(s));
+        }
+        let result = text::forms::prepare(&mut doc, 0).unwrap_or_else(|e| panic!("knockout {knockout}: each group is read once ({e})"));
+        assert_eq!(result.expanded, 1);
+        assert_eq!(result.refused.len(), 30, "{:?}", result.refused);
+        assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "body"));
+    }
+}
+
+/// A page-level `Do` with an operand too many is left as it is and settles nothing: the form
+/// found by its first operand may not be the one the renderer draws (its last). Here `/A /B Do`
+/// draws the knockout group B, and A, a text group, is still prepared where Parent draws it.
+#[test]
+fn a_page_do_with_an_operand_too_many_settles_no_form() {
+    let forms = [
+        ("A".to_string(), "BT /F1 14 Tf 40 500 Td (alpha) Tj ET".to_string()),
+        ("B".to_string(), "BT /F1 14 Tf 40 400 Td (beta) Tj ET".to_string()),
+        ("Parent".to_string(), "/A Do".to_string()),
+    ];
+    let mut doc = page_with_forms("/A /B Do\n/Parent Do", &forms);
+    let r = pdfcraft_cos::ObjRef::new(8, 0);
+    let Object::Stream(mut s) = doc.get(r).as_ref().clone() else { panic!("fixture") };
+    let group = build(&["<< /S /Transparency /K true >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+    s.dict.set(b"Group".to_vec(), Object::Dict(group));
+    doc.set(r, Object::Stream(s));
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 2, "Parent, then the A it draws: {:?}", result.refused);
+    assert!(result.refused.iter().any(|r| r.contains("an operand too many")), "{:?}", result.refused);
+}
+
+/// A refusal that comes from where a form is drawn is not remembered for the form: a text group
+/// refused where it is drawn translucent is still prepared where an expanded parent draws it
+/// opaque, on the next pass.
+#[test]
+fn a_placement_refusal_does_not_settle_the_form_for_later_passes() {
+    let resources = "<< /Font << /F1 5 0 R >> /ExtGState << /Alpha << /ca 0.5 >> >> /XObject << /Shared 6 0 R /Parent 7 0 R >> >>";
+    let form = |extra: &str, body: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] {extra} /Resources {resources}"), body);
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>"),
+        stream("", "q /Alpha gs /Shared Do Q /Parent Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("/Group << /S /Transparency >>", "BT /F1 14 Tf 40 500 Td (shared) Tj ET"),
+        form("", "/Shared Do"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 2, "Parent, then the Shared it draws opaque: {:?}", result.refused);
+    assert!(result.refused.iter().any(|r| r.starts_with("Shared: ") && r.contains("translucent")), "{:?}", result.refused);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().iter().filter(|b| b.text == "shared").count(), 1, "only the opaque one is the page's own text");
+}
+
 /// The `Do` is matched to its resource by the name's bytes as written, which need not be UTF-8.
 #[test]
 fn grouped_text_under_a_non_utf8_resource_name_is_prepared() {

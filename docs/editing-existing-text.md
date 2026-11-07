@@ -86,7 +86,8 @@ selects for Thai, not just a GPOS table); GSUB substitution is optional, as spec
 [the OpenType Thai model](https://learn.microsoft.com/en-us/typography/script-development/thai).
 Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS; their
 alternates are used only when each kept one has a mark's zero advance (or, for the two
-consonant forms, an advance). A THSarabunPSK program with its own Thai mark
+consonant forms, an advance) and, where the PDF's own map names its character, the character
+that alternate stands for. A THSarabunPSK program with its own Thai mark
 positioning, such as a complete face loaded with Load font, is shaped by that layout instead,
 still in its own codes. One without it takes the legacy path only when every Thai glyph it keeps
 is where the legacy glyph order puts it, and is otherwise shaped as an ordinary source font. A

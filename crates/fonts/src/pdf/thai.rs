@@ -120,7 +120,8 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
         (358, '\u{0e31}'),
         (360, '\u{0e47}'),
     ];
-    // The anchors identify the exporter; the font program confirms each glyph. Every glyph the
+    // The anchors identify the exporter; the font program confirms each glyph's advance class
+    // (not its identity, which nothing in such a subset records). Every glyph the
     // subset kept must advance as the character it is given (a vowel or tone mark set on its
     // base takes no advance, every other character does), else the order differs somewhere and
     // nothing is mapped. A glyph the subset dropped is left unmapped: no code can draw it, and
@@ -142,6 +143,11 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
     }
     Some(out)
 }
+
+/// The character each legacy Windows Thai presentation form U+F700 + index stands for: ฐ and ญ
+/// without descenders, and the vowels and tone marks moved left, lower or both (the PUA
+/// assignments of <https://linux.thai.net/~thep/th-otf/shaping.html>).
+const PUA_BASES: [char; 27] = ['ฐ', 'ิ', 'ี', 'ึ', 'ื', '่', '้', '๊', '๋', '์', '่', '้', '๊', '๋', '์', 'ญ', 'ั', 'ํ', '็', '่', '้', '๊', '๋', '์', 'ุ', 'ู', 'ฺ'];
 
 /// Whether a Thai character is a vowel or tone mark set above or below its base, with no advance
 /// of its own (U+0E31, U+0E34–U+0E3A, U+0E47–U+0E4E). Sara Am and the other vowels advance.
@@ -236,17 +242,30 @@ pub(super) fn composite_glyph_maps(
     let kept: Vec<(usize, u32)> = (342u32..=368).enumerate().filter(|&(_, gid)| outlined(gid)).collect();
     let in_order =
         kept.iter().all(|&(index, gid)| advances.advance_width(skrifa::GlyphId::new(gid)).is_some_and(|w| (w > 0.0) == matches!(index, 0 | 15)));
+    // Where the PDF says what an alternate's code is (an intact ToUnicode gives the character it
+    // stands for), it must be that alternate's base character: two alternates of the same kind
+    // in another order pass the advance check, but not this one.
+    let code_of = |gid: u32| match &cid_map {
+        None => u16::try_from(gid).ok(),
+        Some(_) => codes.get(&gid).copied(),
+    };
+    let meanings_agree = kept.iter().all(|&(index, gid)| {
+        let stated = code_of(gid).and_then(|code| metrics.text_of(u32::from(code))).and_then(|t| only_char(&t));
+        stated.filter(|c| matches!(u32::from(*c), 0x0e01..=0x0e5b)).is_none_or(|c| PUA_BASES.get(index) == Some(&c))
+    });
     if family.starts_with("THSarabunPSK")
         && unicode.get(&0x0e01) == Some(&214)
         && unicode.get(&0x0e2d) == Some(&258)
         && (alternate_meanings || unicode.contains_key(&0xf70a))
         && in_order
+        && meanings_agree
     {
         for (index, gid) in kept {
-            if let Some(code) = match &cid_map {
+            let code = match &cid_map {
                 None => u16::try_from(gid).ok(),
                 Some(_) => codes.get(&gid).copied(),
-            } {
+            };
+            if let Some(code) = code {
                 unicode.insert(0xf700 + index as u32, gid);
                 codes.entry(gid).or_insert(code);
             }
@@ -555,13 +574,14 @@ mod tests {
     #[test]
     fn legacy_thai_alternates_need_their_glyph_order_confirmed() {
         let unicode = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
-        let alternates = |program: &[u8]| {
+        let alternates_with = |program: &[u8], unicode: &[u8]| {
             let mut doc = Document::new_empty();
             let font = thai_font(&mut doc, program, unicode);
             let metrics = Metrics::from_dict(&doc, &font);
             let (map, _) = composite_glyph_maps(&doc, &font, program, &metrics, &mut DecodeBudget::new(1 << 20, 0)).unwrap();
             map.range(0xf700..=0xf71a).map(|(u, g)| (*u, *g)).collect::<Vec<_>>()
         };
+        let alternates = |program: &[u8]| alternates_with(program, unicode);
         let ordered = alternates(&thai_ordered_program());
         assert!(ordered.contains(&(0xf70a, 352)) && ordered.contains(&(0xf710, 358)), "{ordered:?}");
         let mut misplaced = thai_ordered_program();
@@ -572,6 +592,12 @@ mod tests {
         drop_glyph(&mut dropped, 353);
         let kept = alternates(&dropped);
         assert!(kept.contains(&(0xf70a, 352)) && !kept.iter().any(|(_, g)| *g == 353), "{kept:?}");
+        // Two marks of the same kind (both zero-advance) in another order: the PDF's own map says
+        // glyph 343 is ี and 344 is ิ, the reverse of U+F701 and U+F702. None is used.
+        let stated = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 4 beginbfchar <0157> <0e35> <0158> <0e34> <0160> <0e48> <0161> <0e49> endbfchar";
+        assert!(alternates_with(&thai_ordered_program(), stated).is_empty(), "a stated meaning out of the PUA order withdraws them all");
+        let agreeing = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 4 beginbfchar <0157> <0e34> <0158> <0e35> <0160> <0e48> <0161> <0e49> endbfchar";
+        assert!(alternates_with(&thai_ordered_program(), agreeing).contains(&(0xf701, 343)));
     }
 
     #[test]
