@@ -212,19 +212,39 @@ impl Automation {
         let mut files = discovery.skipped;
         let (mut completed, mut failed_count) = (0, 0);
         let mut stopped = false;
+        let mut planned_outputs: HashSet<PathBuf> = HashSet::new();
         for (path, relative) in discovery.files {
             if stopped || !recipe.accepts(&path) {
                 files.push(json!({"path":path.to_string_lossy(),"status":"skipped","reason":if stopped {"stopped after error"} else {"unsupported input extension"}}));
                 continue;
             }
             if dry_run {
-                let target = out.join(relative).with_extension("pdf");
-                let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
-                if !target.starts_with(&out) {
-                    files.push(json!({"path":path.to_string_lossy(),"status":"error","error":"output path leaves out_dir"}));
-                    continue;
+                let planned: Result<PathBuf> = (|| {
+                    let target = out.join(&relative).with_extension("pdf");
+                    let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+                    if !target.starts_with(&out) {
+                        return Err(failed("output path leaves out_dir"));
+                    }
+                    let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
+                    let stem = target.file_stem().ok_or_else(|| failed("output has no stem"))?.to_string_lossy().into_owned();
+                    for n in 1..=10_000 {
+                        let candidate = if n == 1 { target.clone() } else { dir.join(format!("{stem} ({n}).pdf")) };
+                        if candidate.symlink_metadata().is_ok() || planned_outputs.contains(&candidate) {
+                            continue;
+                        }
+                        planned_outputs.insert(candidate.clone());
+                        return Ok(candidate);
+                    }
+                    Err(failed("all 10000 output names are occupied"))
+                })();
+                match planned {
+                    Ok(target) => files.push(json!({"path":path.to_string_lossy(),"status":"planned","output":target.to_string_lossy().replace('\\', "/"),"steps":recipe.steps})),
+                    Err(e) => {
+                        failed_count += 1;
+                        files.push(json!({"path":path.to_string_lossy(),"status":"error","error":e.to_string()}));
+                        stopped = stop;
+                    }
                 }
-                files.push(json!({"path":path.to_string_lossy(),"status":"planned","output":target.to_string_lossy().replace('\\', "/")}));
                 continue;
             }
             // Recheck confinement and links before reading a discovered file.
@@ -255,7 +275,7 @@ impl Automation {
                 }
             }
         }
-        let skipped = files.len().saturating_sub(completed + failed_count);
+        let skipped = files.iter().filter(|file| file["status"] == "skipped").count();
         Ok(json!({"dry_run":dry_run,"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
     }
 }
