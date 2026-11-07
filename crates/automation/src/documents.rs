@@ -391,6 +391,8 @@ impl Automation {
         let (mut bytes, mut r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
         let mut attempts = 1;
         let mut step_used = 0;
+        // Settings already optimized with; a rung that changes nothing is not run again.
+        let mut tried = vec![settings.clone()];
         if let Some(t) = target {
             // Stronger image settings, one rung per attempt, until the copy fits. Every attempt
             // starts from the open document, so a failed one changes nothing; the number of
@@ -409,7 +411,11 @@ impl Automation {
                         img.compression = Compression::Jpeg(q.min(quality));
                     }
                 }
+                if tried.contains(&s) {
+                    continue;
+                }
                 let (b2, r2) = self.session.optimized_bytes(id, &s, &discard).map_err(failed)?;
+                tried.push(s);
                 attempts += 1;
                 if b2.len() < bytes.len() {
                     (bytes, r, step_used) = (b2, r2, k + 1);

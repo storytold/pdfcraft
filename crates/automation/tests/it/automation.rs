@@ -7196,7 +7196,9 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
 
 #[test]
 fn optimizing_to_a_target_size() {
-    let dir = workdir("optimize-target");
+    // Dropped at the end of the test, also when an assertion fails.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (w, h) = (2400u32, 1600u32);
     let px: Vec<u8> = (0..w * h)
         .flat_map(|i| {
@@ -7241,6 +7243,10 @@ fn optimizing_to_a_target_size() {
     // A JPEG caller gets the quality step.
     let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jpg.pdf", "target_bytes": 1 }));
     assert!(r["target_settings"]["max_jpeg_quality"].is_number(), "{r}");
+    // Settings already at the ladder's floor leave every rung equal to the first run: no retries.
+    let floor = json!({ "ppi": 9, "above_ppi": 9, "compression": "jpeg", "quality": 1 });
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "floor.pdf", "color": floor, "gray": floor, "target_bytes": 1 }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(false), Some(1)), "{r}");
     // Confinement still applies.
     assert!(a.call("doc_optimize", &json!({ "doc": doc, "path": "../out.pdf", "target_bytes": 1000 })).is_err());
 }
