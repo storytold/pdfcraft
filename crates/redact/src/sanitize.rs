@@ -672,9 +672,9 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
         }
     }
     // Images taken off their page (Delete Image, Replace Image) are still listed in its
-    // resources: the full rewrite would keep them.
-    crate::interp::unlink_undrawn(doc)?;
-    if done.is_empty() {
+    // resources: the full rewrite would keep them. Unlinking them is a removal of its own.
+    let unlinked = crate::interp::unlink_undrawn(doc)?;
+    if done.is_empty() && unlinked == 0 {
         return Err(RedactError::NothingToApply);
     }
     // The rewrite drops the revisions that held the removed content, so it is a different file from

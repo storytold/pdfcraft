@@ -4253,6 +4253,22 @@ fn images_no_page_draws_leave_with_hidden_information() {
     }
 }
 
+/// Unlinking an image nothing draws is a removal of its own: with nothing else to remove, it is
+/// still applied, not reported as nothing to do.
+#[test]
+fn unlinking_alone_still_applies() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Deleted 4 0 R >> >> >>".to_vec(),
+        gray_image(b"DELETEDIMAGEBYTES"),
+    ]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]), Ok(Vec::new()));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(17).any(|w| w == b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+}
+
 /// A name a pattern, a form, an appearance or a soft mask doesn't define is looked up in the
 /// page's resources, /Resources of its own or not: an image drawn only that way is still shown,
 /// so it stays. One no content names goes.
