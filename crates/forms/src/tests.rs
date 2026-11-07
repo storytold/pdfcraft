@@ -2333,7 +2333,8 @@ fn a_radio_option_of_any_field_sharing_the_name_can_be_chosen() {
 /// The same group as a broken save leaves it: the kids carry no `/P` (their page is found through
 /// the page's `/Annots`), and both are drawn on with values that disagree (`/V /Off` with
 /// `/AS /Choice1`, `/V /Choice2` with `/AS /Choice2`). Choosing by the name leaves exactly one
-/// button on, across a save, whichever option it is.
+/// button on, across a save, whichever option it is, and gives every field of the name the
+/// chosen value: both kids and the group listing them.
 #[test]
 fn a_radio_choice_by_the_name_turns_one_button_on_in_kids_without_a_page_that_disagree() {
     let kid = |state: &str, v: &str, x: u32| {
@@ -2361,9 +2362,16 @@ fn a_radio_choice_by_the_name_turns_one_button_on_in_kids_without_a_page_that_di
         set_value(&mut doc, "Group1", &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("Group1 = {choice}: {e}"));
         doc = reopen(&doc);
         assert_eq!((st(&doc, on), st(&doc, off)), (Some(choice.as_bytes().to_vec()), Some(b"Off".to_vec())), "Group1 = {choice}");
+        // Every field named Group1 has the same value (ISO 32000-2 §12.7.4.2): both kids and the
+        // field listing them, whose /V was a stale Choice2.
+        let v = |n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"V").map(<[u8]>::to_vec));
+        assert_eq!(
+            [v(4), v(5), v(6)],
+            [Some(choice.as_bytes().to_vec()), Some(choice.as_bytes().to_vec()), Some(choice.as_bytes().to_vec())],
+            "Group1 = {choice}"
+        );
         let values: Vec<Vec<String>> = fields(&doc).into_iter().map(|f| f.value).collect();
-        assert!(values.iter().all(|v| v.is_empty() || v == &[choice]), "Group1 = {choice}: {values:?}");
-        assert!(values.iter().any(|v| v == &[choice]), "Group1 = {choice}: {values:?}");
+        assert_eq!(values, [vec![choice.to_string()], vec![choice.to_string()]], "Group1 = {choice}");
     }
 }
 

@@ -112,6 +112,38 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("."))
 }
 
+/// The fields of the form's tree whose `/Kids` list one of `kids` and whose own fully qualified
+/// name is `name`: a field listing kids that don't name it as their `/Parent`, and so share its
+/// name rather than extend it. Each node is visited once, at most 64 levels down.
+pub(crate) fn listing_fields_named(doc: &Document, name: &str, kids: &[ObjRef]) -> Vec<ObjRef> {
+    let mut out = Vec::new();
+    let Some(af) = acroform(doc) else { return out };
+    let top = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let mut stack: Vec<(ObjRef, usize)> = top.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((r, depth)) = stack.pop() {
+        if depth > 64 || !seen.insert(r) {
+            continue;
+        }
+        let obj = doc.get(r);
+        let Some(d) = obj.as_dict() else { continue };
+        let list: Vec<ObjRef> = d
+            .get(b"Kids")
+            .map(|k| doc.resolve(k))
+            .and_then(|k| k.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Object::as_ref)
+            .collect();
+        if list.iter().any(|k| kids.contains(k)) && qualified_name(doc, r).as_deref() == Some(name) {
+            out.push(r);
+        }
+        let next = depth.saturating_add(1);
+        stack.extend(list.into_iter().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).map(|k| (k, next)));
+    }
+    out
+}
+
 /// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
 /// in all, however many actions name the same stream.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 64 << 20;
