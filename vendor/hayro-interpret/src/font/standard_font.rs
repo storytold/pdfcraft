@@ -4,7 +4,7 @@ use crate::font::generated::{glyph_names, metrics, standard, symbol, zapf_dings}
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
     Encoding, FontData, FontQuery, glyph_name_to_unicode, normalized_glyph_name, stretch_glyph,
-    strip_subset_prefix,
+    strip_subset_prefix, unicode_from_name,
 };
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
@@ -769,7 +769,11 @@ fn accented_parts(name: &str) -> Option<(&'static str, &'static str, Place)> {
             .map(|&(_, base, accent, place)| (base, accent, place))
     };
     by_name(name).or_else(|| {
-        let c = glyph_name_to_unicode(name)?;
+        // Drawing keeps upstream's lenient reading of `uni` names; text goes by the glyph list
+        // specification (PdfCraft patch 92).
+        let c = glyph_names::get(name)
+            .and_then(|s| s.chars().next())
+            .or_else(|| unicode_from_name(name))?;
         match COMMA_BELOW_BY_CHAR.iter().find(|(letter, _)| *letter == c) {
             Some((_, comma_below)) => by_name(comma_below),
             None => by_name(glyph_names::get_reverse(c)?),
