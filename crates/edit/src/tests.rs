@@ -5294,6 +5294,83 @@ fn content_after_a_stream_that_does_not_decode_is_not_edited() {
     assert_eq!(contents(&doc), listed);
 }
 
+/// An image's `q cm … Q` that closes past a stream not read whole, one that doesn't decode or one
+/// damaged partway, may hold what that stream draws (here a square, in the image's `cm`), also when
+/// the square's operands end the stream before it and only its keyword is hidden. Moving the image
+/// leaves that `cm` as it is and gives the `Do` a `cm` of its own, so the square stays, with a clip
+/// on the image too, which then stays where it is as one the square may share. A crop goes around
+/// the `Do` alone, and a crop PdfCraft put in that scope isn't removed. A scope that closes in a
+/// damaged stream before its damage holds none of it: its `cm` takes the move.
+#[test]
+fn an_image_whose_scope_closes_past_a_stream_not_read_whole_moves_alone() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let first_stream = |doc: &Document| {
+        let Some(Object::Array(list)) = contents(doc) else { panic!("contents {:?}", contents(doc)) };
+        let Some(Object::Stream(first)) = list.first().map(|f| (*doc.resolve(f)).clone()) else { panic!("no first stream") };
+        String::from_utf8(first.decoded().unwrap()).unwrap()
+    };
+    let later_streams = |doc: &Document| match contents(doc) {
+        Some(Object::Array(list)) => list.get(1..).map(<[Object]>::to_vec),
+        other => panic!("contents {other:?}"),
+    };
+    // The image in `q 100 0 0 100 50 50 cm`, a stream not read whole drawing a square in that
+    // `cm`, then the scope's `Q`. Split, the square's operands come before the hidden keyword.
+    let page = |clip: &str, damaged: bool, split: bool| {
+        let operands = if split && !damaged { " 1.5 0 0.5 0.5" } else { "" };
+        let mut doc = two_stream_image_page(&format!("q 100 0 0 100 50 50 cm {clip}/Im1 Do{operands}"), "Q");
+        let hidden = match (damaged, split) {
+            (true, false) => damaged_flate(b"", b"0 0 1 rg 1.5 0 0.5 0.5 re f"),
+            (true, true) => damaged_flate(b"0 0 1 rg 1.5 0", b" 0.5 0.5 re f"),
+            (false, _) => {
+                let filter = doc.add(Object::name("FlateDecode"));
+                let mut s = Stream::flate(Dict::new(), if split { b"re f".as_slice() } else { b"0 0 1 rg 1.5 0 0.5 0.5 re f" });
+                s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+                s
+            }
+        };
+        let hidden = doc.add(hidden);
+        let listed = vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(ObjRef::new(5, 0))];
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(listed))).unwrap();
+        doc
+    };
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    for damaged in [false, true] {
+        for split in [false, true] {
+            for clip in ["", "0 0 1 1 re W n ", "/PdfCraftImageCrop MP 0 0 1 1 re W n "] {
+                let what = format!("damaged: {damaged}, split: {split}, clip: {clip:?}");
+                let mut doc = page(clip, damaged, split);
+                let later = later_streams(&doc);
+                images::change_image(&mut doc, 0, 0, &shift).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.contains("100 0 0 100 50 50 cm"), "{what}: the scope's cm stays: {first}");
+                assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [60.0, 50.0, 160.0, 150.0]), "{what}: the image moved");
+
+                let mut doc = page(clip, damaged, split);
+                images::change_image(&mut doc, 0, 0, &images::ImageChange::Crop([60.0, 60.0, 140.0, 140.0])).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: cropped, the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.starts_with("q 100 0 0 100 50 50 cm"), "{what}: nothing put at the scope's start: {first}");
+
+                if clip.contains("PdfCraftImageCrop") {
+                    let mut doc = page(clip, damaged, split);
+                    let listed = contents(&doc);
+                    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::RemoveCrop).unwrap_err();
+                    assert!(refused.to_string().contains("may also clip"), "{what}: {refused}");
+                    assert_eq!(contents(&doc), listed, "{what}");
+                }
+            }
+        }
+    }
+
+    let mut doc = two_stream_image_page("q 100 0 0 100 50 50 cm /Im1 Do", "");
+    doc.set(ObjRef::new(5, 0), damaged_flate(b"Q\n", b"0 0 1 rg 1.5 0 0.5 0.5 re f"));
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let first = first_stream(&doc);
+    assert!(first.contains("100 0 0 100 60 50 cm") && !first.contains("50 50 cm"), "closed before the damage: {first}");
+}
+
 /// A content stream whose `/DecodeParms`, or a parameter in them, is given by reference is read
 /// through the reference: its text is listed and edited, not read with the predictor's tag bytes
 /// left in it.

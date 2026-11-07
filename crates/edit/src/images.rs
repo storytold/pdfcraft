@@ -527,10 +527,15 @@ fn exclusive_clip(ops: &[Op], op: usize) -> Option<(usize, Matrix)> {
 /// The `q cm … Q` whose only content after its `cm` is `start..=end` (a `Do`, or a balanced
 /// `q … Q` scope), with the index and value of that `cm`. Another transform of the same
 /// placement is folded into it, so repeated moves and resizes don't nest one more `q` each.
-fn enclosing_transform(ops: &[Op], start: usize, end: usize) -> Option<(usize, Matrix)> {
+/// None when its `Q` is at or past `hidden` ([`crate::text::first_op_after_damage`]): a stream
+/// between that wasn't read may draw in that `cm` too.
+fn enclosing_transform(ops: &[Op], start: usize, end: usize, hidden: usize) -> Option<(usize, Matrix)> {
     let at = start.checked_sub(1)?;
     let cm = ops.get(at)?;
     if !ops.get(at.checked_sub(1)?)?.is("q") || !ops.get(end.checked_add(1)?)?.is("Q") || !cm.is("cm") || cm.operands.len() != 6 {
+        return None;
+    }
+    if end.checked_add(1)? >= hidden {
         return None;
     }
     let m = Matrix(cm.nums::<6>()?);
@@ -1052,7 +1057,9 @@ fn determine_arrange_spans(
     has_other_paint: bool,
     marked_unit: bool,
 ) -> Result<(std::ops::Range<usize>, usize, usize, usize), EditError> {
-    let scope = image_scopes(ops, target, "arranged")
+    // Nothing is hidden for Arrange: it takes out the scope it finds, so a scope that closes past a
+    // stream not read whole changes a stream past it, which `rewritten_contents` refuses.
+    let scope = image_scopes(ops, target, "arranged", ops.len())
         .ok()
         .and_then(|s| s.isolated)
         .filter(|&(start, end, _)| start >= target_unit.start && end < target_unit.end);
@@ -1491,8 +1498,10 @@ impl ImageScopes {
     }
 }
 
-/// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`.
-fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, EditError> {
+/// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`. A scope
+/// still open at op `hidden` ([`crate::text::first_op_after_damage`]) holds a stream that wasn't
+/// read, which may paint there: it counts as painting something else.
+fn image_scopes(ops: &[Op], target: usize, done: &str, hidden: usize) -> Result<ImageScopes, EditError> {
     struct Scope {
         start: usize,
         matrix: Matrix,
@@ -1511,6 +1520,11 @@ fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, Ed
     let mut isolated = None;
     let mut outermost = None;
     for (index, op) in ops.iter().enumerate() {
+        if index == hidden {
+            for scope in &mut stack {
+                scope.other_paint = true;
+            }
+        }
         match op.op.as_slice() {
             b"q" => {
                 if stack.len() >= 256 {
@@ -1600,14 +1614,20 @@ fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[Conten
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
-    let scope = image_scopes(&ops, target, "cropped")?;
-    let Some((start, _, _)) = scope.transform_scope(target) else {
-        return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
+    let crops = |hidden| -> Result<Vec<std::ops::Range<usize>>, EditError> {
+        let scope = image_scopes(&ops, target, "cropped", hidden)?;
+        Ok(scope.transform_scope(target).map(|(start, _, _)| app_crop_ranges(&ops, start, target)).unwrap_or_default())
     };
-    let crops = app_crop_ranges(&ops, start, target);
-    if crops.is_empty() {
-        return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
+    let crops_there = crops(crate::text::first_op_after_damage(all, &pieces, &ops))?;
+    if crops_there.is_empty() {
+        // A crop in a scope that closes past a stream not read whole may clip what that stream draws.
+        return Err(EditError::Invalid(if crops(ops.len())?.is_empty() {
+            "the image has no PdfCraft crop to remove".into()
+        } else {
+            "the image's crop may also clip what a content stream that is damaged or can't be decoded draws, so it isn't removed".into()
+        }));
     }
+    let crops = crops_there;
     let changed = crate::text::splice(&pieces, &ops, |index| (Vec::new(), !crops.iter().any(|r| r.contains(&index))));
     let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
@@ -1705,8 +1725,9 @@ fn transform_image(
     }
     // A private path crop moves with its image regardless of intervening state operators.
     // Shared crops retain the existing fixed-clip behavior, preserving neighbouring paint.
+    let hidden = crate::text::first_op_after_damage(streams, &pieces, &ops);
     let (start, end, placement) =
-        image_scopes(&ops, target, "transformed")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
+        image_scopes(&ops, target, "transformed", hidden)?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let local = placement.then(&Matrix(transform)).then(&inverse);
     if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
@@ -1715,7 +1736,7 @@ fn transform_image(
 
     // Already alone in a `q cm … Q` (its own placement, or the wrapper an earlier edit added):
     // change that `cm` in place. The CTM inside is `local · cm · outer` either way.
-    if let Some((at, cm)) = enclosing_transform(&ops, start, end) {
+    if let Some((at, cm)) = enclosing_transform(&ops, start, end, hidden) {
         let folded = local.then(&cm);
         if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the image transform is too large".into()));
@@ -1780,8 +1801,9 @@ fn crop_image_impl(
     if !ops.get(target).is_some_and(|op| op.is("Do")) {
         return Err(EditError::Invalid("the image operation could not be located".into()));
     }
-    let (start, end, placement) =
-        image_scopes(&ops, target, "cropped")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
+    let (start, end, placement) = image_scopes(&ops, target, "cropped", crate::text::first_op_after_damage(streams, &pieces, &ops))?
+        .transform_scope(target)
+        .unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inverse.apply(x, y));
     if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1e12 && y.abs() <= 1e12) {
@@ -1862,6 +1884,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     }
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
+    let hidden = crate::text::first_op_after_damage(&all, &pieces, &ops);
     let mut inside_text = false;
     for (index, op) in ops.iter().enumerate() {
         if op.is("BT") {
@@ -1879,7 +1902,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let mut folds = std::collections::BTreeMap::new();
     for image in images.iter().filter(|image| image.has_editor_crop()) {
         let Some(&(_, _, offset)) = plans.get(&image.op) else { continue };
-        let Some((start, end, placement)) = image_scopes(&ops, image.op, "moved")?.transform_scope(image.op) else {
+        let Some((start, end, placement)) = image_scopes(&ops, image.op, "moved", hidden)?.transform_scope(image.op) else {
             return Err(EditError::Invalid("the image crop cannot be moved independently".into()));
         };
         let inverse = placement.invert().ok_or_else(|| EditError::Invalid("a selected image has no area".into()))?;
@@ -1896,7 +1919,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
         };
         // An enclosing cm is before the captured placement; an inside-scope cm is after it.
         // Their multiplication orders differ when that cm scales or shears a translation.
-        let folded = enclosing_transform(&ops, start, end)
+        let folded = enclosing_transform(&ops, start, end, hidden)
             .map(|(at, cm)| (at, local.then(&cm)))
             .or_else(|| leading_transform().map(|(at, cm)| (at, cm.then(&local))));
         if let Some((at, folded)) = folded {
@@ -1932,7 +1955,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     // An image already alone in `q cm Do Q` moves by changing that `cm`, not by nesting another.
     for index in 0..ops.len() {
         let Some(&(movement, _, _)) = plans.get(&index) else { continue };
-        let Some((at, cm)) = enclosing_transform(&ops, index, index) else { continue };
+        let Some((at, cm)) = enclosing_transform(&ops, index, index, hidden) else { continue };
         let folded = movement.then(&cm);
         if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the image move is too large".into()));

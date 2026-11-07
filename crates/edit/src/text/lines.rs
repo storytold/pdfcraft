@@ -165,6 +165,15 @@ fn first_damaged(streams: &[ContentStream]) -> usize {
     streams.iter().position(|s| s.read != Read::Whole).unwrap_or(streams.len())
 }
 
+/// The index of the first of `ops`, parsed from `pieces` (the [`joined`] `streams`), drawn after a
+/// stream not read whole, or `ops.len()`. A `q … Q` still open there may hold what wasn't read,
+/// painting in the state it sets. An operator counts by its keyword: one whose operands start
+/// before such a stream takes them from around what wasn't read.
+pub(crate) fn first_op_after_damage(streams: &[ContentStream], pieces: &Pieces, ops: &[Op]) -> usize {
+    let damaged = first_damaged(streams);
+    ops.iter().position(|op| pieces.pieces_of(op).1 > damaged).unwrap_or(ops.len())
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
 /// (keeping their dictionaries), the others stay as they were. An error, before anything is
 /// added, when a piece that changed is a stream that didn't decode whole, or comes after one.
