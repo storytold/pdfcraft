@@ -5,6 +5,8 @@
 
 use serde_json::{Value, json};
 
+use pdfcraft_engine::REDACT_PATTERNS;
+
 use crate::ToolError;
 
 #[derive(Clone, Debug)]
@@ -28,6 +30,12 @@ fn doc() -> Value {
 
 fn pages(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "description": format!("1-based page numbers {what}.") })
+}
+
+/// The Search & Redact pattern ids, from the engine's registry, so the advertised schema cannot
+/// drift from the patterns the runtime accepts.
+fn pattern_enum() -> Value {
+    json!({ "type": "string", "enum": REDACT_PATTERNS.iter().map(|p| p.id()).collect::<Vec<&str>>() })
 }
 
 fn path(what: &str) -> Value {
@@ -75,6 +83,12 @@ fn comment_ref(mut extra: Value) -> Value {
 
 fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
+}
+
+/// The language codes the engines read, as the `language` enum — from the engine's own table,
+/// so the schema and the validator can never disagree.
+fn language_enum() -> Value {
+    Value::Array(pdfcraft_engine::ocr::LANGUAGES.iter().map(|(code, _)| json!(code)).collect())
 }
 
 struct T {
@@ -150,7 +164,7 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
-        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments, fonts, security and repair notes.")
+        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments, fonts, security, repair notes and the objects that could not be read.")
             .ro()
             .cmd("file.properties")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
@@ -202,13 +216,14 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "pages": pages("to count (default: all)"),
                 "exclude_tables": { "type": "boolean" }, "exclude_code": { "type": "boolean" }, "exclude_images": { "type": "boolean" }
             }), &["doc"])),
-        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab.")
+        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab. With format \"html\", each page also carries html, the same text as Copy with formatting puts on the clipboard (paragraphs, bold, italic, size, colour and font family), and styles_incomplete when some styles had to be left out. With rect, the html is that text in line order, not split into the column's rows and cells. The HTML of one call is capped at 32 MiB in total; pages past the cap carry empty html with styles_incomplete. html_truncated is set when that cap is reached or when a page's own copy was cut at its span or size cap.")
             .ro()
             .cmd("edit.column_select")
             .with(schema(
                 json!({
                     "doc": doc(), "pages": pages("to extract (default: all)"),
-                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Column select: [x0, y0, x1, y1] in points from the top-left of the displayed page; a glyph counts when its centre is inside." }
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Column select: [x0, y0, x1, y1] in points from the top-left of the displayed page; a glyph counts when its centre is inside." },
+                    "format": { "type": "string", "enum": ["text", "html"], "description": "text (default) or html: also return each page's text as formatted HTML." }
                 }),
                 &["doc"],
             )),
@@ -605,7 +620,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_mark",
             "Mark for redaction",
-            "Mark content for redaction (nothing is removed until redact_apply). One of: rect [x0, y0, x1, y1] (points from the top-left of the displayed page) with page; find (text, every match); words (a list of words or phrases, every match of each; the result's matched_words says how many marks each made); pattern (phone, email, credit-card, ssn, date: every match, Acrobat's Search & Redact patterns); whole_pages: true. find and words accept case_sensitive and whole_words (both default false). Select one page with page or multiple with pages (default all); do not pass both. rect requires page. overlay: text shown on the box once applied, or code_set (foia: U.S. FOIA (b)(1)(A)…(b)(9); privacy-act: U.S. Privacy Act (d)(5), (j)(1)…(k)(7)) with codes, shown as \"(b)(6), (b)(7)(C)\"; fill: box colour (default black). Undoable.",
+            "Mark content for redaction (nothing is removed until redact_apply). One of: rect [x0, y0, x1, y1] (points from the top-left of the displayed page) with page; find (text, every match); words (a list of words or phrases, every match of each; the result's matched_words says how many marks each made); pattern (phone, email, credit-card, ssn, date, iban: every match, Acrobat's Search & Redact patterns); whole_pages: true. find and words accept case_sensitive and whole_words (both default false). Select one page with page or multiple with pages (default all); do not pass both. rect requires page. overlay: text shown on the box once applied, or code_set (foia: U.S. FOIA (b)(1)(A)…(b)(9); privacy-act: U.S. Privacy Act (d)(5), (j)(1)…(k)(7)) with codes, shown as \"(b)(6), (b)(7)(C)\"; fill: box colour (default black). Undoable.",
         )
         .with(schema(
             json!({
@@ -616,7 +631,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "words": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "maxItems": 1000 },
                 "case_sensitive": { "type": "boolean", "description": "Match letter case for find or words (default false)." },
                 "whole_words": { "type": "boolean", "description": "Match whole words for find or words (default false)." },
-                "pattern": { "type": "string", "enum": ["phone", "email", "credit-card", "ssn", "date"] },
+                "pattern": pattern_enum(),
                 "whole_pages": { "type": "boolean" },
                 "pages": pages("to search or mark (default: all); mutually exclusive with page, and not valid with rect"),
                 "overlay": { "type": "string" },
@@ -704,13 +719,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
-        t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style.")
+        t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style; text painted in gray or CMYK also has gray (its level) or cmyk ([c, m, y, k]).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
             "page_add_text",
             "Add text to a page",
-            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right, char_spacing (points after each character). Text must be Western European (WinAnsi) characters, or Arabic, Hebrew or Thai when the build has their craft-fonts faces (drawn right to left where the text is); others are refused. It stays editable with content_update. Undoable.",
+            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name, painted in RGB) or, for print, gray (0 black to 1 white, painted in DeviceGray) or cmyk ([c, m, y, k], each 0 to 1, painted in DeviceCMYK; [0, 0, 0, 1] is 100 K black), one of the three, align left/center/right, char_spacing (points after each character). Text must be Western European (WinAnsi) characters, or Arabic, Hebrew or Thai when the build has their craft-fonts faces (drawn right to left where the text is); others are refused. It stays editable with content_update. Undoable.",
         )
         .cmd("edit.text")
         .with(schema(
@@ -721,6 +736,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "font": { "type": "string", "enum": ["helvetica", "times", "courier"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
                 "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "color": { "type": "string" },
+                "gray": { "type": "number", "minimum": 0, "maximum": 1, "description": "DeviceGray level, 0 black to 1 white (instead of color)." },
+                "cmyk": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 4, "maxItems": 4, "description": "DeviceCMYK [c, m, y, k], each 0 to 1 (instead of color); [0, 0, 0, 1] is 100 K black." },
                 "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                 "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                 "char_spacing": { "type": "number", "minimum": -500, "maximum": 500, "description": "Points after each character." },
@@ -737,13 +754,15 @@ pub fn tools() -> Vec<ToolDef> {
             json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "path": { "type": "string" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } }),
             &["doc", "page", "path"],
         )),
-        t("content_update", "Edit added content", "Move/resize (rect), retype (text) or restyle (font, size, bold, italic, color, align, char_spacing in points) an added item (page, index from content_list). Images: rotate (degrees, multiple of 90, counter-clockwise), flip_h / flip_v (toggle), crop [left, bottom, right, top] as fractions trimmed, image (a file that replaces the picture). Undoable.")
+        t("content_update", "Edit added content", "Move/resize (rect), retype (text) or restyle (font, size, bold, italic, color or gray or cmyk as page_add_text takes them, align, char_spacing in points) an added item (page, index from content_list). Images: rotate (degrees, multiple of 90, counter-clockwise), flip_h / flip_v (toggle), crop [left, bottom, right, top] as fractions trimmed, image (a file that replaces the picture). Undoable.")
             .with(schema(
                 json!({
                     "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "text": { "type": "string" },
                     "font": { "type": "string", "enum": ["helvetica", "times", "courier"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
                     "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "color": { "type": "string" },
+                    "gray": { "type": "number", "minimum": 0, "maximum": 1, "description": "DeviceGray level, 0 black to 1 white (instead of color)." },
+                    "cmyk": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 4, "maxItems": 4, "description": "DeviceCMYK [c, m, y, k], each 0 to 1 (instead of color); [0, 0, 0, 1] is 100 K black." },
                     "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                     "char_spacing": { "type": "number", "minimum": -500, "maximum": 500, "description": "Points after each character." },
@@ -1365,31 +1384,79 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Needs the engines (ocr_status). Searchable output is undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "language": { "type": "string", "enum": ["en"], "description": "Document language (default en)." },
-                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true). false also reads pictures on such pages, without adding their text again." },
+                    "language": { "type": "string", "enum": language_enum(), "description": "Document language (default en)." },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"], "description": "Which engine reads the pages (default ocrs). auto: ocrs first and tesseract as the second engine, combined by strategy (only the engines that can run take part)." },
+                    "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"], "description": "How two engines' readings combine: primary = the first engine alone; confidence = the second engine joins when the first reading's mean confidence is under 70 or unknown; rover = both always read, merged. Default: confidence with engine auto, primary otherwise." },
+                    "output_mode": { "type": "string", "enum": ["searchable", "editable"], "description": "searchable (default): invisible text over the pages of the open document. editable: a NEW <document>_ocr-style file of visible text written to out; the source is not touched." },
+                    "out": { "type": "string", "description": "Where the editable output is written (required with output_mode editable; a new file: never the source path, never an existing file)." },
+                    "region": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0, y0, x1, y1] in points from the top-left of the displayed page: read only that part. Needs exactly one page." },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "skip_text_files": { "type": "boolean", "description": "Batch: leave whole files that already contain text alone (they come back skipped, not read)." },
+                    "force_ocr": { "type": "boolean", "description": "Read pages and files even when the skip options would leave them alone (default false)." },
+                    "auto_rotate": { "type": "boolean", "description": "Turn pages scanned sideways or upside down upright before reading (default false)." },
+                    "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
+                    "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
+                    "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },
                 }),
                 &["doc"],
             )),
-        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name (pages that already have text are left alone unless skip_text_pages is false, as in ocr_recognize). Two inputs that would write the same output file are refused before anything is read or written. Returns, per file, the output path, word count and skipped pages, or the error.")
+        t("ocr_words", "Words of a recognition (for review)", "The words a recognition finds, for inspection without the GUI: per page, each word's text, its box ([x, y, w, h] in points from the top-left of the displayed page), its confidence and band (high >= 90, medium 70–89, low < 70), which engine read it, and whether it is a suspect (low band). suspects counts the words a reviewer should look at first. Changes nothing on the document. retain_review returns a session-local handle for ocr_review_apply (one per document, at most eight; a new retained recognition replaces the old one). Needs the engines (ocr_status).")
+            .ro()
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "retain_review": { "type": "boolean" },
+                    "region": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                    "pages": pages("to read (default: all)"),
+                    "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
+                    "language": { "type": "string", "enum": language_enum() },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"] },
+                    "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"] },
+                    "auto_rotate": { "type": "boolean" },
+                    "deskew": { "type": "boolean" },
+                    "denoise": { "type": "boolean" },
+                    "binarize": { "type": "boolean" },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "force_ocr": { "type": "boolean", "description": "Read pages even when the skip options would leave them alone (default false)." },
+                }),
+                &["doc"],
+            )),
+        t("ocr_review_apply", "Apply or discard reviewed OCR words", "Accept corrected recognition from ocr_words retain_review. Corrections use 1-based page/word positions and text only; empty text removes a word, omitted words keep their original text and boxes. The stored document guard refuses stale, foreign or consumed reviews. Searchable output is one undoable step; editable requires out and writes a new document (out must not exist yet; the review is kept when it does). discard releases the review without applying it. Input is capped at 65536 words and 4 MiB, never truncated.")
+            .cmd("ocr.correct")
+            .with(schema(json!({ "doc": doc(), "review": { "type": "integer", "minimum": 1 }, "discard": { "type": "boolean" }, "output_mode": { "type": "string", "enum": ["searchable", "editable"] }, "out": { "type": "string" },
+                "corrections": { "type": "array", "maxItems": 65536, "items": { "type": "object", "additionalProperties": false, "properties": { "page": { "type": "integer", "minimum": 1 }, "word": { "type": "integer", "minimum": 1 }, "text": { "type": "string" } }, "required": ["page", "word", "text"] } } }), &["doc", "review"])),
+        t("ocr_dictionary", "Read or update an OCR review dictionary", "Read or add/remove words in an OCR Verify dictionary file (one case-insensitive word per UTF-8 line). Choose its per-language ocr-dictionary-<language>.txt path. Paths honor root; updates are atomic. Refuses invalid words, over 65536 entries or over 4 MiB. No document changes.")
+            .destructive()
+            .cmd("ocr.correct")
+            .with(schema(json!({ "path": { "type": "string" }, "add": { "type": "array", "maxItems": 65536, "items": { "type": "string" } }, "remove": { "type": "array", "maxItems": 65536, "items": { "type": "string" } } }), &["path"])),
+        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name. skip_text_files leaves whole files that already contain text alone (they are their own skipped bucket, nothing is written); skip_text_pages leaves single text pages alone; force_ocr reads regardless of both. Every output name is checked before the first page is read: two paths sharing a file name (from different folders) are refused, and a file of that name already in folder aborts the batch, with the names in the error. Each written file carries a low_confidence note when words at or under 60 confidence sit on it (1-based sorted pages). Returns, per file, the output path, word count, skipped pages or the error, plus recognized/words/skipped_files totals. Needs the engines (ocr_status).")
             .cmd("ocr.recognize_batch")
             .with(schema(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                     "folder": { "type": "string" },
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
-                    "language": { "type": "string", "enum": ["en"] },
-                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); see ocr_recognize." },
+                    "language": { "type": "string", "enum": language_enum() },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"] },
+                    "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"] },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "skip_text_files": { "type": "boolean", "description": "Leave whole files that already contain text alone (default false)." },
+                    "force_ocr": { "type": "boolean", "description": "Read even where the skip options would leave things alone (default false)." },
+                    "auto_rotate": { "type": "boolean" },
+                    "deskew": { "type": "boolean" },
+                    "denoise": { "type": "boolean" },
+                    "binarize": { "type": "boolean" },
                 }),
                 &["paths", "folder"],
             )),
-        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), where it looks for them, and the languages it reads.")
+        t("ocr_status", "OCR status", "Whether text recognition is available, where it looks for models (release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), its languages, and the engines: ocrs (built in, models) and tesseract (an installed program, with its path).")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),

@@ -69,8 +69,9 @@ use pdfcraft_engine::{DocId, Session};
 pub use canvas::{DocView, RasterMemory};
 pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
-pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
+pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionary_dir};
 use theme::{ThemeKind, ThemePreference};
+pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
 mod hooks;
@@ -181,6 +182,7 @@ use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
 use workflows::ocr_ui;
+use workflows::ocr_verify;
 use workflows::optimize_ui;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
@@ -251,6 +253,10 @@ struct PendingOpen {
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
 }
+
+/// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
+/// used instead.
+pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
 
 pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
@@ -510,6 +516,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
+    pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
@@ -522,6 +530,8 @@ pub struct PdfCraftApp {
     pub pdfa: standards_ui::PdfaState,
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
+    /// The Compare Files dialog's Pages field: the new file's pages to compare, empty for all.
+    pub compare_pages: String,
     pub compare: Option<compare_ui::CompareState>,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
@@ -586,6 +596,13 @@ pub struct PdfCraftApp {
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
     pub system_clipboard: bool,
+    /// Where Copy with formatting puts its HTML and the plain alternative instead of the system
+    /// clipboard, when `system_clipboard` is on (tests).
+    pub html_clipboard_override: Option<HtmlClipboard>,
+    /// The system clipboard Copy with formatting writes to, kept open so that X11 goes on
+    /// serving the copy after the frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    os_clipboard: Option<arboard::Clipboard>,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
     /// Attach file: the file to attach instead of asking (tests, automation).

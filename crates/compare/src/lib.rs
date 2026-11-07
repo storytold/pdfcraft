@@ -41,6 +41,8 @@ pub struct Side {
     /// The page the change is on (for a pure insertion or deletion, where the other side's
     /// words would have been).
     pub page: usize,
+    /// The page its last word is on: words changed across a page break are one change.
+    pub last_page: usize,
     pub rects: Vec<[f64; 4]>,
     /// For an empty side (the other side's words were inserted or deleted): the box of the
     /// word next to where they would be.
@@ -245,6 +247,7 @@ fn side(words: &[&Word], neighbour: Option<&Word>) -> Side {
     Side {
         text: words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "),
         page: words.first().or(neighbour.as_ref()).map_or(0, |w| w.page),
+        last_page: words.last().or(neighbour.as_ref()).map_or(0, |w| w.page),
         rects: rects(words),
         near: if words.is_empty() { neighbour.map(|w| w.rect) } else { None },
     }
@@ -347,6 +350,17 @@ mod tests {
         );
         assert_eq!(c.changes[0].new.rects, [[90.0, 700.0, 125.0, 710.0]]);
         assert_eq!(c.count(Kind::Inserted), 2);
+    }
+
+    #[test]
+    fn a_change_across_a_page_break_knows_both_pages() {
+        let mut old = words("alpha beta", 0);
+        old.extend(words("gamma delta", 1));
+        let mut new = words("alpha one", 0);
+        new.extend(words("two delta", 1));
+        let c = compare(&old, &new);
+        assert_eq!(c.changes.len(), 1);
+        assert_eq!((c.changes[0].new.page, c.changes[0].new.last_page), (0, 1));
     }
 
     #[test]
