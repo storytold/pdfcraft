@@ -1001,7 +1001,8 @@ fn uncached_printer_switch_resets_driver_papers_to_standard_presets() {
             vec![("Laser 350x550".into(), (350.0, 550.0))]
         }
     }));
-    h.state_mut().default_paper_source = Some(Arc::new(|_| None));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Label Printer" { Some(("Special Label 300x500".into(), (300.0, 500.0))) } else { None }));
 
     assert!(h.state_mut().execute("print.dialog"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1009,16 +1010,72 @@ fn uncached_printer_switch_resets_driver_papers_to_standard_presets() {
         h.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(h.state().print_draft.papers.iter().any(|(n, _)| n == "Special Label 300x500"));
+    assert_eq!(h.state().print_draft.paper_name(), "Special Label 300x500");
+    assert!(!h.state().print_draft.paper_overridden);
 
-    // Switch printer via printer-change site: apply_printer_papers(Vec::new()) clears old papers immediately
+    // Switch printer via printer-change site: reset unoverridden custom paper and apply_printer_papers(Vec::new()) clears old papers immediately
     h.state_mut().print_draft.printer = Some("Laser Printer".into());
+    h.state_mut().print_draft.reset_unoverridden_custom_paper();
     h.state_mut().print_draft.apply_printer_papers(Vec::new());
+    assert_eq!(h.state().print_draft.paper_name(), "US Letter");
     assert!(
         !h.state().print_draft.papers.iter().any(|(n, _)| n == "Special Label 300x500"),
         "Custom label paper from previous printer cleared immediately"
     );
     assert!(h.state().print_draft.papers.iter().any(|(n, _)| n == "US Letter"), "Standard presets remain available");
+
+    // Explicit override is preserved
+    h.state_mut().print_draft.papers.push(("User Custom 400x600".into(), (400.0, 600.0)));
+    h.state_mut().print_draft.paper = h.state().print_draft.papers.len() - 1;
+    h.state_mut().print_draft.paper_overridden = true;
+    h.state_mut().print_draft.reset_unoverridden_custom_paper();
+    assert_eq!(h.state().print_draft.paper_name(), "User Custom 400x600");
+}
+
+#[test]
+fn printer_list_refresh_resets_unoverridden_custom_paper_when_default_printer_changes() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+
+    let mut h = harness();
+    let initial_printers = vec![
+        spool::Printer { name: "Label Printer".into(), default: true, two_sided: None, description: String::new() },
+        spool::Printer { name: "Laser Printer".into(), default: false, two_sided: None, description: String::new() },
+    ];
+    let updated_printers = vec![spool::Printer { name: "Laser Printer".into(), default: true, two_sided: None, description: String::new() }];
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let initial_p = initial_printers.clone();
+    let updated_p = updated_printers.clone();
+    h.state_mut().printer_source =
+        Some(Arc::new(move || if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { initial_p.clone() } else { updated_p.clone() }));
+    h.state_mut().printer_papers_source = Some(Arc::new(|printer: &str| {
+        if printer == "Label Printer" {
+            vec![("Special Label 300x500".into(), (300.0, 500.0))]
+        } else {
+            vec![("Laser 350x550".into(), (350.0, 550.0))]
+        }
+    }));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Label Printer" { Some(("Special Label 300x500".into(), (300.0, 500.0))) } else { None }));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.paper_name(), "Special Label 300x500");
+
+    // Trigger background printer list refresh with the updated printers list (where Laser Printer is default)
+    h.state_mut().open_print();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Laser Printer has no default paper, so paper should be a standard preset ("US Letter"), not Printer A's custom paper
+    assert_ne!(h.state().print_draft.paper_name(), "Special Label 300x500");
+    assert_eq!(h.state().print_draft.paper_name(), "US Letter");
 }
 
 #[test]

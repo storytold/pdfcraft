@@ -158,8 +158,9 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
+                    d.reset_unoverridden_custom_paper();
+                    d.apply_printer_papers(Vec::new());
                     if let Some(p) = d.printer.clone() {
-                        d.apply_printer_papers(Vec::new());
                         d.read_papers_for = Some(p);
                     }
                 }

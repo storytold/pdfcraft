@@ -435,9 +435,12 @@ impl PdfCraftApp {
                     d.printer = new_printer;
                     d.printers = printers;
                     d.printers_loading = false;
-                    if changed && let Some(p) = d.printer.clone() {
+                    if changed {
+                        d.reset_unoverridden_custom_paper();
                         d.apply_printer_papers(Vec::new());
-                        self.read_papers_in_background(p);
+                        if let Some(p) = d.printer.clone() {
+                            self.read_papers_in_background(p);
+                        }
                     }
                 }
             }

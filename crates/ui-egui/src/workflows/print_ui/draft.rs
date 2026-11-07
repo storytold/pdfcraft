@@ -172,6 +172,26 @@ impl PrintDraft {
         })
     }
 
+    /// Reset an automatically selected custom paper to a standard preset on printer change.
+    ///
+    /// If the currently selected paper does not match any standard preset and `paper_overridden` is false,
+    /// resets `paper` to 0 (the standard default preset) so printer A's custom paper does not
+    /// carry over when switching to printer B. Also resets `paper_before_label` if it refers to
+    /// an unoverridden custom paper. Explicit user overrides (`paper_overridden == true`) are preserved.
+    pub fn reset_unoverridden_custom_paper(&mut self) {
+        if !self.paper_overridden {
+            if print::matching_paper(self.paper_size()).is_none() {
+                self.paper = 0;
+            }
+            if let Some(idx) = self.paper_before_label {
+                let is_custom = self.papers.get(idx).is_none_or(|(_, s)| print::matching_paper(*s).is_none());
+                if is_custom {
+                    self.paper_before_label = Some(0);
+                }
+            }
+        }
+    }
+
     /// Refresh `self.papers` with driver-reported media sizes, preserving the current selection.
     pub fn update_printer_papers(&mut self) {
         self.update_printer_papers_with(None);
