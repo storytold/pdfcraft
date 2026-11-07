@@ -385,3 +385,15 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }
+
+/// #6133: a click beside the page lets go of the selected objects, as Escape does, and moves none.
+#[test]
+fn a_click_beside_the_page_lets_go_of_the_selected_objects() {
+    let mut h = harness();
+    let before = objects(&h);
+    marquee(&mut h);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    click(&mut h, Pos2::new(page.left() - 40.0, page.center().y), Modifiers::NONE);
+    assert!(h.query_by_label("3 objects selected").is_none(), "the objects are let go of");
+    assert_eq!(objects(&h), before, "and nothing moved");
+}

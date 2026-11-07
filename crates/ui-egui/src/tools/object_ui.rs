@@ -60,6 +60,11 @@ impl ObjectSelection {
         }
     }
 
+    /// Let go of the selected objects, as Escape does.
+    pub(crate) fn deselect(&mut self) {
+        self.clear();
+    }
+
     fn clear(&mut self) {
         self.page = None;
         self.selected.clear();
