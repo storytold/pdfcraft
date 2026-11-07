@@ -865,10 +865,23 @@ impl Session {
     pub fn ocr_job(&self, id: DocId, pages: &[usize], settings: OcrSettings) -> Option<OcrJob> {
         let doc = self.get(id)?;
         let all = doc.info.pages.len();
-        let pages: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.iter().copied().filter(|p| *p < all).collect() };
+        let mut seen = vec![false; all];
+        let pages: Vec<usize> = if pages.is_empty() {
+            seen.fill(true);
+            (0..all).collect()
+        } else {
+            let mut deduped = Vec::with_capacity(pages.len());
+            for &p in pages {
+                if seen.get(p) == Some(&false) {
+                    seen[p] = true;
+                    deduped.push(p);
+                }
+            }
+            deduped
+        };
         let native = (0..all)
             .map(|p| {
-                if !pages.contains(&p) {
+                if seen.get(p) != Some(&true) {
                     return None;
                 }
                 doc.page_images(p)
@@ -2009,6 +2022,16 @@ mod tests {
         assert!((job.render_scale(0) - 600.0 / 72.0).abs() < 1e-4, "a text page has no image, so the wanted dpi wins");
         let page = job.pages[0];
         assert_eq!(page, 0);
+    }
+
+    /// A job requested with the same page twice carries each page once: a duplicate would
+    /// otherwise be recognized twice.
+    #[test]
+    fn ocr_job_deduplicates_requested_pages() {
+        let mut s = Session::new();
+        let id = s.open("t.pdf", None, Arc::new(fixture(3)), None).unwrap();
+        let job = s.ocr_job(id, &[2, 0, 2, 1, 0, 2], OcrSettings::default()).unwrap();
+        assert_eq!(job.pages, vec![2, 0, 1], "each requested page appears once, in request order");
     }
 
     /// #1848: an A4 scan at 300 dpi whose page box is its pixel size (2480 x 3508 pt, one pixel
