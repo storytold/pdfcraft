@@ -1957,3 +1957,15 @@ fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
     assert_eq!(linked.revisions().len(), 2);
     assert!(linked.repair_log().is_empty(), "{:?}", linked.repair_log());
 }
+
+/// A hybrid update (ISO 32000-2 §7.5.8.4) without `/Prev`: its `/XRefStm` stream belongs to the
+/// update, so the earlier revision is cut off just the same, and the file is rebuilt.
+#[test]
+fn a_hybrid_update_without_prev_is_rebuilt_too() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false))).expect("the unlinked file opens");
+    assert_eq!(page_tree_pages(&doc).len(), 3);
+    assert!(doc.rebuilt_unlinked_update(), "{:?}", doc.repair_log());
+    let linked = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.rebuilt_unlinked_update() && linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+}

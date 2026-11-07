@@ -461,4 +461,20 @@ mod unlinked_update_tests {
         assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
         assert_eq!(linked.links.len(), 1);
     }
+
+    /// A hybrid update's `/XRefStm` stream is part of that update, not an earlier section: without
+    /// `/Prev` the file is rebuilt as the document model rebuilds it, and with it, it isn't.
+    #[test]
+    fn a_hybrid_update_without_prev_is_rebuilt_as_the_document_model_rebuilds_it() {
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false));
+        let info = inspect(bytes.clone(), None).expect("the unlinked hybrid file opens");
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        assert!(pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true));
+        let linked = inspect(bytes.clone(), None).expect("the linked hybrid file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert!(!pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+    }
 }

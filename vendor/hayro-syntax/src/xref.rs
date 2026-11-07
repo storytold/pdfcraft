@@ -56,10 +56,14 @@ pub(crate) enum XRefError {
 pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<(XRef, bool), XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
-    // PdfCraft patch: (hayro-syntax (44)) the sections the chain reached, for the check below.
-    let mut visited = BTreeSet::new();
-    let trailer = populate_xref_impl_inner(data.as_ref(), xref_pos, &mut xref_map, &mut visited)
-        .ok_or(XRefError::Unknown)?;
+    let trailer =
+        populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map).ok_or(XRefError::Unknown)?;
+    // PdfCraft patch: (hayro-syntax (44)) whether the newest section names an earlier one. Its
+    // `/XRefStm` (a hybrid file's stream, §7.5.8.4) belongs to the same update and doesn't count,
+    // as `pdfcraft-cos` doesn't count it.
+    let linked = Reader::new(trailer)
+        .read_with_context::<Dict<'_>>(&ReaderContext::dummy())
+        .is_some_and(|newest| prev_offset(data.as_ref(), &newest, &XrefMap::default()).is_some());
 
     let xref = XRef::new(
         data.clone(),
@@ -72,10 +76,10 @@ pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<(XRef, bool), 
     // §7.5.6, §7.5.8.2) cuts off the revisions before it, and with them the page tree its catalog
     // names (the signed files of PDFBOX-2720 and PDFBOX-2942). The table is rebuilt by scanning
     // the file, as for a broken one, so the page tree is found rather than whatever page
-    // dictionaries `Pages::new_brute_force` turns up. Only when the chain reached that one
-    // section, the file holds another `startxref`, and the page tree can't be read: the
-    // conditions `pdfcraft-cos` rebuilds under, so the two agree on the pages.
-    let cut_off = visited.len() == 1
+    // dictionaries `Pages::new_brute_force` turns up. Only when that section names no earlier
+    // one, the file holds another `startxref`, and the page tree can't be read: the conditions
+    // `pdfcraft-cos` rebuilds under, so the two agree on the pages.
+    let cut_off = !linked
         && xref
             .get::<Dict<'_>>(xref.trailer_data().pages_ref)
             .is_none()
@@ -1012,9 +1016,6 @@ impl XRefEntry {
     }
 }
 
-// PdfCraft patch: (hayro-syntax (44)) `root_xref` reads the chain itself now; the tests still
-// call this.
-#[cfg(test)]
 fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap) -> Option<&'a [u8]> {
     let mut visited = BTreeSet::new();
     populate_xref_impl_inner(data, pos, xref_map, &mut visited)
