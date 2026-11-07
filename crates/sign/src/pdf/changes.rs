@@ -680,12 +680,18 @@ fn same_entries(a: &Dict, b: &Dict, skip: &[&[u8]]) -> bool {
 
 /// Object equality where dictionaries (and stream dictionaries) ignore key order; arrays keep it.
 /// A string is its bytes (ISO 32000-2 §7.3.4.1): written as a literal or as hexadecimal, it is the
-/// same string, so a later save that respells one changes nothing it says. References compare by
-/// object and generation, and stream data byte for byte as stored. The recursion follows the
-/// parsed nesting, which the parser bounds.
+/// same string, so a later save that respells one changes nothing it says. Likewise a number is
+/// its value (§7.3.3: "wherever a real number is expected, an integer may be used instead"), so a
+/// signed `/Rect [20.0 20.0 120.0 40.0]` saved again as `[20 20 120 40]` is the same rectangle.
+/// References compare by object and generation, and stream data byte for byte as stored. The
+/// recursion follows the parsed nesting, which the parser bounds.
 fn same_object(a: &Object, b: &Object) -> bool {
     match (a, b) {
         (Object::String(a), Object::String(b)) => a.bytes == b.bytes,
+        // Compared in i128, where every i64 and every whole real near its range is exact (the cast
+        // saturates far beyond it): no fractional real, NaN or infinity (whose fract is NaN)
+        // equals an integer, nor does the real 2^63 pass for i64::MAX.
+        (Object::Int(i), Object::Real(r)) | (Object::Real(r), Object::Int(i)) => r.fract() == 0.0 && *r as i128 == i128::from(*i),
         (Object::Dict(a), Object::Dict(b)) => same_entries(a, b, &[]),
         (Object::Stream(a), Object::Stream(b)) => a.raw == b.raw && same_entries(&a.dict, &b.dict, &[]),
         (Object::Array(a), Object::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(v, w)| same_object(v, w)),
@@ -1021,6 +1027,55 @@ mod tests {
         let changed = page(vec![("F2", font(&order, "Helvetica")), ("F1", font(&order, "Courier"))], vec![]);
         assert_eq!(page_change_kind(&doc, &doc, &changed, Some(&before)), Some(kind::PAGE_CONTENT));
         assert_eq!(change_kind(&doc, &doc, &changed, Some(&before)), kind::PAGE_CONTENT);
+    }
+
+    /// The page as signed and the same page with its inline resources reordered are each no
+    /// page change at all, stated as `None` rather than only equal to each other, and so is a page
+    /// whose numbers and strings are respelled as well (§7.3.3, §7.3.4.1).
+    #[test]
+    fn reordered_and_respelled_pages_are_no_page_change() {
+        let doc = Document::new_empty();
+        let order = ["Type", "Subtype", "BaseFont", "Encoding"];
+        let mut before = page(vec![("F1", font(&order, "Times-Roman")), ("F2", font(&order, "Helvetica"))], vec![]);
+        before.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(612.0), Object::Real(792.0)]));
+        before.set(
+            b"PieceInfo".to_vec(),
+            Object::Dict(Dict::from_iter([(b"Note".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("signed")))])),
+        );
+        let mut reordered = page(
+            vec![
+                ("F2", font(&["Encoding", "BaseFont", "Type", "Subtype"], "Helvetica")),
+                ("F1", font(&["BaseFont", "Subtype", "Encoding", "Type"], "Times-Roman")),
+            ],
+            vec![],
+        );
+        reordered.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Real(0.0), Object::Int(0), Object::Int(612), Object::Int(792)]));
+        reordered.set(
+            b"PieceInfo".to_vec(),
+            Object::Dict(Dict::from_iter([(b"Note".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: b"signed".to_vec(), hex: true }))])),
+        );
+        assert_eq!(page_change_kind(&doc, &doc, &before, Some(&before)), None);
+        assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), None);
+        assert_eq!(page_change_kind(&doc, &doc, &before, Some(&reordered)), None);
+
+        // A real that is not the integer it replaced is a moved box.
+        let mut moved = reordered.clone();
+        moved.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(612.5), Object::Int(792)]));
+        assert_eq!(page_change_kind(&doc, &doc, &moved, Some(&before)), Some(kind::PAGE_CONTENT));
+    }
+
+    /// Numbers compare by value across integer and real, and only when the values are equal.
+    #[test]
+    fn integers_and_reals_compare_by_value() {
+        let same = |a: Object, b: Object| same_object(&a, &b) && same_object(&b, &a);
+        assert!(same(Object::Int(20), Object::Real(20.0)));
+        assert!(same(Object::Int(0), Object::Real(-0.0)));
+        assert!(same(Object::Int(-7), Object::Real(-7.0)));
+        assert!(!same(Object::Int(20), Object::Real(20.5)));
+        assert!(!same(Object::Int(20), Object::Real(f64::NAN)));
+        assert!(!same(Object::Int(i64::MAX), Object::Real(f64::INFINITY)));
+        assert!(!same(Object::Int(i64::MAX), Object::Real(9_223_372_036_854_775_808.0)));
+        assert!(!same(Object::Int(1), Object::Bool(true)));
     }
 
     #[test]

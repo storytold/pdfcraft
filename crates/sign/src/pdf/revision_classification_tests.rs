@@ -359,3 +359,41 @@ fn a_signature_added_with_respelled_strings_is_signing() {
     let restyled = now("<656E2D5553>", "<2F48656C7620313220546620302067>");
     assert_eq!(verdict(&restyled.open(), signed.open(), None), Modification::Allowed(vec![super::kind::FORM_FILL, super::kind::SIGNATURE]));
 }
+
+/// A signed widget whose /Rect was written with reals, filled and saved by PdfCraft's own writer,
+/// which writes a whole real as an integer: the rectangle is the same numbers (ISO 32000-2
+/// §7.3.3, "wherever a real number is expected, an integer may be used instead"), so the save is a
+/// form fill. A rectangle whose numbers did change is still a moved widget.
+#[test]
+fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
+    let field = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Ann) /Rect [20.0 20.0 120.0 40.0] /P 3 0 R >>";
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, field)),
+    ]);
+    let save = |rect: Option<f64>| {
+        let mut doc = signed.open();
+        doc.update_dict(r(5, 0), |w| {
+            w.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("Bob")));
+            if let Some(x) = rect {
+                w.set(b"Rect".to_vec(), Object::Array(vec![Object::Real(x), Object::Real(20.0), Object::Real(120.0), Object::Real(40.0)]));
+            }
+        })
+        .unwrap();
+        let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        Document::open(Arc::new(bytes)).unwrap()
+    };
+    let filled = save(None);
+    let rect = filled.resolve(&Object::Ref(r(5, 0))).as_dict().and_then(|w| w.get(b"Rect").cloned());
+    assert_eq!(
+        rect,
+        Some(Object::Array(vec![Object::Int(20), Object::Int(20), Object::Int(120), Object::Int(40)])),
+        "the writer respells whole reals"
+    );
+    assert_eq!(verdict(&filled, signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let moved = save(Some(20.5));
+    assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
+}
