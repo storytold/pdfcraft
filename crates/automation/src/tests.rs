@@ -578,3 +578,35 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn text_extract_html_has_one_budget_across_pages() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let args = json!({ "doc": id.0, "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    assert_eq!(full["html_truncated"], false);
+    let sizes: Vec<usize> = full["pages"].as_array().unwrap().iter().map(|p| p["html"].as_str().unwrap().len()).collect();
+    assert!(sizes.iter().all(|n| *n > 0), "{full}");
+    // Room for two pages: the third gets no HTML, and the call says so.
+    let capped = a.text_extract_within(&Args(&args), sizes[0] + sizes[1] + sizes[2] - 1).unwrap();
+    let pages = capped["pages"].as_array().unwrap();
+    assert_eq!(capped["html_truncated"], true);
+    assert_eq!(pages[1]["html"], full["pages"][1]["html"]);
+    assert_eq!(pages[2]["html"], "");
+    assert_eq!(pages[2]["styles_incomplete"], true);
+    assert_eq!(pages[2]["text"], "Page 3", "the plain text is not capped by the HTML budget");
+    // Plain text alone says nothing about HTML.
+    assert!(a.text_extract(&Args(&json!({ "doc": id.0 }))).unwrap().get("html_truncated").is_none());
+    // A smaller page after the one that overflowed still gets none: "Page 1" fits what "Page 10"
+    // did not.
+    let id = search_document(&mut a, 10);
+    let args = json!({ "doc": id.0, "pages": [10, 1], "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    let (ten, one) = (full["pages"][0]["html"].as_str().unwrap().len(), full["pages"][1]["html"].as_str().unwrap().len());
+    assert!(one < ten, "{full}");
+    let capped = a.text_extract_within(&Args(&args), ten - 1).unwrap();
+    assert_eq!(capped["pages"][0]["html"], "");
+    assert_eq!(capped["pages"][1]["html"], "", "no HTML after the budget ran out: {capped}");
+    assert_eq!(capped["pages"][1]["styles_incomplete"], true);
+}

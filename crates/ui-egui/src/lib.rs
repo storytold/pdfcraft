@@ -255,6 +255,10 @@ struct PendingOpen {
     display_override: Option<(canvas::PageLayout, bool)>,
 }
 
+/// Puts `(html, plain_text)` on a clipboard; `false` when it couldn't, and plain-text Copy is
+/// used instead.
+pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
+
 pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
@@ -598,6 +602,13 @@ pub struct PdfCraftApp {
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
     pub system_clipboard: bool,
+    /// Where Copy with formatting puts its HTML and the plain alternative instead of the system
+    /// clipboard, when `system_clipboard` is on (tests).
+    pub html_clipboard_override: Option<HtmlClipboard>,
+    /// The system clipboard Copy with formatting writes to, kept open so that X11 goes on
+    /// serving the copy after the frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    os_clipboard: Option<arboard::Clipboard>,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
     /// Attach file: the file to attach instead of asking (tests, automation).
