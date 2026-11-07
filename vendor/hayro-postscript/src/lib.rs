@@ -66,13 +66,24 @@ impl<'a> Scanner<'a> {
     /// CMap name with spaces in it) instead of stopping there. Every failure moves forward, one
     /// failure per unreadable token, and what a failed read went through (an unclosed string,
     /// to the end of the data) is not read again, so a loop over this ends and reads the data
-    /// about once.
+    /// about once. A number that can't be read is skipped to the end of its token: its tail
+    /// (`beginbfchar` in `1beginbfchar`) is not read as a token of its own.
     pub fn parse_object_or_skip(&mut self) -> Result<Object<'a>> {
         // The whitespace and comments before the token are not the token: skipped first, they
         // don't count as progress, so a token after a space fails once, not twice.
         object::skip_whitespace_and_comments(&mut self.reader);
         let start = self.reader.offset();
+        // `object::read` reads a token starting with one of these bytes as a number.
+        let number = matches!(
+            self.reader.peek_byte(),
+            Some(b'.' | b'+' | b'-' | b'0'..=b'9')
+        );
         let read = object::read(&mut self.reader);
+        // A number read stops at the first byte that can't be part of a number, which may be
+        // inside the token; the rest of the token goes with it.
+        if read.is_err() && number {
+            self.reader.forward_while(reader::is_regular);
+        }
         if read.is_err() && self.reader.offset() <= start {
             self.reader
                 .jump(start.saturating_add(1).min(self.reader.data.len()));
@@ -212,6 +223,21 @@ endcmap"#;
             Ok(Object::Name(Name::new(b"B", true)))
         );
         assert!(s.parse_object_or_skip().is_err());
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"C", true)))
+        );
+        assert!(s.at_end());
+    }
+
+    /// PdfCraft patch (2) test: a number that can't be read fails once with the rest of its
+    /// token, which is not read as a name of its own; the tokens after it still read.
+    #[test]
+    fn parse_object_or_skip_skips_the_rest_of_an_unreadable_number() {
+        let mut s = Scanner::new(b"1beginbfchar 2.5.3x 16#zz! -x /C");
+        for _ in 0..4 {
+            assert!(s.parse_object_or_skip().is_err());
+        }
         assert_eq!(
             s.parse_object_or_skip(),
             Ok(Object::Name(Name::new(b"C", true)))

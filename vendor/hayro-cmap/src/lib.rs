@@ -1196,6 +1196,17 @@ endbfchar
         }
     }
 
+    #[test]
+    fn a_number_run_into_an_operator_does_not_start_its_mappings() {
+        // `1beginbfchar` is one token, not `1` and `beginbfchar`: the pairs after it are not
+        // mappings, and the well-formed block after them still reads.
+        let cmap = parse_with_preamble(
+            b"1beginbfchar <41> <0058> endbfchar\n1 beginbfchar <42> <0059> endbfchar",
+        );
+        assert_eq!(cmap.lookup_bf_string(0x41), None);
+        assert_eq!(cmap.lookup_bf_string(0x42), Some(BfString::Char('Y')));
+    }
+
     /// A CMap with `count` unreadable tokens, each after a space, before one `bfchar` mapping.
     fn mapping_after_unreadable_tokens(count: usize) -> Option<CMap> {
         let mut data = PREAMBLE.to_vec();

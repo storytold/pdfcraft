@@ -9648,8 +9648,9 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let flood = format!("{body}{}", "-".repeat(1 << 16));
     assert!(CMap::parse(flood.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x2B).is_some()));
     // A run past the limit before the mappings ends the scan before them, and a CMap that read
-    // no mappings, like one of unreadable tokens only, reports failure.
-    let flood_first = format!("{}\n{body}", "-".repeat(1025));
+    // no mappings, like one of unreadable tokens only, reports failure. (A run of `-` with
+    // nothing between them is one token, as in PostScript, so these are spaced.)
+    let flood_first = format!("{}\n{body}", "- ".repeat(1025));
     assert!(CMap::parse(flood_first.as_bytes(), |_| None).is_none());
     assert!(CMap::parse("-".repeat(1 << 16).as_bytes(), |_| None).is_none());
     // Unclosed strings after the mappings: the scan ends and keeps them. (That the first one,
