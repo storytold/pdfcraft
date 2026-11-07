@@ -16,7 +16,8 @@ const MAX_FORM_DEPTH: usize = 12;
 /// A picture on a page, with its index in [`Document::page_images`].
 pub type PagePicture = (usize, pdfcraft_edit::PageImage);
 
-/// The topmost of `pictures` under user-space point `at`.
+/// The topmost of `pictures` under user-space point `at` (`[x, y]`). `pictures` is bottom first,
+/// as [`Document::page_pictures_job`] lists them, so the last one that holds `at` wins.
 pub fn picture_at(pictures: &[PagePicture], at: [f64; 2]) -> Option<&PagePicture> {
     pictures.iter().rev().find(|(_, image)| image.contains(at))
 }
@@ -52,8 +53,13 @@ impl Document {
         })
     }
 
-    /// Work that lists the pictures on `page`, for another thread: it reads every drawing operator
-    /// on the page, seconds on a dense one. Look a point up with [`picture_at`].
+    /// Work that lists the pictures on `page`, bottom first, for another thread: it reads every
+    /// drawing operator on the page, seconds on a dense one, so it must not run on the window
+    /// thread. Look a point up with [`picture_at`].
+    ///
+    /// `None` when the document can't be read. The work reads the document as it is now: later
+    /// edits aren't seen (key its answer by [`Document::edit_generation`]). It returns no pictures
+    /// for a page that doesn't exist or can't be read.
     pub fn page_pictures_job(&self, page: usize) -> Option<impl FnOnce() -> Vec<PagePicture> + Send + 'static> {
         let cos = self.editor.as_ref()?.cos.clone();
         Some(move || crate::guard(|| pictures(&cos, page)).unwrap_or_default())

@@ -73,7 +73,11 @@ type PictureKey = (usize, u64);
 
 /// The pictures of the page last asked about, found on their own thread: the search reads every
 /// drawing operator on the page, seconds on a dense one. A small file answers on the spot, so its
-/// menu and selection don't flicker.
+/// menu and selection don't flicker. The web build has no threads, so there every search runs on
+/// the spot, as before.
+///
+/// One search at a time: a page left while it is read is read to the end before the next one
+/// starts (the read can't be stopped part-way).
 #[derive(Default)]
 pub(crate) struct PagePictures {
     /// The pictures of the key's page.
@@ -143,6 +147,7 @@ mod picture_tests {
     /// A search that takes its time doesn't hold the window: starting and polling it return before
     /// the search is let go, and the answer is picked up when it comes.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_slow_page_does_not_hold_up_the_window() {
         let (release, wait) = std::sync::mpsc::channel::<()>();
         // Lets the search go in the end, should it run on this thread.
@@ -160,7 +165,9 @@ mod picture_tests {
             Vec::new()
         });
         pictures.poll();
-        assert_ne!(ran.recv().unwrap(), caller, "the search must not run on the calling thread");
+        // A search that never ran (its thread couldn't start) fails the test rather than hanging it.
+        let ran_on = ran.recv_timeout(std::time::Duration::from_secs(10)).expect("the search ran");
+        assert_ne!(ran_on, caller, "the search must not run on the calling thread");
         let _ = release.send(());
         for _ in 0..500 {
             std::thread::sleep(std::time::Duration::from_millis(10));
