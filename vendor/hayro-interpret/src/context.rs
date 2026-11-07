@@ -182,6 +182,10 @@ pub struct Context<'a> {
     /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
     /// §10.4.2.3) rather than through the CMYK profile used for display.
     pub(crate) luminosity_in_device_cmyk: bool,
+    /// PdfCraft patch (89): the form XObjects being drawn, outermost first. A form that is
+    /// already on it draws itself (directly or through other forms, patterns or glyphs) and is
+    /// skipped. At most `MAX_NESTED_INTERPRETATION_DEPTH + 1` long: each form on it is nested.
+    forms_drawing: Vec<hayro_syntax::object::ObjectIdentifier>,
 }
 
 /// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
@@ -264,6 +268,35 @@ impl<'a> Context<'a> {
             skipped_saves: Vec::new(),
             stream_floor: 0,
             luminosity_in_device_cmyk: false,
+            forms_drawing: Vec::new(),
+        }
+    }
+
+    /// PdfCraft patch (89): begins drawing the form `id`; `false` when that form is already
+    /// being drawn, so drawing it again would never end (ISO 32000-2 §8.10.1: a form is a
+    /// self-contained description; one that contains itself describes nothing finite). The
+    /// skip is reported as `InterpreterWarning::ContentTruncated`. A form without an object
+    /// number can't be told apart and is only bounded by the nesting limits.
+    pub(crate) fn enter_form(
+        &mut self,
+        id: Option<hayro_syntax::object::ObjectIdentifier>,
+    ) -> bool {
+        let Some(id) = id else {
+            return true;
+        };
+        if self.forms_drawing.contains(&id) {
+            warn!("form XObject draws itself; the inner drawing is skipped");
+            CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+            return false;
+        }
+        self.forms_drawing.push(id);
+        true
+    }
+
+    /// PdfCraft patch (89): ends drawing a form begun with `enter_form`.
+    pub(crate) fn leave_form(&mut self, id: Option<hayro_syntax::object::ObjectIdentifier>) {
+        if id.is_some() {
+            self.forms_drawing.pop();
         }
     }
 
