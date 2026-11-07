@@ -198,6 +198,9 @@ impl Automation {
             {
                 v["border_shape"] = json!(shape.name().to_ascii_lowercase());
             }
+            if c.subtype == "Highlight" && doc.comment_props(c.page, c.index).and_then(|p| p.round_corners).unwrap_or(false) {
+                v["round"] = json!(true);
+            }
             // How opaque it is drawn: as a whole, or its fill and text each at their own.
             // Not for replies, which are drawn with the comment they answer.
             if !c.is_reply()
@@ -480,6 +483,12 @@ impl Automation {
             }
             style.border_shape = b;
         }
+        if let Some(round) = a.opt_bool("round")? {
+            if kind != "highlight" {
+                return Err(ToolError::InvalidArgs("round is for a highlight".into()));
+            }
+            style.round_corners = round;
+        }
         let contents = a.opt_str("contents")?.unwrap_or_default().to_string();
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         // Replace Text: the struck-out text and a grouped caret holding `contents`.
@@ -742,6 +751,14 @@ impl Automation {
         }
         if let Some(shape) = border_shape(a)? {
             edits.push(Edit::BorderShapeAnnotation { page, index, shape });
+        }
+        if let Some(round) = a.opt_bool("round")? {
+            let doc = self.doc(a)?;
+            let target = doc.info.annotations.iter().find(|c| c.page == page && c.index == index);
+            if !target.is_some_and(|c| c.subtype == "Highlight") {
+                return Err(ToolError::InvalidArgs("round is for a highlight".into()));
+            }
+            edits.push(Edit::RoundCornersAnnotation { page, index, round });
         }
         // After `opacity`, which sets the whole comment's.
         let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);

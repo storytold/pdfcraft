@@ -40,6 +40,11 @@ real_name = "James Locke"
 display_name = "James Locke"
 sync_github_name = false
 
+[people.shabbirdudhiya]
+real_name = "Shabbir Dudhiyawala"
+display_name = "shabbirdudhiya"
+sync_github_name = false
+
 [people.switch87]
 real_name = "Gert Pellin"
 display_name = "Gert Pellin"

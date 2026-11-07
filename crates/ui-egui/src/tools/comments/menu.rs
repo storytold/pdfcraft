@@ -397,6 +397,12 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             }
         });
     }
+    if tool == CommentTool::Highlight {
+        let label = if style.round_corners { tl!("Round corners: on") } else { tl!("Round corners") };
+        if icons::button(ui, "circle", 32.0, style.round_corners, label).clicked() {
+            prefs.set_round_corners(tool, !style.round_corners);
+        }
+    }
     selected_color
 }
 

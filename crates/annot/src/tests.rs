@@ -2779,3 +2779,70 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// Round corners mode on highlights: persistence, appearance streams, normalization, and validation.
+#[test]
+fn highlight_round_corners_appearance_and_persistence() {
+    let mut doc = fixture();
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let mut item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] });
+    // Default is square corners (round_corners = false)
+    let square_idx = add_annotation(&mut doc, &item, &meta("h1")).unwrap();
+
+    // With round_corners = true
+    item.style.round_corners = true;
+    let round_idx = add_annotation(&mut doc, &item, &meta("h2")).unwrap();
+
+    let doc2 = reopen(&doc);
+    let all = list(&doc2, 0);
+
+    let square_dict = &all[square_idx];
+    assert!(!square_dict.contains(b"PCRoundCorners"));
+    let square_ap = ap_content(&doc2, square_dict);
+    // Square highlight uses lines: m ... l ... l ... l h f
+    assert!(square_ap.contains(" m ") && square_ap.contains(" l ") && !square_ap.contains(" c "));
+    assert_eq!(props(&doc2, 0, square_idx).unwrap().round_corners, Some(false));
+
+    let round_dict = &all[round_idx];
+    assert_eq!(round_dict.get(b"PCRoundCorners"), Some(&Object::Bool(true)));
+    let round_ap = ap_content(&doc2, round_dict);
+    // Rounded highlight uses Bézier curves: contains " c " operator
+    assert!(round_ap.contains(" c ") && round_ap.contains(" h f"));
+    assert_eq!(props(&doc2, 0, round_idx).unwrap().round_corners, Some(true));
+
+    // Test modifying via set_style
+    let mut doc3 = doc2;
+    // Turn off round corners on round_idx
+    let mut change = StyleChange::default();
+    change.round_corners = Some(false);
+    set_style(&mut doc3, 0, round_idx, change, &meta("")).unwrap();
+    let p_after = props(&doc3, 0, round_idx).unwrap();
+    assert_eq!(p_after.round_corners, Some(false));
+
+    // Turn on round corners on square_idx
+    let mut change2 = StyleChange::default();
+    change2.round_corners = Some(true);
+    set_style(&mut doc3, 0, square_idx, change2, &meta("")).unwrap();
+    let p2_after = props(&doc3, 0, square_idx).unwrap();
+    assert_eq!(p2_after.round_corners, Some(true));
+
+    // CCW QuadPoints (§12.5.6.10): TL, BL, BR, TR normalized to Acrobat Z-order without a bow-tie
+    let ccw_q = [72.0, 712.0, 72.0, 700.0, 200.0, 700.0, 200.0, 712.0];
+    let mut ccw_item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![ccw_q] });
+    ccw_item.style.round_corners = true;
+    let ccw_idx = add_annotation(&mut doc3, &ccw_item, &meta("ccw")).unwrap();
+    let ccw_ap = ap_content(&doc3, &list(&doc3, 0)[ccw_idx]);
+    assert_eq!(ccw_ap, round_ap, "CCW QuadPoints must normalize to identical appearance stream as Z-order");
+
+    // Degenerate / zero-height quad falls back to straight quadrilateral (no Bézier 'c' operator)
+    let degen_q = [72.0, 700.0, 200.0, 700.0, 72.0, 700.0, 200.0, 700.0];
+    let mut degen_item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![degen_q] });
+    degen_item.style.round_corners = true;
+    let degen_idx = add_annotation(&mut doc3, &degen_item, &meta("degen")).unwrap();
+    let degen_ap = ap_content(&doc3, &list(&doc3, 0)[degen_idx]);
+    assert!(degen_ap.contains(" l ") && !degen_ap.contains(" c "), "degenerate quad falls back to straight lines");
+
+    // Rejecting round_corners on non-highlight
+    let rect_idx = add_annotation(&mut doc3, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("r")).unwrap();
+    assert!(set_style(&mut doc3, 0, rect_idx, StyleChange { round_corners: Some(true), ..Default::default() }, &meta("")).is_err());
+}

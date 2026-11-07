@@ -366,6 +366,13 @@ impl CommentPrefs {
         }
     }
 
+    /// Whether new highlights have rounded corners like paper.
+    pub fn set_round_corners(&mut self, tool: CommentTool, round: bool) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.round_corners = tool == CommentTool::Highlight && round;
+        }
+    }
+
     /// The tool's fill's own opacity (0–100 %) and a text box's or callout's text's (10–100 %),
     /// for new comments; `None`: as the tool's opacity.
     pub fn set_part_opacity(&mut self, tool: CommentTool, fill: Option<f64>, text: Option<f64>) {

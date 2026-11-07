@@ -69,6 +69,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
         | Edit::BorderShapeAnnotation { .. }
+        | Edit::RoundCornersAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -582,7 +583,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 doc,
                 *page,
                 *index,
-                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone() },
+                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone(), round_corners: None },
                 &cx.meta(),
             )?;
         }
@@ -591,6 +592,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
         Edit::BorderColorAnnotation { page, index, color } => pdfcraft_annot::set_border_color(doc, *page, *index, *color, &cx.meta())?,
         Edit::BorderShapeAnnotation { page, index, shape } => pdfcraft_annot::set_border_shape(doc, *page, *index, *shape, &cx.meta())?,
+        Edit::RoundCornersAnnotation { page, index, round } => {
+            pdfcraft_annot::set_style(
+                doc,
+                *page,
+                *index,
+                pdfcraft_annot::StyleChange { color: None, opacity: None, width: None, endings: None, round_corners: Some(*round) },
+                &cx.meta(),
+            )?;
+        }
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }

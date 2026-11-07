@@ -236,9 +236,12 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"Open".to_vec(), Object::Bool(false));
             popup = Some([rect[2] + 10.0, rect[3] - 120.0, rect[2] + 210.0, rect[3]]);
         }
-        Shape::TextMarkup { quads, .. } => {
+        Shape::TextMarkup { kind, quads } => {
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
+            if *kind == Markup::Highlight && style.round_corners {
+                d.set(b"PCRoundCorners".to_vec(), Object::Bool(true));
+            }
         }
         Shape::Redact { quads, overlay, look } => set_redaction_properties(&mut d, style, quads, overlay, look),
         Shape::Rectangle { .. } | Shape::Oval { .. } => {

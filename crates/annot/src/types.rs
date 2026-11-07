@@ -598,6 +598,8 @@ pub struct Style {
     pub fill_opacity: Option<f64>,
     /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
     pub text_opacity: Option<f64>,
+    /// Whether a highlight's corners are drawn rounded like paper (`/PCRoundCorners`).
+    pub round_corners: bool,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -607,11 +609,14 @@ pub struct StyleChange {
     pub opacity: Option<f64>,
     pub width: Option<f64>,
     pub endings: Option<Vec<LineEnding>>,
+    /// Whether highlight corners are drawn rounded (`Some(true)`), square (`Some(false)`), or left unchanged (`None`).
+    pub round_corners: Option<bool>,
 }
 
 impl StyleChange {
+    /// Create a style change with standard properties, leaving rounded corners unchanged.
     pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
-        Self { color, opacity, width, endings }
+        Self { color, opacity, width, endings, round_corners: None }
     }
 }
 
@@ -638,6 +643,7 @@ impl Default for Style {
             text_opacity: None,
             border_color: None,
             border_shape: BorderShape::Rectangle,
+            round_corners: false,
         }
     }
 }

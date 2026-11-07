@@ -133,6 +133,9 @@ impl PdfCraftApp {
         if let Some(shape) = drawn_border_shape(p) {
             self.comment_prefs.set_border_shape(tool, shape);
         }
+        if let Some(round) = p.round_corners {
+            self.comment_prefs.set_round_corners(tool, round);
+        }
         // The fill's and text's own opacities where they show (else the opacity is the whole
         // comment's). With neither a border nor a fill the text is the whole comment: its drawn
         // opacity, which Comment Properties shows, is the whole comment's default.
@@ -293,6 +296,11 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
     {
         out.push(Edit::BorderShapeAnnotation { page, index, shape });
     }
+    if t.restylable && t.round_corners.is_some() && e.round_corners != o.round_corners {
+        if let Some(round) = e.round_corners {
+            out.push(Edit::RoundCornersAnnotation { page, index, round });
+        }
+    }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
     let icon = (e.icon != o.icon).then_some(e.icon).flatten().filter(|_| t.icon.is_some());
@@ -386,6 +394,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                             })
                             .response
                             .labelled_by(label.id);
+                        ui.end_row();
+                    }
+                    if let Some(round) = e.round_corners.as_mut() {
+                        ui.label(tl!("Corners"));
+                        ui.checkbox(round, tl!("Round corners"));
                         ui.end_row();
                     }
                     if e.fillable {

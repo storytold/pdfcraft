@@ -2204,6 +2204,47 @@ fn text_borders_take_an_oval_or_a_circle_through_the_tools() {
     ));
 }
 
+/// Highlights support optional rounded corners through comment_add, comment_edit, and comment_list.
+#[test]
+fn highlight_round_corners_through_the_tools() {
+    let dir = workdir("highlight-round-corners");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let square =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "highlight", "find": "Page", "contents": "Square" }))["comment"].clone();
+    let round =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "highlight", "find": "1", "contents": "Round", "round": true }))["comment"]
+            .clone();
+
+    let list = |a: &mut Automation| ok(a, "comment_list", json!({ "doc": doc, "page": 1 }))["comments"].as_array().unwrap().clone();
+    let comments = list(&mut a);
+    let sq_comment = comments.iter().find(|c| c["contents"] == "Square").unwrap();
+    let rd_comment = comments.iter().find(|c| c["contents"] == "Round").unwrap();
+    assert_eq!(sq_comment.get("round"), None);
+    assert_eq!(rd_comment["round"], true);
+
+    // Edit round highlight to square corners
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": round["page"], "index": round["index"], "round": false }));
+    let comments_after = list(&mut a);
+    let rd_after = comments_after.iter().find(|c| c["contents"] == "Round").unwrap();
+    assert_eq!(rd_after.get("round"), None);
+
+    // Edit square highlight to round corners
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": square["page"], "index": square["index"], "round": true }));
+    let comments_after2 = list(&mut a);
+    let sq_after = comments_after2.iter().find(|c| c["contents"] == "Square").unwrap();
+    assert_eq!(sq_after["round"], true);
+
+    // Refuse round on non-highlight tools
+    let refused = a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 50, 50], "round": true }));
+    assert!(matches!(refused, Err(ToolError::InvalidArgs(_))));
+
+    // Refuse round in comment_edit on non-highlight
+    let rect = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 50, 50] }))["comment"].clone();
+    let refused_edit = a.call("comment_edit", &json!({ "doc": doc, "page": rect["page"], "index": rect["index"], "round": true }));
+    assert!(matches!(refused_edit, Err(ToolError::InvalidArgs(_))));
+}
+
 /// A rectangle's fill and a text box's text each take an opacity of their own through the tools
 /// (the line or border keeps the comment's `opacity`); `opacity` sets the whole comment's again.
 #[test]

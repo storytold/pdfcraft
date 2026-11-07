@@ -293,6 +293,12 @@ pub enum Edit {
         index: usize,
         shape: BorderShape,
     },
+    /// Give a highlight comment rounded or square corners.
+    RoundCornersAnnotation {
+        page: usize,
+        index: usize,
+        round: bool,
+    },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
         page: usize,

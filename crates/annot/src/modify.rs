@@ -704,7 +704,7 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 /// Change a comment's colour, opacity (of the whole comment), line width and/or line endings, and
 /// redraw it.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
+    let StyleChange { color, opacity, width, endings, round_corners } = change;
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
@@ -722,6 +722,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
         if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
             return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
         }
+    }
+    if round_corners.is_some() && subtype != "Highlight" {
+        return Err(AnnotError::Invalid("only highlights have round corners".into()));
     }
     refuse_foreign_text(doc, &d)?;
     let free_text = subtype == "FreeText";
@@ -774,6 +777,15 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
                 }
             } else if let (Some(start), Some(end)) = (ends.first(), ends.get(1)) {
                 d.set(b"LE".to_vec(), ending_pair(*start, *end));
+            }
+        }
+        if let Some(round) = round_corners {
+            if d.name(b"Subtype") == Some(b"Highlight") {
+                if round {
+                    d.set(b"PCRoundCorners".to_vec(), Object::Bool(true));
+                } else {
+                    d.remove(b"PCRoundCorners");
+                }
             }
         }
         ensure_ending_room(d);
