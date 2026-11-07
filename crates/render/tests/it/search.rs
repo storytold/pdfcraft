@@ -110,3 +110,57 @@ fn long_repeated_prefix_search_preserves_the_last_match_and_limit() {
     assert_eq!(text.find_opts_limited(&query, false, false, 1), vec![126977..131073]);
     assert!(text.find(&format!("{}c", "a".repeat(4095))).is_empty());
 }
+
+/// Horizontal glyphs of `size` points, one per character, each line `lead` points below the
+/// last and starting at `x`: (x, first line's top, text) per line.
+fn laid_out(lines: &[(f32, f32, &str)], size: f32) -> PageText {
+    let mut glyphs = Vec::new();
+    for &(x0, top, text) in lines {
+        for (k, c) in text.chars().enumerate() {
+            let x = x0 + size * k as f32;
+            let (y0, y1) = (top, top + size);
+            glyphs.push(TextGlyph {
+                text: c.into(),
+                rect: [x, y0, x + size, y1],
+                quad: [[x, y1], [x + size, y1], [x + size, y0], [x, y0]],
+                direction: [1.0, 0.0],
+            });
+        }
+    }
+    pdfcraft_render::text::layout(glyphs)
+}
+
+#[test]
+fn a_chinese_or_japanese_word_divided_by_a_line_end_is_found_on_both_lines() {
+    // "検知機構" wraps after "検知" (pdf.js #15340); "ソレノイド" after "ソレ".
+    let text = laid_out(&[(10.0, 10.0, "装置の検知"), (10.0, 25.0, "機構です"), (10.0, 40.0, "ソレ"), (10.0, 55.0, "ノイド")], 10.0);
+    assert_eq!(text.line_of.iter().copied().max(), Some(3));
+    let hits = text.find("検知機構");
+    assert_eq!(hits, vec![3..7]);
+    // One highlight per line, the end of the first line and the start of the second.
+    assert_eq!(text.line_rects(hits[0].clone()), vec![[40.0, 10.0, 60.0, 20.0], [10.0, 25.0, 30.0, 35.0]]);
+    assert_eq!(text.find("ソレノイド"), vec![9..14]);
+    // The query typed with a space still finds nothing across the joined break.
+    assert!(text.find("検知 機構").is_empty());
+    // Copied text keeps the line break.
+    assert_eq!(text.text_of(3..7), "検知\n機構");
+}
+
+#[test]
+fn a_line_break_stays_a_space_beside_latin_or_hangul_and_between_side_by_side_text() {
+    // Latin and Korean separate words with spaces: the line end is one.
+    let latin = laid_out(&[(10.0, 10.0, "abc"), (10.0, 25.0, "def")], 10.0);
+    assert_eq!(latin.find("abc def"), vec![0..6]);
+    assert!(latin.find("abcdef").is_empty());
+    let mixed = laid_out(&[(10.0, 10.0, "PDF"), (10.0, 25.0, "検知")], 10.0);
+    assert_eq!(mixed.find("PDF 検知"), vec![0..5]);
+    assert!(mixed.find("PDF検知").is_empty());
+    let hangul = laid_out(&[(10.0, 10.0, "한국"), (10.0, 25.0, "어")], 10.0);
+    assert_eq!(hangul.find("한국 어"), vec![0..3]);
+    assert!(hangul.find("한국어").is_empty());
+    // Two cells on one row read as two lines, but the second does not continue the first.
+    let row = laid_out(&[(10.0, 10.0, "東京"), (200.0, 10.0, "大阪")], 10.0);
+    assert_eq!(row.line_of, vec![0, 0, 1, 1]);
+    assert!(row.find("東京大阪").is_empty());
+    assert_eq!(row.find("東京 大阪"), vec![0..4]);
+}
