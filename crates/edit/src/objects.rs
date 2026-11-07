@@ -19,6 +19,7 @@ pub enum ObjectKind {
     Added,
     Text,
     Image,
+    Graphic,
 }
 
 impl ObjectKind {
@@ -27,6 +28,7 @@ impl ObjectKind {
             Self::Added => "added",
             Self::Text => "text",
             Self::Image => "image",
+            Self::Graphic => "graphic",
         }
     }
 }
@@ -89,6 +91,14 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             text: None,
         });
     }
+    for (index, graphic) in crate::graphics::page_graphics(doc, page)?.into_iter().enumerate() {
+        objects.push(EditableObject {
+            target: ObjectTarget { kind: ObjectKind::Graphic, index },
+            rect: graphic.rect,
+            content_type: "graphic",
+            text: None,
+        });
+    }
     if objects.len() > MAX_PAGE_OBJECTS {
         return Err(EditError::Invalid("this page has too many objects to select together".into()));
     }
@@ -125,6 +135,7 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     crate::text::translate_blocks(&mut work, page, &indexes(ObjectKind::Text), offset)?;
     crate::images::translate_images(&mut work, page, &indexes(ObjectKind::Image), offset)?;
     translate_added(&mut work, page, &indexes(ObjectKind::Added), offset)?;
+    crate::graphics::translate_graphics(&mut work, page, &indexes(ObjectKind::Graphic), offset)?;
     // Placement operators add to size/depth/work budgets, and moving paragraphs can change
     // their grouping. Keep the resulting inventory usable; refuse before swapping otherwise.
     editable_objects(&work, page)?;

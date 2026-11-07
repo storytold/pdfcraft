@@ -3101,7 +3101,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
-    let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    // A crop drag needs the wheel too: the page must scroll while the button stays down so a
+    // rectangle can span more than the visible part of a page.
+    let crop_wheel = tool == QuickTool::Crop && view.crop_drag.is_some();
+    let selection_wheel =
+        (view.selection_drag || crop_wheel) && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
         added: &added,
         allowed,

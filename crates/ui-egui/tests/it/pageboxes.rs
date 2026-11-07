@@ -119,3 +119,45 @@ fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");
     assert_eq!(size(&h, 1), (300.0, 400.0));
 }
+
+/// While a crop is being dragged, the wheel scrolls the page (a drag makes egui's ScrollArea
+/// ignore it). The rectangle's start must stay on the page point the drag began at, not on the
+/// screen point, so the selection may span the page top and a part below the fold.
+#[test]
+fn the_crop_start_stays_on_its_page_point_while_the_wheel_scrolls() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.crop"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let a = r.min + r.size() * egui::vec2(0.25, 0.30);
+    let b = r.min + r.size() * egui::vec2(0.75, 0.45);
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(2);
+    h.hover_at(b);
+    h.run_steps(2);
+    // Scroll down 100 px with the button held: the page moves up under the pointer.
+    for _ in 0..4 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -25.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(1);
+    }
+    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < r.top() - 50.0, "the wheel scrolls during the drag");
+    h.drop_at(b);
+    h.run_steps(4);
+    let app = h.state();
+    let p = &app.session.get(app.views[0].id).unwrap().info.pages[0];
+    // The start was 30% down the page: its top edge stays there; scrolling only extends the
+    // selection past the initial 15% drag. Storing the screen position would move the top up
+    // with the content, to about 70% - 100 px.
+    assert!((p.crop[3] - 280.0).abs() < 2.0, "crop top {} is the original page point", p.crop[3]);
+    assert!(p.crop[3] - p.crop[1] > 100.0, "the selection extends below the initial drag: {p:?}");
+    assert!((p.crop[0] - 75.0).abs() < 2.0 && (p.crop[2] - 225.0).abs() < 2.0, "{p:?}");
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Crop page"));
+}
