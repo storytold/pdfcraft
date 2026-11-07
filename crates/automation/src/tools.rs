@@ -148,7 +148,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "paths": {"type":"array","items":{"type":"string"},"minItems":1,"maxItems":1000},
                 "out_dir": {"type":"string"},
                 "steps": {"type":"array","items":{"type":"string","enum":["convert","ocr","optimize"]},"minItems":1,"maxItems":3,"uniqueItems":true},
-                "recursive": {"type":"boolean"}, "stop_on_error": {"type":"boolean"},
+                "recursive": {"type":"boolean"}, "stop_on_error": {"type":"boolean"}, "dry_run": {"type":"boolean"},
                 "ppi": {"type":"number","minimum":9,"maximum":1600},
                 "quality": {"type":"integer","minimum":1,"maximum":100},
                 "dpi": {"type":"number","minimum":72,"maximum":600},
