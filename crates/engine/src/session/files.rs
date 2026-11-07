@@ -57,7 +57,7 @@ impl Session {
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
             SourceKind::Office => {
-                let pdf = crate::office::convert(name, bytes)?;
+                let pdf = Arc::new(crate::office::convert(name, bytes)?);
                 open_source(name, &pdf)?;
                 Ok(pdf)
             }

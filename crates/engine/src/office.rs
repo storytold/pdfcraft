@@ -59,6 +59,33 @@ mod native {
         path.is_file()
     }
 
+    fn scan_for_soffice(dir: &Path, depth: u8) -> Option<PathBuf> {
+        if depth == 0 {
+            return None;
+        }
+        let entries = std::fs::read_dir(dir).ok()?;
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name.eq_ignore_ascii_case("soffice.exe")
+                    && is_executable(&path)
+                {
+                    return Some(path);
+                }
+            } else if path.is_dir() {
+                subdirs.push(path);
+            }
+        }
+        for sub in subdirs {
+            if let Some(found) = scan_for_soffice(&sub, depth - 1) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     /// Locate `soffice` (or `libreoffice`) from `PDFCRAFT_SOFFICE`, a portable folder alongside
     /// the executable, the `PATH`, or a standard OS installation path.
     pub fn find_libreoffice() -> Option<PathBuf> {
@@ -71,6 +98,9 @@ mod native {
         if let Ok(exe) = std::env::current_exe()
             && let Some(exe_dir) = exe.parent()
         {
+            if let Some(found) = scan_for_soffice(exe_dir, 5) {
+                return Some(found);
+            }
             for rel in [
                 "libreoffice/program/soffice.exe",
                 "libreoffice/App/libreoffice/program/soffice.exe",
@@ -147,9 +177,9 @@ mod native {
     pub(super) fn file_url(path: &Path) -> String {
         let p = path.to_string_lossy();
         #[cfg(unix)]
-        let p = p.replace('\', "%5C");
+        let p = p.replace('\\', "%5C");
         #[cfg(not(unix))]
-        let p = p.replace('\', "/");
+        let p = p.replace('\\', "/");
         let p = p.replace('%', "%25")
                  .replace(' ', "%20")
                  .replace('#', "%23")
@@ -352,7 +382,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn file_urls_escape_what_would_break_them() {
-        let url = super::native::file_url(std::path::Path::new("/tmp/my?dir/100%#x\bar"));
+        let url = super::native::file_url(std::path::Path::new(r"/tmp/my?dir/100%#x\bar"));
         assert_eq!(url, "file:///tmp/my%3Fdir/100%25%23x%5Cbar");
     }
 }

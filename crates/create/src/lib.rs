@@ -752,12 +752,10 @@ pub enum SourceKind {
 pub const OFFICE: [&str; 15] = ["doc", "docx", "dot", "dotx", "docm", "odt", "ott", "rtf", "xls", "xlsx", "xlsm", "ods", "ppt", "pptx", "odp"];
 
 /// File extensions Create converts to PDF (images, plain text and Office documents).
-pub const CONVERTIBLE: [&str; 27] = [
-    "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text", "doc", "docx", "dot", "dotx", "docm", "odt", "ott", "rtf",
+pub const CONVERTIBLE: [&str; 28] = [
+    "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text", "doc", "docx", "dot", "dotx", "docm", "odt", "ott", "rtf",
     "xls", "xlsx", "xlsm", "ods", "ppt", "pptx", "odp",
 ];
-/// File extensions Create converts to PDF (images and plain text).
-pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
 
 /// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8
 /// bits per plane. `pcx` says when the rest of the header isn't one it can read.

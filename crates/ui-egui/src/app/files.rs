@@ -180,14 +180,12 @@ impl PdfCraftApp {
                 let name = pending.name.clone();
                 match self.open_converted_pdf(&name, pdf) {
                     Ok(()) => {
-                        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
-                            if let Some(override_rect) = pending.display_override {
-                                if let Some((layout, continuous)) = pending.display_override {
-                                let id = view.id;
-                                view.set_display(layout, continuous);
-                                self.launch_display_target = Some(id);
-                            }
-                            }
+                        if let Some((layout, continuous)) = pending.display_override
+                            && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+                        {
+                            let id = view.id;
+                            view.set_display(layout, continuous);
+                            self.launch_display_target = Some(id);
                         }
                         if let Some(command) = pending.then {
                             self.execute(command);
@@ -747,7 +745,9 @@ impl PdfCraftApp {
     /// The File ▸ Open picker: PDFs, and images and text that become PDFs.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_picker() -> rfd::AsyncFileDialog {
+        let all: Vec<&str> = std::iter::once("pdf").chain(create_ui::CONVERTIBLE.iter().copied()).collect();
         rfd::AsyncFileDialog::new()
+            .add_filter_any_case(tl!("PDF, images and text"), &all)
             .add_filter_any_case("PDF", &["pdf"])
             .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
     }
@@ -757,9 +757,7 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
             pickers::PickFor::Open,
-            rfd::AsyncFileDialog::new()
-                .add_filter_any_case("PDF", &["pdf"])
-                .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
+            Self::open_picker(),
             true,
         );
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.

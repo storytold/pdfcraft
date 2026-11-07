@@ -163,13 +163,14 @@ fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
                 }
             }
             PrepareOutcome::ConvertOffice { name, bytes } => {
+                let reply_clone = reply.clone();
                 let spawn_res = std::thread::Builder::new().name("pdfcraft-office".into()).spawn(move || {
                     let kind = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pdfcraft_engine::office::convert(&name, &bytes))) {
                         Ok(Ok(pdf)) => ResultKind::ConvertedPdf(Arc::new(pdf)),
                         Ok(Err(error)) => ResultKind::Failed(error.to_string()),
                         Err(_) => ResultKind::Failed("opening failed unexpectedly in the background worker".into()),
                     };
-                    let _ = reply.send(ResultMessage { token, kind });
+                    let _ = reply_clone.send(ResultMessage { token, kind });
                     let repaint = {
                         let (lock, _) = &*queue_for_office;
                         lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()
