@@ -6,8 +6,20 @@ thread_local! {
     static LOADING: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Indirect `/Length` values resolved during the current outermost load: a damaged file
     /// retries a parse several ways, and each retry would resolve the same lengths again
-    /// (exponential in the chain of streams whose lengths point at further streams).
-    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    /// (exponential in the chain of streams whose lengths point at further streams). Each is
+    /// kept with whether resolving it read unsaved edits.
+    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, (Option<i64>, bool)>> = std::cell::RefCell::new(HashMap::new());
+    /// Unsaved edits read on this thread (`Document::try_get`, and a `/Length` in `Document::load`).
+    static OVERLAY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Unsaved edits read so far on this thread: a load during which this changes depended on one.
+pub(super) fn overlay_reads() -> u64 {
+    OVERLAY_READS.with(std::cell::Cell::get)
+}
+
+pub(super) fn note_overlay_read() {
+    OVERLAY_READS.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
@@ -28,6 +40,14 @@ impl LoadGuard {
             Some(LoadGuard)
         })
     }
+}
+
+/// What loading a file object gave, kept in the document's cache either way.
+pub(super) type Loaded = Result<Arc<Object>, CosError>;
+
+/// The bytes a load result holds of its own ([`held_bytes`]); a failure holds none.
+pub(super) fn loaded_bytes(loaded: &Loaded, data: &Arc<Vec<u8>>) -> usize {
+    loaded.as_ref().map_or(0, |o| held_bytes(o, data, 0))
 }
 
 impl Drop for LoadGuard {
@@ -59,6 +79,60 @@ pub(super) fn objstm_member(num: i64, offset: i64, first: Option<usize>, len: us
     let num = u32::try_from(num).ok()?;
     let start = first?.checked_add(usize::try_from(offset).ok()?)?;
     (start < len).then_some((num, start))
+}
+
+/// Objects the reader could not read, each with the reason (see `Document::unreadable_objects`).
+/// Bounded: a document records past [`Unreadable::MAX`] of the objects it shows only the fact that
+/// there were more. Entries a clone has edited are hidden from it and do not count, so the whole
+/// list holds at most `MAX` plus the objects edited in clones.
+#[derive(Debug, Default)]
+pub(super) struct Unreadable {
+    pub(super) objects: BTreeMap<u32, (u16, String)>,
+    pub(super) more: bool,
+}
+
+impl Unreadable {
+    pub(super) const MAX: usize = 100;
+    /// Characters of a reason kept: a parser's message can quote the bytes it stopped at.
+    const REASON: usize = 160;
+
+    /// Whether `num` is to be recorded: not listed yet and there is room among the entries the
+    /// asking document still shows (`hidden` are the ones it has edited, as in [`Self::lines`]),
+    /// so a clone's edits never use up its own allowance. A full list notes that there were more,
+    /// so a caller asks this before building the reason.
+    pub(super) fn wants(&mut self, num: u32, hidden: impl Fn(u32) -> bool) -> bool {
+        if self.objects.contains_key(&num) {
+            return false;
+        }
+        if self.objects.keys().filter(|n| !hidden(**n)).count() >= Self::MAX {
+            self.more = true;
+            return false;
+        }
+        true
+    }
+
+    /// Record `num` once; the first reason given is kept.
+    pub(super) fn note(&mut self, num: u32, generation: u16, reason: &str, hidden: impl Fn(u32) -> bool) {
+        if self.wants(num, hidden) {
+            self.objects.insert(num, (generation, reason.chars().take(Self::REASON).collect()));
+        }
+    }
+
+    /// One line per recorded object not `hidden`, then one saying there were more, if there were.
+    pub(super) fn lines(&self, hidden: impl Fn(u32) -> bool) -> Vec<String> {
+        // Clones share the list and each hides its own edits, so the list may hold more than
+        // `MAX` entries in all; each document still shows at most `MAX`.
+        let mut shown = self.objects.iter().filter(|(num, _)| !hidden(**num));
+        let mut lines: Vec<String> = shown
+            .by_ref()
+            .take(Self::MAX)
+            .map(|(num, (generation, reason))| format!("object {num} {generation} could not be read: {reason}"))
+            .collect();
+        if self.more || shown.next().is_some() {
+            lines.push(format!("more objects could not be read; only the first {} are listed", Self::MAX));
+        }
+        lines
+    }
 }
 
 /// Where an overlay slot came from.
@@ -182,7 +256,7 @@ thread_local! {
     pub(super) static SECTION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Parsed objects by number, each with what it holds ([`held_bytes`]) measured once, when it goes
+/// What loading each object gave (a failure as well), by number, each with what it holds ([`held_bytes`]) measured once, when it goes
 /// in, and their sum kept beside them.
 ///
 /// Both caches are bounded by those bytes. Summing them on every read walked every cached object
@@ -191,12 +265,12 @@ thread_local! {
 /// (#5873).
 #[derive(Default)]
 pub(crate) struct ObjectCache {
-    entries: HashMap<u32, (Arc<Object>, usize)>,
+    entries: HashMap<u32, (Loaded, usize)>,
     owned: usize,
 }
 
 impl ObjectCache {
-    pub(crate) fn get(&self, num: &u32) -> Option<&Arc<Object>> {
+    pub(crate) fn get(&self, num: &u32) -> Option<&Loaded> {
         self.entries.get(num).map(|(object, _)| object)
     }
 
@@ -205,8 +279,8 @@ impl ObjectCache {
         self.entries.contains_key(num)
     }
 
-    /// Keep `object` as `num`, which holds `owned` bytes (what [`held_bytes`] says of it).
-    pub(crate) fn insert(&mut self, num: u32, object: Arc<Object>, owned: usize) {
+    /// Keep what loading `num` gave, which holds `owned` bytes ([`loaded_bytes`]).
+    pub(crate) fn insert(&mut self, num: u32, object: Loaded, owned: usize) {
         if let Some((_, before)) = self.entries.insert(num, (object, owned)) {
             self.owned = self.owned.saturating_sub(before);
         }
@@ -232,6 +306,11 @@ impl ObjectCache {
         self.owned = 0;
     }
 
+    /// Drop the cached failures `stale` picks. A failure holds no bytes, so the total stands.
+    pub(crate) fn forget_failures(&mut self, mut stale: impl FnMut(&u32) -> bool) {
+        self.entries.retain(|num, (loaded, _)| loaded.is_ok() || !stale(num));
+    }
+
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&u32) -> bool) {
         self.entries.retain(|num, _| keep(num));
         self.owned = self.entries.values().fold(0usize, |n, (_, owned)| n.saturating_add(*owned));
@@ -239,7 +318,7 @@ impl ObjectCache {
 
     #[cfg(test)]
     pub(crate) fn values(&self) -> impl Iterator<Item = &Arc<Object>> {
-        self.entries.values().map(|(object, _)| object)
+        self.entries.values().filter_map(|(object, _)| object.as_ref().ok())
     }
 }
 
