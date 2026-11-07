@@ -3502,6 +3502,37 @@ fn the_field_appearance_cache_sees_indirect_resources() {
     assert_eq!(redraw(&doc), 1, "the form's indirect /DA");
 }
 
+/// Kids, `/Kids` arrays and `/Type`s given through chains of references, an untyped node and an
+/// untyped leaf with `/Kids null`: the form walk numbers the same page objects, in the same
+/// order, as `pdfcraft_model::pages`, so a widget's page index is the page shown at that index.
+#[test]
+fn page_walk_numbers_the_same_pages_as_the_model() {
+    let objs: Vec<String> = [
+        "<< /Type /Catalog /Pages 2 0 R >>",                // 1
+        "<< /Type /Pages /Kids [3 0 R 10 0 R] /Count 5 >>", // 2
+        "<< /Parent 2 0 R /Kids 11 0 R /Count 4 >>",        // 3: untyped, /Kids via 11 → 12
+        "<< /Type /Page /Parent 3 0 R >>",                  // 4: ONE
+        "<< /Type 13 0 R /Parent 3 0 R /Kids [] >>",        // 5: TWO, an indirect /Type /Page
+        "<< /Parent 3 0 R /Kids null >>",                   // 6: THREE, untyped, /Kids null
+        "<< /Type /Page /Parent 3 0 R >>",                  // 7: FOUR, reached via 14 → 15 → 7
+        "<< /Type /Page /Parent 2 0 R >>",                  // 8: FIVE, reached via 10 → 8
+        "null",                                             // 9
+        "8 0 R",                                            // 10
+        "12 0 R",                                           // 11
+        "[4 0 R 5 0 R 6 0 R 14 0 R]",                       // 12
+        "/Page",                                            // 13
+        "15 0 R",                                           // 14
+        "7 0 R",                                            // 15
+    ]
+    .map(String::from)
+    .to_vec();
+    let doc = document(&objs);
+    let r = |num| ObjRef { num, generation: 0 };
+    let model: Vec<ObjRef> = pdfcraft_model::pages(&doc).iter().map(|p| p.obj).collect();
+    assert_eq!(model, [r(4), r(5), r(6), r(7), r(8)]);
+    assert_eq!(page_refs(&doc), model);
+}
+
 #[test]
 fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     let mut doc = fixture();

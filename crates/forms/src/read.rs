@@ -247,7 +247,10 @@ impl Iterator for PageWalk<'_> {
             };
             let node = kid.as_ref();
             *next += 1;
-            let Some(node) = node else { continue };
+            // A kid may be a reference to an object that holds only a reference (ISO 32000-2
+            // §7.3.10): the node or page is where the chain ends, as `pdfcraft_model::pages` and
+            // the renderer read it, so widget page indices agree.
+            let Some(node) = node.map(|r| final_ref(self.doc, r)) else { continue };
             if self.seen.len() >= 1_000_000 {
                 self.pending.clear();
                 return None;
@@ -257,13 +260,47 @@ impl Iterator for PageWalk<'_> {
             }
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
-            match d.get(b"Kids").map(|k| self.doc.resolve(k)) {
-                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((kids, 0)),
-                _ => return Some(node),
+            // The node's /Kids array, direct or indirect (through a chain of references, as far
+            // as `Document::resolve` follows one); anything else (absent, null, which is the same
+            // as absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
+            let kids = d.get(b"Kids").map(|k| self.doc.resolve(k)).filter(|k| k.as_array().is_some());
+            // A node is /Type /Pages, or has a /Kids array and is not /Type /Page; anything else
+            // is a page, whatever its /Type says (the rule `pdfcraft_model::pages` and the
+            // renderer walk by). /Type is read through references too.
+            let indirect_type = match d.get(b"Type") {
+                Some(r @ Object::Ref(_)) => Some(self.doc.resolve(r)),
+                _ => None,
+            };
+            let ty = match &indirect_type {
+                Some(t) => t.as_name(),
+                None => d.name(b"Type"),
+            };
+            let is_node = match ty {
+                Some(b"Pages") => true,
+                Some(b"Page") => false,
+                _ => kids.is_some(),
+            };
+            if !is_node {
+                return Some(node);
+            }
+            if let Some(kids) = kids {
+                self.pending.push((kids, 0));
             }
         }
         None
     }
+}
+
+/// Where a chain of references starting at `r` ends: `r` itself unless its object is nothing but
+/// a reference, followed as far as `Document::resolve` follows one (32 more), so a cycle stops.
+fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
+    }
+    r
 }
 
 /// The AcroForm dictionary.
