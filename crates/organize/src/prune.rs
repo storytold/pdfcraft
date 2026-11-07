@@ -60,9 +60,9 @@ struct Pruner<'a> {
     /// as drawn ([`Pruner::unread`]): once is enough.
     partly_read: HashSet<Owner>,
     /// Dictionaries something this walk doesn't read may draw from: a tiling pattern, a soft
-    /// mask's group or an annotation's appearance can name an XObject its own /Resources don't
-    /// list, and the viewer then finds it in the page's. One the content draws nothing from is
-    /// left as it is, not emptied.
+    /// mask's group or an annotation's appearance draws from its own /Resources, and from the
+    /// page's for a name its own don't list. One the content draws nothing from is left as it
+    /// is, not emptied.
     lent: HashSet<XKey>,
 }
 
@@ -189,16 +189,31 @@ impl Pruner<'_> {
         Some((self.doc.resolve(x).as_dict()?.clone(), key))
     }
 
+    /// Lend the `/XObject` dictionaries of `streams`' own `/Resources`, owned as a form's are: what
+    /// they draw isn't read here, so these stay whole even where a form drawing nothing shares them.
+    fn lend_own(&mut self, streams: &[Object]) {
+        for r in streams.iter().filter_map(Object::as_ref) {
+            let Object::Stream(s) = &*self.doc.get(r) else { continue };
+            let Some(res) = s.dict.get(b"Resources") else { continue };
+            let Some(dict) = self.doc.resolve(res).as_dict().cloned() else { continue };
+            if let Some((_, key)) = self.xobjects(&dict, Owner::Resources(res.as_ref().unwrap_or(r))) {
+                self.lent.insert(key);
+            }
+        }
+    }
+
     /// Record every XObject name `data` draws with `Do`, descending into form XObjects.
     fn content(&mut self, data: &[u8], resources: &Dict, owner: Owner, depth: u8) {
         self.protect_type3_resources(resources, owner);
+        let lenders = lenders(self.doc, resources);
+        self.lend_own(&lenders);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else {
             return;
         };
         // Seen, whether or not anything is drawn from it: a dictionary nothing draws from loses
         // every entry, unless something unread may draw from it.
         self.used.entry(key).or_default();
-        if lends(self.doc, resources) {
+        if !lenders.is_empty() {
             self.lent.insert(key);
         }
         if depth > MAX_FORM_DEPTH {
@@ -273,23 +288,31 @@ impl Pruner<'_> {
     }
 }
 
-/// Whether `resources` lists a tiling pattern or a soft mask with a group: content this walk
-/// doesn't read, which draws through these resources when its own lack a name.
-fn lends(doc: &Document, resources: &Dict) -> bool {
+/// The tiling patterns and soft-mask groups `resources` lists: content this walk doesn't read,
+/// which draws through its own resources, and through these when its own lack a name.
+fn lenders(doc: &Document, resources: &Dict) -> Vec<Object> {
     let entries = |key: &[u8]| resources.get(key).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
-    let tiling = entries(b"Pattern").iter().any(|(_, p)| matches!(&*doc.resolve(p), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1)));
-    tiling
-        || entries(b"ExtGState").iter().any(|(_, g)| {
-            let gs = doc.resolve(g);
-            let mask = gs.as_dict().and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
-            mask.as_ref().and_then(|m| m.as_dict()).is_some_and(|m| m.contains(b"G"))
-        })
+    let tiling = |p: &Object| matches!(&*doc.resolve(p), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1));
+    let group = |g: &Object| doc.resolve(g).as_dict()?.get(b"SMask").map(|m| doc.resolve(m))?.as_dict()?.get(b"G").cloned();
+    let mut out: Vec<Object> = entries(b"Pattern").iter().filter(|&(_, p)| tiling(p)).map(|(_, p)| p.clone()).collect();
+    out.extend(entries(b"ExtGState").iter().filter_map(|(_, g)| group(g)));
+    out
 }
 
-/// Whether one of `page`'s annotations has an appearance.
-fn has_appearances(doc: &Document, page: &Dict) -> bool {
+/// The appearance streams of `page`'s annotations, each state of each.
+fn appearance_streams(doc: &Document, page: &Dict) -> Vec<Object> {
     let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-    annots.iter().any(|a| doc.resolve(a).as_dict().is_some_and(|a| a.contains(b"AP")))
+    let mut out = Vec::new();
+    for a in &annots {
+        let Some(ap) = doc.resolve(a).as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)) else { continue };
+        for (_, entry) in ap.as_dict().into_iter().flat_map(|d| d.iter()) {
+            match &*doc.resolve(entry) {
+                Object::Dict(states) => out.extend(states.iter().map(|(_, s)| s.clone())),
+                _ => out.push(entry.clone()),
+            }
+        }
+    }
+    out
 }
 
 /// The page's content, concatenated (`/Contents` may be one stream or an array) with a space
@@ -390,7 +413,9 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         let Some(res) = attrs.get(b"Resources") else { continue };
         let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
-        if has_appearances(pruner.doc, &pd)
+        let appearances = appearance_streams(pruner.doc, &pd);
+        pruner.lend_own(&appearances);
+        if !appearances.is_empty()
             && let Some((_, key)) = pruner.xobjects(&res_dict, owner)
         {
             pruner.lent.insert(key);

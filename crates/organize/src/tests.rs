@@ -5032,6 +5032,19 @@ fn a_part_whose_appearance_or_pattern_may_draw_an_image_keeps_them() {
         vec!["<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length 7 >>\nstream\n/ImA Do\nendstream".into()],
     );
     assert!(xobject_names(&pattern, 0).iter().any(|n| n.as_slice() == b"ImA"), "the pattern's image must stay");
+    // An appearance's own resources, shared with a form the page draws that draws nothing from
+    // them, keep the appearance's image.
+    let form =
+        |content: &str| format!("<< /Subtype /Form /BBox [0 0 50 50] /Resources 12 0 R /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let shared = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 11 0 R >> >>] >>",
+        "<< /XObject << /Fm 10 0 R >> >>",
+        vec![raw("/Fm Do"), form("0 0 m"), form("/ImA Do"), "<< /XObject << /ImA 7 0 R >> >>".into()],
+    );
+    let ap = shared.resolve(annots(&shared, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let own = shared.resolve(shared.resolve(ap.get(b"N").unwrap()).as_dict().unwrap().get(b"Resources").unwrap());
+    let own = shared.resolve(own.as_dict().unwrap().get(b"XObject").unwrap());
+    assert!(own.as_dict().unwrap().contains(b"ImA"), "the image an appearance draws from its own resources must stay");
 }
 
 /// A page without `/Contents` draws nothing either.
