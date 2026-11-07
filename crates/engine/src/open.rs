@@ -16,6 +16,7 @@ use crate::{
 pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
+    smooth_images_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
 }
@@ -34,6 +35,7 @@ struct DocumentOpenData<'a> {
     render_password: Option<String>,
     password: Option<&'a str>,
     xfa: Option<XfaLayout>,
+    smooth_images: bool,
 }
 
 impl OpenContext {
@@ -54,7 +56,13 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            smooth_images_off: self.smooth_images_off,
+            trust: self.trust.clone(),
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -74,6 +82,13 @@ impl Session {
         let id = DocId(self.next_id);
         let mut document = prepared.document;
         document.id = id;
+        // The document was prepared from an earlier snapshot: apply the preference as it is
+        // now, so toggling Smooth images while the worker runs still reaches this document.
+        let smooth = self.smooth_images();
+        if document.config.smooth_images != smooth {
+            document.config.smooth_images = smooth;
+            document.renderer = RenderPool::new(document.display.clone(), render_threads(), display_config(&document.config));
+        }
         self.docs.push(document);
         id
     }
@@ -84,6 +99,8 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
+    /// Open a document from a context snapshot: inspect it, lay out a dynamic XFA form or sync
+    /// a static one, and build the engine document. Called under the open panic guard.
     fn prepare_open_unguarded(
         context: &OpenContext,
         name: String,
@@ -252,8 +269,10 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            &context.trust,
+            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa, smooth_images: !context.smooth_images_off },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -267,8 +286,8 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
-        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, smooth_images } = data;
+        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), smooth_images, ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };

@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** minor (M2: a persistent Smooth images preference, on by default, keeps the scan fix and restores nearest-neighbour for QR codes, barcodes and pixel art when off; estimates unchanged)
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
@@ -332,6 +334,7 @@ Estimates unchanged.
 | 2026-10-23 | minor | M6: calculation checks: a formula reading a field the form doesn't have, and a script building the names it reads, are flagged by `form_calculation_order` and on the Calculation order page (a red mark, a card naming the broken formulas, a note for built names); `form_calculation_order` gives each formula and `form_fields` a custom Calculate script. Estimates unchanged. |
 | 2026-10-29 | minor | M7 #2517: widening a paragraph rejoins a wrap with the spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split, after an incremental save and a full rewrite. Estimates unchanged. |
 | 2026-10-29 | minor | M2: non-interpolated images drawn below their resolution are area-averaged to whole device pixels instead of nearest-neighbour (scanned text kept one sample in N per axis); page-scan-size images are smoothed when enlarged. Estimates unchanged. |
+| 2026-11-04 | minor | M2: Preferences ▸ Documents and view ▸ Smooth images (on by default) makes that scan smoothing a choice: off restores nearest-neighbour for images without `/Interpolate` (QR codes, barcodes, pixel art), `/Interpolate true` is unchanged, and the setting applies to open and future documents, persists, and is exposed through `view_smooth_images` and `ui.set`/`ui.state`. Estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-24 | minor | M3, #3970 follow-up: the button release given back after a window move or resize goes before the pointer leaving, so hover doesn't stick. Estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |

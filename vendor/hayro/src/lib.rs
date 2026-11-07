@@ -157,6 +157,10 @@ pub struct RenderSettings {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped while
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch: smooth images that don't ask for `/Interpolate` (area-average a shrunk
+    /// one, bilinearly enlarge a page-scan-sized one). `true` by default; `false` restores the
+    /// nearest-neighbour path for them (the "Smooth images" display preference).
+    pub smooth_images: bool,
 }
 
 impl Default for RenderSettings {
@@ -170,6 +174,7 @@ impl Default for RenderSettings {
             x_offset: 0.0,
             y_offset: 0.0,
             color_replacement: None,
+            smooth_images: true,
         }
     }
 }
@@ -252,6 +257,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        render_settings.smooth_images,
     );
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its

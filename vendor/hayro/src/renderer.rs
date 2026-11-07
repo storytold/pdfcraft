@@ -339,6 +339,7 @@ struct AreaAxis {
 }
 
 impl AreaAxis {
+    /// Build the per-target tap table for one axis, or `None` when an allocation fails.
     fn new(src: u32, dst: u32) -> Option<Self> {
         let n = dst as usize;
         let (mut first, mut offsets, mut weights) = (Vec::new(), Vec::new(), Vec::new());
@@ -723,10 +724,12 @@ const SNAP_SKEW: f64 = 0.01;
 /// turned) is drawn as sharply as upright (#5530). `transform` maps source pixels to device
 /// pixels and `planned` is the size [`image_resampling_size`] chose; `None` (draw as before) for
 /// skewed or freely rotated images, non-finite geometry, or a snapped size that strays more than
-/// a pixel from `planned` (so the memory budget that size passed still holds). An image counts
-/// as axis-aligned when the terms the snap drops move its far edges by at most [`SNAP_SKEW`]: a
-/// tolerance on the coefficients alone let a slight skew of a very wide image through, though it
-/// moved the far edge by more than a pixel.
+/// a pixel from `planned` (so the memory budget that size passed still holds). A side the area
+/// shrink capped at its source size is the exception: its snapped device span may be larger, and
+/// [`snapped_axes_transform`] takes only the other side's placement from the snapped transform.
+/// An image counts as axis-aligned when the terms the snap drops move its far edges by at most
+/// [`SNAP_SKEW`]: a tolerance on the coefficients alone let a slight skew of a very wide image
+/// through, though it moved the far edge by more than a pixel.
 fn snap_minified_image(
     transform: &Affine,
     source: (u32, u32),
@@ -762,7 +765,36 @@ fn snap_minified_image(
     } else {
         return None;
     };
-    (w.abs_diff(planned.0) <= 1 && h.abs_diff(planned.1) <= 1).then_some((w, h, draw))
+    // A side planned at its source size is the area shrink's cap: the snapped device span may be
+    // larger because the sampler enlarges that side, and only the other side is drawn 1:1 from
+    // the snapped transform (see `snapped_axes_transform`). Every other side must stay within a
+    // pixel of the size the memory budget passed.
+    let fits = |snapped: u32, planned: u32, source: u32| {
+        snapped.abs_diff(planned) <= 1 || planned == source
+    };
+    (fits(w, planned.0, width) && fits(h, planned.1, height)).then_some((w, h, draw))
+}
+
+/// PdfCraft patch: a snapped draw combined, side by side, with the fallback transform. An area
+/// shrink caps an enlarged side at its source size, so the snapped size no longer describes that
+/// side: the sampler must enlarge it with the full transform. The other (shrunk) side still lands
+/// on whole device pixels, so keeping its part of the snapped transform avoids resampling it at
+/// a fractional offset. `keep_x` and `keep_y` say which raster axes still have the snapped size.
+fn snapped_axes_transform(fallback: Affine, snapped: Affine, keep_x: bool, keep_y: bool) -> Affine {
+    let [fa, fb, fc, fd, fe, ff] = fallback.as_coeffs();
+    let [sa, sb, sc, sd, se, sf] = snapped.as_coeffs();
+    // `snap_minified_image` draws raster x along device x (upright or mirrored) with non-zero
+    // `a` and `d`, or raster x along device y (a quarter turn) with both zero.
+    let upright = sa != 0.0 && sd != 0.0;
+    if upright {
+        let (a, b, e) = if keep_x { (sa, sb, se) } else { (fa, fb, fe) };
+        let (c, d, f) = if keep_y { (sc, sd, sf) } else { (fc, fd, ff) };
+        Affine::new([a, b, c, d, e, f])
+    } else {
+        let (a, b, f) = if keep_x { (sa, sb, sf) } else { (fa, fb, ff) };
+        let (c, d, e) = if keep_y { (sc, sd, se) } else { (fc, fd, fe) };
+        Affine::new([a, b, c, d, e, f])
+    }
 }
 
 /// PdfCraft patch (19): what `Renderer::set_paint` found out: the clip path to apply while
@@ -804,7 +836,14 @@ pub(crate) struct Renderer {
     pub(crate) soft_mask_cache: HashMap<u128, Mask>,
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
     pub(crate) cur_mask: Option<Mask>,
+    /// PdfCraft patch: inside a Type 3 glyph's procedure, where images keep the nearest
+    /// shrink and sampler of #624 instead of the Smooth images paths.
     pub(crate) in_type3_glyph: bool,
+    /// PdfCraft patch: only the renderer that runs a Type 3 glyph's own procedure pads its
+    /// images with the transparent frame interpolation samples past the edge. A nested
+    /// renderer (a pattern-painted stencil) inherits `in_type3_glyph` for the sampling
+    /// exemption but not the frame.
+    pub(crate) type3_glyph_frame: bool,
     pub(crate) scaler: Scaler,
     /// PdfCraft patch: low-detail preview render (see `InterpreterSettings::preview`).
     pub(crate) preview: bool,
@@ -813,6 +852,8 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// PdfCraft patch: the "Smooth images" display preference (`RenderSettings::smooth_images`).
+    smooth_images: bool,
 }
 
 /// PdfCraft patch (27): which inks a pass of a `DeviceCMYK` group draws, and whether the
@@ -902,6 +943,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        smooth_images: bool,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -916,10 +958,12 @@ impl Renderer {
             outline_cache: cache.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
+            type3_glyph_frame: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            smooth_images,
         }
     }
 
@@ -973,6 +1017,8 @@ impl Renderer {
         reach
     }
 
+    /// Draw an image whose soft mask does not share its grid by staging a dummy image and
+    /// pushing the mask as its own layer.
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, mut alpha_data: LumaData) {
         // PdfCraft patch: mismatched masks need a dummy RGB staging image. Validate and
         // reserve it before creating/pushing any mask, so failure skips the whole image.
@@ -1022,10 +1068,12 @@ impl Renderer {
                 outline_cache: self.outline_cache.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
+                type3_glyph_frame: false,
                 scaler: self.scaler,
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                smooth_images: self.smooth_images,
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1216,6 +1264,8 @@ impl Renderer {
         Some((target_width, target_height))
     }
 
+    /// Draw one image, area-averaging minified images and smoothing page-scan-sized enlarged
+    /// ones unless the Smooth images preference is off.
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
         let cur_transform = *self.ctx.transform();
         let (x_scale, y_scale) = {
@@ -1248,12 +1298,18 @@ impl Renderer {
             return;
         }
         let interpolate = image_data.interpolate();
+        // PdfCraft patch: the "Smooth images" display preference gates the smoothing this
+        // renderer gives images that don't ask for `/Interpolate`. Off restores the
+        // nearest-neighbour path of #635 for them; `/Interpolate true` and Type 3 glyph images
+        // are unaffected.
+        let smooth = self.smooth_images;
         let requested_resize = x_scale < 1.0 || y_scale < 1.0;
         // PdfCraft patch: an image that did not ask for interpolation and is drawn below its
         // resolution is shrunk by area averaging (`area_shrink`), not nearest-neighbour, which
         // broke up the text of scans shown at screen size. Type 3 glyph images keep the nearest
         // shrink of #624: they are drawn with a frame of their own and never snapped.
-        let area = !interpolate
+        let area = smooth
+            && !interpolate
             && requested_resize
             && !self.in_type3_glyph
             // Wider sources keep #624's bounded nearest-neighbour shrink (`area_shrink` refuses
@@ -1273,7 +1329,19 @@ impl Renderer {
                 // included) was multiplied by the averaged mask, and the colour of transparent
                 // samples showed at the mask's edges. A larger mask carries detail the image does
                 // not (#1649) and keeps the layer.
-                let on_grid = (area && a.width <= source_width && a.height <= source_height)
+                // An interpolated mask that is enlarged on some side cannot keep that request on
+                // the image's grid: the combined image is sampled nearest-neighbour there because
+                // the image did not ask for interpolation. Draw it as its own mask layer, where
+                // `/Interpolate` reaches the mask's own resampling.
+                let mask_needs_layer = a.interpolate
+                    && !interpolate
+                    && a.width == source_width
+                    && a.height == source_height
+                    && (x_scale > 1.0 || y_scale > 1.0);
+                let on_grid = (area
+                    && !mask_needs_layer
+                    && a.width <= source_width
+                    && a.height <= source_height)
                     .then(|| mask_on_image_grid(&a, source_width, source_height))
                     .flatten();
                 match on_grid {
@@ -1282,7 +1350,7 @@ impl Renderer {
                             data,
                             width: source_width,
                             height: source_height,
-                            interpolate,
+                            interpolate: a.interpolate,
                             ..a
                         });
                     }
@@ -1302,13 +1370,22 @@ impl Renderer {
         };
         let has_alpha = alpha_data.is_some();
         let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
+        // PdfCraft patch: the area shrink never enlarges, so plan (and validate) its target with
+        // the enlarged sides held at their source size. With the raw scales, an enlarged side
+        // could push the target over MAX_IMAGE_PIXELS while the capped area target fits, and the
+        // image then kept its source resolution and skipped the area average altogether.
+        let (plan_x_scale, plan_y_scale) = if area {
+            (x_scale.min(1.0), y_scale.min(1.0))
+        } else {
+            (x_scale, y_scale)
+        };
         let (new_width, new_height) = match image_resampling_size(
             source_width,
             source_height,
             channels,
             data_len,
-            x_scale,
-            y_scale,
+            plan_x_scale,
+            plan_y_scale,
             MAX_IMAGE_PIXELS,
             interpolate,
         ) {
@@ -1339,7 +1416,8 @@ impl Renderer {
         // pixel art) keep their hard pixels. A scan shrunk on one side and stretched on the other
         // is smoothed too: the area shrink leaves the shrunk side at 1:1, where bilinear adds
         // nothing, and the stretched side would otherwise be drawn nearest-neighbour.
-        if !interpolate
+        if smooth
+            && !interpolate
             && !self.in_type3_glyph
             && (x_scale > SMOOTHED_IMAGE_SCALE || y_scale > SMOOTHED_IMAGE_SCALE)
             && source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
@@ -1494,9 +1572,11 @@ impl Renderer {
         if has_alpha && !premultiplied {
             premultiply_rgba(&mut rgba_data);
         }
-        // Type 3 glyphs get a transparent two-pixel frame for interpolation. Check the padded
-        // RGBA allocation and u16 dimensions too, before narrowing or growing either side.
-        if self.in_type3_glyph {
+        // Type 3 glyphs get a transparent two-pixel frame for interpolation. Only the renderer
+        // running the glyph's own procedure draws that frame; a nested renderer inherits the
+        // sampling exemption but must not move (or pad) the raster. Check the padded RGBA
+        // allocation and u16 dimensions too, before narrowing or growing either side.
+        if self.type3_glyph_frame {
             let (Some(width), Some(height)) = (img_width.checked_add(4), img_height.checked_add(4))
             else {
                 return;
@@ -1532,10 +1612,16 @@ impl Renderer {
         );
         // The snapped transform draws the raster 1:1, so it holds only if the shrink produced the
         // snapped size. A failed resize hands back the source raster: drawn 1:1 it would come out
-        // at its source size, so it keeps the full transform instead.
+        // at its source size, so it keeps the full transform instead. An area shrink may cap one
+        // side at its source size while the other is still snapped: keep whole-pixel placement
+        // for the snapped side and let the sampler enlarge only the capped one.
+        let fallback_transform = cur_transform * additional_transform;
         let draw_transform = match snapped {
             Some((w, h, draw)) if (img_width, img_height) == (w, h) => draw,
-            _ => cur_transform * additional_transform,
+            Some((w, h, draw)) if img_width == w || img_height == h => {
+                snapped_axes_transform(fallback_transform, draw, img_width == w, img_height == h)
+            }
+            _ => fallback_transform,
         };
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
@@ -1588,6 +1674,7 @@ impl Renderer {
             outline_cache: self.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
+            type3_glyph_frame: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
             image_transparency_stack: Vec::new(),
@@ -1595,6 +1682,7 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            smooth_images: self.smooth_images,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
@@ -1865,10 +1953,12 @@ impl Renderer {
                                 soft_mask_cache: HashMap::default(),
                                 outline_cache: self.outline_cache.clone(),
                                 in_type3_glyph: false,
+                                type3_glyph_frame: false,
                                 scaler: self.scaler,
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
                                 ink: InkState::default(),
+                                smooth_images: self.smooth_images,
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
@@ -1929,10 +2019,12 @@ impl Renderer {
                             soft_mask_cache: HashMap::default(),
                             outline_cache: self.outline_cache.clone(),
                             in_type3_glyph: false,
+                            type3_glyph_frame: false,
                             scaler: self.scaler,
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
                             ink: InkState::default(),
+                            smooth_images: self.smooth_images,
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
@@ -2036,6 +2128,8 @@ impl Renderer {
         }
     }
 
+    /// Paint one glyph: an outline directly, or a Type 3 glyph's procedure while keeping the
+    /// Type 3 sampling exemption for nested glyphs and pattern-painted stencils.
     fn fill_glyph<'a>(
         &mut self,
         glyph: &Glyph<'a>,
@@ -2060,9 +2154,16 @@ impl Renderer {
                 // PdfCraft patch: a type 3 glyph's content stream keeps painting as line art
                 // (its internal ops reach `fill_path`/`stroke_path` with `is_text: false`), so
                 // reading colours remap it only when line-art replacement is on.
+                // A Type 3 glyph's procedure may draw text in another Type 3 font: save the
+                // outer glyph's state and restore it, or the rest of the outer procedure would
+                // lose the exemption and be area-averaged and snapped.
+                let outer_in_type3_glyph = self.in_type3_glyph;
+                let outer_type3_glyph_frame = self.type3_glyph_frame;
                 self.in_type3_glyph = true;
+                self.type3_glyph_frame = true;
                 s.interpret(self, transform, glyph_transform, paint);
-                self.in_type3_glyph = false;
+                self.in_type3_glyph = outer_in_type3_glyph;
+                self.type3_glyph_frame = outer_type3_glyph_frame;
             }
         }
     }
@@ -2117,6 +2218,7 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    /// Convert the interpreter's image to RGBA and hand it to the renderer's `draw_image`.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -2234,11 +2336,17 @@ impl<'a> Device<'a> for Renderer {
                                         soft_mask_cache: HashMap::default(),
                                         outline_cache: self.outline_cache.clone(),
                                         cur_mask: None,
-                                        in_type3_glyph: false,
+                                        // PdfCraft patch: this renders the stencil a pattern
+                                        // paints, and it belongs to the glyph's procedure, so
+                                        // it keeps the glyph's image-sampling exemption. It is
+                                        // not the glyph itself, so it never takes the frame.
+                                        in_type3_glyph: self.in_type3_glyph,
+                                        type3_glyph_frame: false,
                                         scaler: self.scaler,
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
                                         ink: InkState::default(),
+                                        smooth_images: self.smooth_images,
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
@@ -2383,6 +2491,7 @@ impl<'a> Device<'a> for Renderer {
         true
     }
 
+    /// Push a transparency group layer; a knockout erase pass records instead of painting.
     fn push_transparency_group(
         &mut self,
         opacity: f32,
@@ -2422,7 +2531,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, self.smooth_images))
                     .clone()
             }),
             None,
@@ -2543,6 +2652,7 @@ impl<'a> Device<'a> for Renderer {
         self.ctx.set_transform(old_transform);
     }
 
+    /// Draw and cache the soft mask, then apply it to (or clear it from) the context.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'_>>) {
         let settings = *self.ctx.render_settings();
         self.cur_mask = mask.map(|m| {
@@ -2551,7 +2661,7 @@ impl<'a> Device<'a> for Renderer {
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, self.smooth_images))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2736,7 +2846,8 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+/// Render a soft mask to a mask image, keeping its original luminance values.
+fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool, smooth_images: bool) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
@@ -2752,10 +2863,12 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         soft_mask_cache: HashMap::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
         in_type3_glyph: false,
+        type3_glyph_frame: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        smooth_images,
     };
 
     let bg_color = mask.background_color().to_rgba();
@@ -2995,7 +3108,7 @@ pub fn tiling_cell_pixels(scale: f32, step: f32, max_pixels: f32) -> (u16, f64) 
 
 #[cfg(test)]
 mod snap_tests {
-    use super::{snap_minified_image, Affine};
+    use super::{snap_minified_image, snapped_axes_transform, Affine};
 
     /// The skew a snap drops is measured as the distance it moves the image's far edge, not as a
     /// coefficient against the scale: a 40 000 sample wide image skewed by 4e-5 per sample moves
@@ -3015,6 +3128,32 @@ mod snap_tests {
         assert!(snap_minified_image(&noisy, source, planned).is_some());
         let turned_noisy = Affine::new([1e-9, 0.5, -0.5, 0.0, 200.3, 0.3]);
         assert!(snap_minified_image(&turned_noisy, source, (20_000, 200)).is_some());
+    }
+
+    /// An area cap on one side takes that side's mapping from the fallback transform and the
+    /// other side's from the snapped one, in both the upright and the quarter-turned form.
+    #[test]
+    fn a_capped_side_keeps_only_the_other_sides_snapped_mapping() {
+        let upright_fallback = Affine::new([2.0, 0.0, 0.0, 1.0, 0.4, 5.0]);
+        let upright_snapped = Affine::new([1.0, 0.0, 0.0, 1.0, 3.0, 7.0]);
+        assert_eq!(
+            snapped_axes_transform(upright_fallback, upright_snapped, true, false).as_coeffs(),
+            [1.0, 0.0, 0.0, 1.0, 3.0, 5.0],
+            "raster x is whole-pixel; raster y keeps the fallback"
+        );
+
+        let turned_fallback = Affine::new([0.0, 2.0, 3.0, 0.0, 11.0, 13.0]);
+        let turned_snapped = Affine::new([0.0, 1.0, 1.0, 0.0, 17.0, 19.0]);
+        assert_eq!(
+            snapped_axes_transform(turned_fallback, turned_snapped, true, false).as_coeffs(),
+            [0.0, 1.0, 3.0, 0.0, 11.0, 19.0],
+            "raster x maps to device y; raster y keeps the fallback"
+        );
+        assert_eq!(
+            snapped_axes_transform(turned_fallback, turned_snapped, false, true).as_coeffs(),
+            [0.0, 2.0, 1.0, 0.0, 17.0, 13.0],
+            "raster y maps to device x; raster x keeps the fallback"
+        );
     }
 }
 
@@ -3215,3 +3354,4 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
     }
 }
+

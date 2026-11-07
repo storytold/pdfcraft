@@ -38,6 +38,8 @@ pub struct Session {
     pub(crate) trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     pub(crate) js_off: bool,
+    /// Preferences ▸ Documents and view ▸ Smooth images, inverted (on by default).
+    pub(crate) smooth_images_off: bool,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).
     pub(crate) date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.

@@ -9879,6 +9879,80 @@ fn reading_colors_through_tools() {
     assert_eq!(render(&mut a, 1), page1_off);
 }
 
+/// A 200 × 300 page filled with a 512 × 512 hard 4 × 4 checker, drawn without `/Interpolate`:
+/// shrunk to the page, it is area-averaged (grey) with Smooth images on and nearest-sampled
+/// (black or white only) with it off.
+fn smooth_images_fixture() -> Vec<u8> {
+    let side = 512usize;
+    let image: Vec<u8> = (0..side * side).map(|i| if ((i / side) / 4 + (i % side) / 4).is_multiple_of(2) { 0 } else { 255 }).collect();
+    let content = "q 200 0 0 300 0 0 cm /Im0 Do Q";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    let mut image_obj = format!(
+        "<< /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {} >>\nstream\n",
+        image.len()
+    )
+    .into_bytes();
+    image_obj.extend_from_slice(&image);
+    image_obj.extend_from_slice(b"\nendstream");
+    objs.push(image_obj);
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Smooth images off keeps both an open and a later document's checker hard, and the tool
+/// reports the setting.
+#[test]
+fn smooth_images_through_tools() {
+    let dir = workdir("smooth-images");
+    std::fs::write(dir.join("a.pdf"), smooth_images_fixture()).unwrap();
+    std::fs::write(dir.join("b.pdf"), smooth_images_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation, doc: u64| png_pixels(&a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap()[0]);
+
+    // On by default: the area average leaves intermediate tones.
+    let smooth = render(&mut a, doc);
+    assert!(smooth.as_chunks::<4>().0.iter().any(|px| (32..=223).contains(&px[0])), "smoothing on left only hard pixels");
+
+    // Off: nearest-neighbour keeps every pixel black or white, and the tool echoes the setting.
+    assert_eq!(ok(&mut a, "view_smooth_images", json!({ "enabled": false })), json!({ "enabled": false }));
+    let hard = render(&mut a, doc);
+    let hard_px = hard.as_chunks::<4>().0;
+    assert!(hard_px.iter().all(|px| px[0] == 0 || px[0] == 255), "smoothing off still blended");
+    assert!(hard_px.iter().any(|px| px[0] == 0) && hard_px.iter().any(|px| px[0] == 255), "smoothing off did not draw the checker");
+    // Reading it without an argument reports the setting.
+    assert_eq!(ok(&mut a, "view_smooth_images", json!({})), json!({ "enabled": false }));
+
+    // A document opened after the change inherits it.
+    let later = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let later_render = render(&mut a, later);
+    let later_px = later_render.as_chunks::<4>().0;
+    assert!(later_px.iter().all(|px| px[0] == 0 || px[0] == 255), "a later document did not inherit smoothing off");
+    assert!(later_px.iter().any(|px| px[0] == 0) && later_px.iter().any(|px| px[0] == 255), "a later document did not draw the checker");
+
+    // Invalid arguments name the problem.
+    let bad = a.call("view_smooth_images", &json!({ "enabled": "yes" }));
+    assert!(matches!(&bad, Err(ToolError::InvalidArgs(m)) if m.contains("true or false")), "{bad:?}");
+}
+
 #[test]
 fn private_crops_with_nested_state_resize_save_reopen_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
