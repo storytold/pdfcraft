@@ -62,7 +62,9 @@ another. Edits never touch the original bytes.
   not expand compact xref ranges; the winning xref entry remains authoritative for free
   slots. Compressed objects require generation zero. Explicit `set` overlays accept only the
   supplied generation; `set_existing` and `update_dict` retain both accepted generations of a
-  damaged live slot, including through snapshots, and require full rewrite. Headers beyond
+  damaged live slot, including through snapshots, and require full rewrite.
+  `accepted_generations(num)` lists the generations a slot accepts, so code comparing two
+  revisions can tell whether a reference still reaches the same slot. Headers beyond
   this bounded probe are not additionally recovered. Materialized primary and hybrid rows are
   diagnosed before folding, so a newer row does not hide a retained disagreement.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
@@ -88,6 +90,14 @@ garbage-collecting path. By default (`SaveOptions::object_streams`) it packs non
 into compressed object streams with a cross-reference stream (PDF 1.5+); turning that off writes a
 classic table any reader accepts. Both forms map accepted xref/header aliases to one output
 object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
+
+A full save keeps the file's `/ID` as it is, unless the document asked for a new identifier with
+`Document::require_full_save_with_new_id` (redaction and sanitizing do). Then both strings are
+regenerated, and `SaveOptions::id_entropy` can supply entropy for reproducible output (tests pin
+output this way). Without it the identifier mixes in fresh entropy from the host — the browser's
+`crypto.getRandomValues` on the web, the operating system's random hash seed on the desktop — so a
+fresh copy of the program cannot reproduce it. An encrypted file keeps the first string, because its
+key is derived from it.
 
 Dictionaries keep their key order and streams keep their *encoded* bytes, so rewritten objects stay
 recognisable in a diff and byte-stable when re-serialized.
