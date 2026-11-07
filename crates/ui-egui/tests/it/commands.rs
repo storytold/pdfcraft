@@ -283,6 +283,15 @@ fn shortcuts_run_registered_commands() {
 }
 
 #[test]
+fn dvorak_command_v_does_not_open_palette() {
+    let mut h = harness();
+    // On Dvorak-QWERTY the physical V key reports logical K: Cmd+V is paste, not Cmd+K.
+    h.event(egui::Event::Key { key: Key::K, physical_key: Some(Key::V), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    assert!(!h.state().palette_open, "physical Cmd+V must not open the Cmd+K palette");
+}
+
+#[test]
 fn the_palette_lists_commands_with_shortcuts_and_runs_them() {
     let mut h = harness();
     h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();

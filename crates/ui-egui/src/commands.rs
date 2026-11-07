@@ -878,7 +878,19 @@ impl PdfCraftApp {
             if s.mac_ctrl {
                 m |= Modifiers::CTRL;
             }
-            if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, key))) {
+            if ctx.input_mut(|i| {
+                // `consume_shortcut` matches the logical key alone, so on Dvorak-QWERTY
+                // physical V (logical K) would wrongly open the Cmd+K palette instead of
+                // pasting. A press whose physical key disagrees must not trigger a
+                // registry shortcut.
+                let remapped = i.events.iter().any(|event| {
+                    matches!(event, egui::Event::Key { key: event_key, physical_key: Some(physical), pressed: true, modifiers: event_modifiers, .. }
+                        if *event_key == key
+                            && event_modifiers.matches_logically(m)
+                            && *physical != key)
+                });
+                !remapped && i.consume_shortcut(&KeyboardShortcut::new(m, key))
+            }) {
                 self.dispatch_command(ctx, spec.id);
             }
         }
