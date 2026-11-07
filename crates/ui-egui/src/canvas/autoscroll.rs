@@ -115,7 +115,7 @@ impl AutoScroll {
         let (Some(anchor), Some(pointer)) = (self.anchor, pointer) else { return Vec2::ZERO };
         let displacement = pointer.y - anchor.y;
         let past_dead_zone = displacement.is_finite() && displacement.abs() > DEAD_ZONE;
-        if past_dead_zone && (middle_down || middle_released) {
+        if ctx.input(|i| held_past_dead_zone_in_frame(&i.events, anchor, pointer, middle_press, middle_down, middle_released)) {
             self.held_past_dead_zone = true;
         }
         if middle_released && self.held_past_dead_zone {
@@ -254,6 +254,41 @@ pub(crate) fn edge_delta(y: f32, viewport: egui::Rect, dt: f32) -> f32 {
     -distance.clamp(-MAX_DISPLACEMENT, MAX_DISPLACEMENT) * EDGE_SPEED * dt.clamp(0.0, 0.05)
 }
 
+/// Whether the pointer moved past [`DEAD_ZONE`] from `anchor` while the middle button was held
+/// during this frame.
+///
+/// Events are inspected in order so pointer motion after a middle-button release does not count as
+/// held movement, and a press-and-release arriving together in one frame is treated as a click.
+fn held_past_dead_zone_in_frame(
+    events: &[Event],
+    anchor: Pos2,
+    pointer: Pos2,
+    middle_press: Option<Pos2>,
+    middle_down: bool,
+    middle_released: bool,
+) -> bool {
+    let outside = |pos: Pos2| {
+        let dy = pos.y - anchor.y;
+        dy.is_finite() && dy.abs() > DEAD_ZONE
+    };
+    if middle_press.is_some() && middle_released {
+        return false;
+    }
+    if middle_released {
+        for event in events {
+            match *event {
+                Event::PointerMoved(pos) if outside(pos) => return true,
+                Event::PointerButton { pos, button: PointerButton::Middle, pressed: false, .. } => {
+                    return outside(pos);
+                }
+                _ => {}
+            }
+        }
+        return false;
+    }
+    middle_down && outside(pointer)
+}
+
 /// The middle button's delta, reversed when the user inverted it.
 fn oriented(delta: Vec2, invert: bool) -> Vec2 {
     if invert { -delta } else { delta }
@@ -338,23 +373,41 @@ mod tests {
         let ctx = Context::default();
         let mut scroll = AutoScroll::default();
         let p = egui::pos2(100.0, 100.0);
+        let far = p + vec2(0.0, 60.0);
         frame(&ctx, &mut scroll, vec![], true, (true, false), |_, _| {});
         frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (true, false), |s, d| {
             assert!(s.active() && s.blocks_input());
             assert_eq!(d, Vec2::ZERO);
         });
-        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, 60.0))], true, (true, false), |s, d| {
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(far)], true, (true, false), |s, d| {
             assert!(s.active() && s.blocks_input());
             assert!(d.y < 0.0, "holding and moving past the dead zone scrolls: {d:?}");
         });
-        // Returning inside the dead zone before releasing still counts as a held scroll gesture.
-        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, 5.0)), middle(p + vec2(0.0, 5.0), false)], true, (true, false), |s, d| {
-            assert!(!s.active(), "releasing after scrolling while held must turn auto-scroll off");
+        // Primary case: releasing while still past the dead zone stops auto-scroll immediately.
+        frame(&ctx, &mut scroll, vec![middle(far, false)], true, (true, false), |s, d| {
+            assert!(!s.active(), "releasing at +60pt after holding must turn auto-scroll off");
             assert!(s.blocks_input(), "the release frame itself still blocks page tools");
             assert_eq!(d, Vec2::ZERO);
         });
-        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, 60.0))], true, (true, false), |s, d| {
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(far)], true, (true, false), |s, d| {
             assert!(!s.active() && !s.blocks_input());
+            assert_eq!(d, Vec2::ZERO);
+        });
+
+        // Moving past the dead zone and releasing in the same frame (after pressing earlier) also stops.
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (true, false), |s, _| assert!(s.active()));
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(far), middle(far, false)], true, (true, false), |s, d| {
+            assert!(!s.active(), "moving past the dead zone before release in the same frame cancels");
+            assert!(s.blocks_input());
+            assert_eq!(d, Vec2::ZERO);
+        });
+
+        // Returning inside the dead zone before releasing still counts as a held scroll gesture.
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (true, false), |s, _| assert!(s.active()));
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(far)], true, (true, false), |s, d| assert!(s.active() && d.y < 0.0));
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, 5.0)), middle(p + vec2(0.0, 5.0), false)], true, (true, false), |s, d| {
+            assert!(!s.active(), "releasing after scrolling while held must turn auto-scroll off");
+            assert!(s.blocks_input());
             assert_eq!(d, Vec2::ZERO);
         });
     }
@@ -364,6 +417,7 @@ mod tests {
         let ctx = Context::default();
         let mut scroll = AutoScroll::default();
         let p = egui::pos2(100.0, 100.0);
+        let far = p + vec2(0.0, 60.0);
         frame(&ctx, &mut scroll, vec![], true, (true, false), |_, _| {});
         frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (true, false), |s, _| assert!(s.active()));
         frame(
@@ -377,10 +431,32 @@ mod tests {
                 assert_eq!(d, Vec2::ZERO);
             },
         );
-        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, 60.0))], true, (true, false), |s, d| {
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(far)], true, (true, false), |s, d| {
             assert!(s.active());
             assert!(d.y < 0.0);
         });
+        scroll.cancel();
+
+        // Pointer movement after middle-button release in the same frame does not count as held movement.
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (true, false), |s, _| assert!(s.active()));
+        frame(&ctx, &mut scroll, vec![middle(p, false), Event::PointerMoved(far)], true, (true, false), |s, d| {
+            assert!(s.active(), "movement after release in the same frame keeps auto-scroll latched");
+            assert!(d.y < 0.0);
+        });
+        scroll.cancel();
+
+        // A press, move, and release arriving in a single frame is a click at the initial press position.
+        frame(
+            &ctx,
+            &mut scroll,
+            vec![Event::PointerMoved(p), middle(p, true), Event::PointerMoved(far), middle(far, false)],
+            true,
+            (true, false),
+            |s, d| {
+                assert!(s.active(), "single-frame click and move latches auto-scroll");
+                assert!(d.y < 0.0);
+            },
+        );
     }
 
     #[test]
