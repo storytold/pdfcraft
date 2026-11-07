@@ -5841,6 +5841,10 @@ fn comparing_two_versions_of_a_document() {
     let got: Vec<(compare::Kind, &str, &str)> = c.changes.iter().map(|x| (x.kind, x.old.text.as_str(), x.new.text.as_str())).collect();
     assert_eq!(got, [(compare::Kind::Replaced, "Monday.", "Tuesday."), (compare::Kind::Replaced, "days.", "days of invoice.")], "{got:?}");
     assert!(s.compare(old, old).unwrap().identical());
+    // limited to pages of the new file: both changes are on the first
+    assert_eq!(s.compare_pages(old, new, &[]).unwrap().changes.len(), 2);
+    assert_eq!(s.compare_pages(old, new, &[0]).unwrap().changes.len(), 2);
+    assert!(s.compare_pages(old, new, &[1]).unwrap().identical());
 
     let report = s.compare_report(old, new).unwrap();
     let rid = s.open("report.pdf", None, report, None).unwrap();
