@@ -2417,3 +2417,57 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
 }
+
+#[test]
+fn dest_indicator_rect_covers_each_destination_view() {
+    let info = pdfcraft_render::DocInfo {
+        pages: vec![pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        ..Default::default()
+    };
+    let v = view(1, PageLayout::Single, true);
+
+    let top = v.dest_indicator_rect(0, DestView::Top, &info).expect("top rect");
+    assert_eq!([top[0], top[1], top[2]], [0.0, 0.0, 1.0]);
+    assert!((top[3] - 24.0 / 400.0).abs() < 1e-4);
+
+    let fit = v.dest_indicator_rect(0, DestView::Fit, &info).expect("fit rect");
+    assert_eq!(fit, top);
+
+    let fith = v.dest_indicator_rect(0, DestView::FitH { top: Some(300.0) }, &info).expect("fith rect");
+    assert!((fith[0] - 0.0).abs() < 1e-4 && (fith[1] - 0.25).abs() < 1e-4 && (fith[2] - 1.0).abs() < 1e-4);
+
+    let fitv = v.dest_indicator_rect(0, DestView::FitV { left: Some(75.0) }, &info).expect("fitv rect");
+    assert!((fitv[0] - 0.25).abs() < 1e-4 && (fitv[1] - 0.0).abs() < 1e-4 && (fitv[3] - 1.0).abs() < 1e-4);
+
+    let xyz = v.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: Some(200.0), zoom: None }, &info).expect("xyz rect");
+    assert!((xyz[0] - 0.5).abs() < 1e-4 && (xyz[1] - 0.5).abs() < 1e-4 && xyz[2] > xyz[0] && xyz[3] > xyz[1]);
+
+    let fitr = v.dest_indicator_rect(0, DestView::FitR { rect: [60.0, 100.0, 150.0, 300.0] }, &info).expect("fitr rect");
+    assert!((fitr[0] - 0.2).abs() < 1e-4 && (fitr[1] - 0.25).abs() < 1e-4 && (fitr[2] - 0.5).abs() < 1e-4 && (fitr[3] - 0.75).abs() < 1e-4);
+
+    // Quarter-turn rotation swaps the displayed axis for FitH and FitV.
+    let mut rotated = v;
+    rotated.rotation = 90;
+    let fith_rot = rotated.dest_indicator_rect(0, DestView::FitH { top: Some(300.0) }, &info).expect("rotated fith rect");
+    assert!((fith_rot[0] - 0.75).abs() < 1e-4 && (fith_rot[1] - 0.0).abs() < 1e-4 && (fith_rot[3] - 1.0).abs() < 1e-4);
+
+    let fitv_rot = rotated.dest_indicator_rect(0, DestView::FitV { left: Some(75.0) }, &info).expect("rotated fitv rect");
+    assert!((fitv_rot[0] - 0.0).abs() < 1e-4 && (fitv_rot[1] - 0.25).abs() < 1e-4 && (fitv_rot[2] - 1.0).abs() < 1e-4);
+
+    // Null-top XYZ destination falls back to top edge when no position is preserved,
+    // and uses the resolved position when goto_point preserved it.
+    let v_unrotated = view(1, PageLayout::Single, true);
+    let xyz_null_top =
+        v_unrotated.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: None, zoom: None }, &info).expect("xyz null top rect");
+    assert_eq!(xyz_null_top[1], 0.0);
+    assert!((xyz_null_top[3] - 24.0 / 400.0).abs() < 1e-4);
+
+    let mut v_with_preserved = view(1, PageLayout::Single, true);
+    v_with_preserved.goto_point = Some((0, Some(0.5), Some(0.6), egui::vec2(0.0, 0.0)));
+    let xyz_preserved =
+        v_with_preserved.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: None, zoom: None }, &info).expect("xyz preserved top rect");
+    assert!((xyz_preserved[1] - 0.6).abs() < 1e-4);
+    assert!((xyz_preserved[3] - 0.66).abs() < 1e-4);
+
+    assert!(rotated.dest_indicator_rect(5, DestView::Top, &info).is_none());
+}
