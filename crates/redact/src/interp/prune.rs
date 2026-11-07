@@ -396,6 +396,142 @@ pub(super) fn extgstate_font(
     Some((metrics, vertical, size))
 }
 
+/// Drop every `/Pattern` entry this scope saw selected but no surviving painting operator drew
+/// with. The `scn` that selected it stays in the content, so the page names a pattern its
+/// resources no longer hold; nothing surviving paints with that colour, and
+/// `a_page_whose_pruned_pattern_is_still_selected_renders` pins that the page still renders and
+/// that operators after the stale selector still draw. A pattern's cell is a content stream of its own which
+/// this pass does not enter, so a pattern whose only painting was redacted would otherwise keep
+/// its drawing -- text included -- in the saved file (#3647). A pattern some surviving paint
+/// still uses, or one the scope never saw, is left alone.
+/// `/Pattern` may be an indirect object like any other value, so it is resolved: reading the
+/// reference itself as a dictionary found none and pruned nothing, leaving the cell in the file.
+/// What is written back is a dictionary of this page's own, so pruning never reaches through a
+/// `/Pattern` dictionary another page shares. The pattern objects dropped are added to `pruned`,
+/// for [`unlink_pruned_patterns`].
+pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
+    let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
+    let mut dropped = 0;
+    for n in seen {
+        if !painted.contains(n)
+            && let Some(value) = pat.get(n)
+        {
+            // Every object along the reference chain: a name can lead to a reference-valued
+            // object whose value is the cell, and the cell is what must not stay reachable.
+            let mut next = value.as_ref();
+            for _ in 0..MAX_DEPTH {
+                let Some(reference) = next else { break };
+                pruned.push(reference);
+                next = match &*doc.get(reference) {
+                    Object::Ref(r) => Some(*r),
+                    _ => None,
+                };
+            }
+            pat.remove(n);
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        if pat.is_empty() {
+            res.remove(b"Pattern");
+        } else {
+            res.set(b"Pattern".to_vec(), Object::Dict(pat));
+        }
+    }
+    dropped
+}
+
+/// Unlink the patterns a page's rewrite pruned (`pruned`) from page-tree nodes whose
+/// `/Resources` no page inherits any more: a full save keeps whatever Root still reaches, so a
+/// `/Pages` node above the page that still names the cell would keep it in the file. That happens
+/// when the page's nearest holder was retired but a holder further up, which it shadowed, still
+/// names the pattern. A holder some page still inherits from is left alone; whatever stays
+/// reachable is checked by `pattern_guard`, which refuses a retained cell it cannot prove safe.
+/// When any node's `/Parent` disagrees with where the `/Kids` tree puts it (or the root has
+/// one), which holder a page inherits from is ambiguous and a node may be reached only through
+/// `/Parent`, so nothing is unlinked and the guard, which follows `/Parent` too, decides.
+pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> Result<(), RedactError> {
+    if pruned.is_empty() {
+        return Ok(());
+    }
+    let pruned: HashSet<ObjRef> = pruned.iter().copied().collect();
+    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
+    // Every node with a /Resources of its own, and whether any page inherits from it (it is the
+    // nearest holder above a page, or the page itself). Cycles are cut as in `unlink_doomed`.
+    let mut holders: Vec<(ObjRef, bool)> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut consistent = true;
+    let mut stack: Vec<(ObjRef, Option<ObjRef>, Option<usize>)> = vec![(top, None, None)];
+    seen.insert(top);
+    while let Some((node, parent, mut holder)) = stack.pop() {
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { continue };
+        // Every node's /Parent must be the node /Kids reached it from, and the root has none.
+        // A node reached only through a /Parent link is then impossible here; when the links
+        // disagree, the guard inspects every node they reach instead. A /Parent that is not a
+        // reference (a direct dictionary, written inline by a full save) never agrees.
+        let agrees = match d.get(b"Parent") {
+            None => parent.is_none(),
+            Some(Object::Ref(r)) => Some(*r) == parent,
+            Some(_) => false,
+        };
+        if !agrees {
+            consistent = false;
+            break;
+        }
+        if d.contains(b"Resources") {
+            holders.push((node, false));
+            holder = Some(holders.len() - 1);
+        }
+        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+        if is_pages {
+            // Borrowed, not copied: a /Kids array can be shared by many hostile nodes.
+            let kids_object = d.get(b"Kids").map(|k| doc.resolve(k));
+            for kid in kids_object.as_deref().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_ref) {
+                // A node reached twice (a shared /Kids entry or a cycle) has a /Parent that agrees
+                // with at most one of the nodes above it.
+                if !seen.insert(kid) || seen.len() > 1_000_000 {
+                    consistent = false;
+                    break;
+                }
+                stack.push((kid, Some(node), holder));
+            }
+            if !consistent {
+                break;
+            }
+        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
+            h.1 = true;
+        }
+    }
+    if !consistent {
+        return Ok(());
+    }
+    for (node, inherited) in holders {
+        if inherited {
+            continue;
+        }
+        let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
+            continue;
+        };
+        let mut pat = res_dict(doc, &res, b"Pattern");
+        let names: Vec<Vec<u8>> = pat.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| pruned.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        if names.is_empty() {
+            continue;
+        }
+        for n in &names {
+            pat.remove(n);
+        }
+        if pat.is_empty() {
+            res.remove(b"Pattern");
+        } else {
+            res.set(b"Pattern".to_vec(), Object::Dict(pat));
+        }
+        // A private copy on this node: the dictionary object may be shared with other nodes.
+        doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
