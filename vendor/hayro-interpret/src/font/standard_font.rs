@@ -233,6 +233,13 @@ pub(crate) fn select_standard_font(
         _ => {}
     }
 
+    // PdfCraft patch (98): `SymbolMT` (the name Symbol has as a TrueType font) and the style
+    // variants `Symbol,Bold`, `SymbolMT,Italic` or `Symbol-Bold` are the Symbol font, drawn with
+    // its built-in encoding like `Symbol` itself, whatever `/Encoding` and flags they declare.
+    if matches!(name.split([',', '-']).next(), Some("Symbol" | "SymbolMT")) {
+        return Some((StandardFont::Symbol, true));
+    }
+
     // Now, we bruteforce, trying to determine a suitable font based on the
     // keywords that appear in the name.
     let lower = name.to_ascii_lowercase();
