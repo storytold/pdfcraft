@@ -230,7 +230,7 @@ pub fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Pl
 }
 
 /// [`plan_for`] with Windows' `SystemRoot` given, so a test needn't set it.
-fn plan_with_root(os: &str, default: &DefaultMail, compose: &Compose, system_root: Option<&std::ffi::OsStr>) -> Result<Plan, MailError> {
+pub fn plan_with_root(os: &str, default: &DefaultMail, compose: &Compose, system_root: Option<&std::ffi::OsStr>) -> Result<Plan, MailError> {
     let path = compose.path.to_string_lossy().into_owned();
     let offer = |program: Option<String>, why: Why| Plan { program, route: Route::Fallback { why, fallback: fallback(compose) } };
     match (os, default) {
