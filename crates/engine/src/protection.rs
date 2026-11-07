@@ -1,6 +1,10 @@
 //! Password protection to apply, and the security a document has.
 
-use crate::EditError;
+use std::sync::Arc;
+
+use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
+
+use crate::{CertificateKey, EditError};
 
 /// Document Properties ▸ Security.
 #[derive(Clone, Debug, PartialEq)]
@@ -148,6 +152,66 @@ impl Protection {
         }
         Ok(())
     }
+}
+
+/// Certificate security to apply (§7.6.5): the file encrypted for `recipients`, each with the
+/// permissions their envelope carries (`-1`: everything, what the author gives themself).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateProtection {
+    pub recipients: Vec<CertificateRecipient>,
+    /// AES-256 (Acrobat X and later) or AES-128 (Acrobat 7 and later).
+    pub algorithm: pdfcraft_cos::Algorithm,
+    pub encrypt_metadata: bool,
+    /// The file key's seed, fresh from [`Session::new_seed`](crate::Session::new_seed).
+    pub seed: [u8; 20],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateRecipient {
+    /// The certificate, DER.
+    pub certificate: Vec<u8>,
+    /// Permission bits as `/P` (§7.6.4.2, Table 22); `-1` for everything.
+    pub permissions: i32,
+}
+
+/// Whether the document's next save is certificate security (`/Adobe.PubSec`): its working
+/// bytes cannot be read by the renderer, which gets a decrypted copy instead.
+pub(crate) fn certificate_secured(cos: &pdfcraft_cos::Document) -> bool {
+    cos.output_handler().is_some_and(|h| h.dict().filter == pdfcraft_cos::PUBSEC_FILTER)
+}
+
+/// The document as it is now, with no encryption: what the renderer and inspector read when
+/// the file itself is certificate-protected.
+pub(crate) fn plain_copy(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    let mut plain = cos.clone();
+    plain.remove_encryption();
+    write_full(&plain, &SaveOptions::default()).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+}
+
+/// The working file: the file as opened or last saved, plus one appended update with the unsaved
+/// edits. A certificate-protected document's working file stays encrypted; its
+/// [`Document::bytes`](crate::Document::bytes) are a decrypted copy that must not leave memory.
+pub(crate) fn working_file(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    if cos.is_modified() {
+        write_incremental(cos, &SaveOptions::default()).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+    } else {
+        Ok(cos.bytes().clone())
+    }
+}
+
+/// What one of `identities` makes of the envelopes: the seed and permissions of the first
+/// envelope addressed to it.
+pub(crate) fn unlock_with_identities(identities: &[Arc<pdfcraft_sign::DigitalId>], envelopes: &[Vec<u8>]) -> Option<CertificateKey> {
+    for id in identities {
+        for env in envelopes {
+            if let Ok(Some(content)) = pdfcraft_sign::envelope::open(env, id)
+                && let Some((seed, permissions)) = pdfcraft_cos::permissions_from_envelope(&content)
+            {
+                return Some(CertificateKey { seed, permissions });
+            }
+        }
+    }
+    None
 }
 
 /// Opened as owner, or nothing is restricted (no permissions password was set): security may

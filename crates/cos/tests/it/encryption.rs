@@ -5,7 +5,10 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use pdfcraft_cos::{Algorithm, Auth, CosError, Document, NewEncryption, ObjRef, Object, PdfString, SaveOptions, write_full, write_incremental};
+use pdfcraft_cos::{
+    Algorithm, Auth, CosError, Credential, Document, NewEncryption, ObjRef, Object, PdfString, PublicKeyEncryption, SaveOptions, write_full,
+    write_incremental,
+};
 
 const SECRET: &str = "BT /F1 18 Tf 20 100 Td (Secret page) Tj ET";
 
@@ -438,6 +441,65 @@ fn an_earlier_revision_opens_with_the_documents_own_credentials() {
         // An unencrypted file opens as it always does.
         assert_eq!(content(&current.open_with_same_credentials(Arc::new(fixture())).unwrap()), SECRET, "{alg:?}");
     }
+}
+
+/// The first page's content, decoded (object numbers change on a full save).
+fn page_content(doc: &Document) -> Option<Vec<u8>> {
+    let root = doc.get(doc.root()?);
+    let pages = root.as_dict()?.get(b"Pages").cloned()?;
+    let pages = doc.resolve(&pages);
+    let kids = pages.as_dict()?.get(b"Kids").cloned()?;
+    let kid = doc.resolve(&kids).as_array()?.first().cloned()?;
+    let page = doc.resolve(&kid);
+    let contents = page.as_dict()?.get(b"Contents").cloned()?;
+    let contents = doc.resolve(&contents);
+    let Object::Stream(stream) = contents.as_ref() else { return None };
+    stream.decoded().ok()
+}
+
+fn info_subject(doc: &Document) -> Option<String> {
+    let info = doc.trailer().get(b"Info").cloned()?;
+    doc.resolve(&info).as_dict()?.get(b"Subject").and_then(Object::as_string).map(PdfString::to_text)
+}
+
+#[test]
+fn public_key_security_round_trips_through_a_file() {
+    // The envelopes stand in for pdfcraft-sign's: the handler only hashes them.
+    let recipients = vec![b"envelope for Ada".to_vec(), b"envelope for Bo".to_vec()];
+    let seed = [42u8; 20];
+    let params = PublicKeyEncryption { algorithm: Algorithm::Aes256, recipients: recipients.clone(), seed, permissions: -1, encrypt_metadata: true };
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_public_key_encryption(&params).unwrap();
+    assert!(doc.encryption_changed());
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the content is encrypted");
+    assert!(bytes.windows(12).any(|w| w == b"Adobe.PubSec"));
+    // Without a certificate the opener names the envelopes, so a reader can try its keys.
+    match Document::open(Arc::new(bytes.clone())) {
+        Err(CosError::NeedsCertificate(found)) => assert_eq!(found, recipients),
+        other => panic!("expected NeedsCertificate, got {other:?}"),
+    }
+    // With the seed (what an envelope gives up) the document reads.
+    let opened = Document::open_with_credential(Arc::new(bytes.clone()), &Credential::Certificate { seed, permissions: -1 }).unwrap();
+    assert_eq!(opened.security().map(|s| s.auth()), Some(Auth::Owner));
+    assert_eq!(page_content(&opened).as_deref(), Some(SECRET.as_bytes()));
+    // A wrong seed decrypts to rubbish rather than the text.
+    let wrong = Document::open_with_credential(Arc::new(bytes.clone()), &Credential::Certificate { seed: [1; 20], permissions: -1 }).unwrap();
+    assert_ne!(page_content(&wrong).as_deref(), Some(SECRET.as_bytes()), "a wrong seed must not read the text");
+    // An incremental save keeps the public-key handler, and the saved file opens the same way.
+    let mut edited = opened;
+    let Some(Object::Ref(info)) = edited.trailer().get(b"Info").cloned() else { panic!("Info") };
+    edited.update_dict(info, |d| d.set(b"Subject".to_vec(), Object::String(PdfString::text("private")))).unwrap();
+    let saved = write_incremental(&edited, &SaveOptions::default()).unwrap();
+    let again = Document::open_with_credential(Arc::new(saved), &Credential::Certificate { seed, permissions: -1 }).unwrap();
+    assert_eq!(info_subject(&again).as_deref(), Some("private"));
+    // AES-128 too, with metadata left in clear.
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_public_key_encryption(&PublicKeyEncryption { algorithm: Algorithm::Aes128, encrypt_metadata: false, ..params.clone() }).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let opened = Document::open_with_credential(Arc::new(bytes), &Credential::Certificate { seed, permissions: -1 }).unwrap();
+    assert!(!opened.security().unwrap().encrypts_metadata());
+    assert_eq!(page_content(&opened).as_deref(), Some(SECRET.as_bytes()));
 }
 
 /// `protect`, with the `/Encrypt` dictionary written inline in the trailer, as MuPDF writes it,

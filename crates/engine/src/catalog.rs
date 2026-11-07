@@ -289,7 +289,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             ToolSection {
                 title: "Advanced options",
                 items: &[
-                    item("Encrypt with certificate", "file-lock-2", "protect.certificate", Planned("M8")),
+                    item("Encrypt with certificate", "file-lock-2", "protect.certificate", Ready),
                     item("Security properties", "shield-check", "protect.properties", Ready),
                     item("Remove security", "lock-open", "protect.remove", Ready),
                 ],

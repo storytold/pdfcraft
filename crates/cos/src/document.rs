@@ -25,8 +25,8 @@ pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
 pub(crate) use state::ObjectReader;
+pub use state::{Credential, ReadState, SourceIdentity};
 use state::{ObjStm, Slot};
-pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
 use state::{SECTION_READS, held_bytes, objstm_member};
 use xref::XrefIndex;
