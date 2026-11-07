@@ -3359,6 +3359,26 @@ fn printing_applies_the_print_auto_state() {
     let id = s.open("auto-state.pdf", None, Arc::new(pdf), None).unwrap();
     let (red, green, shown_blue) = colours(&render_page(&s, id));
     assert!(red > 100 && green == 0, "on screen, red shows and green doesn't: {red} red, {green} green");
+    // The print dialog's preview shows the page as it prints, the view as it shows; so after a
+    // Layers panel change too.
+    let preview = |s: &Session, tag: u64| {
+        let doc = s.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.display.clone(), display_config(&doc.config));
+        colours(&renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, tag, ..Default::default() }))
+    };
+    let view_entry = s.get(id).unwrap().info.layers.iter().position(|l| l.name == "View entry").unwrap();
+    let mut printed_blue = Vec::new();
+    for _ in 0..2 {
+        let (red, green, blue) = preview(&s, pdfcraft_render::PRINT_TAG);
+        assert!(red == 0 && green > 100, "the preview shows the print: {red} red, {green} green");
+        printed_blue.push(blue);
+        let (red, green, _) = preview(&s, 0);
+        assert!(red > 100 && green == 0, "the view is unchanged: {red} red, {green} green");
+        // Hidden after the first round, shown again after the second.
+        assert!(s.set_layer_visible(id, view_entry, printed_blue.len() == 2));
+    }
+    // Hidden in the panel, View entry (no Print recommendation) leaves the preview too.
+    assert!(printed_blue[1] * 4 < printed_blue[0] * 3, "the preview follows the panel: {printed_blue:?} blue");
     for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
         let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
         let mut out = Session::new();
@@ -3388,6 +3408,55 @@ fn printing_applies_the_print_auto_state() {
             assert!(config.as_dict().is_some_and(|d| !d.contains(b"AS")), "the print copy keeps /AS");
         }
     }
+}
+
+/// The print auto state of `layers` (object numbers from 5) in a document whose default
+/// configuration has `auto` as its `/AS` and `groups` as the layers' dictionaries.
+fn print_states_of(auto: &str, groups: &[&str]) -> Vec<bool> {
+    let ocgs: String = (0..groups.len()).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [{ocgs}] /D << /AS {auto} >> >> >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    objs.extend(groups.iter().map(|g| g.as_bytes().to_vec()));
+    let cos = pdfcraft_cos::Document::open(Arc::new(pdf_of_objects(&objs))).unwrap();
+    let layers: Vec<Layer> = (0..groups.len()).map(|i| Layer { id: (i as u32 + 5, 0), name: format!("{i}"), visible: true, initial: true }).collect();
+    crate::print_layer_states(&cos, &layers).expect("there are Print entries").iter().map(|l| l.visible).collect()
+}
+
+/// ISO 32000-2 §8.11.4.4: a group prints only if every category of every Print entry naming it
+/// recommends ON. A Print category (`/PrintState /ON`) and a View category of another Print entry
+/// (`/ViewState /OFF`) disagree, so the group stays off; with both ON it prints. A `/Category`
+/// written as a single name (Table 101 asks for an array) is read as one.
+#[test]
+fn a_layer_prints_only_if_every_recommendation_is_on() {
+    let auto = "[<< /Event /Print /OCGs [5 0 R 6 0 R] /Category [/Print] >> << /Event /Print /OCGs [5 0 R 6 0 R] /Category [/View] >> \
+                << /Event /Print /OCGs [7 0 R] /Category /Print >>]";
+    let states = print_states_of(
+        auto,
+        &[
+            "<< /Type /OCG /Name (Disagree) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>",
+            "<< /Type /OCG /Name (Agree) /Usage << /View << /ViewState /ON >> /Print << /PrintState /ON >> >> >>",
+            "<< /Type /OCG /Name (Single name) /Usage << /Print << /PrintState /OFF >> >> >>",
+        ],
+    );
+    assert_eq!(states, [false, true, false]);
+}
+
+/// At most 1,024 `/AS` entries are read: an entry past them that would turn the layer off is not
+/// reached, while the same entry within them is.
+#[test]
+fn the_print_auto_state_reads_a_bounded_number_of_entries() {
+    let layer = "<< /Type /OCG /Name (Layer) /Usage << /Print << /PrintState /OFF >> >> >>";
+    let other = "<< /Type /OCG /Name (Other) >>";
+    let auto = |before: usize| {
+        let filler = "<< /Event /Print /OCGs [6 0 R] /Category [/Print] >> ".repeat(before);
+        format!("[{filler} << /Event /Print /OCGs [5 0 R] /Category [/Print] >>]")
+    };
+    assert_eq!(print_states_of(&auto(1023), &[layer, other]), [false, true], "the 1,024th entry is read");
+    assert_eq!(print_states_of(&auto(1024), &[layer, other]), [true, true], "the 1,025th entry is not");
 }
 
 /// Reading the print auto state is bounded over all `/AS` entries together: 1,024 Print entries
