@@ -177,7 +177,7 @@ impl PdfCraftApp {
             self.views[i].picked_image = None;
             return;
         }
-        let copy = ctx.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        let copy = self.page_keys.clipboard(ctx).copy;
         if !copy || self.views[i].selected_text().is_some() {
             return;
         }

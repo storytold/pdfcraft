@@ -784,8 +784,12 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert_eq!(aliased_hit_tests(source), aliases);
 }
 
-/// egui's raw key state: a key pressed, held, let go or taken, and the key events themselves.
-const RAW_KEY_READS: [&str; 9] = [
+/// egui's raw key state: a key pressed, held, let go or taken, and the key and clipboard events
+/// themselves.
+const RAW_KEY_READS: [&str; 12] = [
+    "Event::Copy",
+    "Event::Cut",
+    "Event::Paste",
     "key_pressed(",
     "key_released(",
     "key_down(",
@@ -799,13 +803,18 @@ const RAW_KEY_READS: [&str; 9] = [
 
 /// Functions under `canvas/` and `tools/`, and in `app/keys.rs`, that read egui's keys themselves
 /// because the keys are not the pages': (file, function, why).
-const NOT_PAGE_KEYS: [(&str, &str, &str); 16] = [
-    ("app/keys.rs", "shortcuts", "the app's own keys before the pages': Select all, and Escape leaving full screen"),
+const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
+    (
+        "app/clipboard.rs",
+        "clipboard_keys",
+        "the pages' clipboard, behind its `page_keys.over()` check: Paste's text and images, and ⌘V read as a chord",
+    ),
+    ("app/keys.rs", "select_all_keys", "Select all, a chord that waits for a menu of the menu bar as the registered commands' do"),
     ("canvas/area.rs", "glide_interrupted", "any key stops the touchpad's glide"),
     ("canvas/autoscroll.rs", "update_latched", "Escape ends the middle-button scroll, which holds the whole view"),
     ("canvas/autoscroll.rs", "escape", "Escape ends the middle-button scroll, which holds the whole view"),
     ("canvas/find.rs", "find_bar", "the Find field's own keys, while it has the focus"),
-    ("canvas/navigation.rs", "view_chords", "the view's chords: a command's chord closes a menu as it runs, as the registry's do"),
+    ("canvas/navigation.rs", "view_chords", "the view's chords, which wait for a menu of the menu bar as the registered commands' do"),
     ("canvas/page_input.rs", "cancel_on_escape", "Escape cancels a press the pages hold, which goes on under a dialog opened during it"),
     ("tools/calc_order_ui.rs", "panel", "the Calculation order panel's own Alt+arrows"),
     ("tools/comments/composer.rs", "submit_key", "the comment field's own Enter, while it has the focus (the Comments panel's too)"),
@@ -820,10 +829,10 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 16] = [
 
 /// The files whose key reads the key guard checks, relative to `src`: every file under `canvas/`
 /// and `tools/` and the canvas's root, whether or not it is a page module yet, and the app's own
-/// keys; not their tests, and not `PageKeys` itself.
+/// keys and clipboard; not their tests, and not `PageKeys` itself.
 fn key_files() -> Vec<String> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = vec!["canvas.rs".to_owned(), "app/keys.rs".to_owned()];
+    let mut files = vec!["canvas.rs".to_owned(), "app/keys.rs".to_owned(), "app/clipboard.rs".to_owned()];
     let mut dirs = vec![src.join("canvas"), src.join("tools")];
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(dir).expect("source directory") {

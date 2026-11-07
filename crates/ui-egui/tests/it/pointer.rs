@@ -2359,3 +2359,45 @@ fn delete_with_a_menu_open_leaves_the_selected_picture() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was deleted");
     assert!(s.views[0].image_selection.is_some(), "and the picture is still selected");
 }
+
+/// The Hotbar tools window, left open when full screen hides it, holds no keys there: the arrows
+/// still turn the page. It held every page key until the window was drawn again.
+#[test]
+fn a_hotbar_window_hidden_by_full_screen_holds_no_keys() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    let before = h.state().views[0].current;
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
+}
+
+/// With a menu of the menu bar open, the view's chords wait, as the registered commands' do: ⌘=
+/// zooms nothing. It zoomed the view behind the menu.
+#[test]
+fn a_view_chord_with_a_menu_open_waits() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    let before = h.state().views[0].zoom;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].zoom, before, "⌘= with a menu open zooms nothing");
+}
+
+/// In Organize Pages, a Cut with a menu of the menu bar open is the menu's: the pages stay. It cut
+/// the current page.
+#[test]
+fn a_cut_with_a_menu_open_leaves_organize_pages_alone() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].organize = true;
+    h.run_steps(4);
+    crate::support::open_menu(&mut h, "View");
+    h.event(egui::Event::Cut);
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 2, "no page was cut");
+}

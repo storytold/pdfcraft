@@ -9,6 +9,14 @@
 
 use egui::{Context, Event, Key, Modifiers};
 
+/// A frame's Copy, Cut and Paste, as egui delivers them (⌘C, ⌘X, ⌘V, or a menu's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Clipboard {
+    pub copy: bool,
+    pub cut: bool,
+    pub paste: bool,
+}
+
 /// One frame's keyboard, as the pages see it: their keys, or none while something is over them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PageKeys {
@@ -33,7 +41,8 @@ impl PageKeys {
         !self.over && ctx.input(|i| i.key_pressed(key))
     }
 
-    /// Take `key`, pressed with no modifier, for the pages: nothing after reads it.
+    /// Take `key`, pressed without ⌘ or Ctrl (egui lets an extra Shift or Alt through), for the
+    /// pages: nothing after reads it.
     pub(crate) fn take(self, ctx: &Context, key: Key) -> bool {
         !self.over && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, key))
     }
@@ -51,6 +60,18 @@ impl PageKeys {
                 _ => true,
             });
         });
+    }
+
+    /// The frame's Copy, Cut and Paste for the pages: none while something is over them. They stay
+    /// for whatever reads them next.
+    pub(crate) fn clipboard(self, ctx: &Context) -> Clipboard {
+        if self.over {
+            return Clipboard::default();
+        }
+        ctx.input(|i| {
+            let any = |f: fn(&Event) -> bool| i.events.iter().any(f);
+            Clipboard { copy: any(|e| matches!(e, Event::Copy)), cut: any(|e| matches!(e, Event::Cut)), paste: any(|e| matches!(e, Event::Paste(_))) }
+        })
     }
 
     /// Something is over the pages: their keys wait.
@@ -122,6 +143,14 @@ mod tests {
             assert_eq!(seen, [Key::ArrowRight, Key::ArrowLeft, Key::Escape]);
             assert!(!ctx.input(|i| i.key_pressed(Key::ArrowLeft)), "the press taken is gone");
             assert!(ctx.input(|i| i.key_pressed(Key::ArrowRight) && i.key_pressed(Key::Escape)), "the others stay");
+        });
+    }
+
+    #[test]
+    fn the_clipboard_is_the_pages_only_with_nothing_over_them() {
+        frame(vec![Event::Copy, Event::Paste("text".into())], |ctx| {
+            assert_eq!(PageKeys::new(true).clipboard(ctx), Clipboard::default());
+            assert_eq!(PageKeys::new(false).clipboard(ctx), Clipboard { copy: true, cut: false, paste: true });
         });
     }
 

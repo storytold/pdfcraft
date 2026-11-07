@@ -32,34 +32,19 @@ impl PdfCraftApp {
             return;
         }
         // The in-window menu bar holds the keys while one of its menus is open or it has the
-        // keyboard (Alt, F10); a command shortcut leaves it and runs.
-        craft_menu::bar::leave_for_shortcut(ctx);
-        if !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx) {
+        // keyboard (Alt, F10); a command shortcut has left it already (`logic`) and runs. The
+        // chords wait meanwhile: the registered commands', Select all and the view's.
+        let chords = !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx);
+        if chords {
             self.registry_shortcuts(ctx);
         }
         // (Esc closes a Combine file shown large first.)
-        if self.full_screen && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if self.full_screen && self.combine_tab.preview.is_none() && self.page_keys.pressed(ctx, Key::Escape) {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {
-            // Select all belongs to the document or page grid, unless a text field or
-            // overlay owns the keyboard. Other canvas shortcuts keep their own handling.
-            let pages_owns_keyboard =
-                self.right == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
-            if self.dialog.is_none()
-                && !self.palette_open
-                && (pages_owns_keyboard || !ctx.egui_wants_keyboard_input())
-                && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
-            {
-                if pages_owns_keyboard {
-                    self.views[i].select_all_pages();
-                } else if self.is_preparing() {
-                    if let Some(doc) = self.session.get(self.views[i].id) {
-                        prepare::select_all(&mut self.views[i], &doc.form);
-                    }
-                } else {
-                    self.views[i].select_all();
-                }
+            if chords {
+                self.select_all_keys(i, ctx);
             }
             self.tool_keys(i, ctx);
             let keys = self.page_keys;
@@ -78,7 +63,7 @@ impl PdfCraftApp {
             {
                 prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, self.scroll_speed);
+            canvas::shortcuts(&mut self.views[i], ctx, keys, chords, self.scroll_speed);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
@@ -86,6 +71,29 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// ⌘A selects all of the document or the page grid, unless a text field or overlay owns the
+    /// keyboard.
+    fn select_all_keys(&mut self, i: usize, ctx: &egui::Context) {
+        use egui::Key;
+        let pages_owns_keyboard =
+            self.right == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        if self.dialog.is_none()
+            && !self.palette_open
+            && (pages_owns_keyboard || !ctx.egui_wants_keyboard_input())
+            && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
+        {
+            if pages_owns_keyboard {
+                self.views[i].select_all_pages();
+            } else if self.is_preparing() {
+                if let Some(doc) = self.session.get(self.views[i].id) {
+                    prepare::select_all(&mut self.views[i], &doc.form);
+                }
+            } else {
+                self.views[i].select_all();
+            }
+        }
+    }
+
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog, the palette
     /// or a menu has the keyboard.

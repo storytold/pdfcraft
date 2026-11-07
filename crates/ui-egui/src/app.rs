@@ -339,17 +339,15 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
-    /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
-    /// on the document underneath it.
     /// Whether something over the pages has the keyboard: a dialog or prompt, the palette, the
     /// hotbar's tools window, a popup or a menu of the menu bar. `menu_keys`: this frame carries the
-    /// keys a menu click stands for (Edit ▸ Delete), which are the pages' though the menu bar still
-    /// counts as open on that frame.
+    /// keys a menu click stands for (Edit ▸ Delete), which are the pages' whatever popup is open (a
+    /// click in a native menu bar leaves one open) and though the menu bar still counts as open on
+    /// that frame.
     pub(crate) fn over_pages(&self, ctx: &egui::Context, menu_keys: bool) -> bool {
         self.covers_pages()
-            || self.hotbar.picker_open()
-            || egui::Popup::is_any_open(ctx)
-            || !menu_keys && (craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx))
+            || self.hotbar.picker_over_pages(ctx)
+            || !menu_keys && (egui::Popup::is_any_open(ctx) || craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx))
     }
 
     /// A dialog, a prompt or the palette is drawn over the pages.
@@ -359,6 +357,8 @@ impl PdfCraftApp {
         self.modal_open() || self.pending_full_screen.is_some() || palette
     }
 
+    /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
+    /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
         self.dialog.is_some()
             || self.close_request.is_some()
@@ -623,6 +623,9 @@ impl eframe::App for PdfCraftApp {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
+        // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
+        // bar, so the chord runs in the same press, the pages' as well as the registry's.
+        craft_menu::bar::leave_for_shortcut(ctx);
         self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx, menu_keys));
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,

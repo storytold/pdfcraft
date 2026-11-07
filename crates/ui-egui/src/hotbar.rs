@@ -23,12 +23,16 @@ pub(crate) struct Hotbar {
     search: String,
     #[serde(skip)]
     picker_open: bool,
+    /// The pass the Hotbar tools window was last drawn on.
+    #[serde(skip)]
+    picker_shown: Option<u64>,
 }
 
 impl Hotbar {
-    /// The Hotbar tools window is open.
-    pub(crate) fn picker_open(&self) -> bool {
-        self.picker_open
+    /// The Hotbar tools window is over the pages: open, and drawn on the last pass. Read mode, full
+    /// screen and Organize don't draw the hotbar, and a window they hide holds no keys.
+    pub(crate) fn picker_over_pages(&self, ctx: &egui::Context) -> bool {
+        self.picker_open && self.picker_shown.is_some_and(|pass| pass.saturating_add(1) >= ctx.cumulative_pass_nr())
     }
 }
 
@@ -45,6 +49,7 @@ impl Default for Hotbar {
             placed: false,
             search: String::new(),
             picker_open: false,
+            picker_shown: None,
         }
     }
 }
@@ -872,6 +877,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
         data.insert_temp(egui::Id::unique("custom-hotbar"), shown.response.rect.size());
     });
     bar.picker_open = picker_open;
+    bar.picker_shown = picker_open.then(|| ctx.cumulative_pass_nr());
     app.hotbar = bar;
     if let Some(id) = run {
         app.execute(id);

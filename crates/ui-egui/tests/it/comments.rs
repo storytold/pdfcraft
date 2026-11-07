@@ -4365,6 +4365,7 @@ fn delete_with_a_menu_open_leaves_the_selected_comment() {
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the Delete");
 }
 
 /// Edit ▸ Delete removes the selected comment: the key a menu click stands for is not under the
@@ -4406,4 +4407,26 @@ fn an_arrow_with_a_menu_open_leaves_the_selected_comment_where_it_is() {
     h.key_press(egui::Key::ArrowRight);
     h.run_steps(3);
     assert_eq!(comments(&h)[0].rect, before, "not moved");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the arrow");
+}
+
+/// Edit ▸ Delete from the menu with the comment's own menu still open removes the comment: the
+/// key a menu click stands for is the pages', whatever popup is open. A click in a native menu bar
+/// never reaches the window, so the popup stays open; the Delete did nothing.
+#[test]
+fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
+    let mut h = selected_square();
+    let p = at(&h, 90.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }

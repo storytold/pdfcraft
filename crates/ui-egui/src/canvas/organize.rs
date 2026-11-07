@@ -169,10 +169,7 @@ fn organize_toolbar(
         let ctx = ui.ctx();
         let (del, esc) = (keys.take(ctx, Key::Delete) || keys.take(ctx, Key::Backspace), keys.take(ctx, Key::Escape));
         // ⌘C / ⌘X / ⌘V copy, cut and paste pages (egui delivers them as clipboard events).
-        let (copy, cut, paste) = ui.input(|i| {
-            let any = |f: &dyn Fn(&egui::Event) -> bool| i.events.iter().any(f);
-            (any(&|e| matches!(e, egui::Event::Copy)), any(&|e| matches!(e, egui::Event::Cut)), any(&|e| matches!(e, egui::Event::Paste(_))))
-        });
+        let crate::page_keys::Clipboard { copy, cut, paste } = keys.clipboard(ctx);
         if copy || cut {
             view.pending_action = Some(ViewAction::CopyPages { cut });
         }

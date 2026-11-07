@@ -352,24 +352,31 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
-/// The view's keys: its chords, then its plain keys.
-pub(crate) fn shortcuts(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::PageKeys, speed: crate::scroll_speed::ScrollSpeed) {
-    if let Some(arrows) = view_chords(view, ctx) {
+/// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
+/// keyboard, so chords may run (they wait for one, as the registered commands' do).
+pub(crate) fn shortcuts(
+    view: &mut DocView,
+    ctx: &egui::Context,
+    keys: crate::page_keys::PageKeys,
+    chords: bool,
+    speed: crate::scroll_speed::ScrollSpeed,
+) {
+    if let Some(arrows) = view_chords(view, ctx, chords) {
         view_keys(view, ctx, keys, speed, arrows);
     }
 }
 
-/// The view's chords: Find and its steps, rotation, zoom and the view history. Not held back by a
-/// menu, which a command's chord closes as it runs. `None` while a text field has the keyboard,
-/// and then it has the plain keys too; else whether the arrows are the view's (a focused radio
-/// button keeps them).
-fn view_chords(view: &mut DocView, ctx: &egui::Context) -> Option<bool> {
+/// The view's chords: Find and its steps, rotation, zoom and the view history, unless a menu of the
+/// menu bar has the keyboard (`chords`). `None` while a text field has the keyboard, and then it
+/// has the plain keys too; else whether the arrows are the view's (a focused radio button keeps
+/// them).
+fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<bool> {
     use egui::{Key, KeyboardShortcut, Modifiers};
-    if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
+    let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
+    if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
         view.open_find();
     }
     let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
-    let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
     // ⌘G / ⇧⌘G step through the matches from the find field too, as in Acrobat and Preview
     // (#2669): ahead of the text-input check, but only while there is a search to step.
     if view.find.is_some() {
