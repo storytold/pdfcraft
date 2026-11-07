@@ -351,6 +351,77 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
+/// Certify `fixture` with "no changes allowed" (DocMDP P=1).
+fn certified_p1() -> (DigitalId, TrustStore, Vec<u8>) {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    (id, trust, signed)
+}
+
+/// Add a signature widget to page 3's /Annots (not to /Fields), with value `v` and rectangle
+/// `rect`.
+fn add_sig_widget(doc: &mut Document, v: Option<&[(&[u8], Object)]>, rect: [i64; 4]) {
+    let mut w = Dict::new();
+    w.set(b"Type".to_vec(), Object::name("Annot"));
+    w.set(b"Subtype".to_vec(), Object::name("Widget"));
+    w.set(b"FT".to_vec(), Object::name("Sig"));
+    w.set(b"Rect".to_vec(), Object::Array(rect.map(Object::Int).to_vec()));
+    w.set(b"P".to_vec(), Object::Ref(ObjRef { num: 3, generation: 0 }));
+    if let Some(entries) = v {
+        let mut value = Dict::new();
+        for (k, o) in entries {
+            value.set(k.to_vec(), o.clone());
+        }
+        let vr = doc.add(Object::Dict(value));
+        w.set(b"V".to_vec(), Object::Ref(vr));
+    }
+    let wr = doc.add(Object::Dict(w));
+    doc.update_dict(ObjRef { num: 3, generation: 0 }, |pg| {
+        let mut a = pg.get(b"Annots").and_then(Object::as_array).cloned().unwrap_or_default();
+        a.push(Object::Ref(wr));
+        pg.set(b"Annots".to_vec(), Object::Array(a));
+    })
+    .unwrap();
+}
+
+/// Under P=1, a signature added after signing breaks the certification unless it is an invisible
+/// document timestamp. A visible overlay, an unsigned widget, an approval signature and a visible
+/// widget wearing a timestamp /SubFilter each break it; a genuine document timestamp does not.
+#[test]
+fn only_an_invisible_document_timestamp_survives_a_no_changes_certification() {
+    let (_, trust, signed) = certified_p1();
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed && s.certify == Some(1)).unwrap();
+    assert_eq!(check(&signed).status, Status::Valid, "{:?}", check(&signed).details);
+    let approval: &[(&[u8], Object)] = &[(b"Type", Object::name("Sig")), (b"SubFilter", Object::name("adbe.pkcs7.detached"))];
+    let timestamp: &[(&[u8], Object)] = &[(b"Type", Object::name("DocTimeStamp")), (b"SubFilter", Object::name("ETSI.RFC3161"))];
+    // Each of these breaks the certification: it is a change P=1 does not allow.
+    for (what, v, rect) in [
+        ("visible overlay widget", None, [0, 0, 300, 300]),
+        ("invisible unsigned widget", None, [0, 0, 0, 0]),
+        ("visible approval signature", Some(approval), [0, 0, 300, 300]),
+        ("invisible approval signature", Some(approval), [0, 0, 0, 0]),
+        ("visible widget wearing a timestamp subfilter", Some(timestamp), [0, 0, 300, 300]),
+    ] {
+        let edited = edit_after(&signed, |doc| add_sig_widget(doc, v, rect));
+        let s = check(&edited);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::SIGNATURE)), "{what}: {:?}", s.modification);
+        assert_ne!(s.status, Status::Valid, "{what}");
+    }
+}
+
+/// A genuine document timestamp, which draws nothing, is validation data P=1 permits: the
+/// certification stays valid.
+#[test]
+fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
+    let (_, trust, signed) = certified_p1();
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let stamped = pdfcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006120000Z").unwrap();
+    let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.certify == Some(1)).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
+}
+
 #[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -1547,6 +1618,145 @@ fn a_dictionary_labelled_metadata_is_not_a_metadata_change() {
             ])),
         );
     });
+}
+
+/// A one-page document whose text sits in an optional-content group (object 8) that the
+/// catalog's indirect `/OCProperties` (object 7) lists as shown.
+fn fixture_with_layer() -> Vec<u8> {
+    let content = b"/OC /oc1 BDC BT /F1 14 Tf 20 250 Td (Clause 4: the buyer pays) Tj ET EMC";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OCProperties 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /oc1 8 0 R >> >> /Annots [6 0 R] >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>".to_vec(),
+        b"<< /OCGs [8 0 R] /D << /ON [8 0 R] >> >>".to_vec(),
+        b"<< /Type /OCG /Name (Clause 4) >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Hide the clause: rewrite `/OCProperties` (object 7) so its group starts off, adding `extra`.
+fn hide_layer(doc: &mut Document, extra: &[(&str, Object)]) {
+    let mut d = dict_of(vec![("OCGs", Object::Array(vec![oref(8)])), ("D", Object::Dict(dict_of(vec![("OFF", Object::Array(vec![oref(8)]))])))]);
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    doc.set(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, Object::Dict(d));
+}
+
+#[test]
+fn an_existing_object_given_form_keys_after_signing_is_still_judged() {
+    // An existing object is judged by the role it had when signed, not only when a signed page
+    // draws it (#1787): the catalog's indirect /OCProperties decides which layers show, and a
+    // rewrite that hides the clause stays a change whatever form-field keys it adds.
+    assert_refused_at_every_level(&fixture_with_layer(), "other changes", |doc| hide_layer(doc, &[]));
+    let zeros = Object::Array(vec![Object::Int(0); 4]);
+    for extra in [
+        vec![("FT", Object::name("Tx"))],
+        vec![("DR", Object::Dict(pdfcraft_cos::Dict::new()))],
+        vec![("T", Object::String(PdfString::text("x"))), ("Kids", Object::Array(Vec::new()))],
+        vec![("Subtype", Object::name("Widget")), ("Rect", zeros.clone())],
+        vec![("Subtype", Object::name("Square")), ("Rect", zeros)],
+    ] {
+        assert_refused_at_every_level(&fixture_with_layer(), "other changes", |doc| hide_layer(doc, &extra));
+    }
+}
+
+#[test]
+fn an_unsigned_signature_widget_turned_into_a_comment_is_no_edit_of_it() {
+    // The empty signature field "Approval" (object 6) rewritten as a white /Square annotation that
+    // covers the signed text. Judged by what it was, it is a signature widget; but an annotation
+    // of another kind is no edit that widget permits, at any level.
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        let white = Object::Array(vec![Object::Int(1); 3]);
+        doc.set(
+            pdfcraft_cos::ObjRef { num: 6, generation: 0 },
+            Object::Dict(dict_of(vec![
+                ("Type", Object::name("Annot")),
+                ("Subtype", Object::name("Square")),
+                ("Rect", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+                ("C", white.clone()),
+                ("IC", white),
+                ("P", oref(3)),
+            ])),
+        );
+    });
+}
+
+/// `fixture()` with the form an indirect dictionary (object 7) listing the unsigned field.
+fn fixture_with_indirect_acroform() -> Vec<u8> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"<< /Fields [6 0 R] >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn the_forms_signed_fields_are_not_dropped_after_signing() {
+    // Signed, then timestamped. A later revision drops the form's /Fields, or empties it: the
+    // fields the timestamp covered, the signature among them, are gone from the form. That is no
+    // signature change, so the timestamp reports it as not permitted.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture_with_indirect_acroform()), &id, &opts()).unwrap();
+    let stamped = pdfcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006120000Z").unwrap();
+    let mut failures = Vec::new();
+    for (how, fields) in [("dropped", None), ("emptied", Some(Object::Array(Vec::new())))] {
+        let edited = edit_after(&stamped, |doc| {
+            doc.update_dict(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, |af| match &fields {
+                Some(f) => af.set(b"Fields".to_vec(), f.clone()),
+                None => {
+                    af.remove(b"Fields");
+                }
+            })
+            .unwrap();
+        });
+        let stamp = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.doc_timestamp).expect("the document timestamp");
+        if !matches!(stamp.modification, Modification::Disallowed(_)) {
+            failures.push(format!("/Fields {how}: {:?}, {:?}", stamp.status, stamp.modification));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A one-page document like `fixture()` (objects 1–6) plus a stream, object 7, with the given
@@ -2953,4 +3163,33 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         "{:?}",
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn the_catalogs_perms_do_not_change_under_no_changes() {
+    // /Perms names the certification signature (DocMDP). Under P=1 nothing may change, so a later
+    // revision that drops it, or points it elsewhere, breaks the certification.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let elsewhere = dict_of(vec![("DocMDP", oref(5))]);
+    for (how, perms) in [("dropped", None), ("pointed elsewhere", Some(Object::Dict(elsewhere)))] {
+        let edited = edit_after(&certified, |doc| {
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| match &perms {
+                Some(p) => c.set(b"Perms".to_vec(), p.clone()),
+                None => {
+                    c.remove(b"Perms");
+                }
+            })
+            .unwrap();
+        });
+        let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+        assert!(
+            s.status == Status::Invalid && matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::STRUCTURE)),
+            "/Perms {how} under P=1: {:?}, {:?}",
+            s.status,
+            s.modification
+        );
+    }
 }
