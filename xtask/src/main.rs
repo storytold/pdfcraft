@@ -8,7 +8,9 @@ mod demo_pdf;
 mod fuzz;
 mod gates;
 mod layers;
+mod license_check;
 mod macos_integration;
+mod netcheck;
 mod parity;
 mod screenshots;
 mod version;
@@ -23,16 +25,22 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     (
         "ci",
-        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, assets, deny, parity (stops at first failure)",
+        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, license-check, deny, parity (stops at first failure)",
         gates::ci,
     ),
     ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
     ("i18n-report", "Print the strings each interface language lacks (counts and a few keys); never fails", gates::i18n_report),
+    ("license-check", "Offline source licence documents, attribution and metadata", license_check::run),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),
     ("fuzz", "Mutation fuzzing of open/render/edit/save in child processes; findings in fuzz-out/ (--time 300)", fuzz::run),
     ("parity", "Validate parity/acrobat-features.toml against the registry, tools and tests; report progress (--json, --partial)", parity::run),
+    (
+        "netcheck",
+        "Record which network-capable crates the batch crates can reach in Cargo.lock, and fail on any reachable pair not in xtask/baselines/network-crates.json",
+        netcheck::run,
+    ),
     (
         "macos-integration",
         "Report macOS bundle, Quick Look, Spotlight and PDF integration diagnostics without mutating system state",

@@ -3,6 +3,7 @@
 //! Files are picked asynchronously and used on a later frame: desktop builds through `pickers`
 //! (a blocking picker crashes the app on macOS), browsers through `requests`.
 
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Edit, SplitBy};
@@ -28,49 +29,81 @@ pub enum FilePurpose {
     RedactWords,
 }
 
-/// Discover installed document fonts off the GUI thread, only when the picker is opened.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
+fn discover_fonts_safely(
+    discover: impl FnOnce() -> Vec<pdfcraft_engine::text_fonts::FontFile> + std::panic::UnwindSafe,
+) -> Vec<pdfcraft_engine::text_fonts::FontFile> {
+    std::panic::catch_unwind(discover).unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FontScanCache {
+    files: Option<Vec<pdfcraft_engine::text_fonts::FontFile>>,
+    loading: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FontScanCache {
+    fn begin(&mut self, reload: bool) -> bool {
+        if self.loading || (!reload && self.files.is_some()) {
+            return false;
+        }
+        self.loading = true;
+        self.files = None;
+        true
+    }
+
+    fn finish(&mut self, files: Vec<pdfcraft_engine::text_fonts::FontFile>) {
+        self.files = Some(files);
+        self.loading = false;
+    }
+}
+
+/// Discover installed document fonts off the GUI thread. Reload permits retrying a
+/// failed scan or discovering newly installed fonts without restarting the app.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn installed_font_files(ctx: &egui::Context, reload: bool) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
     use std::sync::{Mutex, OnceLock};
-    type Files = Arc<Mutex<Option<Vec<pdfcraft_engine::text_fonts::FontFile>>>>;
+    type Files = Arc<Mutex<FontScanCache>>;
     static CACHE: OnceLock<Files> = OnceLock::new();
-    let files = CACHE.get_or_init(|| {
-        let files: Files = Arc::new(Mutex::new(None));
+    let files = CACHE.get_or_init(|| Arc::new(Mutex::new(FontScanCache::default())));
+    let start = files.lock().is_ok_and(|mut state| state.begin(reload));
+    if start {
         let result = files.clone();
         let ctx = ctx.clone();
         if std::thread::Builder::new()
             .name("document-font-discovery".into())
             .spawn(move || {
-                let fonts = pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories());
+                let fonts = discover_fonts_safely(|| pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories()));
                 if let Ok(mut result) = result.lock() {
-                    *result = Some(fonts);
+                    result.finish(fonts);
                 }
                 ctx.request_repaint();
             })
             .is_err()
             && let Ok(mut result) = files.lock()
         {
-            *result = Some(Vec::new());
+            result.finish(Vec::new());
         }
-        files
-    });
-    files.lock().ok().and_then(|f| f.clone())
+    }
+    files.lock().ok().and_then(|f| f.files.clone())
 }
 
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
     if matches!(purpose, FilePurpose::TextFont { .. }) {
-        return dialog.add_filter("TrueType / OpenType font", &["ttf", "otf"]);
+        return dialog.add_filter_any_case("TrueType / OpenType font", &["ttf", "otf"]);
     }
     if purpose == FilePurpose::RedactWords {
-        return dialog.add_filter(tl!("Text"), &["txt"]);
+        return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
-        return dialog.add_filter("PDF", &["pdf"]);
+        return dialog.add_filter_any_case("PDF", &["pdf"]);
     }
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
-    dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
+    dialog.add_filter_any_case(tl!("PDF, images and text"), &all).add_filter_any_case("PDF", &["pdf"])
 }
 
 /// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
@@ -898,7 +931,7 @@ impl PdfCraftApp {
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("Comment and form data").to_string(), &extensions)
+                        .add_filter_any_case(tl!("Comment and form data").to_string(), &extensions)
                         .set_title(tl!("Import data").to_string());
                     let target = self.active_ids().map(|(_, id)| id);
                     self.ask_one(crate::pickers::Ask::File(dialog), target, import);
@@ -939,7 +972,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Export").to_string())
-                        .add_filter(ext.to_uppercase(), &[ext])
+                        .add_filter_any_case(ext.to_uppercase(), &[ext])
                         .set_file_name(format!("{stem}.{ext}"));
                     let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
@@ -959,7 +992,7 @@ impl PdfCraftApp {
         {
             let dialog = rfd::AsyncFileDialog::new()
                 .set_title(tl!("Select data files to merge").to_string())
-                .add_filter(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
+                .add_filter_any_case(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
             self.ask(crate::pickers::Ask::Files(dialog), None, |app, paths| {
                 let mut files = Vec::new();
                 for p in paths {
@@ -1004,7 +1037,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Save the spreadsheet").to_string())
-                        .add_filter("CSV", &["csv"])
+                        .add_filter_any_case("CSV", &["csv"])
                         .set_file_name("report.csv");
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                 }
@@ -1047,22 +1080,22 @@ impl PdfCraftApp {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
                     let d = rfd::AsyncFileDialog::new().set_title(title).set_file_name(format!("{stem}.xfdf"));
                     let d = if comments {
-                        d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
+                        d.add_filter_any_case("XFDF", &["xfdf"]).add_filter_any_case("FDF", &["fdf"])
                     } else if xfa {
                         // An XFA form's data, as Acrobat exports it, first.
                         d.set_file_name(format!("{stem}.xml"))
-                            .add_filter("XML", &["xml"])
-                            .add_filter("XDP", &["xdp"])
-                            .add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("XDP", &["xdp"])
+                            .add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     } else {
-                        d.add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("XML", &["xml"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                        d.add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     };
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
@@ -1175,5 +1208,30 @@ mod stem_tests {
             if path.is_dir() { out.extend(walk(&path)) } else { out.push(path) }
         }
         out
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod font_scan_tests {
+    #[test]
+    fn completed_and_failed_font_scans_can_be_reloaded_without_duplicate_workers() {
+        let mut cache = super::FontScanCache::default();
+        assert!(cache.begin(false));
+        assert!(!cache.begin(true), "a reload during discovery must not start another worker");
+        cache.finish(Vec::new());
+        assert!(!cache.begin(false), "reuse a finished scan until explicitly reloaded");
+        assert!(cache.begin(true), "an empty or failed scan can be retried");
+        cache.finish(vec![pdfcraft_engine::text_fonts::FontFile {
+            path: "installed.ttf".into(),
+            family: "Installed".into(),
+            face: "Installed".into(),
+        }]);
+        assert!(cache.begin(true), "a populated scan can discover newly installed fonts");
+        assert!(cache.files.is_none());
+    }
+
+    #[test]
+    fn a_panicking_font_scan_finishes_with_an_empty_list() {
+        assert!(super::discover_fonts_safely(|| panic!("synthetic font scan failure")).is_empty());
     }
 }
