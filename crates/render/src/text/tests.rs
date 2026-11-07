@@ -1965,3 +1965,102 @@ fn text_outside_the_crop_box_is_clipped() {
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
 }
+
+/// One glyph per text object, as a CAD or word-processor PDF writer draws shaped text: `text` in Helvetica
+/// remapped by `/ToUnicode`, base letters 600 units wide, combining marks 0 wide and placed at the pen after their
+/// base shifted by `mark_dx` points (a mark-positioning offset), words 260 units apart, with a space glyph or
+/// without one.
+fn one_glyph_per_show(text: &str, mark_dx: f32, space_glyphs: bool) -> Pdf {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let is_mark = |c: char| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM;
+    let mut chars: Vec<char> = Vec::new();
+    for c in text.chars() {
+        if !chars.contains(&c) {
+            chars.push(c);
+        }
+    }
+    let code = |c: char| 0x21 + chars.iter().position(|&k| k == c).unwrap();
+    let (size, base, space) = (20.0_f32, 600.0_f32, 260.0_f32);
+    let mut ops = String::new();
+    let mut x = 50.0_f32;
+    for c in text.chars() {
+        let at = if is_mark(c) { x + mark_dx } else { x };
+        if c != ' ' || space_glyphs {
+            ops.push_str(&format!("BT /F1 {size} Tf 1 0 0 1 {at:.3} 300 Tm <{:02X}> Tj ET\n", code(c)));
+        }
+        if c == ' ' {
+            x += space * size / 1000.0;
+        } else if !is_mark(c) {
+            x += base * size / 1000.0;
+        }
+    }
+    let width = |c: char| {
+        if is_mark(c) {
+            0
+        } else if c == ' ' {
+            260
+        } else {
+            600
+        }
+    };
+    let widths: Vec<Object> = chars.iter().map(|&c| Object::Integer(width(c))).collect();
+    let pairs: String = chars.iter().map(|&c| format!("<{:02X}> <{:04X}>\n", code(c), u32::from(c))).collect();
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /T def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange {} beginbfchar\n{pairs}endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+        chars.len()
+    );
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let mut differences = vec![Object::Integer(0x21)];
+    differences.extend(chars.iter().map(|_| Object::Name(b"a".to_vec())));
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "FirstChar" => 0x21, "LastChar" => 0x20 + chars.len() as i64,
+        "Widths" => widths, "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences }, "ToUnicode" => unicode
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(600), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+}
+
+/// #6517: Thai drawn one glyph per show operation, each zero-advance tone mark or above vowel starting a hair past
+/// its base's advance (or exactly at it, or back over the base), reads in content order: no mark moves after the
+/// next letter, and the word gaps read as spaces whether a space glyph is drawn or not. Copy and Find use this order.
+#[test]
+fn thai_marks_drawn_one_glyph_at_a_time_keep_their_place_and_words() {
+    let thai = "ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่";
+    for mark_dx in [0.4, 0.0, -6.0] {
+        for space_glyphs in [false, true] {
+            let text = extract_page(&one_glyph_per_show(thai, mark_dx, space_glyphs), 0, &InterpreterSettings::default()).unwrap();
+            assert_eq!(text.plain_text(), thai, "marks {mark_dx} pt past the pen, space glyphs {space_glyphs}");
+            for word in ["ห้อง", "ก๋วยเตี๋ยว", "น้ำ", "ที่นี่"] {
+                assert_eq!(text.find_opts(word, true, true).len(), 1, "{word:?} found as a whole word in {:?}", text.plain_text());
+            }
+        }
+    }
+}
+
+/// Combining marks of other left-to-right scripts ride on their base the same way: Devanagari signs (virama,
+/// anusvara, a below vowel; the spacing vowel sign ि is a letter of its own), and Latin combining accents.
+#[test]
+fn combining_marks_of_other_scripts_keep_their_place() {
+    for text in ["कुछ हिंदी स्कूल", "e\u{301}te\u{301} na\u{303}o"] {
+        let page = extract_page(&one_glyph_per_show(text, 0.4, false), 0, &InterpreterSettings::default()).unwrap();
+        assert_eq!(page.plain_text(), text);
+    }
+}
+
+/// A line drawn right to left glyph by glyph still reads by x, and a mark drawn right after its letter moves with
+/// it. A mark that starts far from the glyph before it is not taken for a mark on that glyph: it goes by its own x.
+#[test]
+fn a_mark_moves_with_its_letter_in_a_line_drawn_backwards() {
+    let v = vec![g("c", 24.0, 10.0, 30.0), g("b", 18.0, 10.0, 24.0), g("\u{301}", 24.3, 10.0, 29.3), g("a", 12.0, 10.0, 18.0)];
+    assert_eq!(layout(v).plain_text(), "ab\u{301}c");
+    let v = vec![g("a", 12.0, 10.0, 18.0), g("b", 18.0, 10.0, 24.0), g("c", 24.0, 10.0, 30.0), g("\u{301}", 13.0, 10.0, 18.0)];
+    assert_eq!(layout(v).plain_text(), "a\u{301}bc");
+}

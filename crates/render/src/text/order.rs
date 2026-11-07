@@ -152,6 +152,45 @@ pub(super) struct Scratch {
     pub(super) logical: Vec<usize>,
     /// `placed` with the marks merged in, built before it is swapped in.
     pub(super) merged: Vec<usize>,
+    /// For each glyph of the page, the glyph a combining mark drawn right after it rides on (the start of its cluster),
+    /// or the glyph itself. Placement sorts clusters, so a mark keeps its content-stream place after its base (#6517).
+    /// A glyph past its end is its own anchor.
+    pub(super) anchor: Vec<usize>,
+    /// The gap left of each glyph of `placed`, between clusters; `None` for the first glyph and for a riding mark.
+    pub(super) cluster_gap: Vec<Option<f32>>,
+}
+
+/// Fills `sc.cluster_gap` with the gap left of each glyph of `sc.placed`, between clusters: a combining mark riding on a
+/// glyph has none (no word ever starts at it), and its cluster ends at the base's right edge or the furthest mark start.
+/// A zero-advance mark's box is no measure of where the pen went (`draw_glyph` widens it to its outline or half an em).
+pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
+    sc.cluster_gap.clear();
+    let mut right = f32::NEG_INFINITY;
+    for (w, &c) in sc.placed.iter().enumerate() {
+        let Some(g) = glyphs.get(c) else {
+            sc.cluster_gap.push(None);
+            continue;
+        };
+        if anchor_of(&sc.anchor, c) != c {
+            right = right.max(g.rect[0]);
+            sc.cluster_gap.push(None);
+        } else {
+            sc.cluster_gap.push((w > 0).then_some(g.rect[0] - right));
+            right = g.rect[2];
+        }
+    }
+}
+
+/// The glyph that glyph `i`'s cluster starts at ([`Scratch::anchor`]).
+fn anchor_of(anchor: &[usize], i: usize) -> usize {
+    anchor.get(i).copied().unwrap_or(i)
+}
+
+/// Orders glyphs by the x of their cluster's first glyph, keeping each cluster together and in content order.
+fn by_cluster(glyphs: &[&TextGlyph], anchor: &[usize], a: usize, b: usize) -> std::cmp::Ordering {
+    let (ka, kb) = (anchor_of(anchor, a), anchor_of(anchor, b));
+    let x = |i: usize| glyphs.get(i).map_or(0.0, |g| g.rect[0]);
+    x(ka).total_cmp(&x(kb)).then(ka.cmp(&kb)).then(a.cmp(&b))
 }
 
 /// One run of a colliding component.
@@ -261,7 +300,7 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     if sc.text.len() <= 1 {
         // A single run cannot collide with itself: its glyphs only need sorting by x.
         sc.placed.extend(sc.text.iter().flat_map(|run| run.range()));
-        sc.placed.sort_unstable_by(|a, b| x0(*a).total_cmp(&x0(*b)).then(a.cmp(b)));
+        sc.placed.sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     } else {
         collide(glyphs, height, s.h, sc);
     }
@@ -272,7 +311,7 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         sc.merged.clear();
         let mut next = 0;
         for &m in &sc.marks {
-            while next < sc.placed.len() && x0(sc.placed[next]) <= x0(m) {
+            while next < sc.placed.len() && x0(anchor_of(&sc.anchor, sc.placed[next])) <= x0(m) {
                 sc.merged.push(sc.placed[next]);
                 next += 1;
             }
@@ -296,17 +335,31 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
     for (r, run) in sc.text.iter().enumerate() {
         sc.owner.extend(run.range().map(|i| (i, r)));
     }
-    sc.owner.sort_unstable_by(|a, b| x0(a.0).total_cmp(&x0(b.0)).then(a.0.cmp(&b.0)));
+    sc.owner.sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, a.0, b.0));
     sc.parent.clear();
     sc.parent.extend(0..runs);
     let mut budget = COLLIDE_PAIRS_PER_GLYPH.saturating_mul(sc.owner.len());
     let mut collided = false;
     let mut dense = false;
+    // A mark riding on a glyph goes with it, so only cluster starts are swept. They are in x order in `owner`.
+    let rides = |i: usize| anchor_of(&sc.anchor, i) != i;
     'sweep: for a in 0..sc.owner.len() {
         let (i, ri) = sc.owner[a];
+        if rides(i) {
+            continue;
+        }
         let (x1, hi) = (glyphs[i].rect[2], height(i));
         for b in a + 1..sc.owner.len() {
             let (j, rj) = sc.owner[b];
+            if rides(j) {
+                // Skipping counts against the budget, so a long string of marks cannot make the sweep quadratic.
+                if budget == 0 {
+                    dense = true;
+                    break 'sweep;
+                }
+                budget -= 1;
+                continue;
+            }
             if x0(j) >= x1 {
                 break;
             }
@@ -357,7 +410,7 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
             for i in sc.text[head].range() {
                 let at = sc.flat.len();
                 sc.flat.push(i);
-                sc.units.push(Unit { left: x0(i), first: i, glyphs: at..at + 1 });
+                sc.units.push(Unit { left: x0(anchor_of(&sc.anchor, i)), first: i, glyphs: at..at + 1 });
             }
             continue;
         }
@@ -368,7 +421,7 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
             let run = sc.text[m];
             let start = sc.group.len();
             sc.group.extend(run.range());
-            sc.group[start..].sort_unstable_by(|a, b| x0(*a).total_cmp(&x0(*b)).then(a.cmp(b)));
+            sc.group[start..].sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
             let left = sc.group[start..].iter().map(|&i| x0(i)).fold(f32::INFINITY, f32::min);
             let right = sc.group[start..].iter().map(|&i| glyphs[i].rect[2]).fold(f32::NEG_INFINITY, f32::max);
             let lead = sc.group[start];
