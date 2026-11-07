@@ -148,29 +148,31 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
 }
 
 /// An error when content at `/Contents` index `at` (a stream there, or one inserted there) is drawn
-/// after a stream damaged partway: what the damage hides can change how it reads.
+/// after a stream not read whole, damaged partway or not decoding at all: what wasn't read can
+/// change how it reads, the graphics state it draws in among it.
 pub(crate) fn drawn_before_damage(streams: &[ContentStream], at: usize) -> Result<(), EditError> {
     if at > first_damaged(streams) {
         return Err(EditError::Invalid(
-            "this change comes after a content stream that is damaged partway, and what the damage hides can change how the rest of the page reads"
+            "this change comes after a content stream that is damaged or can't be decoded, and what wasn't read can change how the rest of the page reads"
                 .into(),
         ));
     }
     Ok(())
 }
 
-/// The index of the first stream damaged partway, or the number of streams.
+/// The index of the first stream not read whole, or the number of streams.
 fn first_damaged(streams: &[ContentStream]) -> usize {
-    streams.iter().position(|s| s.read == Read::Damaged).unwrap_or(streams.len())
+    streams.iter().position(|s| s.read != Read::Whole).unwrap_or(streams.len())
 }
 
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
 /// (keeping their dictionaries), the others stay as they were. An error, before anything is
-/// added, when a piece that changed is a stream that didn't decode whole, or comes after one
-/// damaged partway. Written from what decoded, a damaged stream would lose everything after the
-/// damage, and one that doesn't decode all of it. What follows the damage is unknown, so a later
-/// stream may not read as it seems: a string or comment the damage left open runs on into it, and
-/// operators the damage hides can change the graphics state it draws in.
+/// added, when a piece that changed is a stream that didn't decode whole, or comes after one.
+/// Written from what decoded, a damaged stream would lose everything after the damage, and one
+/// that doesn't decode all of it. What follows the damage is unknown, so a later stream may not
+/// read as it seems: a string or comment the damage left open runs on into it, and operators the
+/// damage hides can change the graphics state it draws in. A stream that doesn't decode hides its
+/// operators all the same.
 pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[ContentStream], new: Vec<Vec<u8>>) -> Result<Object, EditError> {
     // The last stream that changed: when it is drawn before the damage, so are the others.
     if let Some(i) = streams.iter().zip(&new).rposition(|(s, data)| s.data != *data) {

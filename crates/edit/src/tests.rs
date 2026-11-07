@@ -5191,7 +5191,7 @@ fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
     assert!(refused.to_string().contains("is damaged partway"), "{refused}");
     assert_eq!(contents(&doc), listed);
     let refused = text::replace_line(&mut doc, 0, 1, "Edited").unwrap_err();
-    assert!(refused.to_string().contains("comes after a content stream that is damaged partway"), "{refused}");
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
     assert_eq!(contents(&doc), listed);
 
     let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
@@ -5244,23 +5244,54 @@ fn a_content_stream_that_does_not_decode_is_never_written_over() {
 }
 
 /// A content stream that doesn't decode at all is no damage to write over: it is kept as stored,
-/// and the page's other streams are read and edited around it. A stream of a few MB is read for
+/// and the page's streams before it are read and edited. A stream of a few MB is read for
 /// selecting objects.
 #[test]
-fn a_content_stream_that_does_not_decode_is_kept_and_edited_around() {
-    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+fn a_content_stream_that_does_not_decode_is_kept_and_edited_before() {
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
     let mut dict = pdfcraft_cos::Dict::new();
     dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
     let unknown = pdfcraft_cos::Stream::from_raw(dict, b"BT /F1 12 Tf 72 700 Td (Unread) Tj ET".to_vec());
-    doc.set(pdfcraft_cos::ObjRef::new(4, 0), unknown.clone());
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), unknown.clone());
     text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
     let doc = reopen(&doc);
     assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), ["Edited"]);
-    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(4, 0)) else { panic!("not a stream") };
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
     assert_eq!(kept.raw, unknown.raw, "stored as it was");
 
     let large = format!("{}0 0 m 10 10 l S", " ".repeat(2 << 20));
     assert!(editable_objects(&split_page(&large, "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
+/// A content stream that doesn't decode hides its operators as damage does. Here its `/Filter` is
+/// given by reference, which a file may do and which isn't read here, and it holds a `cm` that
+/// moves what the page draws after it. Text and images there aren't edited, as the edit would be
+/// worked out without the `cm`.
+#[test]
+fn content_after_a_stream_that_does_not_decode_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let hidden_move = |doc: &mut Document| {
+        let filter = doc.add(Object::name("FlateDecode"));
+        let mut s = Stream::flate(Dict::new(), b"1 0 0 1 0 -300 cm");
+        s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+        doc.set(ObjRef::new(4, 0), s);
+    };
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (After) Tj ET");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page("", "q 100 0 0 100 200 200 cm /Im1 Do Q");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
 }
 
 /// A content stream whose `/DecodeParms`, or a parameter in them, is given by reference is read
