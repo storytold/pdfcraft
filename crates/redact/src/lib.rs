@@ -772,9 +772,11 @@ fn redact_page_content(
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let out = {
+    // What the walk leaves of the page's allowance, the cleanups below spend.
+    let (out, mut budget) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images);
-        process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
+        let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
+        (out, scope.into_budget())
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
     // tell whether those glyphs lie under a mark. Rather than report success and possibly
@@ -816,6 +818,11 @@ fn redact_page_content(
         let mut res = resources.clone();
         if !out.xobjects.is_empty() || !out.replaced.is_empty() {
             let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+            // The rewritten XObjects first, as for a rewritten form: one left without resources of
+            // its own draws through these, and `prune` follows it only under a name it can find.
+            for (n, r) in &out.xobjects {
+                xo.set(n.clone(), Object::Ref(*r));
+            }
             // A full save keeps whatever is still referenced: unlink the originals this page no
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
@@ -825,10 +832,7 @@ fn redact_page_content(
                     _ => Vec::new(),
                 })
                 .collect();
-            interp::prune(&mut xo, &out.replaced, &page_content);
-            for (n, r) in &out.xobjects {
-                xo.set(n.clone(), Object::Ref(*r));
-            }
+            interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         let (_, cleaned_data) = page_streams(
@@ -845,8 +849,8 @@ fn redact_page_content(
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
         report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
-        retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
+        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut res, &cleaned_data)?);
+        type3::prune_type3_from_resources(doc, &mut budget, &mut res, &cleaned_data)?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));

@@ -202,6 +202,12 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// What is left of the page's allowance once the content is walked, for the cleanups after it
+    /// that read the forms drawing through the page's resources ([`prune`]) to go on spending.
+    pub(crate) fn into_budget(self) -> DecodeBudget {
+        self.budget
+    }
+
     /// Sanitizing visits every form XObject (not only those under a region).
     fn everywhere(&self) -> bool {
         self.hidden_text.is_some() || self.layers_enabled
@@ -977,9 +983,11 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            // Strict, like page content: a Form read only in part counts as undecodable.
+            // Strict, like page content: a Form read only in part counts as undecodable. With its
+            // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
+            // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
             let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(s)
+                scope.budget.decode_strict(&doc.with_direct_parms(s))
             } else {
                 Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
             };
@@ -1053,11 +1061,11 @@ fn xobject(
             let mut cleaned_res = res.clone();
             // Install rewritten nested forms before finding live property names: a new form may
             // still inherit its caller's resources, and its new Do name must resolve here.
-            if !inner.xobjects.is_empty() || !inner.replaced.is_empty() {
+            // `prune_form_resources` below then drops the XObjects this form no longer draws, the
+            // ones it replaced among them, keeping those a form drawing through these resources
+            // still draws.
+            if !inner.xobjects.is_empty() {
                 let mut xo = res_dict(doc, &cleaned_res, b"XObject");
-                if let Some(data) = &new_data {
-                    prune(&mut xo, &inner.replaced, std::slice::from_ref(data));
-                }
                 for (name, reference) in &inner.xobjects {
                     xo.set(name.clone(), Object::Ref(*reference));
                 }
@@ -1065,18 +1073,18 @@ fn xobject(
             }
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut cleaned_res, content) {
+                match prune_properties(doc, &mut scope.budget, &mut cleaned_res, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);
                         return None;
                     }
                 }
-                if let Err(error) = prune_form_resources(doc, &mut cleaned_res, content) {
+                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
                     out.error = Some(error);
                     return None;
                 }
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
                     out.error = Some(error);
                     return None;
                 }
