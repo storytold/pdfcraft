@@ -37,6 +37,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   and a byte per row, plus 4 KiB (ASCIIHex text broken into lines under Flate is a little over
   twice; for a fax image's code, about a byte per pixel), are removed whole;
   cleared copies drop `/Alternates` so alternate pixels cannot survive;
+  A run that would decode more of its images than one redaction may (`pdfcraft_cos::ImageBudget`,
+  filters, decoders and pixels alike) is refused
+  and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
+  covers with it.
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
@@ -55,6 +59,15 @@ renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the p
 resume after it would be a guess. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
 skipping that mark. The count covers the marks on the pages being applied.
+
+Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
+surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may
+contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
+`RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
+by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
+bounded check is conservative: an unrelated retained pattern on a selected page can also cause
+refusal when its content cannot be proven safe. If a selected page had a pattern resource, the
+check covers all pages after rewriting so another page cannot keep the same cell in the saved PDF.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text

@@ -125,6 +125,27 @@ fn text_is_wrapped_and_paginated() {
 }
 
 #[test]
+fn text_of_many_form_feeds_makes_its_pages_in_linear_time() {
+    // Each form feed starts a page: adding each to the page tree copied all the pages before it,
+    // which made forty thousand of them take over a minute in a debug build, against about two
+    // seconds when the tree is written once.
+    let text = "x\u{c}".repeat(40_000);
+    let start = std::time::Instant::now();
+    let doc = from_text("many", &text, LETTER, 11.0).unwrap();
+    let took = start.elapsed();
+    let tree = doc.get(doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap());
+    let tree = tree.as_dict().unwrap();
+    assert_eq!(tree.get(b"Kids").and_then(|k| k.as_array()).map(|a| a.len()), Some(40_001));
+    assert_eq!(tree.int(b"Count"), Some(40_001));
+    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    // Blank documents and pages made from images keep their pages, in order.
+    let doc = reopen(&blank(200.0, 300.0, 3).unwrap());
+    assert_eq!(pages(&doc).len(), 3);
+    let doc = reopen(&from_images(&[("a.png".into(), png_bytes(false)), ("b.png".into(), png_bytes(true))]).unwrap());
+    assert_eq!(pages(&doc).len(), 2);
+}
+
+#[test]
 fn text_keeps_leading_spaces_and_tabs() {
     let doc = reopen(&from_text("t", "    indented\n\ttabbed\nplain", LETTER, 11.0).unwrap());
     let p = pages(&doc);
@@ -462,6 +483,82 @@ fn bigtiff_images_become_pages() {
     let doc = reopen(&from_images(&[("scan.tif".into(), tif)]).unwrap());
     assert_eq!(pages(&doc).len(), 1);
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 1.0], "4×2 px at 144 dpi");
+}
+
+/// A PCX header for a `w` by `h` image at 72 dpi.
+fn pcx_header(version: u8, bits: u8, planes: u8, stride: u16, w: u16, h: u16) -> Vec<u8> {
+    let mut pcx = vec![0u8; 128];
+    pcx[..4].copy_from_slice(&[0x0A, version, 1, bits]);
+    pcx[8..10].copy_from_slice(&(w - 1).to_le_bytes());
+    pcx[10..12].copy_from_slice(&(h - 1).to_le_bytes());
+    pcx[12..14].copy_from_slice(&72u16.to_le_bytes());
+    pcx[14..16].copy_from_slice(&72u16.to_le_bytes());
+    pcx[65] = planes;
+    pcx[66..68].copy_from_slice(&stride.to_le_bytes());
+    pcx
+}
+
+/// A 24-bit PCX: each scanline holds a red, a green and a blue row.
+#[test]
+fn pcx_images_become_pages() {
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 2);
+    pcx.extend_from_slice(&[10, 11, 20, 21, 30, 31]);
+    pcx.extend_from_slice(&[40, 41, 50, 51, 60, 61]);
+    let embedded = super::pcx("a.pcx", &pcx).unwrap();
+    assert_eq!(embedded.data, [10, 20, 30, 11, 21, 31, 40, 50, 60, 41, 51, 61]);
+    let doc = reopen(&from_images(&[("a.pcx".into(), pcx)]).unwrap());
+    assert_eq!(pages(&doc).len(), 1);
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 2.0]);
+    assert_eq!(image_of(&doc, 0).name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+}
+
+#[test]
+fn a_pcx_run_may_cross_planes_but_not_scanlines() {
+    // 0xC4 repeats 7 four times: the red row and half of the green one
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 1);
+    pcx.extend_from_slice(&[0xC4, 7, 8, 9]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [7, 7, 8, 7, 7, 9]);
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 2);
+    pcx.extend_from_slice(&[0xC8, 7, 1, 2, 3, 4]);
+    assert!(super::pcx("a.pcx", &pcx).is_err(), "eight bytes in a six-byte scanline");
+}
+
+#[test]
+fn an_8_bit_pcx_uses_its_palette_and_is_grey_without_one() {
+    let mut pcx = pcx_header(5, 8, 1, 2, 2, 1);
+    pcx.extend_from_slice(&[1, 2]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [1, 1, 1, 2, 2, 2], "no palette: grey");
+    pcx.push(0x0C);
+    let mut palette = vec![0u8; 768];
+    palette[3..9].copy_from_slice(&[9, 8, 7, 6, 5, 4]);
+    pcx.extend_from_slice(&palette);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [9, 8, 7, 6, 5, 4]);
+}
+
+#[test]
+fn bit_plane_pcx_images_read_their_palette() {
+    // version 2, one plane: black and white
+    let mut pcx = pcx_header(2, 1, 1, 2, 2, 1);
+    pcx.extend_from_slice(&[0b1000_0000, 0]);
+    assert!(from_images(&[("a.pcx".into(), pcx.clone())]).is_ok(), "an old version is still a PCX");
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [255, 255, 255, 0, 0, 0]);
+    // two planes: colour 3 is at byte 16 + 9
+    let mut pcx = pcx_header(5, 1, 2, 1, 1, 1);
+    pcx[25..28].copy_from_slice(&[1, 2, 3]);
+    pcx.extend_from_slice(&[0x80, 0x80]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [1, 2, 3]);
+}
+
+#[test]
+fn damaged_pcx_headers_and_bodies_are_refused() {
+    let no_planes = pcx_header(5, 8, 0, 2, 2, 1);
+    let no_stride = pcx_header(5, 8, 3, 0, 2, 1);
+    let short_stride = pcx_header(5, 8, 3, 1, 2, 1);
+    let short_body = pcx_header(5, 8, 3, 2, 2, 1);
+    for bytes in [no_planes, no_stride, short_stride, short_body] {
+        assert!(super::pcx("a.pcx", &bytes).is_err());
+    }
+    assert!(super::pcx("a.pcx", &[0x0A, 5, 1, 8]).is_err(), "no header");
 }
 
 /// A synthetic ICC profile: a 128-byte header (size, device class, colour space, `acsp`) and
@@ -2232,6 +2329,260 @@ fn jbig2_globals_are_decoded_within_a_limit_of_their_own() {
         let why = &out.skipped.first().expect("the image is skipped").2;
         assert!(why.contains("the JBIG2 globals can't be read") && why.contains(&format!("limit of {LIMIT} bytes")), "{why}");
     }
+}
+
+/// One allowance for all the images of an export: an image past it is left out, saying so.
+#[test]
+fn jbig2_images_past_the_exports_allowance_are_left_out_with_the_reason() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    dict.set(b"Width".to_vec(), Object::Int(16));
+    dict.set(b"Height".to_vec(), Object::Int(2));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let image = Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap());
+    let mut cost = ImageBudget::with_work(u64::MAX);
+    cost.decode(&Document::new_empty(), &image, 1 << 20).unwrap();
+    let cost = u64::MAX - cost.work_left();
+
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec();
+    let mut doc = Document::open(std::sync::Arc::new(pdf)).unwrap();
+    let (a, b) = (doc.add(Object::Stream(image.clone())), doc.add(Object::Stream(image)));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"A".to_vec(), Object::Ref(a));
+    xobjects.set(b"B".to_vec(), Object::Ref(b));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    let page = pdfcraft_model::pages(&doc).swap_remove(0).obj;
+    doc.update_dict(page, |p| p.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+
+    let export = crate::extract::extract_images_within(&doc, &[0], 1, &mut ImageBudget::with_work(cost), usize::MAX);
+    assert_eq!(export.images.len(), 1);
+    assert_eq!(export.skipped.len(), 1);
+    assert!(export.skipped[0].2.contains("more image decoding than"), "{:?}", export.skipped);
+    // What an export holds is bounded too: the files are all in memory until it ends.
+    let export = crate::extract::extract_images_within(&doc, &[0], 1, &mut ImageBudget::with_work(u64::MAX), 1);
+    assert_eq!(export.images.len(), 1, "the first goes past it");
+    assert_eq!(export.skipped.len(), 1);
+    assert!(export.skipped[0].2.contains("than one export can hold"), "{:?}", export.skipped);
+    // A file of many images shares one allowance too, image by image.
+    let mut budget = ImageBudget::with_work(cost);
+    assert!(crate::extract::image_file_within(&doc, a, &mut budget).is_ok());
+    assert!(crate::extract::image_file_within(&doc, b, &mut budget).is_err());
+}
+
+/// An image that isn't JBIG2 shares the allowance too: a file of filter bombs would hold an export
+/// as long as one of JBIG2. What isn't decoded here, a JPEG, is still exported.
+#[test]
+fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let image = |filter: &str, raw: Vec<u8>| {
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(2));
+        dict.set(b"Height".to_vec(), Object::Int(2));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        dict.set(b"Filter".to_vec(), Object::name(filter));
+        Stream::from_raw(dict, raw)
+    };
+    let flate = image("FlateDecode", pdfcraft_filters::encode_flate(&[0x80; 4]));
+    let mut cost = ImageBudget::with_work(u64::MAX);
+    cost.decode(&Document::new_empty(), &flate, 1 << 20).unwrap();
+    let cost = u64::MAX - cost.work_left();
+
+    let mut doc = Document::new_empty();
+    let (a, b) = (doc.add(Object::Stream(flate.clone())), doc.add(Object::Stream(flate)));
+    let mut budget = ImageBudget::with_work(cost);
+    assert!(crate::extract::image_file_within(&doc, a, &mut budget).is_ok());
+    let refused = crate::extract::image_file_within(&doc, b, &mut budget).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!(budget.refused(), 1);
+
+    let jpeg = image::RgbImage::from_pixel(2, 2, image::Rgb([9, 9, 9]));
+    let mut bytes = Vec::new();
+    jpeg.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = doc.add(Object::Stream(image("DCTDecode", bytes)));
+    assert!(crate::extract::image_file_within(&doc, jpeg, &mut budget).is_ok(), "nothing charged");
+    assert_eq!(budget.refused(), 1);
+}
+
+/// A JPEG is written as it is, at no cost, unless something means decoding it, here a mask: that
+/// pays for its samples, and past the allowance the image goes, with the reason, as it would come out without
+/// its transparency otherwise.
+#[test]
+fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let image_dict = |extra: Option<(&[u8], Object)>| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(4));
+        d.set(b"Height".to_vec(), Object::Int(4));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        if let Some((key, value)) = extra {
+            d.set(key.to_vec(), value);
+        }
+        d
+    };
+    let mut doc = Document::new_empty();
+    let mut mask = Dict::new();
+    mask.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask.set(b"Width".to_vec(), Object::Int(4));
+    mask.set(b"Height".to_vec(), Object::Int(4));
+    mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0x80; 16])));
+    let doc_jpeg_len = jpeg.len();
+    let masked = doc.add(Object::Stream(Stream::from_raw(image_dict(Some((b"SMask", Object::Ref(mask)))), jpeg.clone())));
+    let plain = doc.add(Object::Stream(Stream::from_raw(image_dict(None), jpeg)));
+
+    let mut budget = ImageBudget::with_work(0);
+    assert!(crate::extract::image_file_within(&doc, plain, &mut budget).is_ok(), "written as it is");
+    assert_eq!(budget.refused(), 0);
+    let mut budget = ImageBudget::with_work(u64::MAX);
+    assert!(crate::extract::image_file_within(&doc, masked, &mut budget).is_ok());
+    let cost = u64::MAX - budget.work_left();
+    let read = 4 * doc_jpeg_len as u64;
+    assert_eq!(cost, 16 + 16 + 2 * 4 * 4 * 3 + read, "the mask's bytes and pixels, the JPEG's samples twice and its reading");
+    let mut budget = ImageBudget::with_work(cost - 1);
+    let refused = crate::extract::image_file_within(&doc, masked, &mut budget).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!(budget.refused(), 1);
+}
+
+/// A JPEG that is itself a mask pays for its samples, each time an image reads it: images can
+/// share one, and only the images are ever seen once.
+#[test]
+fn a_jpeg_mask_pays_for_its_samples() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::GrayImage::from_pixel(4, 4, image::Luma([90])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let mut mask = Dict::new();
+    mask.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask.set(b"Width".to_vec(), Object::Int(4));
+    mask.set(b"Height".to_vec(), Object::Int(4));
+    mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    mask.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    let mut doc = Document::new_empty();
+    let read = 4 * jpeg.len() as u64;
+    let mask = doc.add(Object::Stream(Stream::from_raw(mask, jpeg)));
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"SMask".to_vec(), Object::Ref(mask));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+    let mut budget = ImageBudget::with_work(u64::MAX);
+    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
+    assert_eq!(u64::MAX - budget.work_left(), 2 * 4 * 4 + read + 2, "its samples twice, its reading, and the image's byte and pixel");
+    // Just short of what the mask costs: it isn't decoded, and takes the image with it.
+    let mut budget = ImageBudget::with_work(2 * 4 * 4 + read - 1);
+    let refused = crate::extract::image_file_within(&doc, image, &mut budget).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+}
+
+/// What decoding a JPEG takes goes by its header, so that is what has to agree with the
+/// dictionary before it is decoded: one image of a pixel can hold a page of 500 megapixels. The
+/// file comes out as it is either way, so what shows is whether it was decoded.
+#[test]
+fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    // A colour key means decoding it, to find the pixels it hides.
+    let keyed = |side: i64| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(side));
+        d.set(b"Height".to_vec(), Object::Int(side));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        d.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(0); 6]));
+        Stream::from_raw(d, jpeg.clone())
+    };
+    let decodes = |doc: &Document, image: pdfcraft_cos::ObjRef| {
+        crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+        assert!(crate::extract::image_file_within(doc, image, &mut ImageBudget::with_work(u64::MAX)).is_ok());
+        crate::extract::JPEGS_DECODED.with(std::cell::Cell::get)
+    };
+    let mut doc = Document::new_empty();
+    let (honest, lying) = (doc.add(Object::Stream(keyed(4))), doc.add(Object::Stream(keyed(1))));
+    assert_eq!(decodes(&doc, honest), 1);
+    assert_eq!(decodes(&doc, lying), 0);
+    // The same as a mask: read as none, without being decoded.
+    let mut mask = keyed(1);
+    mask.dict.remove(b"Mask");
+    let mask = doc.add(Object::Stream(mask));
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"SMask".to_vec(), Object::Ref(mask));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+    assert_eq!(decodes(&doc, image), 0);
+    // Reading the header to find that out is paid for: a mask can be mostly tables, shared by
+    // every image of a file, and with nothing left it isn't read.
+    let mut budget = ImageBudget::with_work(u64::MAX);
+    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
+    assert_eq!(u64::MAX - budget.work_left(), 2 + 4 * jpeg.len() as u64 + 2, "its one declared sample twice, its bytes, the image's byte and pixel");
+    let mut budget = ImageBudget::with_work(0);
+    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_err());
+    assert_eq!(budget.refused(), 1, "the image goes, with its mask unread");
+}
+
+/// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
+/// opaque, showing what the mask hides: the image goes, with the reason.
+#[test]
+fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut mask = Dict::new();
+    mask.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask.set(b"Width".to_vec(), Object::Int(16));
+    mask.set(b"Height".to_vec(), Object::Int(2));
+    mask.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    mask.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let mut doc = Document::new_empty();
+    let mask = doc.add(Object::Stream(Stream::from_raw(mask, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())));
+    // A JPEG, read for nothing until its mask is, so only the mask can be what stops it.
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(1, 1, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    image.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    image.set(b"SMask".to_vec(), Object::Ref(mask));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, jpeg)));
+    assert!(crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(u64::MAX)).is_ok());
+    let refused = crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(0)).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+}
+
+/// A large honest file keeps its images: what an export may hold grows with the file past the fixed
+/// part, and a file too long to double doesn't wrap round to nothing.
+#[test]
+fn an_export_may_hold_twice_a_large_file() {
+    let fixed = crate::extract::export_bytes(0);
+    assert_eq!(fixed, 2 << 30);
+    assert_eq!(crate::extract::export_bytes(fixed / 2), fixed);
+    assert_eq!(crate::extract::export_bytes(fixed / 2 + 1), fixed + 2);
+    assert_eq!(crate::extract::export_bytes(usize::MAX), usize::MAX);
 }
 
 /// `/Decode` says which way round a stencil mask is, and its numbers can be given by reference. Read
