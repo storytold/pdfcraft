@@ -2,7 +2,7 @@ use super::{ACCENT, Color32, CornerRadius, DocInfo, DocView, Edit, MAX_OUTLINES,
 use crate::canvas::{ImageObb, PainterExt, image_screen_rect};
 use crate::image_engine::{CROP_ACCENT, apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds};
 use crate::page_cursor::Layer;
-use crate::page_router::{Hit, Owner, PicturePart};
+use crate::page_router::{CropPart, Hit, Owner, PagePress, PicturePart};
 
 /// What the pointer and the page are, for the image tools on one page.
 #[derive(Clone, Copy)]
@@ -15,7 +15,10 @@ pub(crate) struct ImageCx<'a> {
     pub info: &'a DocInfo,
     /// Says where a picture with transparency shows, so it is picked only there.
     pub doc: &'a pdfcraft_engine::Document,
-    pub allow_interaction: bool,
+    /// What the press the pages hold is to this page.
+    pub press: PagePress,
+    /// Edit text's input is open: no dialog, palette, other window or other tab has it.
+    pub gate: bool,
 }
 
 /// The 8 resize handles on an image (4 corners + 4 edge centers).
@@ -118,12 +121,27 @@ pub struct CropMode {
     pub keep: [f64; 4],
     /// A drag in progress: the grip (0–7 handles, 8 inside), where it started and the box then.
     pub(crate) drag: Option<(usize, Pos2, [f64; 4])>,
+    /// Where its Done, Cancel and Remove Crop controls were drawn last (screen): the hand shows
+    /// over them ([`crop_hit`]).
+    pub(crate) controls: Vec<Rect>,
 }
 
 impl CropMode {
     pub fn new(keep: [f64; 4]) -> Self {
-        Self { keep, drag: None }
+        Self { keep, drag: None, controls: Vec::new() }
     }
+}
+
+/// How far from a crop grip a press still takes it, and the pointer shows its cursor (screen).
+const CROP_GRIP_REACH: f32 = 10.0;
+
+/// The picture `image` being cropped to `keep`, on screen: its whole frame, and the box kept
+/// within it. `None` when either has no area.
+fn crop_frames(xf: &PageXform, info: &DocInfo, page: usize, image: &pdfcraft_engine::PageImage, keep: [f64; 4]) -> Option<(Rect, Rect)> {
+    let full = xf.user_rect(info, page, image.rect.map(|v| v as f32));
+    let b = if full.is_positive() { full } else { xf.user_rect(info, page, image.visible_rect.unwrap_or(image.rect).map(|v| v as f32)) };
+    let k = xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
+    (b.is_finite() && b.is_positive() && b.size().is_finite() && k.is_finite() && k.is_positive()).then_some((b, k))
 }
 
 pub(crate) use pdfcraft_content::Matrix;
@@ -248,50 +266,31 @@ fn same_rect(a: [f64; 4], b: [f64; 4]) -> bool {
     a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3)
 }
 
-fn crop_bounds(image: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
-    let full = xf.user_rect(info, page, image.rect.map(|v| v as f32));
-    if full.is_positive() { full } else { xf.user_rect(info, page, image.visible_rect.unwrap_or(image.rect).map(|v| v as f32)) }
-}
-
-/// Whether `p` is on the crop box or one of its handles (#5835). The Done, Cancel and Remove
-/// Crop pills are widgets of their own, so they take their clicks before the canvas does.
-pub(crate) fn crop_controls_contain(
-    image: &pdfcraft_engine::PageImage,
-    mode: &CropMode,
-    xf: &PageXform,
-    info: &DocInfo,
-    page: usize,
-    p: Pos2,
-) -> bool {
-    let b = crop_bounds(image, xf, info, page);
-    let k = xf.user_rect(info, page, mode.keep.map(|v| v as f32)).intersect(b);
-    if !b.is_finite() || !b.is_positive() || !b.size().is_finite() || !k.is_finite() || !k.is_positive() {
-        return false;
-    }
-    k.contains(p) || crop_handles(k).iter().any(|h| h.distance(p) < 10.0)
-}
-
 /// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
-/// (the pointer and keys are the crop's while it lasts).
+/// (the pointer is the crop's while it lasts; its keys are read by [`picture_keys`]).
 #[allow(clippy::cognitive_complexity)]
 fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_engine::PageImage) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction, .. } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, press, gate, .. } = *cx;
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
     let hover_pos = ptr.pos;
-    let b = crop_bounds(image, xf, info, page);
-    let keep_screen = |keep: [f64; 4]| xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
-    let k = keep_screen(mode.keep);
-    if !b.is_finite() || !b.is_positive() || !b.size().is_finite() || !k.is_finite() || !k.is_positive() {
+    let Some((b, k)) = crop_frames(xf, info, page, image, mode.keep) else {
         mode.drag = None;
         return true;
-    }
+    };
+    let keep_screen = |keep: [f64; 4]| xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
 
-    if allow_interaction
-        && resp.drag_started()
+    // A drag takes what its press was on ([`crop_hit`]).
+    if gate
+        && ptr.drag_started
         && let Some(o) = ptr.origin
+        && let PagePress::Mine(Owner::Picture { part: PicturePart::Crop(part), .. }) = press
     {
-        let grip = crop_handles(k).iter().position(|h| h.distance(o) < 10.0).or_else(|| k.contains(o).then_some(8));
+        let grip = match part {
+            CropPart::Grip(g) => Some(g),
+            CropPart::Keep => Some(8),
+            CropPart::Cut | CropPart::Page => None,
+        };
         if let Some(g) = grip {
             mode.drag = Some((g, o, mode.keep));
         }
@@ -354,7 +353,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     // Crop handles
     for (idx, h) in crop_handles(k).iter().enumerate() {
         let is_active = mode.drag.as_ref().is_some_and(|d| d.0 == idx);
-        let is_hovered = hover_pos.is_some_and(|p| p.distance(*h) < 10.0);
+        let is_hovered = hover_pos.is_some_and(|p| p.distance(*h) < CROP_GRIP_REACH);
         draw_handle(painter, *h, is_active, is_hovered, true, CROP_ACCENT);
     }
 
@@ -387,6 +386,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let done = Rect::from_min_size(Pos2::new(right - done_w, y), egui::vec2(done_w, 22.0));
     let cancel = Rect::from_min_size(Pos2::new(done.min.x - spacing - cancel_w, y), egui::vec2(cancel_w, 22.0));
     let reset = reset_w.map(|w| Rect::from_min_size(Pos2::new(cancel.min.x - spacing - w, y), egui::vec2(w, 22.0)));
+    mode.controls = [Some(done), Some(cancel), reset].into_iter().flatten().collect();
 
     let done_id = ui.scope_id().with("crop_pill_done").with(page).with(i);
     let cancel_id = ui.scope_id().with("crop_pill_cancel").with(page).with(i);
@@ -395,10 +395,10 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let done_resp = ui.interact(done, done_id, egui::Sense::click());
     let cancel_resp = ui.interact(cancel, cancel_id, egui::Sense::click());
     let reset_resp = reset.map(|r| ui.interact(r, reset_id, egui::Sense::click()));
-    done_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, allow_interaction, tl!("Done")));
-    cancel_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, allow_interaction, tl!("Cancel")));
+    done_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, gate, tl!("Done")));
+    cancel_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, gate, tl!("Cancel")));
     if let Some(response) = &reset_resp {
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, allow_interaction, tl!("Remove Crop")));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, gate, tl!("Remove Crop")));
     }
 
     let t = crate::theme::Tokens::get(ui.ctx());
@@ -432,54 +432,81 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
         neutral_pill(r, response, tl!("Remove Crop"));
     }
 
-    if let Some(p) = hover_pos {
-        let icon = if done_resp.hovered()
-            || cancel_resp.hovered()
-            || reset_resp.as_ref().is_some_and(|r| r.hovered())
-            || done.contains(p)
-            || cancel.contains(p)
-            || reset.is_some_and(|r| r.contains(p))
-        {
-            egui::CursorIcon::PointingHand
-        } else if let Some(&g) = crop_handles(k).iter().position(|h| h.distance(p) < 8.0).and_then(|g| GRIPS.get(g)) {
-            g.cursor_icon()
-        } else if k.contains(p) {
-            if mode.drag.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }
-        } else {
-            egui::CursorIcon::Default
-        };
-        view.cursor.claim(Layer::Editor, icon);
+    // The cursor is the hit's ([`crop_hit`]), and a grip's or the box's being dragged.
+    if let Some((grip, ..)) = mode.drag {
+        view.cursor.claim(Layer::Drag, GRIPS.get(grip).map_or(egui::CursorIcon::Grabbing, |g| g.cursor_icon()));
     }
 
-    let keys = |key: egui::Key| allow_interaction && ui.input(|inp| inp.key_pressed(key)) && !ui.ctx().egui_wants_keyboard_input();
-    let done_clicked = allow_interaction && (done_resp.clicked() || (resp.clicked() && hover_pos.is_some_and(|p| done.contains(p))));
-    let cancel_clicked = allow_interaction && (cancel_resp.clicked() || (resp.clicked() && hover_pos.is_some_and(|p| cancel.contains(p))));
-    let reset_clicked = allow_interaction
+    let done_clicked = gate && (done_resp.clicked() || (resp.clicked() && hover_pos.is_some_and(|p| done.contains(p))));
+    let cancel_clicked = gate && (cancel_resp.clicked() || (resp.clicked() && hover_pos.is_some_and(|p| cancel.contains(p))));
+    let reset_clicked = gate
         && reset
             .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
         mode.drag = None;
-    } else if done_clicked || keys(egui::Key::Enter) {
-        let keep = mode.keep;
-        if let Some(s) = view.image_selection.as_mut() {
-            s.crop = None;
-        }
-        let is_full = same_rect(keep, image.rect);
-        if is_full {
-            if image.has_editor_crop() {
-                view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::RemoveCrop });
-            }
-        } else if image.visible_rect != Some(keep) {
-            view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Crop(keep) });
-        }
-    } else if (cancel_clicked || keys(egui::Key::Escape))
-        && let Some(s) = view.image_selection.as_mut()
-    {
+    } else if done_clicked {
+        apply_crop_mode(view, image);
+    } else if cancel_clicked && let Some(s) = view.image_selection.as_mut() {
         s.crop = None;
     }
     true
+}
+
+/// Done in crop mode: it ends, and the picture `image` of the selection keeps the box kept (or
+/// all of itself again).
+fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
+    let Some(s) = view.image_selection.as_mut() else { return };
+    let Some(keep) = s.crop.take().map(|mode| mode.keep) else { return };
+    let (page, index) = (s.page, s.index);
+    if same_rect(keep, image.rect) {
+        if image.has_editor_crop() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::RemoveCrop });
+        }
+    } else if image.visible_rect != Some(keep) {
+        view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Crop(keep) });
+    }
+}
+
+/// The keys of the picture selected on `page`, a page being drawn, so the page grid and the Pages
+/// panel have had theirs; nothing while the page is off the screen, as pages near it are drawn too.
+/// Delete or Backspace removes it, wherever on the pages the pointer is, unless it is being cropped or
+/// a button is down: the press held would then name another picture. In crop mode
+/// Enter applies the crop and Escape leaves it, though not while a button is down (`held`): Escape
+/// then cancels the press the pages hold, if any (`canvas::cancel_on_escape`), and crop mode stays.
+/// Nothing while a text field has the keyboard.
+pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], held: bool) {
+    if ctx.egui_wants_keyboard_input() || view.page_screen_rect(page).is_none() {
+        return;
+    }
+    let Some(s) = view.image_selection.as_ref().filter(|s| s.page == page) else { return };
+    let index = s.index;
+    let key = |k: egui::Key| ctx.input(|i| i.key_pressed(k));
+    let image = images.get(index);
+    if s.crop.is_some() {
+        if key(egui::Key::Enter) {
+            if let Some(image) = image {
+                apply_crop_mode(view, image);
+            }
+        } else if !held
+            && key(egui::Key::Escape)
+            && let Some(s) = view.image_selection.as_mut()
+        {
+            s.crop = None;
+        }
+    } else if !held && !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image.is_some() {
+        // The key is the picture's: added content's own Delete runs later this frame.
+        ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace);
+        });
+        view.image_selection = None;
+        // Added content's selection follows the picture's (`content_ui::sync_image_selection`), and
+        // goes with it: once the picture is gone it would be the next added item's.
+        view.content.selected = None;
+        view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
+    }
 }
 
 /// The page raster's picture of the box `from`, stretched into `to`, over blanks at `blank` (where
@@ -543,17 +570,44 @@ pub(crate) fn handle_hit(
     Some(Hit::new(picture(PicturePart::Corner(grip)), Layer::Handle, obb.handle_cursor(handle)))
 }
 
-/// The picture being cropped on `page`: crop mode owns every press there, the controls beside its
-/// frame included, so the paragraphs under it and the empty page's marquee never take a crop
-/// button's press before the picture does. `None` when no picture on `page` is being cropped.
-pub(crate) fn crop_hit(view: &DocView, page: usize) -> Option<Hit> {
-    let selection = view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_some())?;
-    Some(Hit::new(Owner::Picture { index: selection.index, part: PicturePart::Body }, Layer::Handle, egui::CursorIcon::Default))
+/// The picture being cropped on `page`, under `p`: crop mode holds every press on its page, the
+/// controls beside its frame included, so the paragraphs under it and the empty page's marquee
+/// never take a crop button's press before the picture does. A grip of the box kept (within
+/// [`CROP_GRIP_REACH`], past the page's edge too), the box itself, the picture outside it (its frame
+/// shown or its whole frame), or the rest of the page; and the controls past the page's edge, where
+/// they show the hand. `None` when no picture on `page` is being cropped, or `p` is off the page,
+/// its grips and its controls: the box and the picture stop at the page's edge, as a clipped
+/// artwork's whole frame can reach over the next pages.
+pub(crate) fn crop_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
+    let s = view.image_selection.as_ref().filter(|s| s.page == page)?;
+    let mode = s.crop.as_ref()?;
+    let crop = |part, icon| Some(Hit::new(Owner::Picture { index: s.index, part: PicturePart::Crop(part) }, Layer::Editor, icon));
+    if mode.controls.iter().any(|r| r.contains(p)) {
+        return crop(CropPart::Page, egui::CursorIcon::PointingHand);
+    }
+    let image = images.get(s.index);
+    let kept = image.and_then(|image| crop_frames(xf, info, page, image, mode.keep)).map(|(_, k)| k);
+    // The grips reach past the page's edge, where those of a picture filling its page lie half.
+    if let Some(g) = kept.and_then(|k| crop_handles(k).iter().position(|h| h.distance(p) < CROP_GRIP_REACH)) {
+        return crop(CropPart::Grip(g), GRIPS.get(g).map_or(egui::CursorIcon::Default, |grip| grip.cursor_icon()));
+    }
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    if kept.is_some_and(|k| k.contains(p)) {
+        return crop(CropPart::Keep, egui::CursorIcon::Grab);
+    }
+    let on_picture = image.is_some_and(|image| {
+        let shown = ImageObb::from_image(image, xf, info, page);
+        let whole = ImageObb::from_matrix(image.matrix, xf, info, page);
+        quad_contains(shown.corners(), p) || quad_contains(whole.corners(), p)
+    });
+    crop(if on_picture { CropPart::Cut } else { CropPart::Page }, egui::CursorIcon::Default)
 }
 
-/// The picture under `p` (its shape and where it shows, not only its box): a click selects it, a
-/// drag moves the selected one. On the text layer, asked before the paragraphs: editable text on
-/// top of a picture takes the press.
+/// The picture under `p` (its shape and where it shows, not only its box; for the selected one,
+/// its frame, a hole in it included): a click selects it, a drag moves the selected one. On the
+/// text layer, asked before the paragraphs: editable text on top of a picture takes the press.
 pub(crate) fn body_hit(
     xf: &PageXform,
     page: usize,
@@ -568,14 +622,22 @@ pub(crate) fn body_hit(
     }
     let (x, y) = xf.screen_to_view(p);
     let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
-    let index = images.iter().rposition(|im| {
+    let on_picture = |im: &pdfcraft_engine::PageImage| {
+        // A picture is picked where it shows: through its transparent parts, the one below is.
         im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p))
             && im.contains(user)
             && doc.image_shows_at(im, user)
-    })?;
+    };
+    // The selected picture's frame is its own, a hole in it and a picture over it included.
+    let framed =
+        view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_none()).map(|s| s.index).filter(|i| {
+            images.get(*i).is_some_and(|image| on_picture(image) || quad_contains(ImageObb::from_image(image, xf, info, page).corners(), p))
+        });
+    let index = images.iter().rposition(on_picture).or(framed)?;
     let selected = view.image_selection.as_ref().is_some_and(|s| s.page == page && s.index == index);
     let icon = if selected { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
-    Some(Hit::new(Owner::Picture { index, part: PicturePart::Body }, Layer::Text, icon))
+    let part = if framed.is_some_and(|i| i != index) { PicturePart::OverSelected } else { PicturePart::Body };
+    Some(Hit::new(Owner::Picture { index, part }, Layer::Text, icon))
 }
 
 /// What a right-click on a selected image asks for.
@@ -632,15 +694,12 @@ pub(super) fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
     turn_degrees_delta(centre, centre - egui::vec2(0.0, 10.0), pointer, snap)
 }
 
-#[doc(hidden)]
-pub fn image_menu_id() -> egui::Id {
-    egui::Id::unique("image-menu")
-}
-
-/// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
+/// Images on a page: the press that is a picture's (`press`, [`body_hit`] and [`handle_hit`])
+/// selects it, a drag of the selected one moves, resizes or turns it. Returns `true` when the
+/// pointer was used.
 #[allow(clippy::cognitive_complexity)]
 pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage], view: &mut DocView) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, doc, allow_interaction } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, doc, press, gate } = *cx;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ptr.pos;
@@ -737,56 +796,25 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             }
         }
 
-        let mut handle_drag = None;
-        for (h, h_pos) in obb.handles() {
-            let handle_rect = Rect::from_center_size(h_pos, egui::vec2(18.0, 18.0));
-            let handle_resp = ui.interact(handle_rect, ui.scope_id().with("img_handle").with(h), egui::Sense::drag());
-            if allow_interaction && handle_resp.drag_started() {
-                handle_drag = Some(h);
-            }
-        }
-        let rot_id = ui.scope_id().with("img_handle").with(8);
-        let rot_rect = Rect::from_center_size(shown_knob, egui::vec2(12.0, 12.0));
-        let rot_resp = ui.interact(rot_rect, rot_id, egui::Sense::drag());
-        let rot_drag = allow_interaction && rot_resp.drag_started();
-
-        if allow_interaction && let Some(p) = hover_pos {
-            if shown_knob.distance(p) < 8.0 {
-                view.cursor.claim(Layer::Handle, egui::CursorIcon::Grab);
-            } else if let Some((h, _)) = obb.handles().iter().find(|(_, pos)| pos.distance(p) < 8.0) {
-                let icon = obb.handle_cursor(*h);
-                view.cursor.claim(Layer::Handle, icon);
-            }
-        }
-
-        let origin = ptr.origin;
-        if allow_interaction {
-            if let Some(h) = handle_drag {
-                if let Some(s) = view.image_selection.as_mut() {
-                    let o = origin.unwrap_or_else(|| obb.handle_pos(h));
-                    s.drag = Some(ImageDrag {
-                        start: o,
-                        target: DragTarget::Handle(h),
-                        initial_rect: b,
-                        initial_matrix: resize_frame(&obb, xf, info, page).0,
-                    });
-                }
-            } else if rot_drag {
-                if let Some(s) = view.image_selection.as_mut() {
-                    let o = origin.unwrap_or(shown_knob);
+        // A drag of the selected picture takes what its press was on ([`body_hit`], [`handle_hit`]):
+        // the rotate knob turns it, a grip resizes it, the picture itself moves. The knob and the
+        // grips take it from the press, so a move too short to be a drag of the page counts; the
+        // picture waits for that, as a click selects.
+        let at_press = |part| matches!(part, PicturePart::Knob | PicturePart::Corner(_));
+        if gate
+            && let Some(o) = ptr.origin
+            && let PagePress::Mine(Owner::Picture { index, part }) = press
+            && (index == i || part == PicturePart::OverSelected)
+            && (ptr.drag_started || at_press(part) && ptr.pressed().is_some())
+            && let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none())
+        {
+            match part {
+                PicturePart::Knob => {
                     s.drag = Some(ImageDrag { start: o, target: DragTarget::Rotate, initial_rect: b, initial_matrix: image.matrix });
                     s.turning = true;
                 }
-            } else if resp.drag_started()
-                && let Some(o) = origin
-            {
-                if shown_knob.distance(o) < 8.0 {
-                    if let Some(s) = view.image_selection.as_mut() {
-                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Rotate, initial_rect: b, initial_matrix: image.matrix });
-                        s.turning = true;
-                    }
-                } else if let Some((h, _)) = obb.handles().iter().find(|(_, pos)| pos.distance(o) < 8.0) {
-                    if let Some(s) = view.image_selection.as_mut() {
+                PicturePart::Corner(grip) => {
+                    if let Some((h, _)) = obb.handles().get(grip) {
                         s.drag = Some(ImageDrag {
                             start: o,
                             target: DragTarget::Handle(*h),
@@ -794,11 +822,11 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                             initial_matrix: resize_frame(&obb, xf, info, page).0,
                         });
                     }
-                } else if (image_contains(i, o) || quad_contains(obb.corners(), o))
-                    && let Some(s) = view.image_selection.as_mut()
-                {
+                }
+                PicturePart::Body | PicturePart::OverSelected => {
                     s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: b, initial_matrix: image.matrix });
                 }
+                PicturePart::Crop(_) => {}
             }
         }
 
@@ -962,59 +990,35 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             view.cursor.claim(Layer::Drag, cursor_icon);
             return true;
         }
-        if allow_interaction
-            && ui.input(|inp| inp.key_pressed(egui::Key::Delete) || inp.key_pressed(egui::Key::Backspace))
-            && !ui.ctx().egui_wants_keyboard_input()
-        {
-            view.image_selection = None;
-            view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Delete });
-            return true;
+    }
+    // A click selects the picture its press was on; its cursor is the hit's. One nobody holds on this
+    // page leaves it unselected (where the page's objects can be selected together, the area
+    // selection the press starts has done so already).
+    let owner = match press {
+        PagePress::Mine(Owner::Picture { index, .. }) => Some(index),
+        _ => None,
+    };
+    if gate && resp.clicked() {
+        match owner {
+            Some(index) => view.image_selection = Some(ImageSelection::at(page, index)),
+            None if press == PagePress::Free && ptr.released.is_some_and(|p| xf.rect.contains(p)) => view.image_selection = None,
+            None => {}
         }
     }
-    if !allow_interaction {
-        return false;
-    }
-    let menu_key = image_menu_id();
-    let Some(p) = hover_pos.filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| {
-        b.is_positive() && images.get(i).is_some_and(|img| ImageObb::from_image(img, xf, info, page).contains(*b, p)) && image_contains(i, p)
-    }) else {
-        if resp.secondary_clicked() || resp.clicked() {
-            view.image_selection = None;
-            ui.ctx().data_mut(|d| d.insert_temp(menu_key, false));
+    owner.is_some()
+}
+
+/// A right-click on `page` that went to its picture `index` (on it or a grip of it) selects it for
+/// its menu, keeping it as it is if it was selected (crop mode included); one that went to anything
+/// else (`None`) unselects the picture selected.
+pub(crate) fn picture_context(page: usize, index: Option<usize>, view: &mut DocView) {
+    match index {
+        Some(index) if view.image_selection.as_ref().is_none_or(|s| (s.page, s.index) != (page, index)) => {
+            view.image_selection = Some(ImageSelection::at(page, index));
         }
-        return false;
-    };
-    let Some(hit_img) = images.get(hit) else { return false };
-    let hit_obb = ImageObb::from_image(hit_img, xf, info, page);
-    if selected != Some(hit) {
-        if hit_obb.is_rotated {
-            let pts = hit_obb.corners();
-            for k in 0..4 {
-                painter.line_segment([pts[k], pts[(k + 1) % 4]], Stroke::new(1.5, ACCENT.gamma_multiply(0.7)));
-            }
-        } else if let Some(b) = boxes.get(hit).copied() {
-            painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
-        }
+        Some(_) => {}
+        None => view.image_selection = None,
     }
-    let grip = hit_obb.handles().into_iter().find(|(_, point)| point.distance(p) < 10.0);
-    let cursor = if selected == Some(hit) {
-        grip.map_or(egui::CursorIcon::Grab, |(handle, _)| hit_obb.handle_cursor(handle))
-    } else {
-        egui::CursorIcon::PointingHand
-    };
-    view.cursor.claim(Layer::Text, cursor);
-    let clicked = match view.router.owner(page) {
-        Some(Owner::Picture { index, .. }) if resp.clicked() => Some(index),
-        _ => (resp.clicked() || resp.secondary_clicked()).then_some(hit),
-    };
-    if let Some(index) = clicked {
-        view.image_selection = Some(ImageSelection::at(page, index));
-    }
-    if resp.secondary_clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(menu_key, true));
-    }
-    true
 }
 
 /// The right-click context menu for a selected image.
@@ -1038,7 +1042,6 @@ pub(crate) fn image_context_menu(
     let picked = |ui: &mut egui::Ui, entry: egui::Response| {
         let clicked = entry.clicked();
         if clicked {
-            ui.ctx().data_mut(|d| d.insert_temp(image_menu_id(), false));
             egui::Popup::close_all(ui.ctx());
             ui.close();
         }
