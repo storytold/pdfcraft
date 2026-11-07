@@ -120,7 +120,17 @@ impl PdfCraftApp {
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
     pub(super) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+        let detached_id = match req {
+            CloseRequest::Tab(id) if self.views.get(index).is_some_and(|v| v.detached) => Some(id),
+            _ => None,
+        };
         self.close_tab(index);
+        if let Some(id) = detached_id {
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::from_hash_of(("detached-doc", id)),
+                egui::ViewportCommand::Close,
+            );
+        }
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
         if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {

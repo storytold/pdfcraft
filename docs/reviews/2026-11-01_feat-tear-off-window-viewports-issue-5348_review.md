@@ -19,20 +19,20 @@
 
 ### Documented Standard Violations
 
-1. **[MAJOR] WASM & Platform Compatibility** ([`CLAUDE.md`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/CLAUDE.md): "PdfCraft... runs natively on macOS, Windows, Linux and FreeBSD, and on the web via WASM")
-   - References: [`crates/ui-egui/src/app.rs#L666-L692`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app.rs#L666-L692), [`crates/ui-egui/src/chrome.rs#L172-L175`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/chrome.rs#L172-L175)
+1. **[MAJOR] WASM & Platform Compatibility** ([`CLAUDE.md`](CLAUDE.md): "PdfCraft... runs natively on macOS, Windows, Linux and FreeBSD, and on the web via WASM")
+   - References: [`crates/ui-egui/src/app.rs#L666-L692`](crates/ui-egui/src/app.rs#L666-L692), [`crates/ui-egui/src/chrome.rs#L172-L175`](crates/ui-egui/src/chrome.rs#L172-L175)
    - Issue: `ctx.show_viewport_immediate(...)` and tab detach actions (`Move to New Window`, drag tear-off) lack `#[cfg(not(target_arch = "wasm32"))]` guards. Web browsers and WASM eframe runtimes do not support native immediate viewports; detaching sets `v.detached = true`, hiding the tab from the strip while failing to spawn an OS window, stranding the document.
    - Fix: Guard viewport detachment actions and viewport rendering with `#[cfg(not(target_arch = "wasm32"))]`.
 
-2. **[MAJOR] Headless Automation** ([`AGENTS.md §3`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/AGENTS.md): "Everything is reachable headlessly... A feature is not done until its tool exists and has an end-to-end test")
-   - Reference: [`parity/acrobat-features.toml#L1235-L1249`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/parity/acrobat-features.toml#L1235-L1249)
+2. **[MAJOR] Headless Automation** ([`AGENTS.md §3`](AGENTS.md): "Everything is reachable headlessly... A feature is not done until its tool exists and has an end-to-end test")
+   - Reference: [`parity/acrobat-features.toml#L1235-L1249`](parity/acrobat-features.toml#L1235-L1249)
    - Issue: `view.multiple-windows` is promoted to `status = "shipped"` with `commands = []` and `tools = []`. No engine/automation tool or control-channel endpoint was implemented.
    - Fix: Keep status as `partial` or implement the corresponding headless/control channel tool before claiming `shipped`.
 
 ### Fowler Code Smells
 
 3. **[MAJOR] Primitive Obsession / Mismatched Index Domains**
-   - Reference: [`crates/ui-egui/src/chrome.rs#L306-L310`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/chrome.rs#L306-L310)
+   - Reference: [`crates/ui-egui/src/chrome.rs#L306-L310`](crates/ui-egui/src/chrome.rs#L306-L310)
    - Quoted hunk:
      ```rust
      let to = drop_index(&slots, from, pos.x);
@@ -46,7 +46,7 @@
    - Fix: Map `to` through `slots` back to the underlying `app.views` index.
 
 4. **[NIT] Duplicated Code**
-   - Reference: [`crates/ui-egui/src/chrome.rs#L273-L323`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/chrome.rs#L273-L323)
+   - Reference: [`crates/ui-egui/src/chrome.rs#L273-L323`](crates/ui-egui/src/chrome.rs#L273-L323)
    - Quoted hunk:
      ```rust
      if is_tear_off {
@@ -64,7 +64,7 @@
 
 ### 1. [BLOCKER] Active Tab Desynchronization & Concurrent Viewport Mutation
 **Spec Requirement:** "Viewport ID Management: Every detached view must be assigned its own distinct viewport ID." / Issue #5348  
-**Offending Code:** [`crates/ui-egui/src/app/files.rs#L661-L666`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app/files.rs#L661-L666) & [`crates/ui-egui/src/editing/close.rs#L104`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/editing/close.rs#L104)
+**Offending Code:** [`crates/ui-egui/src/app/files.rs#L661-L666`](crates/ui-egui/src/app/files.rs#L661-L666) & [`crates/ui-egui/src/editing/close.rs#L104`](crates/ui-egui/src/editing/close.rs#L104)
 ```rust
 self.active = match self.active {
     _ if self.views.is_empty() => None,
@@ -81,7 +81,7 @@ self.active = Some(index);
 
 ### 2. [BLOCKER] Child Viewport Unsaved-Close Broken & Missing CancelClose
 **Spec Requirement:** "Window Closure Behavior: When a detached window is closed, the app must either re-attach the tab to the main window or cleanly close the document—always prompting if there are unsaved changes."  
-**Offending Code:** [`crates/ui-egui/src/app.rs#L667-L698`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app.rs#L667-L698)
+**Offending Code:** [`crates/ui-egui/src/app.rs#L667-L698`](crates/ui-egui/src/app.rs#L667-L698)
 ```rust
 ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
     if child_ui.input(|i| i.viewport().close_requested()) {
@@ -97,7 +97,7 @@ if reattach { ... } else if close { self.request_close_tab(idx); }
 
 ### 3. [MAJOR] Missing Platform Guard for WASM
 **Spec Requirement:** "Platform Reality Check: ... WASM does not support multiple viewports. Document verified platforms."  
-**Offending Code:** [`crates/ui-egui/src/chrome.rs#L172-L175`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/chrome.rs#L172-L175) & [`crates/ui-egui/src/app.rs#L647`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app.rs#L647)
+**Offending Code:** [`crates/ui-egui/src/chrome.rs#L172-L175`](crates/ui-egui/src/chrome.rs#L172-L175) & [`crates/ui-egui/src/app.rs#L647`](crates/ui-egui/src/app.rs#L647)
 ```rust
 if ui.button(tl!("Move to New Window")).clicked() {
     action = Some(crate::tab_context::Action::Detach(id));
@@ -107,13 +107,13 @@ if ui.button(tl!("Move to New Window")).clicked() {
 
 ### 4. [MAJOR] Missing Drag Re-Docking & Incomplete Test Suite
 **Spec Requirement:** "Re-docking / dragging a detached window back into the main tab group." and Author Action Items 2, 3, 4.  
-**Offending Code:** [`crates/ui-egui/src/app.rs#L680-L684`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app.rs#L680-L684)  
+**Offending Code:** [`crates/ui-egui/src/app.rs#L680-L684`](crates/ui-egui/src/app.rs#L680-L684)  
 **Problem:** Spec-defined drag-docking back into the tab strip is omitted; only a button exists. Additionally, required tests for detaching the sole tab, closing detached tabs with unsaved changes, and re-docking were not added to `crates/ui-egui/tests/it/ui.rs`.  
 **Fix:** Implement drag re-docking or document deviation, and provide missing integration tests.
 
 ### 5. [NIT] Sole Tab Detachment Unguarded
 **Spec Requirement:** "Detaching the sole/last remaining tab: Establishing clear behavior (refused or handled)."  
-**Offending Code:** [`crates/ui-egui/src/app.rs#L283-L290`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app.rs#L283-L290)  
+**Offending Code:** [`crates/ui-egui/src/app.rs#L283-L290`](crates/ui-egui/src/app.rs#L283-L290)  
 **Problem:** Detaching the last remaining tab clears `self.active`, abruptly sending the primary window back to the Home screen while leaving an orphaned child viewport.  
 **Fix:** Disallow detaching the last remaining tab or explicitly handle the primary window empty state.
 
@@ -121,12 +121,12 @@ if ui.button(tl!("Move to New Window")).clicked() {
 
 ## Actionable Remediation Checklist
 
-- [ ] **Fix active tab desynchronization** in [`close_tab`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/app/files.rs#L661-L666) and [`resolve_close`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/editing/close.rs#L104) to ensure `self.active` only targets non-detached tabs (`!v.detached`), preventing concurrent duplicate rendering in both windows.
+- [ ] **Fix active tab desynchronization** in [`close_tab`](crates/ui-egui/src/app/files.rs#L661-L666) and [`resolve_close`](crates/ui-egui/src/editing/close.rs#L104) to ensure `self.active` only targets non-detached tabs (`!v.detached`), preventing concurrent duplicate rendering in both windows.
 - [ ] **Fix detached window close flow**: Send `egui::ViewportCommand::CancelClose` to the child viewport when dirty, route modal save prompts to the active viewport, and prevent re-spawning closed viewports.
 - [ ] **Add WASM target guards**: Gate multi-viewport logic (`show_detached_windows`, "Move to New Window" context menu item, and drag tear-off) behind `#[cfg(not(target_arch = "wasm32"))]`.
-- [ ] **Fix slot-to-view index mapping**: In [`crates/ui-egui/src/chrome.rs#L306`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/src/chrome.rs#L306), translate `to` from `slots` back to the underlying `app.views` index.
-- [ ] **Revert or adjust parity status**: Keep `view.multiple-windows` as `partial` in [`parity/acrobat-features.toml`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/parity/acrobat-features.toml#L1238) until a headless tool or control-channel endpoint exists per AGENTS.md §3.
-- [ ] **Implement missing tests** in [`crates/ui-egui/tests/it/ui.rs`](file:///media/saifallah/DATA/desktop_backup/Tech/Projects/pdf_craft_project/pdfcraft/crates/ui-egui/tests/it/ui.rs):
+- [ ] **Fix slot-to-view index mapping**: In [`crates/ui-egui/src/chrome.rs#L306`](crates/ui-egui/src/chrome.rs#L306), translate `to` from `slots` back to the underlying `app.views` index.
+- [ ] **Revert or adjust parity status**: Keep `view.multiple-windows` as `partial` in [`parity/acrobat-features.toml`](parity/acrobat-features.toml#L1238) until a headless tool or control-channel endpoint exists per AGENTS.md §3.
+- [ ] **Implement missing tests** in [`crates/ui-egui/tests/it/ui.rs`](crates/ui-egui/tests/it/ui.rs):
   - Detaching the sole / last remaining tab behavior.
   - Closing a detached window containing unsaved changes.
   - Focus transfer predictability when detaching the active tab.

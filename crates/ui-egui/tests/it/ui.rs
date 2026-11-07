@@ -2082,6 +2082,13 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
 
+    h.ctx.set_embed_viewports(false);
+    egui::Context::set_immediate_viewport_renderer(|ctx, mut vp| {
+        egui::Window::from_viewport(vp.ids.this, vp.builder.clone())
+            .collapsible(false)
+            .show(ctx, |ui| (vp.viewport_ui_cb)(ui));
+    });
+
     h.state_mut().detach_tab(ids[1]);
     h.run_steps(3);
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
@@ -2092,7 +2099,13 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
 
     // Clicking "Don't save" discards changes and closes the detached tab
     h.get_by_label("Don't save").click();
-    h.run_steps(3);
+    h.step();
+
+    let close_sent = h.output().viewport_output.get(&child_viewport_id)
+        .is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(close_sent, "ViewportCommand::Close must be sent to child viewport on close resolution");
+
+    h.run_steps(2);
 
     assert_eq!(h.state().views.len(), 2);
     assert!(h.state().views.iter().all(|v| v.id != ids[1]));
@@ -2109,6 +2122,13 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
 
+    h.ctx.set_embed_viewports(false);
+    egui::Context::set_immediate_viewport_renderer(|ctx, mut vp| {
+        egui::Window::from_viewport(vp.ids.this, vp.builder.clone())
+            .collapsible(false)
+            .show(ctx, |ui| (vp.viewport_ui_cb)(ui));
+    });
+
     h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
     h.state_mut().detach_tab(ids[1]);
     h.run_steps(3);
@@ -2120,7 +2140,13 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
 
     // Clicking "Save" saves changes and closes the detached tab once written
     h.get_by_label("Save").click();
-    h.run_steps(5);
+    h.step();
+
+    let close_sent = h.output().viewport_output.get(&child_viewport_id)
+        .is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(close_sent, "ViewportCommand::Close must be sent to child viewport on close resolution");
+
+    h.run_steps(4);
 
     assert!(save_path.exists());
     assert_eq!(h.state().views.len(), 2);
