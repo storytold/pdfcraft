@@ -547,6 +547,64 @@ fn numbered_glyph_names_read_as_their_own_code() {
     assert!(lines(2).is_empty(), "/MT40 at 0x40 among names numbering other codes: {:?}", lines(2));
 }
 
+/// `numbered_glyph_names_read_as_their_own_code` in a Type 3 font, which already reads codes
+/// 32-126 by the code: above 126, `C174` at 174, `C176` at 176 and `GE9` at 0xE9 read as the
+/// code's Latin-1 character, unless one numbered name in the font numbers another code
+/// (`/C1` at 233).
+#[test]
+fn numbered_type3_glyph_names_read_as_their_own_code() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    // Each font's /Differences as (code, glyph name) pairs, and the codes its page shows.
+    type Names<'a> = &'a [(i64, &'a str)];
+    let fonts: [(Names, &[u8]); 2] = [
+        (&[(70, "C70"), (174, "C174"), (176, "C176"), (233, "GE9")], b"F\xae\xb0\xe9"),
+        (&[(174, "C174"), (176, "C176"), (233, "C1")], b"\xae\xb0\xe9"),
+    ];
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let mut kids = Vec::new();
+    for (names, codes) in fonts {
+        let glyph = doc.add_object(Stream::new(dictionary! {}, b"600 0 0 0 500 700 d1 0 0 500 700 re f".to_vec()));
+        let mut differences = Vec::new();
+        let mut procs = lopdf::Dictionary::new();
+        for &(code, glyph_name) in names {
+            differences.extend([Object::Integer(code), name(glyph_name)]);
+            procs.set(glyph_name, glyph);
+        }
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type3",
+            "FontBBox" => vec![0.into(), 0.into(), 1000.into(), 1000.into()],
+            "FontMatrix" => vec![0.001.into(), 0.into(), 0.into(), 0.001.into(), 0.into(), 0.into()],
+            "CharProcs" => procs,
+            "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences },
+            "FirstChar" => 0, "LastChar" => 255, "Widths" => vec![Object::Integer(600); 256],
+        });
+        // One glyph per line, as in `glyph_names_outside_the_glyph_list_still_read_as_text`.
+        let mut content = b"BT /T3 20 Tf 20 290 Td".to_vec();
+        for code in codes {
+            content.extend_from_slice(format!(" <{code:02x}> Tj 0 -25 Td").as_bytes());
+        }
+        content.extend_from_slice(b" ET");
+        let content = doc.add_object(Stream::new(dictionary! {}, content));
+        let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 300.into(), 300.into()], "Resources" => dictionary! {"Font" => dictionary! {"T3" => font}}, "Contents" => content });
+        kids.push(Object::Reference(page));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(pages_id, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages_id});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let lines = |page| {
+        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
+        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(lines(0), ["F", "\u{ae}", "\u{b0}", "\u{e9}"]);
+    assert!(lines(1).is_empty(), "/C1 at 233 beside /C174 at 174: {:?}", lines(1));
+}
+
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex
 /// digits only, and map a name with lowercase ones to nothing ("uni20ac" in its examples).
 /// Names upstream's own lookup can't read (several groups, a suffix) show it: lowercase reads
