@@ -1581,8 +1581,11 @@ pub fn tools() -> Vec<ToolDef> {
         t("text_font_import", "Load document font", "Load an explicitly selected, openly licensed full TrueType/OpenType face into a page. The program's family, embedding permissions and licence declaration are validated. Completes source subsets of the same face without replacing existing glyphs. Returns a font resource usable with text_edit.font_resource. Undoable; respects root confinement. No system-interface fallback is exported.")
             .cmd("edit.edit_text")
             .with(schema(json!({"doc":doc(), "page":{"type":"integer","minimum":1}, "path":{"type":"string"}}), &["doc","page","path"])),
-        t("text_fonts", "List document fonts", "List validated embedded source faces and approved full preview faces for a page. Full registered resources can be selected by text_edit.font_resource; preview_only faces are not PDF resource names.")
+        t("text_fonts", "List document fonts", "List validated embedded source faces and approved full preview faces for a page. Full registered resources and bundled choices can be selected by text_edit.font_resource. builtin:thai explicitly replaces a paragraph or range with the bundled Noto Sans Thai; a build without that face never lists it and text_edit refuses it there (a page whose fonts fill the listing budget may also omit it, but text_edit still accepts it). preview_only faces cannot be selected.")
             .ro().cmd("edit.edit_text")
+            .with(schema(json!({"doc":doc(), "page":{"type":"integer","minimum":1}}), &["doc","page"])),
+        t("text_prepare", "Prepare grouped text", "Make existing text inside supported Form XObjects directly editable on one page. Replaces placements with their original operators and resources, preserving position, clipping and other pages. Refuses unsafe transparency, tags or malformed content. Adds no text or cover boxes. Returns prepared_groups (placements made editable), repaired_fonts (damaged legacy Thai maps repaired) and refused_groups ('name: reason' for each group left as it was). Fails when nothing on the page can be prepared. Undoable; list text_paragraphs again afterwards.")
+            .cmd("edit.edit_text")
             .with(schema(json!({"doc":doc(), "page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("text_paragraphs", "List paragraphs", "The paragraphs on a page (adjacent source runs grouped into aligned visual rows, including mixed fonts, sizes and colours): number, text, editor_text (visual rows separated by newlines), rows and source line numbers, box (top-left-origin points), font and size. Use the number with text_edit's paragraph: until you list the page again, a number names the paragraph listed here, even after edits regroup the page.")
             .ro()
@@ -1597,7 +1600,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 },
                     "paragraph": { "type": "integer", "minimum": 1 },
-                    "font_resource": { "type": "string", "description": "Explicit source/full page font resource from text_fonts or text_font_import." },
+                    "font_resource": { "type": "string", "description": "Paragraphs: source/full page resource or bundled document-font choice from text_fonts (builtin:thai selects the bundled Thai face); also accepts text_font_import resources." },
                     "ranges": { "type": "array", "maxItems": 1024, "items": { "type": "object", "properties": {"range":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2},"font":{"type":"string","enum":["helvetica","times","courier"]},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"font_resource":{"type":"string"},"size":{"type":"number","exclusiveMinimum":0},"color":{"type":"string"},"underline":{"type":"boolean"},"char_spacing":{"type":"number"},"scale":{"type":"number"}},"required":["range"]}, "description":"Disjoint UTF-8 byte ranges in replacement text; unspecified source formatting survives." },
                     "text": { "type": "string" },
                     "font": { "type": "string", "enum": ["helvetica", "times", "courier"] },

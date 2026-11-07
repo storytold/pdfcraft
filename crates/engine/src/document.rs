@@ -255,6 +255,20 @@ impl Document {
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
     }
 
+    /// Whether this page has grouped source text that can be prepared without changing its appearance.
+    /// Used once when entering the existing-text tool, before queuing an undoable preparation.
+    pub fn can_prepare_text(&self, page: usize) -> bool {
+        self.text_preparation(page).is_ok_and(|p| p.expanded > 0)
+    }
+
+    /// Preview preparation, including skipped groups and character-map repairs, without editing.
+    pub fn text_preparation(&self, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, String> {
+        let editor = self.editor.as_ref().ok_or("the document is not editable")?;
+        crate::guard(|| pdfcraft_edit::text::forms::prepare(&mut editor.cos.clone(), page))
+            .map_err(|e| format!("grouped text could not be prepared safely ({e})"))?
+            .map_err(|e| e.to_string())
+    }
+
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
         self.editor.as_ref().and_then(|e| e.text_blocks(page).ok()).map(|b| b.as_ref().clone()).unwrap_or_default()

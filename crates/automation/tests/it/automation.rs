@@ -11428,3 +11428,151 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
+
+#[test]
+fn explicit_bundled_thai_font_choice_layout_edit_undo_and_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = page_text(&mut a, doc);
+    let fonts = ok(&mut a, "text_fonts", json!({"doc":doc,"page":1}));
+    let choice = fonts["fonts"].as_array().unwrap().iter().find(|f| f["resource"] == "builtin:thai");
+    let args = json!({"doc":doc,"page":1,"paragraph":1,"text":"น้ำ กิ่ กี้ ผู้ใช้","font_resource":"builtin:thai"});
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(choice.is_none());
+        assert!(a.call("text_edit", &args).is_err());
+        assert_eq!(page_text(&mut a, doc), before);
+        return;
+    }
+    assert_eq!(choice.unwrap()["preview_only"], false);
+    ok(&mut a, "text_edit_layout", args.clone());
+    assert_eq!(page_text(&mut a, doc), before);
+    ok(&mut a, "text_edit", args);
+    let edited = page_text(&mut a, doc);
+    assert!(edited[0].contains("น้ำ กิ่ กี้ ผู้ใช้"));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(page_text(&mut a, doc), before);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, reopened), edited);
+    let Err(ToolError::Failed(m)) =
+        a.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"text":"น้ำ 😀","font_resource":"builtin:thai"}))
+    else {
+        panic!("Noto Sans Thai has no emoji")
+    };
+    assert!(m.contains("Noto Sans Thai") && m.contains("U+1F600"), "the error names the font and the character: {m}");
+    assert_eq!(page_text(&mut a, reopened), edited);
+    let image = a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":144})).unwrap();
+    assert!(image.iter().any(|c| matches!(c, Content::Png { .. })));
+}
+
+/// `text_prepare` refuses what it can't act on, changing nothing: a page with no grouped text
+/// (with the reason), and a page the document doesn't have.
+#[test]
+fn text_prepare_refuses_pages_without_grouped_text() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let Err(ToolError::Failed(m)) = a.call("text_prepare", &json!({"doc":doc,"page":1})) else { panic!("nothing to prepare") };
+    assert!(m.contains("no supported grouped text"), "{m}");
+    let Err(ToolError::InvalidArgs(m)) = a.call("text_prepare", &json!({"doc":doc,"page":2})) else { panic!("no page 2") };
+    assert!(m.contains("out of range"), "{m}");
+    assert!(a.call("edit_undo", &json!({"doc":doc})).is_err(), "nothing was recorded to undo");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], false);
+}
+
+#[test]
+fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_glyphs() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut source = Document::open(Arc::new(fixture(2))).unwrap();
+    let old = "ข้อความเดิม น้ำ ผู้ใช้";
+    let new = "ข้อความแก้ไข น้ำ ผู้ใช้";
+    let mut cmap = String::from("begincmap 1 begincodespacerange <00> <ff> endcodespacerange\n");
+    cmap.push_str(&format!("{} beginbfchar\n", old.chars().count()));
+    for (i, ch) in old.chars().enumerate() {
+        cmap.push_str(&format!("<{:02x}> <{:04x}>\n", 65 + i, u32::from(ch)));
+    }
+    cmap.push_str("endbfchar endcmap");
+    let unicode = source.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+LegacyThai"));
+    font.set(b"FirstChar".to_vec(), Object::Int(65));
+    font.set(b"LastChar".to_vec(), Object::Int(65 + old.chars().count() as i64 - 1));
+    font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(300); old.chars().count()]));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+    let font = source.add(Object::Dict(font));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), Object::Ref(font));
+    let mut resources = Dict::new();
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(200), Object::Int(300)]));
+    form.set(b"Resources".to_vec(), Object::Dict(resources));
+    let codes: String = (0..old.chars().count()).map(|i| format!("{:02x}", 65 + i)).collect();
+    let form = source.add(Object::Stream(Stream::flate(form, format!("BT /F1 14 Tf 20 220 Td <{codes}> Tj ET").as_bytes())));
+    for page in [ObjRef::new(4, 0), ObjRef::new(6, 0)] {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Body".to_vec(), Object::Ref(form));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let content = source.add(Object::Stream(Stream::flate(Dict::new(), b"q /Body Do Q")));
+        source
+            .update_dict(page, |d| {
+                d.set(b"Resources".to_vec(), Object::Dict(resources));
+                d.set(b"Contents".to_vec(), Object::Ref(content));
+            })
+            .unwrap();
+    }
+    std::fs::write(dir.join("source.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["count"], 0);
+    let prepared = ok(&mut a, "text_prepare", json!({"doc":id,"page":1}));
+    assert_eq!(
+        [&prepared["prepared_groups"], &prepared["repaired_fonts"], &prepared["refused_groups"]],
+        [&json!(1), &json!(0), &json!([])],
+        "{prepared}"
+    );
+    assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap(), before, "preparing must not change pixels");
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["paragraphs"][0]["text"], old);
+    // The bundled Thai face is an optional build input. Without it, `builtin:thai` is refused and
+    // the grouped edit, undo, redo and save checks run on Latin text in Helvetica instead.
+    let thai = json!({"doc":id,"page":1,"paragraph":1,"text":new,"font_resource":"builtin:thai"});
+    let (new, args) = if pdfcraft_fonts::document_thai_font().is_some() {
+        (new, thai)
+    } else {
+        let Err(ToolError::Failed(m)) = a.call("text_edit", &thai) else { panic!("builtin:thai needs the bundled Thai face") };
+        assert!(m.contains("builtin:thai"), "{m}");
+        let latin = "Edited body";
+        (latin, json!({"doc":id,"page":1,"paragraph":1,"text":latin,"font":"helvetica"}))
+    };
+    ok(&mut a, "text_edit", args);
+    assert_eq!(ok(&mut a, "text_lines", json!({"doc":id,"page":1}))["lines"][0]["text"].as_str().unwrap().trim(), new);
+    assert_eq!(page_text(&mut a, id)[1], old, "a shared form's other page must not change");
+    let after = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    assert_ne!(after, before);
+    ok(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap(), before);
+    ok(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["count"], 0);
+    ok(&mut a, "edit_redo", json!({"doc":id}));
+    ok(&mut a, "edit_redo", json!({"doc":id}));
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), after);
+    assert_eq!(page_text(&mut a, reopened), [new, old]);
+    assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
+}
