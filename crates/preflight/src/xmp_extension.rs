@@ -16,7 +16,12 @@
 //!   `pdfaProperty`, `pdfaType`, `pdfaField`): "Unlike predefined XMP schemas, the namespace
 //!   prefixes are not only preferred, but required" (4.1).
 //!
-//! An entry counts as present written as an element or as an attribute of the description.
+//! An entry counts as present written as an element or as an attribute of the description. An
+//! entry that names something is empty when it holds no value: a namespace URI or prefix, a
+//! property, value type or field name, a value type reference, a property category. TechNote 0009
+//! asks for names that are valid XML names (4.4, 4.6) and a category that is internal or external
+//! (4.4), and an empty prefix or namespace binds nothing. The human-readable descriptions
+//! (`pdfaSchema:schema` and the `description` entries) are Text and may be empty.
 
 use pdfcraft_cos::ObjRef;
 use roxmltree::{Document, Node};
@@ -51,7 +56,7 @@ pub(crate) struct Findings {
     pub(crate) not_bag: Vec<NotBag>,
 }
 
-/// A description without an entry it needs.
+/// A description without an entry it needs, or with the entry empty.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Missing {
     /// The metadata stream.
@@ -63,8 +68,10 @@ pub(crate) struct Missing {
     /// description itself: its `pdfaProperty:name` or `pdfaType:type`, a field as `type/name`, or
     /// `#n` for the n-th of its list when it has no name.
     pub(crate) item: Option<String>,
-    /// The entry it lacks, as `prefix:name`.
+    /// The entry it lacks or holds empty, as `prefix:name`.
     pub(crate) entry: String,
+    /// Whether the entry is there but empty, rather than absent.
+    pub(crate) empty: bool,
 }
 
 /// A description namespace written with another prefix than its own.
@@ -132,12 +139,21 @@ impl Findings {
         self.missing.len().saturating_add(self.prefixes.len()).saturating_add(self.not_bag.len()) < MAX_FINDINGS
     }
 
-    /// Notes the entries of `ns` in `names` that the description `d`, at `at`, lacks.
+    /// Notes the entries of `ns` in `names` that the description `d`, at `at`, lacks, or holds
+    /// empty when they are entries that name something (see [`NAMING`]).
     fn need(&mut self, at: &Place, d: &Node<'_, '_>, ns: &str, prefix: &str, names: &[&str]) {
         for name in names {
-            if entry(d, ns, name).is_none() && d.attribute((ns, *name)).is_none() && self.room() {
+            let element = entry(d, ns, name);
+            let attribute = d.attribute((ns, *name));
+            let empty = match (element, attribute) {
+                (None, None) => false,
+                (Some(e), _) => NAMING.contains(name) && is_empty(&e),
+                (None, Some(a)) => NAMING.contains(name) && a.trim().is_empty(),
+            };
+            if (empty || (element.is_none() && attribute.is_none())) && self.room() {
                 let Place { object, schema, item } = at;
-                self.missing.push(Missing { object: *object, schema: schema.clone(), item: item.clone(), entry: format!("{prefix}:{name}") });
+                let entry = format!("{prefix}:{name}");
+                self.missing.push(Missing { object: *object, schema: schema.clone(), item: item.clone(), entry, empty });
             }
         }
     }
@@ -161,6 +177,20 @@ impl Findings {
             }
         }
     }
+}
+
+/// The entries that name something, which an empty value leaves without a name: namespace URIs
+/// and prefixes, property, value type and field names, value type references and the property
+/// category.
+const NAMING: [&str; 6] = ["namespaceURI", "prefix", "name", "type", "valueType", "category"];
+
+/// Whether the element entry `e` holds no value: no element, no text but white space, and no
+/// `rdf:resource` or `rdf:value` attribute with a value.
+fn is_empty(e: &Node<'_, '_>) -> bool {
+    let blank = |v: Option<&str>| v.is_none_or(|v| v.trim().is_empty());
+    !e.children().any(|c| c.is_element() || (c.is_text() && c.text().is_some_and(|t| !t.trim().is_empty())))
+        && blank(e.attribute((RDF, "resource")))
+        && blank(e.attribute((RDF, "value")))
 }
 
 /// `#n` for the 0-based position `n`, counted from 1.

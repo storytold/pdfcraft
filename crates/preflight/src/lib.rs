@@ -155,6 +155,8 @@ pub const WORDINGS: &[&str] = &[
     "The XMP property {property} in metadata stream {object} should have the value type {type}",
     "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
     "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} describes {item} with an empty {entry} entry",
     "The XMP extension schema container in metadata stream {object} holds no rdf:Bag",
     "The XMP extension schema container in metadata stream {object} holds {found}, not one rdf:Bag",
     "Metadata stream {object} writes the namespace {namespace} without a prefix, not with {prefix}",
@@ -534,19 +536,36 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     for m in extension.missing {
         let mut values = vec![("{schema}", m.schema), ("{object}", m.object.to_string()), ("{entry}", m.entry)];
-        match m.item {
-            None => located_issue(
+        match (m.item, m.empty) {
+            (None, false) => located_issue(
                 "6.6.2.3.3",
                 "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
                 values,
                 m.object,
                 false,
             ),
-            Some(item) => {
+            (None, true) => located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
+                values,
+                m.object,
+                false,
+            ),
+            (Some(item), false) => {
                 values.push(("{item}", item));
                 located_issue(
                     "6.6.2.3.3",
                     "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
+                    values,
+                    m.object,
+                    false,
+                );
+            }
+            (Some(item), true) => {
+                values.push(("{item}", item));
+                located_issue(
+                    "6.6.2.3.3",
+                    "The XMP extension schema {schema} in metadata stream {object} describes {item} with an empty {entry} entry",
                     values,
                     m.object,
                     false,
