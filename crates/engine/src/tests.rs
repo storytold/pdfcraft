@@ -10523,3 +10523,67 @@ fn imported_bookmarks_undo_in_one_step() {
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
+
+/// A document of `objs`, numbered from 1, with a cross-reference table.
+fn pdf_of(objs: &[&str]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn deleting_a_comment_before_a_3d_model_moves_its_listed_position() {
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 30 30] /C [1 0 0] >>",
+        "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] /F 2 >>",
+        "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] >>",
+    ]);
+    let mut s = Session::new();
+    let id = s.open("models.pdf", None, Arc::new(pdf), None).expect("opens");
+    let indexes = |s: &Session| s.get(id).unwrap().info.annots_3d.iter().map(|a| a.index).collect::<Vec<_>>();
+    // The hidden model is not listed.
+    assert_eq!(indexes(&s), [2]);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(indexes(&s), [1]);
+    s.undo(id).unwrap();
+    assert_eq!(indexes(&s), [2]);
+}
+
+#[test]
+fn deleting_a_3d_model_or_a_comment_before_a_repeated_one_keeps_the_list_right() {
+    // The model at 6 is listed twice; the inspector counts it once, at position 1.
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Annots [4 0 R 6 0 R 6 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 30 30] /C [1 0 0] >>",
+        "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] /Contents (second) >>",
+        "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] /Contents (first) >>",
+    ]);
+    let mut s = Session::new();
+    let id = s.open("models.pdf", None, Arc::new(pdf), None).expect("opens");
+    let indexes = |s: &Session| s.get(id).unwrap().info.annots_3d.iter().map(|a| a.index).collect::<Vec<_>>();
+    assert_eq!(indexes(&s), [1, 3]);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(indexes(&s), [0, 2]);
+    s.undo(id).unwrap();
+    assert_eq!(indexes(&s), [1, 3]);
+    // Deleting a model takes it off the list, and undo brings it back.
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 3 }).unwrap();
+    assert_eq!(indexes(&s), [1]);
+    s.undo(id).unwrap();
+    assert_eq!(indexes(&s), [1, 3]);
+}

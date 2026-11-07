@@ -1,5 +1,8 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{
+    Annot3d, Annotation, AttachmentSource, DestView, Dimension3d, Field, FieldKind, Format3d, LayerOp, Link, LinkTarget, Projection3d,
+    RemoteDestination, View3d, link_replies,
+};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -22,6 +25,23 @@ pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 /// key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
+/// 3D models `DocInfo::annots_3d` lists. Real files have one per page or fewer.
+pub(super) const MAX_ANNOTS_3D: usize = 1024;
+
+/// A 3D view chosen by name is looked for among this many of the stream's views...
+const MAX_VIEWS_SEARCHED: usize = 1024;
+/// ...and only for a name this long or shorter. Real view names are a few words.
+const MAX_VIEW_NAME_BYTES: usize = 1024;
+
+/// Whether a `/C2W` matrix has a camera: its y and z axes not zero and not parallel.
+fn has_camera_axes(c: &[f64; 12]) -> bool {
+    let (y, z) = ([c[3], c[4], c[5]], [c[6], c[7], c[8]]);
+    let length = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let cross = [y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0]];
+    let (ly, lz) = (length(y), length(z));
+    ly > 0.0 && lz > 0.0 && length(cross) > ly * lz * 1e-9
+}
+
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
     let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
@@ -37,6 +57,121 @@ pub(super) fn retained(a: &Annotation) -> usize {
 }
 
 impl<'a> Inspector<'a> {
+    /// The format of a 3D annotation's model: its `/3DD` stream's `/Subtype`, following one 3D
+    /// reference dictionary (`/Type /3DRef`, a stream another annotation shares; §13.6.3).
+    fn model_3d(&self, page: usize, index: usize, annot: &Dictionary) -> Annot3d {
+        let rect = rect4(self.resolve(annot.get(b"Rect").unwrap_or(&Object::Null)));
+        let mut data = annot.get(b"3DD").ok().and_then(|o| self.dict(o));
+        if let Some(d) = data
+            && self.name(d, b"Type").as_deref() == Some("3DRef")
+        {
+            data = d.get(b"3DD").ok().and_then(|o| self.dict(o));
+        }
+        let format = match data.and_then(|d| self.name(d, b"Subtype")).as_deref() {
+            Some("PRC") => Format3d::Prc,
+            Some("U3D") => Format3d::U3d,
+            _ => Format3d::Unknown,
+        };
+        // A null entry is an absent one (§7.3.7).
+        let chosen = match annot.get(b"3DV").ok().filter(|s| !matches!(self.resolve(s), Object::Null)) {
+            Some(selector) => self.select_view(selector, data, true),
+            None => self.default_view(data),
+        };
+        Annot3d { page, index, rect, format, view: chosen.and_then(|v| self.view_3d(v)) }
+    }
+
+    /// The 3D stream's default view (§13.6.3): its `/DV`, else its first view.
+    fn default_view(&self, data: Option<&'a Dictionary>) -> Option<&'a Dictionary> {
+        let d = data?;
+        d.get(b"DV").ok().and_then(|dv| self.select_view(dv, data, false)).or_else(|| self.views(data).first().and_then(|v| self.dict(v)))
+    }
+
+    fn views(&self, data: Option<&'a Dictionary>) -> &'a [Object] {
+        data.and_then(|d| d.get(b"VA").ok()).and_then(|o| self.resolve(o).as_array().ok()).map_or(&[], Vec::as_slice)
+    }
+
+    /// A view given by `/3DV` or `/DV` (§13.6.2): a view dictionary, an index or name into the
+    /// stream's `/VA`, or `/F`, `/L` (first, last) and, for `/3DV`, `/D` (the default).
+    fn select_view(&self, selector: &'a Object, data: Option<&'a Dictionary>, may_default: bool) -> Option<&'a Dictionary> {
+        let views = self.views(data);
+        match self.resolve(selector) {
+            Object::Dictionary(_) | Object::Stream(_) => self.dict(selector),
+            Object::Integer(i) => usize::try_from(*i).ok().and_then(|i| views.get(i)).and_then(|v| self.dict(v)),
+            Object::Name(n) => match n.as_slice() {
+                b"F" => views.first().and_then(|v| self.dict(v)),
+                b"L" => views.last().and_then(|v| self.dict(v)),
+                b"D" if may_default => self.default_view(data),
+                _ => None,
+            },
+            // A name matches a view's internal name `/IN`; a view without one is matched by its
+            // external name `/XN`. Compared as text (PDFDocEncoding or UTF-16BE, §7.9.2.2), over
+            // a bounded number of views and only for short names, so no file makes this scan
+            // costly.
+            Object::String(s, _) if s.len() <= MAX_VIEW_NAME_BYTES => {
+                let wanted = text_string(s);
+                let named = |d: &Dictionary| {
+                    let key: &[u8] = if d.has(b"IN") { b"IN" } else { b"XN" };
+                    matches!(d.get(key).map(|o| self.resolve(o)), Ok(Object::String(n, _)) if n.len() <= MAX_VIEW_NAME_BYTES && text_string(n) == wanted)
+                };
+                views.iter().take(MAX_VIEWS_SEARCHED).filter_map(|v| self.dict(v)).find(|d| named(d))
+            }
+            _ => None,
+        }
+    }
+
+    /// A 3D view dictionary (§13.6.4) with a camera given by `/C2W`; `None` for views positioned
+    /// another way (a U3D path) or without a usable matrix.
+    fn view_3d(&self, view: &Dictionary) -> Option<View3d> {
+        let num = |o: &Object| match self.resolve(o) {
+            Object::Integer(i) => Some(*i as f64),
+            Object::Real(r) => Some(f64::from(*r)),
+            _ => None,
+        };
+        if self.name(view, b"MS").is_some_and(|ms| ms != "M") {
+            return None;
+        }
+        let c2w = self.resolve(view.get(b"C2W").ok()?).as_array().ok()?;
+        let mut camera_to_world = [0.0; 12];
+        for (out, o) in camera_to_world.iter_mut().zip(c2w) {
+            *out = num(o)?;
+        }
+        if c2w.len() != 12 || camera_to_world.iter().any(|v| !v.is_finite()) || !has_camera_axes(&camera_to_world) {
+            return None;
+        }
+        let center_of_orbit = view.get(b"CO").ok().and_then(num).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        let dimension = |d: Option<&Object>, default: Dimension3d| match d.map(|o| self.resolve(o)) {
+            Some(Object::Name(n)) => match n.as_slice() {
+                b"W" => Dimension3d::Width,
+                b"H" => Dimension3d::Height,
+                b"Max" => Dimension3d::Max,
+                b"Min" => Dimension3d::Min,
+                _ => default,
+            },
+            _ => default,
+        };
+        let p = view.get(b"P").ok().and_then(|o| self.dict(o));
+        let projection = match p {
+            Some(p) if self.name(p, b"Subtype").as_deref() == Some("O") => Projection3d::Orthographic {
+                scale: p.get(b"OS").ok().and_then(num).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0),
+                scaled: dimension(p.get(b"OB").ok(), Dimension3d::Width),
+            },
+            Some(p) => Projection3d::Perspective {
+                fov: p.get(b"FOV").ok().and_then(num).filter(|v| *v > 0.0 && *v < 180.0).unwrap_or(90.0),
+                scaled: dimension(p.get(b"PS").ok(), Dimension3d::Width),
+            },
+            None => Projection3d::Perspective { fov: 90.0, scaled: Dimension3d::Width },
+        };
+        let background = view
+            .get(b"BG")
+            .ok()
+            .and_then(|o| self.dict(o))
+            .and_then(|bg| bg.get(b"C").ok())
+            .and_then(|c| self.resolve(c).as_array().ok())
+            .filter(|c| c.len() == 3)
+            .and_then(|c| Some([num(&c[0])? as f32, num(&c[1])? as f32, num(&c[2])? as f32]));
+        Some(View3d { camera_to_world, center_of_orbit, projection, background })
+    }
+
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
     /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
     fn is_fill_sign(&self, d: &Dictionary, subtype: &str) -> bool {
@@ -106,6 +241,14 @@ impl<'a> Inspector<'a> {
                         info.has_javascript = true;
                     }
                     info.links.push(link);
+                }
+                continue;
+            }
+            if subtype == "3D" {
+                // Hidden (2) and NoView (32) annotations are not shown (§12.5.3).
+                let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
+                if flags & (2 | 32) == 0 && info.annots_3d.len() < MAX_ANNOTS_3D {
+                    info.annots_3d.push(self.model_3d(page, index, d));
                 }
                 continue;
             }

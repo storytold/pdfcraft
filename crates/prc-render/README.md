@@ -14,6 +14,7 @@ depth-buffered triangle fill and headlight shading, into a straight-RGBA image.
 assemble(&PrcFile) -> Result<Vec<WorldMesh>, RenderError>   // every placement's mesh moved into the world and coloured
 place(&TriangleMesh, &Matrix, colour, triangle_colours) -> WorldMesh
 Camera::fit(&Bounds, direction, up, perspective, aspect) / Camera::fit_meshes(&[WorldMesh], ...)
+Camera::from_view(c2w, center_of_orbit, ViewLens, annotation_size, fallback) // a PDF 3D view's camera (§13.6.4)
 render(&[WorldMesh], &Camera, &RenderOptions) -> Result<Image, RenderError>
 ```
 

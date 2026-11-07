@@ -11,12 +11,17 @@ const TRIANGLE_PRC_HEX: &str = "505243c91f0000c91f000001000000020000000300000004
 
 /// A one-page PDF whose page holds a 3D annotation over a stream of `/Subtype /{subtype}`.
 fn pdf(subtype: &str, hex: &str) -> Vec<u8> {
+    pdf_with(subtype, hex, "")
+}
+
+/// As [`pdf`], with `extra` entries in the 3D annotation (a `/3DV`, say).
+fn pdf_with(subtype: &str, hex: &str, extra: &str) -> Vec<u8> {
     let stream = format!("<< /Type /3D /Subtype /{subtype} /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}>\nendstream", hex.len() + 1);
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
         "<< /Type /Page /Parent 2 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] >> 4 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /3D /Rect [20 20 180 180] /3DD 5 0 R >>".into(),
+        format!("<< /Type /Annot /Subtype /3D /Rect [20 20 180 180] /3DD 5 0 R {extra} >>"),
         stream,
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -43,6 +48,10 @@ fn setup(test: &str) -> (PathBuf, Automation) {
     std::fs::write(dir.join("in/prc.pdf"), pdf("PRC", TRIANGLE_PRC_HEX)).unwrap();
     std::fs::write(dir.join("in/u3d.pdf"), pdf("U3D", "553344")).unwrap();
     std::fs::write(dir.join("outside.pdf"), pdf("PRC", TRIANGLE_PRC_HEX)).unwrap();
+    // Looking down -z from 10 above, y up, 1 / 0.25 = 4 units across the annotation, on blue.
+    let view = "/3DV << /Type /3DView /XN (Top) /C2W [1 0 0 0 1 0 0 0 -1 0 0 10] /CO 10 \
+                /P << /Subtype /O /OS 0.25 /OB /Min >> /BG << /C [0 0 1] >> >>";
+    std::fs::write(dir.join("in/view.pdf"), pdf_with("PRC", TRIANGLE_PRC_HEX, view)).unwrap();
     let a = Automation::new().with_root(dir.join("in")).unwrap();
     (dir, a)
 }
@@ -80,6 +89,33 @@ fn a_prc_model_is_drawn_over_the_background() {
     assert_ne!(rgb(data, 32, 24), [255, 255, 255], "the centre is drawn in perspective too");
     // The same model named explicitly, and the default isometric view, both draw.
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1, "model": 1 })).is_ok());
+}
+
+#[test]
+fn a_model_is_drawn_as_its_saved_view_shows_it_unless_asked_to_fit() {
+    let (_dir, mut a) = setup("view");
+    let doc = open(&mut a, "view.pdf");
+    let png = |a: &mut Automation, args: Value| match a.call("model_render", &args).unwrap().remove(0) {
+        Content::Png { data, .. } => data,
+        other => panic!("expected a PNG: {other:?}"),
+    };
+    // By default, the saved view: its blue background, and the 2-unit triangle across half of
+    // the 4 units the view spans, centred.
+    let saved = png(&mut a, json!({ "doc": doc, "page": 1, "width": 64, "height": 64 }));
+    assert_eq!(rgb(&saved, 1, 1), [0, 0, 255], "the view's background");
+    assert_eq!(rgb(&saved, 32, 33), [190, 192, 200], "the triangle, head on");
+    assert_eq!(rgb(&saved, 32, 6), [0, 0, 255], "the triangle's apex is a quarter of the way down");
+    assert_eq!(png(&mut a, json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "view": "saved" })), saved);
+    // "fit", or a direction, frames it to fill the image on white instead.
+    let fit = png(&mut a, json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "view": "fit" }));
+    assert_eq!(rgb(&fit, 1, 1), [255, 255, 255]);
+    let along = png(&mut a, json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "direction": [0, 0, -1] }));
+    assert_eq!(rgb(&along, 1, 1), [255, 255, 255]);
+    // A model without a saved view can't be asked for one; a wrong view name is refused.
+    let plain = open(&mut a, "prc.pdf");
+    let err = a.call("model_render", &json!({ "doc": plain, "page": 1, "view": "saved" })).unwrap_err().to_string();
+    assert!(err.contains("no saved view"), "{err}");
+    assert!(a.call("model_render", &json!({ "doc": doc, "page": 1, "view": "front" })).is_err());
 }
 
 #[test]

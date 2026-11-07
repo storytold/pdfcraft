@@ -33,6 +33,38 @@ pub enum Projection {
     },
 }
 
+/// Which side of the annotation a PDF 3D view's projection is relative to (`/PS`, `/OB`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewSide {
+    /// The width.
+    Width,
+    /// The height.
+    Height,
+    /// The shorter side.
+    Min,
+    /// The longer side.
+    Max,
+}
+
+/// A PDF 3D view's projection (`/P`, ISO 32000-2 §13.6.4).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewLens {
+    /// A field of view, degrees, across `side`.
+    Perspective {
+        /// Field of view, degrees (`/FOV`).
+        fov: f64,
+        /// The side it spans (`/PS`).
+        side: ViewSide,
+    },
+    /// Parallel: `1 / scale` model units span `side`.
+    Orthographic {
+        /// `/OS`.
+        scale: f64,
+        /// `/OB`.
+        side: ViewSide,
+    },
+}
+
 /// Where the camera is and where it looks, in world coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -117,6 +149,60 @@ impl Camera {
     pub fn fit_meshes(meshes: &[WorldMesh], direction: [f64; 3], up: [f64; 3], perspective: bool, aspect: f64) -> Result<Camera, RenderError> {
         let bounds = Bounds::of(meshes).ok_or(RenderError::Camera("the model has no vertex"))?;
         Camera::frame(&bounds, vertices(meshes), direction, up, (perspective, aspect))
+    }
+
+    /// The camera of a PDF 3D view (ISO 32000-2 §13.6.4): `camera_to_world` (`/C2W`) is the
+    /// camera's x, y and z axes and its position, the camera looking along z with y up;
+    /// `center_of_orbit` (`/CO`) is how far ahead it looks, or 0 when the view gives none, and then
+    /// the camera looks as far as `fallback` lies along its z axis. `size` is the annotation's width
+    /// and height (any unit), which the lens's field of view or scale is relative to.
+    ///
+    /// # Errors
+    /// [`RenderError::Camera`] when the axes are zero, not finite, or the y axis lies along z.
+    pub fn from_view(
+        camera_to_world: [f64; 12],
+        center_of_orbit: f64,
+        lens: ViewLens,
+        size: [f64; 2],
+        fallback: [f64; 3],
+    ) -> Result<Camera, RenderError> {
+        let c = camera_to_world;
+        if c.iter().any(|v| !v.is_finite()) {
+            return Err(RenderError::Camera("the view's matrix is not finite"));
+        }
+        let ahead = normalize([c[6], c[7], c[8]]).ok_or(RenderError::Camera("the view's z axis is zero"))?;
+        let up = normalize([c[3], c[4], c[5]]).ok_or(RenderError::Camera("the view's y axis is zero"))?;
+        let eye = [c[9], c[10], c[11]];
+        // The target sets the perspective near plane (1/10,000 of its distance), so it is the
+        // nearer of the centre of orbit and the model's centre ahead: a far /CO must not clip
+        // a model close to the eye.
+        let usable = |d: f64| Some(d).filter(|d| d.is_finite() && *d > 0.0);
+        let distance = match (usable(center_of_orbit), usable(dot(sub(fallback, eye), ahead))) {
+            (Some(orbit), Some(model)) => orbit.min(model),
+            (orbit, model) => orbit.or(model).unwrap_or(1.0),
+        };
+        let target = [0, 1, 2].map(|i| at(eye, i) + at(ahead, i) * distance);
+        let [w, h] = size.map(|v| if v.is_finite() && v > 0.0 { v } else { 1.0 });
+        let side = |s: ViewSide| match s {
+            ViewSide::Width => w,
+            ViewSide::Height => h,
+            ViewSide::Min => w.min(h),
+            ViewSide::Max => w.max(h),
+        };
+        let projection = match lens {
+            // `1 / scale` model units span the side; the projection is given by the height.
+            ViewLens::Orthographic { scale, side: s } => {
+                let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+                Projection::Orthographic { height: h / side(s) / scale }
+            }
+            ViewLens::Perspective { fov, side: s } => {
+                let half = (if fov.is_finite() && fov > 0.0 && fov < 180.0 { fov } else { 90.0 }).to_radians() / 2.0;
+                Projection::Perspective { fov_y: 2.0 * (half.tan() * h / side(s)).atan().to_degrees() }
+            }
+        };
+        let camera = Camera { eye, target, up, projection };
+        camera.basis()?;
+        Ok(camera)
     }
 
     /// Frames `points` (which `bounds` holds) from `direction`, aimed at the middle of their projection.

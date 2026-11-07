@@ -15,4 +15,6 @@ mod render;
 mod vec3;
 
 pub use assemble::{MAX_ASSEMBLED_TRIANGLES, MAX_ASSEMBLED_VERTICES, WorldMesh, assemble, place};
-pub use render::{Bounds, Camera, Image, Lighting, MAX_RENDER_PIXELS, MAX_RENDER_WORK, Projection, RenderError, RenderOptions, render};
+pub use render::{
+    Bounds, Camera, Image, Lighting, MAX_RENDER_PIXELS, MAX_RENDER_WORK, Projection, RenderError, RenderOptions, ViewLens, ViewSide, render,
+};

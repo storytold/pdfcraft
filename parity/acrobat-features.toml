@@ -9983,8 +9983,8 @@ milestone = "M12"
 status = "partial"
 commands = []
 tools = ["model_render"]
-evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
-notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, with headlight shading. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
+evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/automation/tests/it/model_render.rs::a_model_is_drawn_as_its_saved_view_shows_it_unless_asked_to_fit", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther", "crates/render/src/inspect/tests.rs::models_3d_are_listed_with_their_format_and_view_and_not_as_comments"]
+notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG with headlight shading, as the annotation's default view shows it (/3DV, else the stream's /DV, else its first view: camera, perspective or orthographic projection, background) or framed from a chosen direction. The pages outline each 3D annotation and say what it holds. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the views list, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
 
 [[feature]]
 id = "misc.3d-add"

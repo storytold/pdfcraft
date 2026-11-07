@@ -38,7 +38,7 @@ use lookup::{annots, page_ref};
 pub use lookup::{
     has_visible_fill_sign, is_fill_sign, isolate_annotation, isolate_annotations, page_refs, picture_rotation, set_annots, signature_image,
 };
-pub use model3d::{Model3d, Model3dKind, model_3d, model_3d_annotations};
+pub use model3d::{Model3d, Model3dKind, model_3d, model_3d_annotations, shown_model_3d_positions};
 pub(crate) use modify::n;
 pub use modify::{
     add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation,
