@@ -8199,7 +8199,8 @@ mod icc_profile_cache;
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 
-// An Arial the PDF doesn't embed draws the glyphs its codes name (#5889).
+// An Arial (#5889) or Times New Roman (#6449) the PDF doesn't embed draws the glyphs its codes
+// name.
 mod non_embedded_arial;
 
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.

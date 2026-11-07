@@ -20,7 +20,7 @@ struct Font<'a> {
     base_font: &'a str,
     /// The descendant's `/Subtype`.
     subtype: &'a str,
-    /// `true`: the codes are 1, 2, … and a `/CIDToGIDMap` stream gives each its Arial glyph.
+    /// `true`: the codes are 1, 2, … and a `/CIDToGIDMap` stream gives each its glyph in the author's font.
     /// `false`: `/CIDToGIDMap /Identity`, and the codes are the glyph indexes themselves.
     mapped: bool,
     to_unicode: bool,
