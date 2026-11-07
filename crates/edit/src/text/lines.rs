@@ -61,16 +61,37 @@ impl TextLine {
     }
 }
 
-/// The page's content streams as listed, each with its decoded data (empty when it doesn't
-/// decode), within one page's [`DecodeBudget`]. An error when the content runs past it: reading
-/// or rewriting a page from part of its content would lose the rest.
-pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
+/// One entry of a page's `/Contents`, and what it decoded to.
+pub(crate) struct ContentStream {
+    /// The entry as listed.
+    pub(crate) entry: Object,
+    /// Its decoded data, empty when it doesn't decode.
+    pub(crate) data: Vec<u8>,
+    /// How much of it decoded.
+    pub(crate) read: Read,
+}
+
+/// How much of a content stream decoded ([`rewritten_contents`] says what each allows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    Whole,
+    /// Damaged partway: the data is what decoded before the damage. What follows it is unknown,
+    /// the graphics state and syntax the later streams start in too.
+    Damaged,
+    /// Not at all (a filter this reader lacks, say): the data is empty.
+    Unread,
+}
+
+/// The page's content streams as listed, each with its decoded data, within one page's
+/// [`DecodeBudget`]. An error when the content runs past it: reading or rewriting a page from
+/// part of its content would lose the rest.
+pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<ContentStream>, EditError> {
     content_streams_within(doc, page, &mut DecodeBudget::page())
 }
 
 /// [`content_streams`], decoded against `budget`, which a walk of the page's forms then goes on
 /// spending.
-pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
+pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<Vec<ContentStream>, EditError> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -79,18 +100,24 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
         },
     };
     let mut out = Vec::with_capacity(list.len());
-    for o in list {
-        let data = match &*doc.resolve(&o) {
-            Object::Stream(s) => match budget.decode(s) {
-                Ok(data) => data,
+    for entry in list {
+        let (data, read) = match &*doc.resolve(&entry) {
+            Object::Stream(s) => match budget.decode_with_damage(doc, s, usize::MAX) {
+                Ok((data, damaged)) => (data, if damaged { Read::Damaged } else { Read::Whole }),
                 Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
-                Err(_) => Vec::new(),
+                Err(_) => (Vec::new(), Read::Unread),
             },
-            _ => Vec::new(),
+            // Nothing to lose: a null or missing entry draws nothing.
+            _ => (Vec::new(), Read::Whole),
         };
-        out.push((o, data));
+        out.push(ContentStream { entry, data, read });
     }
     Ok(out)
+}
+
+/// The page's streams joined into the one stream they are: an operator may span two of them.
+pub(crate) fn joined(streams: &[ContentStream]) -> Pieces {
+    Pieces::join(&streams.iter().map(|s| s.data.as_slice()).collect::<Vec<_>>())
 }
 
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
@@ -120,26 +147,68 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
     pieces.splice(edits)
 }
 
+/// An error when content at `/Contents` index `at` (a stream there, or one inserted there) is drawn
+/// after a stream damaged partway: what the damage hides can change how it reads.
+pub(crate) fn drawn_before_damage(streams: &[ContentStream], at: usize) -> Result<(), EditError> {
+    if at > first_damaged(streams) {
+        return Err(EditError::Invalid(
+            "this change comes after a content stream that is damaged partway, and what the damage hides can change how the rest of the page reads"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The index of the first stream damaged partway, or the number of streams.
+fn first_damaged(streams: &[ContentStream]) -> usize {
+    streams.iter().position(|s| s.read == Read::Damaged).unwrap_or(streams.len())
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
-/// (keeping their dictionaries), the others stay as they were.
-pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>)], new: Vec<Vec<u8>>) -> Object {
-    let mut contents: Vec<Object> = Vec::with_capacity(streams.len());
-    for ((obj, old), data) in streams.iter().zip(new) {
-        if *old == data {
-            contents.push(obj.clone());
+/// (keeping their dictionaries), the others stay as they were. An error, before anything is
+/// added, when a piece that changed is a stream that didn't decode whole, or comes after one
+/// damaged partway. Written from what decoded, a damaged stream would lose everything after the
+/// damage, and one that doesn't decode all of it. What follows the damage is unknown, so a later
+/// stream may not read as it seems: a string or comment the damage left open runs on into it, and
+/// operators the damage hides can change the graphics state it draws in.
+pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[ContentStream], new: Vec<Vec<u8>>) -> Result<Object, EditError> {
+    // The last stream that changed: when it is drawn before the damage, so are the others.
+    if let Some(i) = streams.iter().zip(&new).rposition(|(s, data)| s.data != *data) {
+        drawn_before_damage(streams, i)?;
+    }
+    for (s, data) in streams.iter().zip(&new) {
+        if s.data == *data {
             continue;
         }
-        let mut dict = match &*doc.resolve(obj) {
+        match s.read {
+            Read::Whole => {}
+            Read::Damaged => {
+                return Err(EditError::Invalid(
+                    "this change is in a content stream that is damaged partway, and rewriting it would lose what follows the damage".into(),
+                ));
+            }
+            Read::Unread => {
+                return Err(EditError::Invalid("this change is in a content stream that can't be decoded, and rewriting it would lose it".into()));
+            }
+        }
+    }
+    let mut contents: Vec<Object> = Vec::with_capacity(streams.len());
+    for (s, data) in streams.iter().zip(new) {
+        if s.data == data {
+            contents.push(s.entry.clone());
+            continue;
+        }
+        let mut dict = match &*doc.resolve(&s.entry) {
             Object::Stream(s) => s.dict.clone(),
             _ => Dict::new(),
         };
         dict.remove(b"Length");
         contents.push(Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &data)))));
     }
-    match <[Object; 1]>::try_from(contents) {
+    Ok(match <[Object; 1]>::try_from(contents) {
         Ok([one]) => one,
         Err(many) => Object::Array(many),
-    }
+    })
 }
 
 pub(crate) fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
@@ -201,7 +270,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
     let mut carry = Carry::new();
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
-    let pieces = Pieces::join(&content_streams(doc, &p.dict)?.into_iter().map(|(_, d)| d).collect::<Vec<_>>());
+    let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
@@ -608,7 +677,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
     // can run on from one stream into the next. Text still counts as the stream its operator
     // starts in, which keeps lines from different streams apart.
-    let pieces = Pieces::join(&streams.into_iter().map(|(_, data)| data).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
     walk(&mut w, &ops, &res, &mut carry, &stream_of)?;

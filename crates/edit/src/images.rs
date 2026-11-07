@@ -4,12 +4,12 @@
 //! or delete. Only the stream that draws it is rewritten, as a new object.
 
 use kurbo::{BezPath, Point, Shape};
-use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
+use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use std::sync::Arc;
 
 use crate::EditError;
-use crate::text::content_streams;
+use crate::text::{ContentStream, content_streams, joined};
 
 /// The identity of a soft mask (`/SMask`) in the PDF graphics state.
 #[derive(Clone, Debug)]
@@ -47,7 +47,7 @@ pub struct PageImage {
     pub width: u32,
     pub height: u32,
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
-    /// operators of the page's streams joined ([`Pieces`]).
+    /// operators of the page's streams joined ([`pdfcraft_content::Pieces`]).
     pub stream: usize,
     op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
@@ -101,11 +101,6 @@ pub(crate) const MAX_PAGE_IMAGES: usize = 100_000;
 
 fn too_many_images() -> EditError {
     EditError::Invalid(format!("the page draws more than {MAX_PAGE_IMAGES} images"))
-}
-
-/// The page's streams joined into the one stream they are: an operator may span two of them.
-fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
-    Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
 }
 
 fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
@@ -1191,13 +1186,7 @@ fn build_relocated_unit_ops(
 }
 
 /// Change the stacking order of `img`, drawn on page `p` by its content streams `all`.
-fn arrange_image(
-    doc: &mut Document,
-    p: &pdfcraft_model::Page,
-    all: &[(Object, Vec<u8>)],
-    img: &PageImage,
-    order: ArrangeOrder,
-) -> Result<(), EditError> {
+fn arrange_image(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage, order: ArrangeOrder) -> Result<(), EditError> {
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
@@ -1264,7 +1253,7 @@ fn arrange_image(
         ops.get(dest_unit.start).map(|op| pieces.piece_of(op.span.start))
     };
     let owned_destination = destination_piece
-        .filter(|piece| all.get(*piece).is_some_and(|(obj, _)| doc.resolve(obj).as_dict().is_some_and(|d| d.get(b"PCAdded").is_some())));
+        .filter(|piece| all.get(*piece).is_some_and(|s| doc.resolve(&s.entry).as_dict().is_some_and(|d| d.get(b"PCAdded").is_some())));
     if let Some(piece) = owned_destination {
         let whole_unit = ops.iter().enumerate().all(|(index, op)| {
             let (first, last) = pieces.pieces_of(op);
@@ -1439,13 +1428,14 @@ fn arrange_image(
     };
 
     if let Some(piece) = owned_destination {
+        let insertion = piece.saturating_add(usize::from(insert_after));
+        crate::text::drawn_before_damage(all, insertion)?;
         let changed = pieces.splice([(target_span, removal_replacement)]);
-        let contents = crate::text::rewritten_contents(doc, all, changed);
+        let contents = crate::text::rewritten_contents(doc, all, changed)?;
         let mut list = match contents {
             Object::Array(list) => list,
             one => vec![one],
         };
-        let insertion = piece.saturating_add(usize::from(insert_after));
         if insertion > list.len() {
             return Err(EditError::Invalid("the destination content stream is missing".into()));
         }
@@ -1467,7 +1457,7 @@ fn arrange_image(
     }
 
     let changed = pieces.splice(edits);
-    let contents = crate::text::rewritten_contents(doc, all, changed);
+    let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1606,7 +1596,7 @@ fn app_crop_ranges(ops: &[Op], start: usize, target: usize) -> Vec<std::ops::Ran
 }
 
 /// Remove only crops written by PdfCraft, preserving the document author's clipping paths.
-fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[(Object, Vec<u8>)], img: &PageImage) -> Result<(), EditError> {
+fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage) -> Result<(), EditError> {
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
@@ -1619,7 +1609,7 @@ fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[(Objec
         return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
     }
     let changed = crate::text::splice(&pieces, &ops, |index| (Vec::new(), !crops.iter().any(|r| r.contains(&index))));
-    let contents = crate::text::rewritten_contents(doc, all, changed);
+    let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1666,7 +1656,7 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         }
     };
     let changed = crate::text::splice(&pieces, &ops, |index| if index == img.op { (replacement.clone(), false) } else { (Vec::new(), true) });
-    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    let contents = crate::text::rewritten_contents(doc, &all, changed)?;
     doc.update_dict(p.obj, |d| {
         d.set(b"Contents".to_vec(), contents);
         if let Some(res) = resources {
@@ -1687,7 +1677,7 @@ pub(crate) fn selectable_images(
     Ok(page_images(doc, page)?
         .into_iter()
         .enumerate()
-        .filter(|(_, image)| !all.get(image.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
+        .filter(|(_, image)| !all.get(image.stream).and_then(|s| s.entry.as_ref()).is_some_and(|r| excluded.contains(&r)))
         .collect())
 }
 
@@ -1700,7 +1690,7 @@ pub(crate) fn painted_over(doc: &Document, page: usize, rect: [f64; 4], from: us
 fn transform_image(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
-    streams: &[(Object, Vec<u8>)],
+    streams: &[ContentStream],
     image: &PageImage,
     transform: [f64; 6],
 ) -> Result<(), EditError> {
@@ -1733,7 +1723,7 @@ fn transform_image(
         let changed = crate::text::splice(&pieces, &ops, |index| {
             if index == at { (vec![Op::new("cm", folded.0.map(Object::Real).to_vec())], false) } else { (Vec::new(), true) }
         });
-        let contents = crate::text::rewritten_contents(doc, streams, changed);
+        let contents = crate::text::rewritten_contents(doc, streams, changed)?;
         doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
         return Ok(());
     }
@@ -1754,7 +1744,7 @@ fn transform_image(
             (Vec::new(), true)
         }
     });
-    let contents = crate::text::rewritten_contents(doc, streams, changed);
+    let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1766,7 +1756,7 @@ fn transform_image(
 fn crop_image_impl(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
-    streams: &[(Object, Vec<u8>)],
+    streams: &[ContentStream],
     image: &PageImage,
     keep: [f64; 4],
 ) -> Result<(), EditError> {
@@ -1844,7 +1834,7 @@ fn crop_image_impl(
             (Vec::new(), true)
         }
     });
-    let contents = crate::text::rewritten_contents(doc, streams, changed);
+    let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1977,7 +1967,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
         out.push(Op::new("Q", vec![]));
         (out, false)
     });
-    let contents = crate::text::rewritten_contents(doc, &all, data);
+    let contents = crate::text::rewritten_contents(doc, &all, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
