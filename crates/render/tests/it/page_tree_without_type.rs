@@ -11,7 +11,8 @@ const WORDS: [&str; 5] = ["ONE", "TWO", "THREE", "FOUR", "FIVE"];
 /// Root (typed) → [node 3, page FIVE]; node 3 (no `/Type`, `/MediaBox` 300 × 200) → [node 4,
 /// page FOUR (no `/Type` either, and `/Kids null`)]; node 4 (no `/Type`, its `/Kids` reached
 /// through two references) → [ONE, TWO (an indirect `/Type /Page` and an empty `/Kids`), THREE].
-/// Page FIVE has its own 400 × 400 box and a text annotation.
+/// Page FIVE has its own 400 × 400 box and a text annotation, is listed in the root's `/Kids`
+/// through a reference to a reference (19 → 10), and a bookmark goes to its page object.
 fn pdf() -> Arc<Vec<u8>> {
     let font = "<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>";
     let page = |typed: bool, parent: u32, content: u32, extra: &str| {
@@ -19,8 +20,8 @@ fn pdf() -> Arc<Vec<u8>> {
         format!("<< {ty}/Parent {parent} 0 R /Resources {font} /Contents {content} 0 R {extra}>>").into_bytes()
     };
     let mut objects: Vec<Vec<u8>> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R 10 0 R] /Count 5 /MediaBox [0 0 612 792] >>".to_vec(),
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 20 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 19 0 R] /Count 5 /MediaBox [0 0 612 792] >>".to_vec(),
         b"<< /Parent 2 0 R /Kids [4 0 R 9 0 R] /Count 4 /MediaBox [0 0 300 200] >>".to_vec(),
         b"<< /Parent 3 0 R /Kids 16 0 R /Count 3 >>".to_vec(),
         // 5: unused, keeps the numbering below readable.
@@ -36,8 +37,11 @@ fn pdf() -> Arc<Vec<u8>> {
     for word in WORDS {
         objects.push(stream(format!("BT /F1 24 Tf 20 100 Td ({word}) Tj ET").as_bytes()));
     }
-    // 16 → 17 → node 4's kids; 18: the name page TWO's /Type refers to.
-    objects.extend([b"17 0 R".to_vec(), b"[6 0 R 7 0 R 8 0 R]".to_vec(), b"/Page".to_vec()]);
+    // 16 → 17 → node 4's kids; 18: the name page TWO's /Type refers to; 19 → page FIVE; 20, 21:
+    // the outline and its one bookmark, to page FIVE's object.
+    objects.extend([b"17 0 R".to_vec(), b"[6 0 R 7 0 R 8 0 R]".to_vec(), b"/Page".to_vec(), b"10 0 R".to_vec()]);
+    objects.push(b"<< /Type /Outlines /First 21 0 R /Last 21 0 R /Count 1 >>".to_vec());
+    objects.push(b"<< /Title (Five) /Parent 20 0 R /Dest [10 0 R /Fit] >>".to_vec());
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, object) in objects.iter().enumerate() {
@@ -89,4 +93,6 @@ fn inspection_numbers_the_same_pages_and_their_inherited_boxes() {
     assert_eq!(sizes, [(300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (400.0, 400.0)]);
     let notes: Vec<usize> = info.annotations.iter().filter(|a| a.subtype == "Text").map(|a| a.page).collect();
     assert_eq!(notes, [4], "the annotation is on page FIVE, the fifth page");
+    let bookmarks: Vec<(&str, Option<usize>)> = info.outline.iter().map(|o| (o.title.as_str(), o.page)).collect();
+    assert_eq!(bookmarks, [("Five", Some(4))], "the bookmark to page FIVE's object finds the fifth page");
 }

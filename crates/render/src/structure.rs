@@ -29,6 +29,19 @@ pub(crate) trait Structure {
         Err(Error::ReferenceLimit)
     }
 
+    /// Where a chain of references starting at `id` ends: `id` itself unless its object is
+    /// nothing but a reference, followed at most 32 steps (as `pdfcraft_cos::Document::resolve`
+    /// follows one), so a cycle stops.
+    fn final_id(&self, mut id: ObjectId) -> ObjectId {
+        for _ in 0..32 {
+            match self.get_object(id) {
+                Ok(Object::Reference(next)) => id = *next,
+                _ => break,
+            }
+        }
+        id
+    }
+
     fn get_dictionary(&self, id: ObjectId) -> Result<&Dictionary> {
         self.get_object(id).and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_dict())
     }
@@ -43,10 +56,14 @@ pub(crate) trait Structure {
         let mut pending = vec![(root, 0usize)];
         let mut seen = HashSet::new();
         while let Some((id, depth)) = pending.pop() {
+            // A kid may be a reference to an object that holds only a reference (ISO 32000-2
+            // §7.3.10): the node or page is where the chain ends, as pdfcraft-model and
+            // pdfcraft-annot read it, so a destination or `/P` naming the page object finds it.
+            let id = self.final_id(id);
             if depth > 256 || !seen.insert(id) {
                 continue;
             }
-            let Ok(dict) = self.get_dictionary(id) else { continue };
+            let Ok(dict) = self.get_object(id).and_then(Object::as_dict) else { continue };
             // A node is /Type /Pages, or has a /Kids array (direct or indirect) and is not
             // /Type /Page; anything else is a page, whatever its /Type says, including one whose
             // /Kids is null (the same as absent, ISO 32000-2 §7.3.9) or not an array. The
