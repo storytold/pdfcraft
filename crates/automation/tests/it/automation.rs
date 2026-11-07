@@ -11578,3 +11578,13 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
+
+#[test]
+fn pdfa_verify_rejects_document_without_editor() {
+    let dir = workdir("pdfa-no-editor");
+    let junk = [vec![b'x'; 5000], std::fs::read(dir.join("a.pdf")).unwrap()].concat();
+    std::fs::write(dir.join("junk.pdf"), junk).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "junk.pdf" }))["doc"].as_u64().unwrap();
+    assert!(a.call("pdfa_verify", &json!({ "doc": doc })).is_err(), "pdfa_verify must reject a document without an editor instead of reporting it compliant");
+}
