@@ -533,10 +533,12 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     // 6.2.10: blend modes are those ISO 32000-1 defines, and without a PDF/A output intent (one with
     // a profile) a page with transparency names a blending colour space.
     let intent = pdfa_intent_has_profile(doc);
+    // Pages share resources, forms and fonts: what one page found under them, the next takes as is.
+    let mut shared = transparency::Shared::default();
     for (i, p) in pages.iter().enumerate() {
-        let painting = transparency::page_painting(doc, &p.dict);
+        let painting = transparency::page_painting(doc, &p.dict, &mut shared);
         for name in painting.unknown_blend_modes {
-            issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), None, false);
+            issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
         }
         if painting.transparency && !intent && !transparency::page_names_blending_space(doc, &p.dict) {
             let n = Some((i + 1).to_string());

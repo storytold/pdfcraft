@@ -709,3 +709,85 @@ fn transparency_reached_first_too_deep_is_found_from_a_shallower_place() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// 6.2.10: an unknown blend mode is reported on the page whose resources reach it, as the
+/// transparency issue is, each page once.
+#[test]
+fn an_unknown_blend_mode_names_its_page() {
+    let page = "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G 5 0 R >> >> >>";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        page,
+        "<< /BM /Custom >>",
+    ];
+    let found: Vec<(String, Option<usize>)> =
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| (i.message, i.page)).collect();
+    assert_eq!(found, [("A graphics state uses the blend mode Custom, which ISO 32000-1 doesn't define".to_owned(), Some(1))]);
+}
+
+/// A `/BM` array of many unknown names gathers a bounded number of them.
+#[test]
+fn unknown_blend_mode_names_are_capped() {
+    let names: String = (0..1000).map(|k| format!("/Custom{k} ")).collect();
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G << /BM [/Multiply {names}] >> >> >> >>"
+    );
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said.len(), 32);
+    assert_eq!(said.first().map(String::as_str), Some("A graphics state uses the blend mode Custom0, which ISO 32000-1 doesn't define"));
+}
+
+/// Pages that share a form read it once: the next page takes what was found under it from
+/// [`transparency::Shared`] in one read, and still reports it.
+#[test]
+fn pages_sharing_a_form_read_it_once() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    let pages = 50;
+    let first_form = 3 + pages;
+    let kids: String = (0..pages).map(|k| format!("{} 0 R ", 3 + k)).collect();
+    let mut objs =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 200 200] >>")];
+    for _ in 0..pages {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Resources << /XObject << /F {first_form} 0 R >> >> >>"));
+    }
+    // A chain of ten forms, each with twenty graphics states, the last one translucent.
+    let gstates: String = (0..20).map(|k| format!("/G{k} << /CA 1 >> ")).collect();
+    for n in 0..10 {
+        let next = if n < 9 { format!("/XObject << /X {} 0 R >>", first_form + n + 1) } else { "/ExtGState << /T << /ca 0.5 >> >>".to_owned() };
+        objs.push(form(&format!("/Resources << /ExtGState << {gstates} >> {next} >>")));
+    }
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&objs, "");
+    let list = pdfcraft_model::pages(&doc);
+    let mut shared = transparency::Shared::default();
+    let reads: Vec<usize> = list.iter().map(|p| transparency::page_reads(&doc, &p.dict, &mut shared)).collect();
+    assert!(reads.first().is_some_and(|&n| n > 200), "the first page reads the chain: {reads:?}");
+    assert!(reads.iter().skip(1).all(|&n| n == 2), "the others its resources and the form: {reads:?}");
+    let said = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").count();
+    assert_eq!(said, pages, "every page has transparency");
+}
+
+/// A form whose reading stopped at the depth limit on one page is not kept as read: a page that
+/// names it from a shallower place reads what lies below it.
+#[test]
+fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    // Page 1 (object 3) names a chain of 33 forms, objects 5 to 37, whose last holds a translucent
+    // graphics state beyond the depth limit; page 2 (object 4) names form 20, from which it is near.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 5 0 R >> >> >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 20 0 R >> >> >>".to_owned(),
+    ];
+    for n in 5..=36 {
+        objs.push(form(&format!("/Resources << /XObject << /X {} 0 R >> >>", n + 1)));
+    }
+    objs.push(form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
