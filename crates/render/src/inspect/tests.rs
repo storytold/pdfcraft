@@ -633,7 +633,7 @@ const MODELS_3D: &[u8] = b"%PDF-1.7
 5 0 obj << /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (note) >> endobj
 6 0 obj << /Type /Annot /Subtype /3D /Rect [50 50 750 550] /3DD 9 0 R /3DV /D >> endobj
 7 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DV (Front) >> endobj
-8 0 obj << /Type /Annot /Subtype /3D /Rect [300 400 100 200] /3DD << /Type /3DRef /3DD 10 0 R >> /3DV 11 0 R >> endobj
+8 0 obj << /Type /Annot /Subtype /3D /Rect [300 400 100 200] /3DD << /Type /3DRef /3D 10 0 R >> /3DV 11 0 R >> endobj
 9 0 obj << /Type /3D /Subtype /PRC /VA [11 0 R 12 0 R] /DV 1 /Length 3 >> stream
 PRC
 endstream endobj

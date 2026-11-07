@@ -58,14 +58,15 @@ pub(super) fn retained(a: &Annotation) -> usize {
 
 impl<'a> Inspector<'a> {
     /// The format of a 3D annotation's model: its `/3DD` stream's `/Subtype`, following one 3D
-    /// reference dictionary (`/Type /3DRef`, a stream another annotation shares; §13.6.3).
+    /// reference dictionary (`/Type /3DRef`, a stream another annotation shares; §13.6.3) to the
+    /// stream its `/3D` names, as `pdfcraft_annot::model_3d` does.
     fn model_3d(&self, page: usize, index: usize, annot: &Dictionary) -> Annot3d {
         let rect = rect4(self.resolve(annot.get(b"Rect").unwrap_or(&Object::Null)));
         let mut data = annot.get(b"3DD").ok().and_then(|o| self.dict(o));
         if let Some(d) = data
             && self.name(d, b"Type").as_deref() == Some("3DRef")
         {
-            data = d.get(b"3DD").ok().and_then(|o| self.dict(o));
+            data = d.get(b"3D").ok().and_then(|o| self.dict(o));
         }
         let format = match data.and_then(|d| self.name(d, b"Subtype")).as_deref() {
             Some("PRC") => Format3d::Prc,
