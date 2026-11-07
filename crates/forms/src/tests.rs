@@ -3549,6 +3549,32 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     assert_eq!(page_refs(&doc), [page]);
 }
 
+/// A thousand untyped page tree nodes sharing one indirect `/Kids` array of two thousand entries:
+/// the form walk reads the array once, not once per node (two million reads), and numbers the
+/// same pages as `pdfcraft_model::pages`.
+#[test]
+fn page_walk_reads_a_shared_kids_array_once() {
+    let nodes: String = (0..1_000).map(|i| format!("{} 0 R ", 6 + i)).collect();
+    let shared: String = (0..1_000).map(|_| "3 0 R 4 0 R ").collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),             // 1
+        format!("<< /Type /Pages /Kids [{nodes}] /Count 2 >>"), // 2
+        "<< /Type /Page /Parent 2 0 R >>".into(),               // 3
+        "<< /Type /Page /Parent 2 0 R >>".into(),               // 4
+        format!("[{shared}]"),                                  // 5
+    ];
+    objs.extend((0..1_000).map(|_| "<< /Parent 2 0 R /Kids 5 0 R >>".to_string())); // 6..
+    let doc = document(&objs);
+    let r = |num| ObjRef { num, generation: 0 };
+    let model: Vec<ObjRef> = pdfcraft_model::pages(&doc).iter().map(|p| p.obj).collect();
+    assert_eq!(model, [r(3), r(4)]);
+    let mut walk = PageWalk::new(&doc, r(2));
+    let pages: Vec<ObjRef> = walk.by_ref().collect();
+    assert_eq!(pages, model);
+    assert!(walk.examined <= 10_000, "{} kids entries read", walk.examined);
+    assert_eq!(page_refs(&doc), model);
+}
+
 /// A Calculate script naming thousands of fields is merged with the field's other reads in one
 /// pass, not by searching the names so far for each one.
 #[test]
