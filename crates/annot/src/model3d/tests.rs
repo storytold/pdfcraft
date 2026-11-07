@@ -51,6 +51,12 @@ fn a_3dref_leads_to_the_stream_it_names() {
 }
 
 #[test]
+fn a_3dref_and_its_format_may_be_named_through_references() {
+    let d = doc("[4 0 R]", &[annot("<< /Type 6 0 R /3D 5 0 R >>"), stream("/Type /3D /Subtype 7 0 R", b"PRC"), b"/3DRef".to_vec(), b"/PRC".to_vec()]);
+    assert_eq!(model_3d(&d, 0, 0), Ok(Model3d { kind: Model3dKind::Prc, data: b"PRC".to_vec() }));
+}
+
+#[test]
 fn a_u3d_stream_is_read_and_says_so() {
     let d = doc("[4 0 R]", &[annot("5 0 R"), stream("/Type /3D /Subtype /U3D", b"U3D")]);
     assert_eq!(model_3d(&d, 0, 0).map(|m| m.kind), Ok(Model3dKind::U3d));

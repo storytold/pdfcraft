@@ -87,7 +87,7 @@ pub fn model_3d(doc: &Document, page: usize, index: usize) -> Result<Model3d, An
     let Object::Stream(s) = stream.as_ref() else {
         return Err(AnnotError::Invalid(format!("{} has no 3D stream", at())));
     };
-    let kind = match s.dict.name(b"Subtype") {
+    let kind = match name_of(doc, &s.dict, b"Subtype").as_deref() {
         Some(b"PRC") => Model3dKind::Prc,
         Some(b"U3D") => Model3dKind::U3d,
         other => {
@@ -102,12 +102,17 @@ pub fn model_3d(doc: &Document, page: usize, index: usize) -> Result<Model3d, An
     Ok(Model3d { kind, data })
 }
 
+/// The name under `key`, read through a reference as the inspector reads it.
+fn name_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    doc.resolve(d.get(key)?).as_name().map(<[u8]>::to_vec)
+}
+
 /// What an annotation's `/3DD` names: the 3D stream itself, or the `/3D` entry of a 3D reference
 /// dictionary. A reference is followed once; the caller refuses anything that is not a stream.
 fn stream_of(doc: &Document, annot: &Dict) -> Option<std::sync::Arc<Object>> {
     let obj = doc.resolve(annot.get(b"3DD")?);
     match obj.as_ref() {
-        Object::Dict(d) if d.name(b"Type") == Some(b"3DRef") => Some(doc.resolve(d.get(b"3D")?)),
+        Object::Dict(d) if name_of(doc, d, b"Type").as_deref() == Some(b"3DRef") => Some(doc.resolve(d.get(b"3D")?)),
         _ => Some(obj),
     }
 }
