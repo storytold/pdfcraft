@@ -128,6 +128,18 @@ impl Children {
     }
 }
 
+/// Where a chain of references starting at `r` ends: `r` itself unless its object is nothing but
+/// a reference, followed as far as `Document::resolve` follows one (32 more), so a cycle stops.
+fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
+    }
+    r
+}
+
 struct PageTree<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<ObjRef>,
@@ -166,7 +178,9 @@ impl Iterator for PageTree<'_> {
             let node = child.as_ref();
             // A successful get means next is strictly below the allocated array length.
             parent.next += 1;
-            let Some(node) = node else { continue };
+            // A kid may be a reference to an object that holds only a reference (ISO 32000-2
+            // §7.3.10): the node or page is where the chain ends, as the renderer reads it.
+            let Some(node) = node.map(|r| final_ref(self.doc, r)) else { continue };
             if self.seen.len() >= 1_000_000 {
                 self.pending.clear();
                 return None;
@@ -182,13 +196,34 @@ impl Iterator for PageTree<'_> {
                     *owner = Some((obj.clone(), weight(value, 0)));
                 }
             }
-            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+            // The node's /Kids array, direct or indirect (through a chain of references, as far
+            // as `Document::resolve` follows one); anything else (absent, null, which is the same
+            // as absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
+            let kids = match d.get(b"Kids") {
+                Some(r @ Object::Ref(_)) => Some(self.doc.resolve(r)).filter(|k| k.as_array().is_some()),
+                Some(Object::Array(_)) => Some(obj.clone()),
+                _ => None,
+            };
+            // A node is /Type /Pages, or has a /Kids array and is not /Type /Page; anything else
+            // is a page, whatever its /Type says. The renderer (hayro-syntax `is_page_tree_node`)
+            // and its inspector walk the tree by the same rule, so page numbers agree. /Type is
+            // read through references too; only a reference is resolved, as `resolve` clones a
+            // direct value, however large.
+            let indirect_type = match d.get(b"Type") {
+                Some(r @ Object::Ref(_)) => Some(self.doc.resolve(r)),
+                _ => None,
+            };
+            let ty = match &indirect_type {
+                Some(t) => t.as_name(),
+                None => d.name(b"Type"),
+            };
+            let is_pages = match ty {
+                Some(b"Pages") => true,
+                Some(b"Page") => false,
+                _ => kids.is_some(),
+            };
             if is_pages {
-                let owner = match d.get(b"Kids") {
-                    Some(Object::Ref(r)) => self.doc.get(*r),
-                    Some(Object::Array(_)) => obj.clone(),
-                    _ => continue,
-                };
+                let Some(owner) = kids else { continue };
                 self.pending.push(Children { owner, next: 0, inherited });
             } else {
                 let mut dict = d.clone();
@@ -313,6 +348,75 @@ mod tests {
         assert_eq!(pages[0].rotation(&d), 90, "first depth-first occurrence supplies inheritance");
         assert_eq!(pages[1].rotation(&d), 180, "a leaf's own attribute wins");
         assert!(pages.iter().all(|p| p.dict.contains(b"Resources")));
+    }
+
+    /// Without /Type, a dictionary is a node only when its /Kids is an array, direct or indirect:
+    /// one whose /Kids is null (the same as absent, ISO 32000-2 §7.3.9), an integer, or a reference
+    /// to something other than an array is a page and keeps its place in the page order.
+    #[test]
+    fn untyped_dictionaries_are_nodes_only_with_a_kids_array() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let untyped = |d: &mut Document, kids: Option<Object>| {
+            let mut dict = Dict::new();
+            dict.set(b"Parent".to_vec(), Object::Ref(root));
+            if let Some(kids) = kids {
+                dict.set(b"Kids".to_vec(), kids);
+            }
+            d.add(dict)
+        };
+        let first = untyped(&mut d, None);
+        let node = untyped(&mut d, Some(Object::Array(vec![Object::Ref(first)])));
+        let null_kids = untyped(&mut d, Some(Object::Null));
+        let int_kids = untyped(&mut d, Some(Object::Int(7)));
+        let not_array = d.add(Object::Int(7));
+        let ref_kids = untyped(&mut d, Some(Object::Ref(not_array)));
+        let last = untyped(&mut d, None);
+        let kids = d.add(Object::Array(vec![Object::Ref(last)]));
+        let indirect = untyped(&mut d, Some(Object::Ref(kids)));
+        let order = [node, null_kids, int_kids, ref_kids, indirect].map(Object::Ref).to_vec();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(order.clone()))).unwrap();
+        let found: Vec<ObjRef> = pages(&d).iter().map(|p| p.obj).collect();
+        assert_eq!(found, vec![first, null_kids, int_kids, ref_kids, last]);
+    }
+
+    /// /Kids and /Type are read through chains of references, as the renderer reads them: an
+    /// untyped node whose /Kids reaches its array through two references is walked, and a
+    /// dictionary whose /Type is a reference to /Page stays a page despite a direct /Kids array.
+    /// A kid reached through a chain of references is read where the chain ends.
+    #[test]
+    fn kids_and_type_are_read_through_reference_chains() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = |d: &mut Document| {
+            let mut dict = Dict::new();
+            dict.set(b"Parent".to_vec(), Object::Ref(root));
+            d.add(dict)
+        };
+        let first = leaf(&mut d);
+        let array = d.add(Object::Array(vec![Object::Ref(first)]));
+        let hop = d.add(Object::Ref(array));
+        let mut node = Dict::new();
+        node.set(b"Parent".to_vec(), Object::Ref(root));
+        node.set(b"Kids".to_vec(), Object::Ref(hop));
+        let node = d.add(node);
+        let hidden = leaf(&mut d);
+        let page_name = d.add(Object::name("Page"));
+        let type_hop = d.add(Object::Ref(page_name));
+        let mut page = Dict::new();
+        page.set(b"Parent".to_vec(), Object::Ref(root));
+        page.set(b"Type".to_vec(), Object::Ref(type_hop));
+        page.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(hidden)]));
+        let page = d.add(page);
+        // A kid that is a reference to a reference to a page: the page is listed, by its own
+        // object, where the chain ends.
+        let last = leaf(&mut d);
+        let last_hop = d.add(Object::Ref(last));
+        let chained = d.add(Object::Ref(last_hop));
+        let kids = vec![Object::Ref(node), Object::Ref(page), Object::Ref(chained)];
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        let found: Vec<ObjRef> = pages(&d).iter().map(|p| p.obj).collect();
+        assert_eq!(found, vec![first, page, last]);
     }
 
     #[test]
