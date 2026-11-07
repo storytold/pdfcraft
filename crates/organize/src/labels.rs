@@ -120,18 +120,26 @@ pub fn page_label_ranges(doc: &Document) -> Vec<LabelRange> {
     checked_ranges(doc).unwrap_or_default()
 }
 
-// Borrow direct objects instead of cloning complete untrusted dictionaries or arrays.
-fn with_label_object<T>(doc: &Document, object: &Object, f: impl FnOnce(&Object) -> Result<T, OrganizeError>) -> Result<T, OrganizeError> {
-    let Object::Ref(r) = object else { return f(object) };
+/// Borrow direct objects and charge every reference lookup to the shared tree budget.
+/// This bounds repeated aliases across ranges as well as each individual chain.
+fn with_label_object<T>(
+    doc: &Document,
+    object: &Object,
+    left: &mut usize,
+    f: impl FnOnce(&Object, &mut usize) -> Result<T, OrganizeError>,
+) -> Result<T, OrganizeError> {
+    let Object::Ref(r) = object else { return f(object, left) };
     let mut seen = HashSet::from([*r]);
+    label_work(left, 1)?;
     let mut object = doc.get(*r);
     while let Object::Ref(r) = object.as_ref() {
         if seen.len() >= MAX_LABEL_TREE_DEPTH || !seen.insert(*r) {
             return Err(invalid_label("a number tree reference is cyclic or too deeply nested"));
         }
+        label_work(left, 1)?;
         object = doc.get(*r);
     }
-    f(&object)
+    f(&object, left)
 }
 
 fn label_work(left: &mut usize, count: usize) -> Result<(), OrganizeError> {
@@ -159,18 +167,18 @@ fn read_label_node(
     {
         return Err(invalid_label("the number tree repeats a node or contains a cycle"));
     }
-    with_label_object(doc, node, |node| {
+    with_label_object(doc, node, left, |node, left| {
         let Some(d) = node.as_dict() else { return Ok(()) };
         if let Some(nums) = d.get(b"Nums") {
-            with_label_object(doc, nums, |nums| {
+            with_label_object(doc, nums, left, |nums, left| {
                 let Some(nums) = nums.as_array() else { return Ok(()) };
                 label_work(left, nums.len().div_ceil(2))?;
                 for pair in nums.as_chunks::<2>().0 {
                     let Some(start) = pair[0].as_int().and_then(|n| usize::try_from(n).ok()) else { continue };
-                    with_label_object(doc, &pair[1], |spec| {
+                    with_label_object(doc, &pair[1], left, |spec, left| {
                         let Some(spec) = spec.as_dict() else { return Ok(()) };
                         let prefix = match spec.get(b"P") {
-                            Some(prefix) => with_label_object(doc, prefix, |p| match p.as_string() {
+                            Some(prefix) => with_label_object(doc, prefix, left, |p, _| match p.as_string() {
                                 Some(p) if p.bytes.len() > MAX_PREFIX_BYTES => Err(invalid_label("a raw prefix exceeds 2050 bytes")),
                                 Some(p) => Ok(p.to_text()),
                                 None => Ok(String::new()),
@@ -186,11 +194,13 @@ fn read_label_node(
                         // These scalar entries may be indirect too. Reading only direct values
                         // would silently change untouched labels when an edit rewrites the tree.
                         let style = match spec.get(b"S") {
-                            Some(style) => with_label_object(doc, style, |s| Ok(s.as_name().map_or(LabelStyle::None, LabelStyle::from_name)))?,
+                            Some(style) => {
+                                with_label_object(doc, style, left, |s, _| Ok(s.as_name().map_or(LabelStyle::None, LabelStyle::from_name)))?
+                            }
                             None => LabelStyle::None,
                         };
                         let first = match spec.get(b"St") {
-                            Some(first) => with_label_object(doc, first, |s| Ok(s.as_int().unwrap_or(1)))?,
+                            Some(first) => with_label_object(doc, first, left, |s, _| Ok(s.as_int().unwrap_or(1)))?,
                             None => 1,
                         }
                         .max(1);
@@ -208,7 +218,7 @@ fn read_label_node(
             })?;
         }
         if let Some(kids) = d.get(b"Kids") {
-            with_label_object(doc, kids, |kids| {
+            with_label_object(doc, kids, left, |kids, left| {
                 let Some(kids) = kids.as_array() else { return Ok(()) };
                 label_work(left, kids.len())?;
                 if !kids.is_empty() && depth == MAX_LABEL_TREE_DEPTH {

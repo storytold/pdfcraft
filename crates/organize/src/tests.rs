@@ -2122,6 +2122,7 @@ fn page_label_limits_refuse_reference_only_cycles_without_rewriting() {
     assert_eq!(d.modified_objects(), before);
 }
 
+/// Relabeling a subset preserves indirect scalar values, shared objects and both save modes.
 #[test]
 fn number_pages_preserves_indirect_label_style_and_start() {
     for (indirect_style, indirect_start) in [(true, false), (false, true), (true, true)] {
@@ -2149,6 +2150,7 @@ fn number_pages_preserves_indirect_label_style_and_start() {
     }
 }
 
+/// Scalar reference cycles fail before changing any page-label object.
 #[test]
 fn cyclic_label_style_or_start_is_refused_without_rewriting() {
     for key in [b"S".as_slice(), b"St".as_slice()] {
@@ -2166,6 +2168,38 @@ fn cyclic_label_style_or_start_is_refused_without_rewriting() {
         assert!(crate::page_labels(&d).unwrap_err().to_string().contains("cyclic"));
         assert!(crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).is_err());
         assert_eq!(d.modified_objects(), before);
+    }
+}
+
+/// Repeated scalar aliases share one work limit, so a small graph cannot amplify reads.
+#[test]
+fn page_label_scalar_reference_work_is_bounded_before_rewriting() {
+    use pdfcraft_cos::page_labels::{MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK};
+    for key in [b"S".as_slice(), b"St".as_slice()] {
+        let mut d = doc_a();
+        let mut scalar = d.add(if key == b"S" { Object::name("r") } else { Object::Int(4) });
+        for _ in 1..MAX_LABEL_TREE_DEPTH {
+            scalar = d.add(Object::Ref(scalar));
+        }
+        let mut spec = Dict::new();
+        spec.set(b"S".to_vec(), Object::name("r"));
+        spec.set(b"St".to_vec(), Object::Int(4));
+        spec.set(key.to_vec(), Object::Ref(scalar));
+        // Each individual chain is valid. Only the total repeated work exceeds the cap.
+        for (count, allowed) in [(2, true), (MAX_LABEL_TREE_WORK / MAX_LABEL_TREE_DEPTH + 1, false)] {
+            let nums = (0..count).flat_map(|_| [Object::Int(0), Object::Dict(spec.clone())]).collect();
+            let mut tree = Dict::new();
+            tree.set(b"Nums".to_vec(), Object::Array(nums));
+            d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Dict(tree))).unwrap();
+            let before = d.modified_objects();
+            if allowed {
+                assert_eq!(crate::page_labels(&d).unwrap(), ["iv", "v", "vi"]);
+            } else {
+                assert!(crate::page_labels(&d).unwrap_err().to_string().contains("too many"));
+                assert!(crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).is_err());
+            }
+            assert_eq!(d.modified_objects(), before, "reading or refusing an edit preserves the object graph");
+        }
     }
 }
 
