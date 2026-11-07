@@ -1348,7 +1348,12 @@ fn enter_and_a_brace_leave_a_string_or_template_as_typed() {
     assert_eq!(typed("  var s = `abc", enter.clone()), "  var s = `abc\n");
     assert_eq!(typed("s = `{", enter.clone()), "s = `{\n", "no block in a template");
     assert_eq!(typed("s = \"(", enter.clone()), "s = \"(\n");
-    // Outside one, as ever.
+    // Whatever a `/` before it was read as: as a regular expression, this one hid the opening `` ` ``.
+    let after_a_division = "const n = { valueOf() { return 6; } } / 2; const s = `a\n    ";
+    assert_eq!(typed(after_a_division, brace.clone()), format!("{after_a_division}}}"));
+    assert_eq!(typed(after_a_division, enter.clone()), format!("{after_a_division}\n"));
+    // Outside one, as ever: after such a `/` too.
+    assert_eq!(typed("x = {} / 2;\nif (a) {\n    ", brace.clone()), "x = {} / 2;\nif (a) {\n  }");
     assert_eq!(typed("if (a) {\n    ", brace), "if (a) {\n  }");
     assert_eq!(typed("  x = 'a';", enter.clone()), "  x = 'a';\n  ");
     assert_eq!(typed("  x = `a${b", enter), "  x = `a${b\n  ");

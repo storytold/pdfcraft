@@ -21,7 +21,8 @@
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
 //!
-//! Script editors use [`highlight`] to colour a script, without running or parsing it.
+//! Script editors use [`highlight`] to colour a script and [`in_literal`] before adding white space,
+//! without running or parsing it.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -50,7 +51,7 @@ use format::{printd, printf, printx, scand};
 pub use format::{set_date_names, with_english_printd};
 pub(crate) use globals::menu_item;
 use globals::platform;
-pub use highlight::{Token, TokenKind, highlight};
+pub use highlight::{Token, TokenKind, highlight, in_literal};
 use host::{arg, as_number, error, function, s, text};
 pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,

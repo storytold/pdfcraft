@@ -1,6 +1,9 @@
 //! Syntax colouring for the script editors: [`highlight`] is a fast, forgiving tokenizer for colouring
 //! text as it is typed. It never fails, it only has to be good enough to colour, and it runs neither
 //! the script nor the engine's parser, so showing a script from any document reaches neither.
+//!
+//! A wrong colour is only that, but editing mustn't change what a script holds on a guess, so what
+//! it asks ([`in_literal`]) reads a `/` both ways wherever it can't tell.
 
 use std::ops::Range;
 
@@ -88,6 +91,38 @@ const MAX_TEMPLATE_DEPTH: usize = 64;
 /// operators, white space) is plain. Never fails: unclosed strings, comments and templates run
 /// to the end of their line or of the source.
 pub fn highlight(source: &str) -> Vec<Token> {
+    tokens(source, false)
+}
+
+/// Whether byte `at` of `source` may be inside a string or template, where white space is what the
+/// script holds. After its closing quote, or between `${` and `}`, it isn't; at the end of one never
+/// closed, it is.
+///
+/// Without a parser, a `/` after a `}`, or after a word that may be a name, can start a regular
+/// expression or divide: `{ valueOf() { return 6; } } / 2` is valid. Read the wrong way, it hides what
+/// follows on its line, a template's opening `` ` `` among them. So this is true if either reading
+/// says so, which errs towards leaving the text alone. It reads every such `/` the same way each time,
+/// so a script that has both kinds of `/` could still be misread.
+pub fn in_literal(source: &str, at: usize) -> bool {
+    [false, true].into_iter().any(|divide_when_unsure| {
+        tokens(source, divide_when_unsure).iter().filter(|t| matches!(t.kind, TokenKind::String | TokenKind::Template)).any(|t| {
+            let token = source.get(t.bytes.clone()).unwrap_or_default();
+            let open_at_its_end = match t.kind {
+                // A piece of a template starts with `` ` `` or `}`, and ends with `` ` `` or `${`.
+                TokenKind::Template => !(closed_by(token, "${") || closed_by(token, "`")),
+                _ => !token.get(..1).is_some_and(|quote| closed_by(token, quote)),
+            };
+            t.bytes.start < at && (at < t.bytes.end || (at == t.bytes.end && open_at_its_end))
+        })
+    })
+}
+
+/// Whether `token` ends with `end`, when that is neither all it holds nor escaped.
+fn closed_by(token: &str, end: &str) -> bool {
+    token.strip_suffix(end).is_some_and(|rest| !rest.is_empty() && rest.chars().rev().take_while(|c| *c == '\\').count().is_multiple_of(2))
+}
+
+fn tokens(source: &str, divide_when_unsure: bool) -> Vec<Token> {
     let mut lexer = Lexer {
         s: source,
         i: 0,
@@ -98,6 +133,8 @@ pub fn highlight(source: &str) -> Vec<Token> {
         keyword_paren: false,
         parens: Vec::new(),
         line_start: false,
+        may_be_value: false,
+        divide_when_unsure,
     };
     lexer.run();
     lexer.out
@@ -122,6 +159,11 @@ struct Lexer<'a> {
     /// Whether only white space and comments stand between here and a line end before it, where
     /// `-->` starts a comment. Not on the script's first line, where the parser reads `--` and `>`.
     line_start: bool,
+    /// Whether a `/` here, read as starting a regular expression, could instead be dividing what
+    /// came last: an object's `}` rather than a block's, or `of` as a name.
+    may_be_value: bool,
+    /// Whether such a `/` divides, instead of starting a regular expression as it does for colouring.
+    divide_when_unsure: bool,
 }
 
 impl Lexer<'_> {
@@ -175,7 +217,7 @@ impl Lexer<'_> {
                 // HTML-like comments, as the parser reads a script (ECMAScript Annex B.1.1).
                 self.skip_to_line_end();
                 self.push(TokenKind::Comment, start);
-            } else if c == '/' && self.regex_ok {
+            } else if c == '/' && self.regex_ok && !(self.divide_when_unsure && self.may_be_value) {
                 self.regex();
                 self.push(TokenKind::Regex, start);
                 self.after(false, false);
@@ -203,7 +245,9 @@ impl Lexer<'_> {
                 // divides (`i++ / 2`), and before one it starts a regular expression.
                 self.bump();
                 self.bump();
+                let may_be_value = self.may_be_value;
                 self.after(self.regex_ok, false);
+                self.may_be_value = may_be_value;
             } else {
                 self.bump();
                 // Whether a `/` after `c` starts a regular expression: not after a value's
@@ -230,6 +274,7 @@ impl Lexer<'_> {
                     // What follows a spread is a value, not a property: `f(...event)`.
                     let spread = c == '.' && self.s.get(..self.i).is_some_and(|b| b.ends_with("..."));
                     self.after(regex_ok, c == '.' && !spread);
+                    self.may_be_value = regex_ok && !wants_a_value_next(c);
                 }
             }
         }
@@ -240,6 +285,7 @@ impl Lexer<'_> {
         self.after_dot = after_dot;
         self.keyword_paren = false;
         self.line_start = false;
+        self.may_be_value = false;
     }
 
     fn skip_to_line_end(&mut self) {
@@ -357,8 +403,16 @@ impl Lexer<'_> {
             self.push(kind, start);
         }
         self.after(BEFORE_REGEX.contains(&word), false);
+        // The ones not reserved outside some contexts: the rest can't be names, so a `/` can't divide them.
+        self.may_be_value = matches!(word, "of" | "yield" | "await");
         self.keyword_paren = matches!(word, "if" | "while" | "for" | "with");
     }
+}
+
+/// Whether what comes after `c` starts a value, so that a `/` there can't be dividing. A `)` gets here
+/// only as a keyword's, as in `if (x) /re/.test(s)`.
+fn wants_a_value_next(c: char) -> bool {
+    matches!(c, '(' | ')' | '[' | '{' | ',' | ';' | ':' | '=' | '!' | '&' | '|' | '?' | '+' | '-' | '*' | '/' | '%' | '<' | '>' | '~' | '^' | '.')
 }
 
 fn is_line_end(c: char) -> bool {

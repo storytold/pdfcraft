@@ -8,8 +8,6 @@
 
 use std::ops::Range;
 
-use pdfcraft_engine::js::{TokenKind, highlight};
-
 /// Most lines looked at to find the script's indentation.
 const MAX_LINES_FOR_UNIT: usize = 2000;
 
@@ -165,24 +163,9 @@ pub(super) fn line_break(text: &str, selection: Range<usize>, indent: &str) -> E
     replace(text, selection, &format!("{end}{indent}"))
 }
 
-/// Whether character `index` of `text` is inside a string or template, where white space is what it
-/// holds. After its closing quote, or between `${` and `}`, it isn't; at the end of one never closed, it is.
+/// Whether character `index` of `text` may be inside a string or template: see [`pdfcraft_engine::js::in_literal`].
 pub(super) fn in_literal(text: &str, index: usize) -> bool {
-    let at = byte_of(text, index);
-    highlight(text).iter().filter(|t| matches!(t.kind, TokenKind::String | TokenKind::Template)).any(|t| {
-        let token = text.get(t.bytes.clone()).unwrap_or_default();
-        let open_at_its_end = match t.kind {
-            // A piece of a template starts with `` ` `` or `}`, and ends with `` ` `` or `${`.
-            TokenKind::Template => !(closed_by(token, "${") || closed_by(token, "`")),
-            _ => !token.get(..1).is_some_and(|quote| closed_by(token, quote)),
-        };
-        t.bytes.start < at && (at < t.bytes.end || (at == t.bytes.end && open_at_its_end))
-    })
-}
-
-/// Whether `token` ends with `end`, when that is neither all it holds nor escaped.
-fn closed_by(token: &str, end: &str) -> bool {
-    token.strip_suffix(end).is_some_and(|rest| !rest.is_empty() && rest.chars().rev().take_while(|c| *c == '\\').count().is_multiple_of(2))
+    pdfcraft_engine::js::in_literal(text, byte_of(text, index))
 }
 
 /// The character range of the lines `selection` covers. A selection that ends at the start of
