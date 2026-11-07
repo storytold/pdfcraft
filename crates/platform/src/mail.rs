@@ -350,7 +350,8 @@ fn percent_encode(text: &str, also_keep: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 
 /// Find this computer's default email program. Runs the system's own tools (osascript on macOS,
-/// reg on Windows); on Linux and the BSDs it looks for `xdg-email` on `PATH`.
+/// reg on Windows); on Linux and the BSDs it looks for `xdg-email` on `PATH` and reads the `mailto:` handler
+/// with `xdg-mime`.
 pub fn detect() -> DefaultMail {
     match std::env::consts::OS {
         "macos" => {
@@ -359,9 +360,29 @@ pub fn detect() -> DefaultMail {
         }
         "windows" => detect_windows(),
         "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => {
-            std::env::var_os("PATH").and_then(|p| find_program(&p, "xdg-email")).map_or(DefaultMail::Nothing, DefaultMail::XdgEmail)
+            let path = std::env::var_os("PATH");
+            let Some(xdg) = path.as_deref().and_then(|p| find_program(p, "xdg-email")) else { return DefaultMail::Nothing };
+            let handler = path
+                .as_deref()
+                .and_then(|p| find_program(p, "xdg-mime"))
+                .and_then(|m| output(Command::new(m).args(["query", "default", "x-scheme-handler/mailto"])));
+            linux_default(xdg, handler.as_deref())
         }
         _ => DefaultMail::Nothing,
+    }
+}
+
+/// Mail programs whose `mailto:` handler keeps `attach=`. A browser or a webmail site opens a message
+/// without the file while `xdg-email` still exits cleanly, so anything else is offered the fallback.
+const LINUX_ATTACHING: [&str; 8] = ["thunderbird", "betterbird", "evolution", "kmail", "claws", "geary", "sylpheed", "mailspring"];
+
+/// `xdg-email` is used when the desktop's `mailto:` handler (`xdg-mime query default`) is a mail program
+/// that attaches files, or when the handler can't be read; any other handler is named instead.
+fn linux_default(xdg: PathBuf, handler: Option<&str>) -> DefaultMail {
+    let handler = handler.map(|h| h.trim().trim_end_matches(".desktop")).filter(|h| !h.is_empty());
+    match handler {
+        Some(h) if !LINUX_ATTACHING.iter().any(|known| h.to_ascii_lowercase().contains(known)) => DefaultMail::Other(Some(h.to_string())),
+        _ => DefaultMail::XdgEmail(xdg),
     }
 }
 
@@ -1100,6 +1121,20 @@ mod tests {
         assert_eq!(fallback_of(&p).0, &Why::NoProgram);
         // Another system's default can't be used here.
         assert_eq!(fallback_of(&plan_for("macos", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose()).unwrap()).0, &Why::CantAttach);
+    }
+
+    #[test]
+    fn the_linux_default_is_the_handler_when_it_cannot_attach() {
+        let xdg = || PathBuf::from("/usr/bin/xdg-email");
+        assert_eq!(linux_default(xdg(), Some("org.mozilla.Thunderbird.desktop\n")), DefaultMail::XdgEmail(xdg()));
+        assert_eq!(linux_default(xdg(), Some("org.gnome.Evolution.desktop")), DefaultMail::XdgEmail(xdg()));
+        assert_eq!(linux_default(xdg(), Some("firefox.desktop\n")), DefaultMail::Other(Some("firefox".into())));
+        assert_eq!(linux_default(xdg(), Some("google-chrome.desktop")), DefaultMail::Other(Some("google-chrome".into())));
+        // Unreadable or unset: keep trying xdg-email.
+        assert_eq!(linux_default(xdg(), None), DefaultMail::XdgEmail(xdg()));
+        assert_eq!(linux_default(xdg(), Some("  \n")), DefaultMail::XdgEmail(xdg()));
+        let p = plan_for("linux", &linux_default(xdg(), Some("firefox.desktop")), &compose()).unwrap();
+        assert_eq!(fallback_of(&p).0, &Why::CantAttach);
     }
 
     #[test]
