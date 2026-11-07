@@ -2094,3 +2094,18 @@ fn a_mark_in_a_zero_width_run_follows_its_letter() {
     let v = vec![g("a", 10.0, 10.0, 10.0), g("\u{301}", 10.6, 10.0, 10.6), g("b", 10.3, 10.0, 10.3)];
     assert_eq!(layout(v).plain_text(), "a\u{301}b");
 }
+
+/// The glyph under a point is the first whose box holds it, edges included; between glyphs, none.
+#[test]
+fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {
+    let text = PageText {
+        glyphs: vec![em_box("a", 0.0, 0.0, 10.0, 10.0), em_box("b", 8.0, 0.0, 20.0, 10.0)],
+        line_of: vec![0, 0],
+        space_before: vec![false, false],
+    };
+    assert_eq!(text.glyph_at(5.0, 5.0), Some(0));
+    assert_eq!(text.glyph_at(9.0, 5.0), Some(0), "the first of overlapping boxes");
+    assert_eq!(text.glyph_at(20.0, 10.0), Some(1), "an edge is in");
+    assert_eq!(text.glyph_at(25.0, 5.0), None);
+    assert_eq!(PageText::default().glyph_at(0.0, 0.0), None);
+}
