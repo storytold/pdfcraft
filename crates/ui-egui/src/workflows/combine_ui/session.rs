@@ -1,8 +1,10 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::MAX_FOLDER_FILES;
 use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess};
 #[cfg(not(target_arch = "wasm32"))]
 use super::parts::combinable_in;
 use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, title_of};
-use super::*;
+use super::{Arc, BTreeSet, CombineTab, HISTORY, Modifiers, PdfCraftApp};
 
 impl PdfCraftApp {
     /// Show the Combine files tab (File ▸ Combine files…), opening it if needed.

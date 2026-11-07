@@ -1,6 +1,8 @@
 //! Action Wizard: the actions (PdfCraft's and your own), running one over files in the
 //! background, and creating or editing an action's steps. Your actions are remembered.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
@@ -186,7 +188,7 @@ impl PdfCraftApp {
             match self.action_files_override.clone() {
                 Some(p) => run(self, p.into_iter().map(std::path::PathBuf::from).collect()),
                 None => {
-                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
+                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter_any_case("PDF", &["pdf"]);
                     self.ask(crate::pickers::Ask::Files(dialog), None, run);
                 }
             }
@@ -345,11 +347,14 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let all = Step::all();
     let add = &mut app.wizard.add;
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("action-add-step").selected_text(tl!(all[(*add).min(all.len() - 1)].label())).width(240.0).show_ui(ui, |ui| {
-            for (i, s) in all.iter().enumerate() {
-                ui.selectable_value(add, i, tl!(s.label()));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("action-add-step").selected_text(tl!(all[(*add).min(all.len() - 1)].label())).width(240.0).show_ui(
+            ui,
+            |ui| {
+                for (i, s) in all.iter().enumerate() {
+                    ui.selectable_value(add, i, tl!(s.label()));
+                }
+            },
+        );
         if ui.button(tl!("Add Step")).clicked() {
             a.steps.push(all[(*add).min(all.len() - 1)].clone());
         }
