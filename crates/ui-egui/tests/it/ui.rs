@@ -2377,6 +2377,73 @@ fn detached_tab_preserves_detachment_on_document_replacement() {
     );
 }
 
+#[test]
+fn detached_window_edit_commit_routes_to_target_view_without_modifying_docked_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    let tab_a_id = ids[0];
+    let tab_b_id = ids[1];
+
+    // Make Tab A (index 0) the active docked tab
+    h.state_mut().active = Some(0);
+
+    // Detach middle.pdf (Tab B, index 1)
+    h.state_mut().detach_tab(tab_b_id);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "Tab B should be detached");
+    assert_eq!(h.state().active, Some(0), "Tab A should remain active docked tab");
+
+    // Both documents are initially clean
+    assert!(!h.state().session.get(tab_a_id).unwrap().dirty);
+    assert!(!h.state().session.get(tab_b_id).unwrap().dirty);
+
+    // 1. In-flight text box typing on Tab B committed via commit_typing_in
+    h.state_mut().views[1].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Detached text".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
+
+    let committed = h.state_mut().commit_typing_in(tab_b_id);
+    assert!(committed, "commit_typing_in should succeed");
+
+    // Tab B must receive the edit while Tab A remains unmodified
+    assert!(
+        h.state().session.get(tab_b_id).unwrap().dirty,
+        "Detached Tab B should receive the committed edit and become dirty"
+    );
+    assert!(
+        !h.state().session.get(tab_a_id).unwrap().dirty,
+        "Docked Tab A must NOT receive edits committed for detached Tab B"
+    );
+    assert!(
+        h.state().views[1].fill_text.is_none(),
+        "Tab B's open typing box should be committed and cleared"
+    );
+
+    // 2. Pending edit on Tab B processed during show_detached_windows pass
+    h.state_mut().views[1].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.run_steps(2);
+
+    assert_eq!(
+        h.state().views[1].pending_edit,
+        None,
+        "Tab B's pending edit should be processed in detached window pass"
+    );
+    let tab_b_doc = h.state().session.get(tab_b_id).unwrap();
+    assert_eq!(tab_b_doc.info.pages[0].rotation, 90, "Tab B's page 0 should have 90 degree rotation");
+
+    let tab_a_doc = h.state().session.get(tab_a_id).unwrap();
+    assert_eq!(tab_a_doc.info.pages[0].rotation, 0, "Docked Tab A must remain completely unmodified");
+    assert!(!tab_a_doc.dirty, "Docked Tab A must remain clean");
+}
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
