@@ -243,7 +243,8 @@ pub(super) fn restarts_run(glyphs: &[&TextGlyph], start: usize, next: usize, pro
 /// Glyphs are placed by x. Runs that collide, meaning that glyphs of different runs overprint each other, stay whole
 /// and are placed by their left edge. Runs that only interleave along the line, such as symbols between letters, keep
 /// their glyph-by-glyph order, so the common case is one sort. A run of zero-width glyphs (a combining mark) has no
-/// extent of its own, so it goes next to the glyph it starts at.
+/// extent of its own, so it goes next to the glyph it starts at. A space whose advance the next glyph takes back stays
+/// before that glyph ([`keep_taken_back_blanks`]).
 pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, s: &Seg, sc: &mut Scratch) {
     let x0 = |i: usize| glyphs[i].rect[0];
     let zero_width = |i: usize| glyphs[i].rect[2] - glyphs[i].rect[0] <= 0.05 * height(i);
@@ -265,6 +266,7 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     } else {
         collide(glyphs, height, s.h, sc);
     }
+    keep_taken_back_blanks(glyphs, &mut sc.placed);
     // Each mark goes before the first placed glyph whose x is greater than its own. Marks are visited in x order, and
     // that position never moves back, so one pass over `placed` puts all of them in.
     sc.marks.sort_by(|a, b| x0(*a).total_cmp(&x0(*b)));
@@ -280,6 +282,38 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         }
         sc.merged.extend_from_slice(&sc.placed[next..]);
         std::mem::swap(&mut sc.placed, &mut sc.merged);
+    }
+}
+
+/// Puts a blank glyph (a space) back before the glyph drawn right after it on a line with right-to-left text, when that
+/// glyph's adjustment took the blank's advance back: it starts at or left of the blank's own start and covers at least
+/// half of it. Right-to-left text drawn in reverse order starts a show string with the space that ends its word
+/// (ISO 32000-2 §14.8.2.5.3, whose NOTE 2 has such a space realign the typography without visible effect), and a word
+/// processor pulls the next letter back over it. A blank has no ink, so its box says nothing about which side of that
+/// letter it belongs on, and sorting by x split "המדינה" as "המדינ ה". The space is a word break in the character
+/// stream (§14.8.2.6.2), and drawing order is the only evidence of its place.
+///
+/// Only a right-to-left letter or a neutral (punctuation, a symbol) after the blank counts: left-to-right text has no
+/// reverse-order show strings, and in scanned pages' invisible text layers its spaces overlap letters at random. A
+/// glyph that only touches the blank's start was drawn beside it, as text set letter by letter leftwards is, and x
+/// order already reads it right. A blank that a glyph placed before them also reaches over sits inside a cluster (a
+/// letter and the marks drawn on it), where its place is no clearer, so it stays where x order put it.
+fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
+    let blank = |g: &TextGlyph| !g.text.is_empty() && g.text.chars().all(char::is_whitespace);
+    let left_to_right = |g: &TextGlyph| g.text.chars().any(|c| c.is_alphanumeric() && !is_rtl(c));
+    if !placed.iter().any(|&i| glyphs.get(i).is_some_and(|g| g.text.chars().any(is_rtl))) {
+        return;
+    }
+    for p in 1..placed.len() {
+        let (Some(&ink), Some(&space)) = (placed.get(p - 1), placed.get(p)) else { continue };
+        let (Some(s), Some(g)) = (glyphs.get(space), glyphs.get(ink)) else { continue };
+        let width = s.rect[2] - s.rect[0];
+        let covered = g.rect[2].min(s.rect[2]) - s.rect[0];
+        let taken_back = g.rect[0] <= s.rect[0] && width > 0.0 && covered >= 0.5 * width;
+        let alone = p.checked_sub(2).and_then(|q| placed.get(q)).and_then(|&q| glyphs.get(q)).is_none_or(|q| q.rect[2] <= s.rect[0]);
+        if space.checked_add(1) == Some(ink) && blank(s) && !blank(g) && !left_to_right(g) && taken_back && alone {
+            placed.swap(p - 1, p);
+        }
     }
 }
 

@@ -1550,8 +1550,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.copy"]
 tools = ["text_extract"]
-evidence = ["crates/ui-egui/tests/it/ui.rs::drag_selects_text_and_copy_returns_it", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_edit_and_context_menus", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_floating_button_honours_permissions", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_keeps_focused_input_clipboard_ownership"]
-notes = "Keyboard, Edit-menu, page-context-menu and floating-selection Copy honour document copy permissions. Menus require selected page text; focused text inputs and Organize page copying retain their own clipboard handling. Headless text extraction uses text_extract."
+evidence = ["crates/ui-egui/tests/it/ui.rs::drag_selects_text_and_copy_returns_it", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_edit_and_context_menus", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_floating_button_honours_permissions", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_keeps_focused_input_clipboard_ownership", "crates/render/src/text/tests.rs::a_space_taken_back_under_the_next_letter_stays_before_it"]
+notes = "Keyboard, Edit-menu, page-context-menu and floating-selection Copy honour document copy permissions. Menus require selected page text; focused text inputs and Organize page copying retain their own clipboard handling. Headless text extraction uses text_extract. A space that starts a right-to-left show string and is taken back under the next letter (ISO 32000-2 §14.8.2.5.3) stays a word break after its word instead of splitting it."
 
 [[feature]]
 id = "view.select-all"
