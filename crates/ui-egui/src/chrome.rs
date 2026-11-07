@@ -501,6 +501,7 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(crate::i18n::fmt(tl!("Local only: {sent} sent"), &[("sent", &app.egress_sent().to_string())]));
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
@@ -820,6 +821,31 @@ mod page_position_tests {
         assert_eq!(page_position(2, 180, ""), "180");
         assert_eq!(page_position(0, 0, "i"), "0");
         assert_eq!(page_position(usize::MAX, 3, "x"), "3");
+    }
+}
+
+#[cfg(test)]
+mod local_only_badge_tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use crate::PdfCraftApp;
+
+    /// Opening a local file reports zero egress in the status area, verifiable against the
+    /// session egress log.
+    #[test]
+    fn local_only_badge_reports_zero_after_opening_local_file() {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+            let path = std::env::temp_dir().join(format!("pdfcraft-local-only-{}-local.pdf", std::process::id()));
+            app.open_bytes("local.pdf", Some(path.to_string_lossy().into_owned()), bytes.as_ref().clone().to_vec()).unwrap();
+            app
+        });
+        h.run_steps(3);
+        assert!(h.state().active_ids().is_some(), "the local file is open");
+        assert_eq!(h.get_all_by_label("Local only: 0 sent").count(), 1, "the status-area badge reports zero egress");
     }
 }
 

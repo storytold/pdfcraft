@@ -703,3 +703,47 @@ pub struct PdfCraftApp {
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }
+
+/// Session egress logs, keyed by the app's own per-instance state: an entry lives next to the
+/// `unsaved_flag` allocation it was recorded under. That allocation is created fresh by every
+/// app, so entries never cross sessions; an entry whose state only the map still holds belongs
+/// to a dropped app and is ignored. No feature sends yet, so every log stays empty and the
+/// status-area badge in `chrome::mode_bar` reports zero.
+static SESSION_EGRESS_LOGS: std::sync::Mutex<Vec<(std::sync::Arc<std::sync::atomic::AtomicBool>, Vec<u64>)>> = std::sync::Mutex::new(Vec::new());
+
+impl PdfCraftApp {
+    /// The live log for this session, if this app has recorded any egress yet. An entry whose
+    /// state only the map holds (strong count 1) belongs to a dropped app and reads empty, so a
+    /// later app landing on the same state starts from zero.
+    fn egress_entry<'a>(
+        logs: &'a [(std::sync::Arc<std::sync::atomic::AtomicBool>, Vec<u64>)],
+        state: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Option<&'a Vec<u64>> {
+        let entry = logs.iter().find(|(key, _)| std::sync::Arc::ptr_eq(key, state))?;
+        (std::sync::Arc::strong_count(&entry.0) > 1).then_some(&entry.1)
+    }
+
+    /// The session egress total: bytes sent off-device since the app started.
+    pub fn egress_sent(&self) -> u64 {
+        let logs = SESSION_EGRESS_LOGS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::egress_entry(&logs, &self.unsaved_flag).map_or(0, |log| log.iter().fold(0u64, |total, bytes| total.saturating_add(*bytes)))
+    }
+
+    /// The session egress log: bytes sent off-device, one entry per send.
+    pub fn egress_log(&self) -> Vec<u64> {
+        let logs = SESSION_EGRESS_LOGS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::egress_entry(&logs, &self.unsaved_flag).cloned().unwrap_or_default()
+    }
+
+    /// Record bytes sent off-device in this session's egress log.
+    pub fn record_egress(&mut self, bytes: u64) {
+        let mut logs = SESSION_EGRESS_LOGS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match logs.iter_mut().find(|(key, _)| std::sync::Arc::ptr_eq(key, &self.unsaved_flag) && std::sync::Arc::strong_count(key) > 1) {
+            Some((_, log)) => log.push(bytes),
+            None => {
+                logs.retain(|(key, _)| std::sync::Arc::strong_count(key) > 1);
+                logs.push((std::sync::Arc::clone(&self.unsaved_flag), vec![bytes]));
+            }
+        }
+    }
+}
