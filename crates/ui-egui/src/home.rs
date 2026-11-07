@@ -213,13 +213,23 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
                 #[cfg(not(target_arch = "wasm32"))]
-                resp.context_menu(|ui| {
-                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
-                    if ui.button(label).clicked() {
-                        reveal = Some(r.path.clone());
-                        ui.close();
+                {
+                    // The Menu key or Shift+F10 on the focused row opens the same menu a secondary
+                    // click does, under the row, so Reveal works from the keyboard.
+                    let by_key =
+                        resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
+                    let mut popup = egui::Popup::context_menu(&resp);
+                    if by_key {
+                        popup = popup.open_memory(egui::SetOpenCommand::Bool(true)).anchor(rect).align(egui::RectAlign::BOTTOM_START);
                     }
-                });
+                    popup.show(|ui| {
+                        let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+                        if ui.button(label).clicked() {
+                            reveal = Some(r.path.clone());
+                            ui.close();
+                        }
+                    });
+                }
                 let press = theme::Press::track(ui, &resp);
                 // The row, not its response: the pointer stays "in" the row over its remove button.
                 let hovered = ui.rect_contains_pointer(rect);
@@ -327,6 +337,23 @@ mod tests {
         h.get_by_label("Unpin tool").click();
         h.run_steps(2);
         assert!(h.state().pinned_tools.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_focused_recent_row_opens_its_reveal_menu_from_the_keyboard() {
+        use egui_kittest::kittest::Queryable;
+        for chord in [(egui::Modifiers::NONE, egui::Key::Menu), (egui::Modifiers::SHIFT, egui::Key::F10)] {
+            let mut h = review_home_harness();
+            h.state_mut().recent = vec![crate::RecentFile { name: "notes.pdf".into(), path: "/nowhere/notes.pdf".into(), pages: 2, size: 2048 }];
+            h.run_steps(3);
+            assert!(!egui::Popup::is_any_open(&h.ctx));
+            h.get_by_label("notes.pdf").focus();
+            h.run_steps(2);
+            h.key_press_modifiers(chord.0, chord.1);
+            h.run_steps(3);
+            assert!(egui::Popup::is_any_open(&h.ctx), "{chord:?} did not open the Reveal menu");
+        }
     }
 
     #[test]

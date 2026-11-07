@@ -416,6 +416,9 @@ pub struct PdfCraftApp {
     pub pinned: folders_ui::PinnedFolders,
     /// The recent files restored from settings, checked off the UI thread (#5682).
     recent_check: persist::recent_check::RecentCheck,
+    /// Failures of the Reveal worker, taken each frame and shown as a notification.
+    #[cfg(not(target_arch = "wasm32"))]
+    reveal_errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Tools pinned to Home, in user-defined order.
     pub pinned_tools: Vec<String>,
     /// Search query for the Pin a tool selection dialog.
