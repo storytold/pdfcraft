@@ -1975,6 +1975,7 @@ fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {
         glyphs: vec![em_box("a", 0.0, 0.0, 10.0, 10.0), em_box("b", 8.0, 0.0, 20.0, 10.0)],
         line_of: vec![0, 0],
         space_before: vec![false, false],
+        truncated: false,
     };
     assert_eq!(text.glyph_at(5.0, 5.0), Some(0));
     assert_eq!(text.glyph_at(9.0, 5.0), Some(0), "the first of overlapping boxes");
