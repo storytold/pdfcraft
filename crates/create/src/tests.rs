@@ -486,6 +486,82 @@ fn bigtiff_images_become_pages() {
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 1.0], "4×2 px at 144 dpi");
 }
 
+/// A PCX header for a `w` by `h` image at 72 dpi.
+fn pcx_header(version: u8, bits: u8, planes: u8, stride: u16, w: u16, h: u16) -> Vec<u8> {
+    let mut pcx = vec![0u8; 128];
+    pcx[..4].copy_from_slice(&[0x0A, version, 1, bits]);
+    pcx[8..10].copy_from_slice(&(w - 1).to_le_bytes());
+    pcx[10..12].copy_from_slice(&(h - 1).to_le_bytes());
+    pcx[12..14].copy_from_slice(&72u16.to_le_bytes());
+    pcx[14..16].copy_from_slice(&72u16.to_le_bytes());
+    pcx[65] = planes;
+    pcx[66..68].copy_from_slice(&stride.to_le_bytes());
+    pcx
+}
+
+/// A 24-bit PCX: each scanline holds a red, a green and a blue row.
+#[test]
+fn pcx_images_become_pages() {
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 2);
+    pcx.extend_from_slice(&[10, 11, 20, 21, 30, 31]);
+    pcx.extend_from_slice(&[40, 41, 50, 51, 60, 61]);
+    let embedded = super::pcx("a.pcx", &pcx).unwrap();
+    assert_eq!(embedded.data, [10, 20, 30, 11, 21, 31, 40, 50, 60, 41, 51, 61]);
+    let doc = reopen(&from_images(&[("a.pcx".into(), pcx)]).unwrap());
+    assert_eq!(pages(&doc).len(), 1);
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 2.0]);
+    assert_eq!(image_of(&doc, 0).name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+}
+
+#[test]
+fn a_pcx_run_may_cross_planes_but_not_scanlines() {
+    // 0xC4 repeats 7 four times: the red row and half of the green one
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 1);
+    pcx.extend_from_slice(&[0xC4, 7, 8, 9]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [7, 7, 8, 7, 7, 9]);
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 2);
+    pcx.extend_from_slice(&[0xC8, 7, 1, 2, 3, 4]);
+    assert!(super::pcx("a.pcx", &pcx).is_err(), "eight bytes in a six-byte scanline");
+}
+
+#[test]
+fn an_8_bit_pcx_uses_its_palette_and_is_grey_without_one() {
+    let mut pcx = pcx_header(5, 8, 1, 2, 2, 1);
+    pcx.extend_from_slice(&[1, 2]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [1, 1, 1, 2, 2, 2], "no palette: grey");
+    pcx.push(0x0C);
+    let mut palette = vec![0u8; 768];
+    palette[3..9].copy_from_slice(&[9, 8, 7, 6, 5, 4]);
+    pcx.extend_from_slice(&palette);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [9, 8, 7, 6, 5, 4]);
+}
+
+#[test]
+fn bit_plane_pcx_images_read_their_palette() {
+    // version 2, one plane: black and white
+    let mut pcx = pcx_header(2, 1, 1, 2, 2, 1);
+    pcx.extend_from_slice(&[0b1000_0000, 0]);
+    assert!(from_images(&[("a.pcx".into(), pcx.clone())]).is_ok(), "an old version is still a PCX");
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [255, 255, 255, 0, 0, 0]);
+    // two planes: colour 3 is at byte 16 + 9
+    let mut pcx = pcx_header(5, 1, 2, 1, 1, 1);
+    pcx[25..28].copy_from_slice(&[1, 2, 3]);
+    pcx.extend_from_slice(&[0x80, 0x80]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [1, 2, 3]);
+}
+
+#[test]
+fn damaged_pcx_headers_and_bodies_are_refused() {
+    let no_planes = pcx_header(5, 8, 0, 2, 2, 1);
+    let no_stride = pcx_header(5, 8, 3, 0, 2, 1);
+    let short_stride = pcx_header(5, 8, 3, 1, 2, 1);
+    let short_body = pcx_header(5, 8, 3, 2, 2, 1);
+    for bytes in [no_planes, no_stride, short_stride, short_body] {
+        assert!(super::pcx("a.pcx", &bytes).is_err());
+    }
+    assert!(super::pcx("a.pcx", &[0x0A, 5, 1, 8]).is_err(), "no header");
+}
+
 /// A synthetic ICC profile: a 128-byte header (size, device class, colour space, `acsp`) and
 /// some payload. Only the header is read.
 fn icc_profile(space: &[u8; 4]) -> Vec<u8> {
