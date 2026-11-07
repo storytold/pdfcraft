@@ -113,7 +113,7 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
 }
 
 /// Autotagging refuses a page whose content it can't read whole, and says why: content past
-/// 16 MiB, or content that doesn't decode strictly.
+/// 16 MiB, or content that doesn't decode strictly, with the decoder's reason right after.
 #[test]
 fn autotag_text_says_why_it_cannot_read_a_page() {
     use pdfcraft_cos::{Dict, ObjRef, Stream};
@@ -138,7 +138,7 @@ fn autotag_text_says_why_it_cannot_read_a_page() {
     let mut corrupt = Stream::from_raw(Dict::new(), b"not zlib data".to_vec());
     corrupt.dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
     let why = reason(corrupt);
-    assert!(why.starts_with("content cannot be decoded strictly"), "{why}");
+    assert!(why.starts_with("content cannot be decoded strictly: FlateDecode: "), "{why}");
 }
 
 #[test]
