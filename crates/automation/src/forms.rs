@@ -238,8 +238,8 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
         // button, not the second one's state. A value matching neither is refused when written,
         // with the options listed.
         (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(f.state_for_export(s).unwrap_or(s).to_owned())),
-        // A number is the same option written without quotes (`1` for the export value `1`). It
-        // is compared as a number with the export values first, so `1.0` names the button
+        // A number is the same option written without quotes (`1` for the export value `1`).
+        // Below 2^53 it is compared as a number with the export values first, so `1.0` names the button
         // exported as `1.0` (`/Opt [(1.0) (2.0)]`, states `/0 /1`) and not the one whose state is
         // `/1`; then as text, as a string would be.
         (FormFieldKind::Radio, Value::Number(n)) => {

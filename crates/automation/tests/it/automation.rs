@@ -2936,6 +2936,47 @@ endstream",
     assert!(e.contains("has no option"), "{e}");
 }
 
+/// Past 2^53 a float no longer holds every integer, so `9007199254740992` and `9007199254740993`
+/// are the same `f64`. A number there is matched only by its exact text, never compared as a
+/// number with the export values: with `/Opt [(9007199254740992) (2)]` the number
+/// `9007199254740993` names no option, nor does `9007199254740992` with
+/// `/Opt [(9007199254740993) (2)]`. Each is refused and the selection kept, while the number
+/// spelled as its export value still picks that button.
+#[test]
+fn form_fill_matches_a_radio_number_past_2_53_only_by_its_text() {
+    for (export, other) in [("9007199254740992", "9007199254740993"), ("9007199254740993", "9007199254740992")] {
+        let field = format!("<< /FT /Btn /T (big) /Ff 49152 /Opt [({export}) (2)] /V /Off /Kids [6 0 R 7 0 R] >>");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+            field.as_str(),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>
+stream
+
+endstream",
+        ];
+        let dir = workdir(&format!("radio-past-2-53-{export}"));
+        std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+        let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"big": {lit}}}}}"#)).unwrap() };
+        let on = |a: &Automation| -> Vec<usize> {
+            let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+            f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+        };
+        ok(&mut a, "form_fill", fill(export));
+        assert_eq!(on(&a), [0], "{export} selects the button exported as {export}");
+        ok(&mut a, "form_fill", fill("2"));
+        let e = err(&mut a, "form_fill", fill(other)).to_string();
+        assert!(e.contains("has no option"), "{other} with /Opt [({export}) (2)]: {e}");
+        assert_eq!(on(&a), [1], "{other} keeps the selection");
+    }
+}
+
 /// A form whose fields are only page widgets (the `/Fields` list is empty) still lists, fills and
 /// resets through the tools, and the leniency shows up as a repair note.
 #[test]
