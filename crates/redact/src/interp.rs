@@ -31,7 +31,7 @@ mod prune;
 
 use layers::strip_hidden_layers;
 use prune::{clip_out, extgstate_font, prune_form_resources};
-pub(crate) use prune::{prune, prune_extgstates, prune_patterns, prune_properties, resource_ops, unlink_doomed};
+pub(crate) use prune::{prune, prune_extgstates, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
@@ -53,6 +53,23 @@ pub(crate) enum Mode {
     Verify,
 }
 
+/// A run of glyphs cut out under a region, kept for the redaction proof
+/// ([`Snapshot::capture`](crate::verify::Snapshot::capture)).
+pub(crate) struct Removed {
+    /// Index of the region (in `Scope::rects`) the run lay under.
+    pub(crate) rect: usize,
+    /// The character codes as they stood in the string.
+    pub(crate) raw: Vec<u8>,
+    /// What the font says they showed (codes without a known meaning are left out).
+    pub(crate) text: String,
+    /// How many character codes the run holds (a composite font's codes are several bytes).
+    pub(crate) codes: usize,
+    /// Which text operator showed it, counted from the start of the page.
+    pub(crate) op: usize,
+    /// Where in that operator it starts: the operand's place in a `TJ` array, and the byte in it.
+    pub(crate) at: (usize, usize),
+}
+
 #[derive(Clone)]
 struct Gs {
     ctm: Matrix,
@@ -71,9 +88,17 @@ struct Gs {
     /// When the active font was set by an `/ExtGState` `/Font` entry (`gs`), the resource name of
     /// that graphics state dictionary (cleared when `Tf` sets a font).
     font_gs: Option<Vec<u8>>,
-    /// Active pattern names selected by `scn` (non-stroking) and `SCN` (stroking).
+    /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
+    /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
+    /// everything else. A pattern's cell is a content stream of its own and this pass does not
+    /// enter it, so a pattern whose only painting was removed has to leave the page's resources
+    /// or its drawing stays in the file (#3647).
     fill_pattern: Option<Vec<u8>>,
     stroke_pattern: Option<Vec<u8>>,
+    /// The current font is a Type 3 font without `/Resources`: its glyph descriptions look their
+    /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
+    /// any of this scope's patterns.
+    type3_inherits: bool,
 }
 
 /// What processing a scope produced.
@@ -87,10 +112,6 @@ pub(crate) struct Output {
     /// can unlink the original from the resource dictionary (a full save keeps whatever is still
     /// referenced, which would otherwise retain the removed image or form bytes).
     pub replaced: Vec<Vec<u8>>,
-    /// New Pattern resources the rewritten content refers to: (resource name, object).
-    pub patterns: Vec<(Vec<u8>, ObjRef)>,
-    /// Pattern resource names dropped or replaced in this scope.
-    pub replaced_patterns: Vec<Vec<u8>>,
     /// New ExtGState resources the rewritten content refers to: (resource name, object).
     pub ext_gstates: Vec<(Vec<u8>, ObjRef)>,
     /// ExtGState resource names dropped or replaced in this scope.
@@ -101,6 +122,16 @@ pub(crate) struct Output {
     pub doomed: Vec<ObjRef>,
     /// Rewritten form/image objects, including nested replacements, that may retain parent-tree keys.
     pub replacements: Vec<ObjRef>,
+    /// Pattern resource names a painting operator that survived the rewrite still uses. A name
+    /// this scope saw selected but never painted with afterwards is pruned from the page's
+    /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
+    /// saved file (#3647).
+    pub patterns_seen: Vec<Vec<u8>>,
+    pub patterns_painted: Vec<Vec<u8>>,
+    /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
+    /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
+    /// not tracked, so the page keeps them all.
+    pub keeps_all_patterns: bool,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -119,20 +150,14 @@ pub(crate) struct Output {
 
 impl Output {
     pub fn has_resource_changes(&self) -> bool {
-        !self.xobjects.is_empty()
-            || !self.replaced.is_empty()
-            || !self.patterns.is_empty()
-            || !self.replaced_patterns.is_empty()
-            || !self.ext_gstates.is_empty()
-            || !self.replaced_ext_gstates.is_empty()
+        !self.xobjects.is_empty() || !self.replaced.is_empty() || !self.ext_gstates.is_empty() || !self.replaced_ext_gstates.is_empty()
     }
 
     pub fn apply_resources(&self, doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
         // A form with no /Resources of its own draws these names through this dictionary.
         // Read that use before any entry is removed; an unreadable form keeps the names by
         // failing the redaction rather than dropping a font or pattern it still paints.
-        let inherited =
-            if self.replaced_patterns.is_empty() && self.replaced_ext_gstates.is_empty() { None } else { Some(resource_ops(doc, res, content)?) };
+        let inherited = if self.replaced_ext_gstates.is_empty() { None } else { Some(resource_ops(doc, res, content)?) };
         if !self.xobjects.is_empty() || !self.replaced.is_empty() {
             let mut xo = res_dict(doc, res, b"XObject");
             prune(&mut xo, &self.replaced, content);
@@ -140,20 +165,6 @@ impl Output {
                 xo.set(n.clone(), Object::Ref(*r));
             }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
-        }
-        if !self.patterns.is_empty() || !self.replaced_patterns.is_empty() {
-            let mut pat = res_dict(doc, res, b"Pattern");
-            if let Some(ops) = &inherited {
-                prune_patterns(&mut pat, &self.replaced_patterns, ops);
-            }
-            for (n, r) in &self.patterns {
-                pat.set(n.clone(), Object::Ref(*r));
-            }
-            if pat.is_empty() {
-                res.remove(b"Pattern");
-            } else {
-                res.set(b"Pattern".to_vec(), Object::Dict(pat));
-            }
         }
         if !self.ext_gstates.is_empty() || !self.replaced_ext_gstates.is_empty() {
             let mut egs = res_dict(doc, res, b"ExtGState");
@@ -196,6 +207,12 @@ pub(crate) struct Scope<'a> {
     xobject_oc_cache: HashMap<ObjRef, bool>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
+    /// Collects the glyph runs removed under a region in apply mode (`None` = not collected).
+    /// The redaction proof's snapshot is what sets it: it must know what applying is about to
+    /// remove, by the interpreter's own judgement, without trusting anything else to it.
+    pub removed: Option<Vec<Removed>>,
+    /// How many text operators have been shown, for [`Removed::op`].
+    shown: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
@@ -221,6 +238,8 @@ impl<'a> Scope<'a> {
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
+            removed: None,
+            shown: 0,
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
@@ -241,21 +260,33 @@ impl<'a> Scope<'a> {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
     }
 
-    /// Does a glyph box count as under a region? Any real overlap does (more than a fifth of
+    /// Which regions a glyph box counts as under? Any real overlap does (more than a fifth of
     /// the glyph or a point, whichever is less, in both directions), so neighbours that only
     /// touch an edge survive while partly covered glyphs go. Degenerate boxes (zero-size text)
-    /// count when their origin is inside.
-    fn glyph_hit(&self, b: [f64; 4], origin: (f64, f64)) -> bool {
+    /// count when their origin is inside. Empty = under no region (a glyph kept). A glyph may
+    /// lie under several regions at once (overlapping marks); each is reported.
+    fn glyph_rects(&self, b: [f64; 4], origin: (f64, f64)) -> Vec<usize> {
         let (gw, gh) = (b[2] - b[0], b[3] - b[1]);
         if gw < 0.01 || gh < 0.01 {
-            return self.rects.iter().any(|r| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3]);
+            return self
+                .rects
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3])
+                .map(|(i, _)| i)
+                .collect();
         }
         let (mx, my) = ((gw * 0.2).min(1.0), (gh * 0.2).min(1.0));
-        self.rects.iter().any(|r| {
-            let ox = b[2].min(r[2]) - b[0].max(r[0]);
-            let oy = b[3].min(r[3]) - b[1].max(r[1]);
-            ox > mx && oy > my
-        })
+        self.rects
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                let ox = b[2].min(r[2]) - b[0].max(r[0]);
+                let oy = b[3].min(r[3]) - b[1].max(r[1]);
+                ox > mx && oy > my
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 
@@ -295,6 +326,24 @@ struct Glyph {
     /// Advance in unscaled text space (before `Th`).
     advance: f64,
     hit: bool,
+    /// The regions it lies under (empty for hidden text).
+    rects: Vec<usize>,
+}
+
+/// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
+/// painting knows exactly what it draws and whether the paint survived; text, images and forms
+/// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted,
+/// and with it the pattern's cell. A cell that carries text or images is then refused by
+/// `pattern_guard`; a vector-only cell stays in the file though nothing shows it
+/// (`a_pattern_painted_only_by_redacted_text_keeps_its_vector_cell`). Dropping a pattern something
+/// still draws with would lose paint from the page instead.
+fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
+    if fills && let Some(n) = &gs.fill_pattern {
+        out.patterns_painted.push(n.clone());
+    }
+    if strokes && let Some(n) = &gs.stroke_pattern {
+        out.patterns_painted.push(n.clone());
+    }
 }
 
 /// Process a scope's content streams (state flows from one stream to the next).
@@ -313,6 +362,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         font_gs: None,
         fill_pattern: None,
         stroke_pattern: None,
+        type3_inherits: false,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -342,7 +392,6 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         if removed > 0 {
             scope.layer_blocks += removed;
             forced_change = true;
-            walk.any_paint_removed = true;
         }
     }
     let (pieces, rewrite) = split_into_pieces(&joined, parsed.ops, streams.len(), forced_change);
@@ -406,7 +455,6 @@ struct Piece {
 /// The interpreter state carried across the operators of a scope.
 struct Walk {
     gs: Gs,
-    initial_ctm: Matrix,
     /// With each saved state, the text and text line matrices: inside a text object `q`/`Q`
     /// save and restore them too (ISO 32000-2 §9.4.1 as corrected by the PDF Association's
     /// errata, issue 368), as the renderer does.
@@ -416,11 +464,10 @@ struct Walk {
     fonts_res: Dict,
     ext_gstates: Dict,
     xobjects: Dict,
-    patterns: Dict,
-    painted_patterns: HashSet<Vec<u8>>,
+    /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
+    patterns: Vec<Vec<u8>>,
     redacted_font_gs: HashSet<Vec<u8>>,
     surviving_font_gs: HashSet<Vec<u8>>,
-    any_paint_removed: bool,
     fallback: Rc<Metrics>,
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
@@ -431,21 +478,17 @@ struct Walk {
 
 impl Walk {
     fn new(doc: &Document, resources: &Dict, gs: Gs) -> Self {
-        let initial_ctm = gs.ctm;
         Self {
             gs,
-            initial_ctm,
             stack: Vec::new(),
             tm: Matrix::IDENTITY,
             tlm: Matrix::IDENTITY,
             fonts_res: res_dict(doc, resources, b"Font"),
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
-            patterns: res_dict(doc, resources, b"Pattern"),
-            painted_patterns: HashSet::new(),
+            patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
             redacted_font_gs: HashSet::new(),
             surviving_font_gs: HashSet::new(),
-            any_paint_removed: false,
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
@@ -473,17 +516,47 @@ impl Walk {
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => self.graphics_state(doc, scope, resources, op, piece),
-            b"g" | b"rg" | b"k" | b"sc" | b"G" | b"RG" | b"K" | b"SC" | b"cs" | b"CS" | b"scn" | b"SCN" => {
-                self.color_or_pattern(doc, scope, resources, op, piece)
-            }
             b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
                 self.text_state(&op);
                 Some(op)
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
-            b"BI" => self.inline_image(scope, op, piece),
+            b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
             b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, op, piece),
             b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
+            // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
+            // and clear it. `cs` with a space other than /Pattern clears it too.
+            b"scn" | b"SCN" => {
+                let fill = o == b"scn";
+                let picked = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                if let Some(name) = &picked {
+                    self.out.patterns_seen.push(name.clone());
+                }
+                if fill {
+                    self.gs.fill_pattern = picked;
+                } else {
+                    self.gs.stroke_pattern = picked;
+                }
+                Some(op)
+            }
+            b"cs" | b"CS" => {
+                if op.name(0) != Some(b"Pattern") {
+                    if o == b"cs" {
+                        self.gs.fill_pattern = None;
+                    } else {
+                        self.gs.stroke_pattern = None;
+                    }
+                }
+                Some(op)
+            }
+            b"g" | b"rg" | b"k" => {
+                self.gs.fill_pattern = None;
+                Some(op)
+            }
+            b"G" | b"RG" | b"K" => {
+                self.gs.stroke_pattern = None;
+                Some(op)
+            }
             _ => Some(op),
         };
         piece.ops.extend(kept);
@@ -535,30 +608,6 @@ impl Walk {
                 }
             }
         }
-        if self.any_paint_removed {
-            for (ops, changed) in processed {
-                let mut i = 0;
-                while i < ops.len() {
-                    let drop_pat = if matches!(ops[i].op.as_slice(), b"scn" | b"SCN") {
-                        ops[i].operands.last().and_then(Object::as_name).filter(|n| !self.painted_patterns.contains(*n)).map(<[u8]>::to_vec)
-                    } else {
-                        None
-                    };
-                    if let Some(pname) = drop_pat {
-                        if let Some(pr) = self.patterns.get(&pname).and_then(Object::as_ref) {
-                            self.out.doomed.push(pr);
-                        }
-                        if !self.out.replaced_patterns.contains(&pname) {
-                            self.out.replaced_patterns.push(pname);
-                        }
-                        ops.remove(i);
-                        *changed = true;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-        }
     }
 
     /// Path construction: collects the operator and grows the path's bounding box.
@@ -588,16 +637,11 @@ impl Walk {
         let clips = std::mem::replace(&mut self.clip, false);
         let hit = scope.mode == Mode::Apply && o != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
-            if matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*")
-                && let Some(p) = &self.gs.fill_pattern
-            {
-                self.painted_patterns.insert(p.clone());
-            }
-            if matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*")
-                && let Some(p) = &self.gs.stroke_pattern
-            {
-                self.painted_patterns.insert(p.clone());
-            }
+            // The paint survives, so the pattern it draws with is still in use. `n` paints
+            // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
+            let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+            let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+            uses_patterns(&mut self.out, &self.gs, fills, strokes);
             piece.ops.extend(body);
             piece.ops.push(op);
             return;
@@ -605,7 +649,6 @@ impl Walk {
         let b = bbox.unwrap_or_default();
         piece.changed = true;
         scope.report.paths_removed += 1;
-        self.any_paint_removed = true;
         if scope.covered(b) && clips {
             // Keep the clipping, drop the painting.
             piece.ops.extend(body);
@@ -630,55 +673,12 @@ impl Walk {
             }
             b"Tf" => self.select_font(doc, scope, &op),
             _ => {
+                self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 if let Some(new) = extgstate_op(doc, scope, &op, (&mut self.gs, &self.fallback), resources, &mut self.ext_gstates, &mut self.out) {
                     piece.changed = true;
                     return new;
                 }
             }
-        }
-        Some(op)
-    }
-
-    fn color_or_pattern(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) -> Option<Op> {
-        let o = op.op.as_slice();
-        match o {
-            b"g" | b"rg" | b"k" | b"sc" => self.gs.fill_pattern = None,
-            b"G" | b"RG" | b"K" | b"SC" => self.gs.stroke_pattern = None,
-            b"cs" => {
-                if op.name(0) != Some(b"Pattern") {
-                    self.gs.fill_pattern = None;
-                }
-            }
-            b"CS" => {
-                if op.name(0) != Some(b"Pattern") {
-                    self.gs.stroke_pattern = None;
-                }
-            }
-            b"scn" | b"SCN" => {
-                let is_fill = o == b"scn";
-                if let Some(pat_name) = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec) {
-                    if is_fill {
-                        self.gs.fill_pattern = Some(pat_name);
-                    } else {
-                        self.gs.stroke_pattern = Some(pat_name);
-                    }
-                    if let Some(new) = pattern_op(doc, scope, &op, (&self.gs, &self.initial_ctm), resources, &mut self.patterns, &mut self.out) {
-                        piece.changed = true;
-                        let updated = new.as_ref().and_then(|n| n.operands.last()).and_then(Object::as_name).map(<[u8]>::to_vec);
-                        if is_fill {
-                            self.gs.fill_pattern = updated;
-                        } else {
-                            self.gs.stroke_pattern = updated;
-                        }
-                        return new;
-                    }
-                } else if is_fill {
-                    self.gs.fill_pattern = None;
-                } else {
-                    self.gs.stroke_pattern = None;
-                }
-            }
-            _ => {}
         }
         Some(op)
     }
@@ -689,6 +689,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -737,6 +738,16 @@ impl Walk {
 
     /// `Tj`, `TJ`, `'` and `"`: glyphs under a region are cut out (or counted, when verifying).
     fn show_text(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
+        // Text paints with the fill pattern, and with the stroke pattern in the stroking render
+        // modes. Mode 3 paints nothing and mode 7 only clips.
+        let mode = self.gs.render_mode;
+        uses_patterns(&mut self.out, &self.gs, matches!(mode, 0 | 2 | 4 | 6), matches!(mode, 1 | 2 | 5 | 6));
+        // A Type 3 glyph without resources of its own paints through this scope's: keep every
+        // pattern it could select, as with a form that has no /Resources.
+        if self.gs.type3_inherits {
+            self.out.patterns_painted.extend(self.patterns.iter().cloned());
+            self.out.keeps_all_patterns = true;
+        }
         let o = op.op.as_slice();
         if o == b"\"" {
             self.gs.word_spacing = op.num(0).unwrap_or(self.gs.word_spacing);
@@ -767,16 +778,10 @@ impl Walk {
         }
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
         let has_surviving = new_items.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty()));
-        if removed == 0 || has_surviving {
-            if let Some(fg) = &self.gs.font_gs {
-                self.surviving_font_gs.insert(fg.clone());
-            }
-            if let Some(p) = &self.gs.fill_pattern {
-                self.painted_patterns.insert(p.clone());
-            }
-            if let Some(p) = &self.gs.stroke_pattern {
-                self.painted_patterns.insert(p.clone());
-            }
+        if (removed == 0 || has_surviving)
+            && let Some(fg) = &self.gs.font_gs
+        {
+            self.surviving_font_gs.insert(fg.clone());
         }
         if removed == 0 {
             return Some(op);
@@ -784,7 +789,6 @@ impl Walk {
         if let Some(fg) = &self.gs.font_gs {
             self.redacted_font_gs.insert(fg.clone());
         }
-        self.any_paint_removed = true;
         if scope.mode == Mode::Verify {
             self.out.residue += removed;
             return Some(op);
@@ -805,14 +809,14 @@ impl Walk {
     }
 
     /// An inline image under a region is removed (or counted, when verifying).
-    fn inline_image(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
-        if !scope.hits(self.gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
-            self.painted_patterns.extend(self.gs.fill_pattern.iter().cloned());
+    fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
+        // An image mask paints with the fill colour, pattern included.
+        uses_patterns(out, gs, true, false);
+        if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
             return Some(op);
         }
         if scope.mode == Mode::Verify {
-            self.out.residue += 1;
-            self.painted_patterns.extend(self.gs.fill_pattern.iter().cloned());
+            out.residue += 1;
             return Some(op);
         }
         scope.report.images_removed += 1;
@@ -832,12 +836,10 @@ impl Walk {
     }
 
     fn draw_xobject(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) -> Option<Op> {
-        let replacement = xobject(doc, scope, &op, &self.gs, resources, &mut self.xobjects, &mut self.out);
-        if !matches!(replacement, Some(None)) {
-            self.painted_patterns.extend(self.gs.fill_pattern.iter().cloned());
-            self.painted_patterns.extend(self.gs.stroke_pattern.iter().cloned());
-        }
-        let Some(new) = replacement else { return Some(op) };
+        // An image mask paints with the fill colour, and a form's content is interpreted with a
+        // graphics state of its own, so a pattern it inherits from here is never recorded inside it.
+        uses_patterns(&mut self.out, &self.gs, true, true);
+        let Some(new) = xobject(doc, scope, &op, &self.gs, resources, &mut self.xobjects, &mut self.out) else { return Some(op) };
         piece.changed = true;
         piece.ops.extend(new);
         None
@@ -888,11 +890,14 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
 /// items with the glyphs under a region replaced by displacements, and how many were removed.
-fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+/// In apply mode the runs removed under each region are also handed to `scope.removed`.
+fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
     let f = &gs.font;
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    scope.shown += 1;
+    let op = scope.shown;
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -905,7 +910,7 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
         }
         out.push(num(v));
     };
-    for item in items {
+    for (place, item) in items.iter().enumerate() {
         match item {
             Object::String(s) => {
                 let bytes = &s.bytes;
@@ -918,17 +923,49 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let b = trm.bbox([0.0, f.descent, w0, f.ascent]);
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
+                    let mut rects = Vec::new();
                     let hit = match scope.hidden_text {
                         // Invisible (Tr 3) and clip-only (Tr 7) text, or text wholly off the page.
                         Some(page) => {
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => scope.glyph_hit(b, origin),
+                        None => {
+                            rects = scope.glyph_rects(b, origin);
+                            !rects.is_empty()
+                        }
                     };
-                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
+                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit, rects });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
                     pos += len;
+                }
+                if scope.mode == Mode::Apply
+                    && let Some(sink) = scope.removed.as_mut()
+                {
+                    // Consecutive removed glyphs under one region are one run, recorded for
+                    // every region the glyphs lie under: overlapping marks each account for
+                    // their own share of what was cut.
+                    let mut under: Vec<usize> = glyphs.iter().flat_map(|g| g.rects.iter().copied()).collect();
+                    under.sort_unstable();
+                    under.dedup();
+                    for r in under {
+                        let mut k = 0;
+                        while let Some(g) = glyphs.get(k) {
+                            if !g.rects.contains(&r) {
+                                k += 1;
+                                continue;
+                            }
+                            let mut end = k;
+                            while glyphs.get(end + 1).is_some_and(|n| n.rects.contains(&r)) {
+                                end += 1;
+                            }
+                            let span = g.bytes.start..glyphs.get(end).map_or(g.bytes.end, |l| l.bytes.end);
+                            let at = (place, span.start);
+                            let raw = bytes.get(span).unwrap_or_default().to_vec();
+                            sink.push(Removed { rect: r, text: f.decode(&raw), raw, codes: end - k + 1, op, at });
+                            k = end + 1;
+                        }
+                    }
                 }
                 let mut run: Vec<u8> = Vec::new();
                 for g in &glyphs {
@@ -971,7 +1008,6 @@ fn sanitize_stream_form(
     scope: &mut Scope<'_>,
     (r, s): (ObjRef, &Stream),
     gs: Gs,
-    override_rects: Option<&[[f64; 4]]>,
     resources: &Dict,
     out: &mut Output,
 ) -> StreamOutcome {
@@ -987,10 +1023,9 @@ fn sanitize_stream_form(
         let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
         (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
     });
-    let active_rects = override_rects.unwrap_or(scope.rects);
     if let Some(bb) = bbox
         && !scope.everywhere()
-        && !active_rects.iter().any(|rect| overlaps(*rect, gs.ctm.bbox(bb), 0.0))
+        && !scope.hits(gs.ctm.bbox(bb))
     {
         return StreamOutcome::Unchanged;
     }
@@ -1031,6 +1066,8 @@ fn sanitize_stream_form(
             return StreamOutcome::Removed;
         }
         Err(_) => {
+            // Apply drops an undecodable Form while sanitizing. Count it during Verify
+            // so a zero-count preflight cannot leave its potentially hidden bytes behind.
             if scope.everywhere() {
                 scope.layer_blocks += 1;
             }
@@ -1039,42 +1076,29 @@ fn sanitize_stream_form(
     };
     let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
     let res = own.clone().unwrap_or_else(|| resources.clone());
-    let inner = {
-        let mut sub_scope = Scope {
-            rects: active_rects,
-            mode: scope.mode,
-            report: scope.report,
-            images: &mut *scope.images,
-            hidden_text: scope.hidden_text,
-            hidden_layers: std::mem::take(&mut scope.hidden_layers),
-            layers_enabled: scope.layers_enabled,
-            retained_off_layers: std::mem::take(&mut scope.retained_off_layers),
-            ocmd_cache: std::mem::take(&mut scope.ocmd_cache),
-            xobject_oc_cache: std::mem::take(&mut scope.xobject_oc_cache),
-            layer_blocks: scope.layer_blocks,
-            fonts: HashMap::new(),
-            used_names: std::mem::take(&mut scope.used_names),
-            depth: scope.depth + 1,
-            budget: std::mem::replace(&mut scope.budget, DecodeBudget::page()),
-        };
-        let res_inner = process_from(doc, &mut sub_scope, std::slice::from_ref(&data), &res, gs);
-        scope.hidden_layers = sub_scope.hidden_layers;
-        scope.retained_off_layers = sub_scope.retained_off_layers;
-        scope.ocmd_cache = sub_scope.ocmd_cache;
-        scope.xobject_oc_cache = sub_scope.xobject_oc_cache;
-        scope.layer_blocks = sub_scope.layer_blocks;
-        scope.used_names = sub_scope.used_names;
-        scope.budget = sub_scope.budget;
-        res_inner
-    };
+    let saved_fonts = std::mem::take(&mut scope.fonts);
+    scope.depth += 1;
+    let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, gs);
+    scope.depth -= 1;
+    scope.fonts = saved_fonts;
     out.residue += inner.residue;
     out.vertical |= inner.vertical;
     out.ambiguous |= inner.ambiguous;
     out.doomed.extend_from_slice(&inner.doomed);
     out.retired_properties.extend(inner.retired_properties.clone());
+    // A Type 3 glyph without resources shown inside the form may paint with the page's
+    // patterns (the renderer resolves its names there), whether or not the form has
+    // /Resources of its own.
+    out.keeps_all_patterns |= inner.keeps_all_patterns;
     out.tag_changes.extend(inner.tag_changes.clone());
     out.replacements.extend_from_slice(&inner.replacements);
     out.error = inner.error.clone().or(out.error.take());
+    // A form without /Resources of its own paints with its caller's patterns, so what it
+    // still paints keeps the caller's entry. Only the painted side is passed up: a name
+    // the form selected but no longer paints with is left for the caller to keep.
+    if own.is_none() {
+        out.patterns_painted.extend(inner.patterns_painted.iter().cloned());
+    }
     if scope.mode == Mode::Verify {
         return StreamOutcome::Unchanged;
     }
@@ -1145,6 +1169,7 @@ fn extgstate_op(
     if let Some((font, vertical, size)) = extgstate_font(doc, scope, ext_gstates, &name, fallback) {
         (gs.font, gs.vertical, gs.size) = (font, vertical, size);
         gs.font_gs = Some(name.clone());
+        gs.type3_inherits = extgstate_type3_inherits(doc, ext_gstates, &name);
     }
     let smask_obj = d.get(b"SMask")?;
     let smask_ref = smask_obj.as_ref();
@@ -1154,7 +1179,7 @@ fn extgstate_op(
     let Object::Stream(s) = &*g_obj else { return None };
     let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
     let fctm = m.then(&gs.ctm);
-    match sanitize_stream_form(doc, scope, (g_ref, s), Gs { ctm: fctm, ..gs.clone() }, None, resources, out) {
+    match sanitize_stream_form(doc, scope, (g_ref, s), Gs { ctm: fctm, ..gs.clone() }, resources, out) {
         StreamOutcome::Unchanged => None,
         StreamOutcome::Removed => {
             if let Some(sr) = smask_ref {
@@ -1203,106 +1228,6 @@ fn extgstate_op(
                 gs.font_gs = Some(n.clone());
             }
             Some(Some(Op::new("gs", vec![Object::Name(n)])))
-        }
-    }
-}
-
-fn pattern_rects(doc: &Document, dict: &Dict, pctm: &Matrix, gs_ctm: &Matrix, m: &Matrix, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
-    let mut out = rects.to_vec();
-    if gs_ctm.0 != pctm.0
-        && let Some(inv_gs) = m.then(gs_ctm).invert()
-    {
-        for r in rects {
-            let mapped = pctm.bbox(inv_gs.bbox(*r));
-            if !out.contains(&mapped) {
-                out.push(mapped);
-            }
-        }
-    }
-    let bbox = dict.get(b"BBox").and_then(|b| {
-        let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
-        (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
-    });
-    let xstep = dict.get(b"XStep").and_then(|x| doc.resolve(x).as_f64()).unwrap_or(0.0).abs();
-    let ystep = dict.get(b"YStep").and_then(|y| doc.resolve(y).as_f64()).unwrap_or(0.0).abs();
-    if let Some(bb) = bbox
-        && xstep > 1e-3
-        && ystep > 1e-3
-        && let Some(inv) = pctm.invert()
-    {
-        for r in rects {
-            let pr = inv.bbox(*r);
-            let kx0 = ((pr[0] - bb[2]) / xstep).floor() as i64;
-            let kx1 = ((pr[2] - bb[0]) / xstep).ceil() as i64;
-            let ky0 = ((pr[1] - bb[3]) / ystep).floor() as i64;
-            let ky1 = ((pr[3] - bb[1]) / ystep).ceil() as i64;
-            if kx1.saturating_sub(kx0) > 16 || ky1.saturating_sub(ky0) > 16 {
-                // Bounded enumeration must fail closed, not miss distant copies of the tile.
-                let whole = pctm.bbox(bb);
-                if !out.contains(&whole) {
-                    out.push(whole);
-                }
-                continue;
-            }
-            for kx in kx0..=kx1 {
-                for ky in ky0..=ky1 {
-                    if kx == 0 && ky == 0 {
-                        continue;
-                    }
-                    let shifted =
-                        [pr[0] - (kx as f64) * xstep, pr[1] - (ky as f64) * ystep, pr[2] - (kx as f64) * xstep, pr[3] - (ky as f64) * ystep];
-                    if overlaps(shifted, bb, 0.0) {
-                        out.push(pctm.bbox(shifted));
-                    }
-                }
-            }
-        }
-    } else if let Some(bb) = bbox
-        && !(xstep > 1e-3 && ystep > 1e-3)
-        && !rects.is_empty()
-    {
-        // Tiny or invalid steps cannot be enumerated safely.
-        let whole = pctm.bbox(bb);
-        if !out.contains(&whole) {
-            out.push(whole);
-        }
-    }
-    out
-}
-
-fn pattern_op(
-    doc: &mut Document,
-    scope: &mut Scope<'_>,
-    op: &Op,
-    (gs, initial_ctm): (&Gs, &Matrix),
-    resources: &Dict,
-    patterns: &mut Dict,
-    out: &mut Output,
-) -> Option<Option<Op>> {
-    let name = op.operands.last()?.as_name()?.to_vec();
-    let r = patterns.get(&name)?.as_ref()?;
-    let obj = doc.get(r);
-    let Object::Stream(s) = &*obj else { return None };
-    let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
-    let pctm = m.then(initial_ctm);
-    let rects = pattern_rects(doc, &s.dict, &pctm, &gs.ctm, &m, scope.rects);
-    match sanitize_stream_form(doc, scope, (r, s), Gs { ctm: pctm, ..gs.clone() }, Some(&rects), resources, out) {
-        StreamOutcome::Unchanged => None,
-        StreamOutcome::Removed => {
-            out.replaced_patterns.push(name);
-            Some(None)
-        }
-        StreamOutcome::Rewritten(nr) => {
-            let n = fresh_name(scope, patterns);
-            patterns.set(n.clone(), Object::Ref(nr));
-            out.patterns.push((n.clone(), nr));
-            out.replaced_patterns.push(name);
-            let mut operands = op.operands.clone();
-            if let Some(last) = operands.last_mut() {
-                *last = Object::Name(n);
-            }
-            let op_name = if op.op == b"SCN" { "SCN" } else { "scn" };
-            Some(Some(Op::new(op_name, operands)))
         }
     }
 }
@@ -1368,7 +1293,7 @@ fn xobject(
         Some(b"Form") => {
             let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
             let fctm = m.then(&gs.ctm);
-            match sanitize_stream_form(doc, scope, (r, s), Gs { ctm: fctm, ..gs.clone() }, None, resources, out) {
+            match sanitize_stream_form(doc, scope, (r, s), Gs { ctm: fctm, ..gs.clone() }, resources, out) {
                 StreamOutcome::Unchanged => None,
                 StreamOutcome::Removed => {
                     out.replaced.push(name);
@@ -1385,4 +1310,19 @@ fn xobject(
         }
         _ => None,
     }
+}
+
+/// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
+fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {
+    let Some(state) = ext_gstates.get(name).map(|s| doc.resolve(s)) else { return false };
+    let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
+    let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
+    let dict = doc.resolve(reference);
+    dict.as_dict().is_some_and(|d| type3_without_resources(doc, d))
+}
+
+/// A Type 3 font whose glyph descriptions use the resources of whatever shows them: no
+/// `/Resources`, or `/Resources null`, which is the same thing.
+fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
+    font.name(b"Subtype") == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
 }
