@@ -2886,6 +2886,8 @@ trailer << /Root 1 0 R >>
     h.run_steps(8);
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
+    // Until the page's raster is in: before it, full screen takes no press on the page.
+    settle(&mut h);
     let n = h.state().views.len() - 1;
     let r = h.state().views[n].page_screen_rect(0).expect("page 1 on screen");
     let p = egui::pos2(r.left() + r.width() * 112.0 / 300.0, r.top() + r.height() * (400.0 - 112.0) / 400.0);
