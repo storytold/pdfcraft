@@ -156,25 +156,36 @@ impl PrintDraft {
         }
     }
 
-    /// The engine settings for this draft (page count and labels from the document).
-    pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
+    /// The engine settings for this print: the chosen document pages, and — in Poster — the
+    /// chosen tiles of the sheets they tile into. `sizes` is each document page's display size.
+    pub fn settings(&self, sizes: &[(f64, f64)], labels: &[String]) -> Result<print::Settings, String> {
         if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
+        // In Poster the Pages to Print choice counts the generated tiles, not the document pages:
+        // what the pages of a big drawing are tiled into is what there is to pick from. Every
+        // document page is tiled and the choice — a range, the tile in the preview, the subset —
+        // picks from the sheets, resolved below once they have been laid out. Pages picked in the
+        // panel keep their document-page meaning.
+        let poster_tiles = self.handling == Handling::Poster && self.which != Which::Selected;
         let range = match self.which {
             Which::All | Which::Selected | Which::Current => None,
             Which::Range => Some(self.range.clone()),
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
         // page labels first.
-        let pages = match self.which {
-            Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
-            Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
-            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
-        }
-        // What the person got wrong about what to print is said in their language: the engine hands
-        // the wording over whole and the page numbers apart from it.
-        .map_err(|e| e.said(&crate::i18n::words))?;
+        let pages = if poster_tiles {
+            Ok((0..sizes.len()).collect())
+        } else {
+            match self.which {
+                Which::Selected => print::select_listed(sizes.len(), &self.selected, self.subset, self.reverse),
+                Which::Current => print::select_listed(sizes.len(), &[self.current_page], self.subset, self.reverse),
+                Which::All | Which::Range => print::select_pages(sizes.len(), range.as_deref(), labels, self.subset, self.reverse),
+            }
+            // What the person got wrong about what to print is said in their language: the engine
+            // hands the wording over whole and the page numbers apart from it.
+            .map_err(|e| e.said(&crate::i18n::words))
+        }?;
         let layout = match self.handling {
             Handling::Size => Layout::Size(match self.size {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
@@ -190,7 +201,7 @@ impl PrintDraft {
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
-        Ok(print::Settings {
+        let mut settings = print::Settings {
             pages,
             paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
             orientation: self.orientation,
@@ -198,7 +209,32 @@ impl PrintDraft {
             content: self.content,
             raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
             crops: self.crops.clone(),
-        })
+            tiles: None,
+        };
+        // The tiles only exist once the sheets are laid out, so the choice resolves against that
+        // count. All with every tile kept stays `None`, which the engine prints as all sheets.
+        if poster_tiles {
+            let sheets = print::layout(sizes, &settings).map_err(|e| e.said(&crate::i18n::words))?;
+            let tiles = self.tile_selection(sheets.len())?;
+            let every_tile = tiles.len() == sheets.len() && tiles.iter().enumerate().all(|(i, &t)| t == i);
+            settings.tiles = (!every_tile).then_some(tiles);
+        }
+        Ok(settings)
+    }
+
+    /// Poster: which tiles (0-based, in tile order) the Pages to Print choice keeps, out of
+    /// `count`. All, Current page and a typed range count the tiles; the odd/even subset and
+    /// reverse apply to them as they apply to document pages elsewhere. Current page is the tile
+    /// the preview shows.
+    fn tile_selection(&self, count: usize) -> Result<Vec<usize>, String> {
+        let shown = self.sheet.min(count.saturating_sub(1));
+        match self.which {
+            Which::All => print::select_pages(count, None, &[], self.subset, self.reverse),
+            Which::Current => print::select_listed(count, &[shown], self.subset, self.reverse),
+            Which::Range => print::select_pages(count, Some(&self.range), &[], self.subset, self.reverse),
+            Which::Selected => Ok((0..count).collect()),
+        }
+        .map_err(|e| e.said(&crate::i18n::words))
     }
 
     fn cut_and_stack(&self) -> bool {

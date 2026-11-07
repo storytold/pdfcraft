@@ -182,7 +182,8 @@ impl PdfCraftApp {
     pub(crate) fn read_label_crops(&mut self, id: pdfcraft_engine::DocId) {
         let Some(doc) = self.session.get(id) else { return };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let mut pages = self.print_draft.settings(doc.info.pages.len(), &labels).map(|s| s.pages).unwrap_or_default();
+        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+        let mut pages = self.print_draft.settings(&sizes, &labels).map(|s| s.pages).unwrap_or_default();
         pages.sort_unstable();
         pages.dedup();
         pages.truncate(LABEL_CROP_PAGES);
@@ -397,7 +398,8 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {
+        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        let settings = match self.print_draft.settings(&sizes, &labels) {
             Ok(s) => s,
             Err(e) => {
                 self.notify_tr(&e);
@@ -592,7 +594,13 @@ pub(crate) const PREVIEW_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
 /// fill the preview pane (so the picture is not a stretched thumbnail), nearest sheet first and
 /// within [`PREVIEW_MAX_SIDE`] (and `max_side`, the GPU's texture limit) and [`PREVIEW_BYTES`].
 pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[String], ppp: f32, max_side: f32) -> Vec<(usize, f32)> {
-    let Ok(settings) = d.settings(sizes.len(), labels) else { return Vec::new() };
+    let mut settings = match d.settings(sizes, labels) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    // Every sheet the pages tile into may be shown (the preview pages through them all), so the
+    // tile choice narrows nothing here: the rasters are per source page and shared by tiles.
+    settings.tiles = None;
     let Ok(sheets) = print::layout(sizes, &settings) else { return Vec::new() };
     if sheets.is_empty() {
         return Vec::new();
@@ -649,20 +657,21 @@ mod tests {
             }
         }
         let labels: Vec<String> = ["i", "ii", "iii", "1", "2"].into_iter().map(str::to_owned).collect();
+        let sizes = [(200.0, 300.0); 5];
         let mut draft = PrintDraft { which: Which::Selected, selected: vec![0, 3], ..Default::default() };
-        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![0, 3]);
+        assert_eq!(draft.settings(&sizes, &labels).unwrap().pages, vec![0, 3]);
         draft.which = Which::All;
-        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![0, 1, 2, 3, 4]);
+        assert_eq!(draft.settings(&sizes, &labels).unwrap().pages, vec![0, 1, 2, 3, 4]);
         draft.which = Which::Current;
         draft.reverse = true;
         draft.subset = Subset::Odd;
-        assert_eq!(draft.settings(5, &labels).unwrap().pages, vec![0]);
+        assert_eq!(draft.settings(&sizes, &labels).unwrap().pages, vec![0]);
         draft.subset = Subset::Even;
-        assert!(draft.settings(5, &labels).is_err());
+        assert!(draft.settings(&sizes, &labels).is_err());
         draft.subset = Subset::All;
         for (count, current) in [(0, 0), (5, 5), (5, usize::MAX)] {
             draft.current_page = current;
-            assert!(draft.settings(count, &labels).is_err());
+            assert!(draft.settings(&sizes[..count], &labels).is_err());
         }
     }
 
@@ -676,6 +685,49 @@ mod tests {
         assert_eq!(off.job("report.pdf").duplex, Some(spool::Duplex::Off));
     }
 
+    /// Poster's Pages to Print counts the generated tiles: All, Current page and a typed range
+    /// pick from the sheets the chosen pages tile into, with the subset and reverse; every other
+    /// layout keeps counting document pages, and pages picked in the panel stay document pages.
+    #[test]
+    fn poster_pages_to_print_counts_tiles() {
+        // Two 200×300 pages at 400 % tile 2 × 2 each: 8 tiles in all.
+        let sizes = [(200.0, 300.0); 2];
+        let labels: Vec<String> = ["1", "2"].map(String::from).to_vec();
+        let mut d = PrintDraft { handling: Handling::Poster, poster_scale: 400.0, which: Which::Range, range: "1-3".into(), ..PrintDraft::default() };
+        let s = d.settings(&sizes, &labels).unwrap();
+        assert_eq!(s.tiles, Some(vec![0, 1, 2]), "the first three tiles of page 1");
+        assert_eq!(s.pages, vec![0, 1], "the document pages stay the whole document");
+
+        d.range = "5".into();
+        assert_eq!(d.settings(&sizes, &labels).unwrap().tiles, Some(vec![4]));
+
+        d.which = Which::Current;
+        d.sheet = 5;
+        assert_eq!(d.settings(&sizes, &labels).unwrap().tiles, Some(vec![5]), "Current page is the tile the preview shows");
+
+        d.which = Which::All;
+        assert_eq!(d.settings(&sizes, &labels).unwrap().tiles, None, "All keeps every tile");
+        d.subset = Subset::Even;
+        assert_eq!(d.settings(&sizes, &labels).unwrap().tiles, Some(vec![1, 3, 5, 7]), "the subset counts tiles");
+
+        d.which = Which::Range;
+        d.subset = Subset::All;
+        d.range = "9".into();
+        assert!(d.settings(&sizes, &labels).is_err(), "a tile number past the tiles is refused");
+
+        // Outside Poster the choice counts document pages, as before.
+        let d = PrintDraft { which: Which::Range, range: "2".into(), ..PrintDraft::default() };
+        let s = d.settings(&sizes, &labels).unwrap();
+        assert_eq!(s.pages, vec![1]);
+        assert_eq!(s.tiles, None);
+
+        // Pages picked in the panel keep their document pages in Poster too.
+        let d = PrintDraft { handling: Handling::Poster, poster_scale: 400.0, which: Which::Selected, selected: vec![1], ..PrintDraft::default() };
+        let s = d.settings(&sizes, &labels).unwrap();
+        assert_eq!(s.pages, vec![1]);
+        assert_eq!(s.tiles, None);
+    }
+
     /// Untouched, Two-sided sends nothing, so the duplex set in the printer's Properties applies
     /// (#2422); cut and stack still asks for single-sided sheets.
     #[test]
@@ -684,9 +736,9 @@ mod tests {
         assert_eq!(PrintDraft::default().job("report.pdf").duplex, None);
         let mut cut = PrintDraft { handling: Handling::Multiple, order: PageOrder::CutStack, ..PrintDraft::default() };
         assert_eq!(cut.job("report.pdf").duplex, Some(spool::Duplex::Off));
-        assert!(cut.settings(4, &[]).is_ok(), "the printer's default doesn't block cut and stack");
+        assert!(cut.settings(&[(200.0, 300.0); 4], &[]).is_ok(), "the printer's default doesn't block cut and stack");
         cut.duplex = Some(spool::Duplex::ShortEdge);
-        assert!(cut.settings(4, &[]).is_err());
+        assert!(cut.settings(&[(200.0, 300.0); 4], &[]).is_err());
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
@@ -734,12 +786,13 @@ mod tests {
     #[test]
     fn current_page_is_the_viewed_page_not_a_label() {
         let labels: Vec<String> = ["i", "ii", "iii", "1", "2"].map(String::from).to_vec();
+        let sizes = [(200.0, 300.0); 5];
         for (current, want) in [(0, vec![0]), (1, vec![1]), (3, vec![3])] {
             let d = PrintDraft { which: Which::Current, current_page: current, ..PrintDraft::default() };
-            assert_eq!(d.settings(5, &labels).map(|s| s.pages), Ok(want), "viewing page {}", current + 1);
+            assert_eq!(d.settings(&sizes, &labels).map(|s| s.pages), Ok(want), "viewing page {}", current + 1);
         }
         let typed = PrintDraft { which: Which::Range, range: "1".into(), ..PrintDraft::default() };
-        assert_eq!(typed.settings(5, &labels).map(|s| s.pages), Ok(vec![3]));
+        assert_eq!(typed.settings(&sizes, &labels).map(|s| s.pages), Ok(vec![3]));
     }
 
     #[test]

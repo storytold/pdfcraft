@@ -92,8 +92,15 @@ pub(crate) fn body(
     ui.set_width(820.0);
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    let settings = d.settings(sizes.len(), labels);
-    let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
+    let settings = d.settings(sizes, labels);
+    // The preview pages through every sheet the chosen pages tile into, so the person can reach
+    // the tiles a poster tile choice left out; `kept` is how many of them print.
+    let mut every_sheet = settings.clone();
+    if let Ok(s) = &mut every_sheet {
+        s.tiles = None;
+    }
+    let sheets = every_sheet.ok().and_then(|s| print::layout(sizes, &s).ok()).unwrap_or_default();
+    let kept = settings.as_ref().map(|s| s.tiles.as_ref().map_or(sheets.len(), Vec::len)).unwrap_or(0);
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     ui.horizontal_top(|ui| {
         // Settings.
@@ -262,10 +269,10 @@ pub(crate) fn body(
                 widgets::radio_value(ui, &mut d.which, Which::All, tl!("All"));
                 widgets::radio_value(ui, &mut d.which, Which::Current, tl!("Current page"));
                 let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
-                let r = ui.add_enabled(
-                    d.which == Which::Range,
-                    crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
-                ).labelled_by(pages.id);
+                // In Poster the numbers count the tiles the chosen pages are tiled into.
+                let most = if d.handling == Handling::Poster && !sheets.is_empty() { sheets.len() } else { sizes.len() };
+                let r = ui.add_enabled(d.which == Which::Range, crate::widgets::line(&mut d.range).hint_text(format!("1-{}", most.max(1))).desired_width(110.0))
+                    .labelled_by(pages.id);
                 if r.gained_focus() {
                     d.which = Which::Range;
                 }
@@ -287,6 +294,13 @@ pub(crate) fn body(
                 );
                 ui.add(widgets::checkbox(&mut d.reverse, tl!("Reverse pages")));
             });
+            if d.handling == Handling::Poster && matches!(d.which, Which::Current | Which::Range) && settings.is_ok() {
+                let line = crate::i18n::fmt(
+                    tl!("{k} of the {n} tiles will print."),
+                    &[("k", &kept.to_string()), ("n", &sheets.len().to_string())],
+                );
+                ui.label(egui::RichText::new(line).small().color(t.text_muted));
+            }
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Page Sizing & Handling"));
             ui.horizontal_wrapped(|ui| {
@@ -328,6 +342,13 @@ pub(crate) fn body(
                     );
                 }
                 Handling::Poster => {
+                    if d.which == Which::All && sheets.len() > 1 {
+                        let line = crate::i18n::fmt(
+                            tl!("Pages to Print counts the {n} tiles the pages are tiled into."),
+                            &[("n", &sheets.len().to_string())],
+                        );
+                        ui.label(egui::RichText::new(line).small().color(t.text_muted));
+                    }
                     ui.horizontal(|ui| {
                         let scale_label = ui.label(tl!("Tile scale:"));
                         ui.add(egui::DragValue::new(&mut d.poster_scale).range(10.0..=1000.0).suffix(" %")).labelled_by(scale_label.id);
@@ -537,7 +558,7 @@ pub(crate) fn body(
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui.add_enabled_ui(settings.is_ok() && kept > 0 && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
             go = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
