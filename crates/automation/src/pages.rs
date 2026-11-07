@@ -80,7 +80,7 @@ impl Automation {
         if block.is_some() && added.is_some() {
             return Err(ToolError::InvalidArgs("choose only one of hide_text_block and hide_added_text".into()));
         }
-        let out = if let Some(block) = block {
+        let mut out = if let Some(block) = block {
             if block < 1 {
                 return Err(ToolError::InvalidArgs("hide_text_block must be a positive paragraph index from text_paragraphs".into()));
             }
@@ -99,6 +99,9 @@ impl Automation {
         };
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
+        }
+        if let Some(palette) = self.dark_filter(id) {
+            out.rgba = dark_pixels(&out.rgba, palette);
         }
         rendered_content(&out, page)
     }
@@ -121,7 +124,23 @@ impl Automation {
         if let Some(e) = out.error {
             return Err(failed(format!("page {page} could not be rendered: {e}")));
         }
-        Ok((out.width, out.height, out.rgba))
+        // The same dark pages page_render shows.
+        let rgba = match self.dark_filter(id) {
+            Some(palette) => dark_pixels(&out.rgba, palette),
+            None => out.rgba,
+        };
+        Ok((out.width, out.height, rgba))
+    }
+
+    /// The dark-page filter `id`'s rendered pixels need, if any: dark pages that recolour every
+    /// image. Explicit reading presets take precedence, and dark pages that keep images were
+    /// drawn by the renderer already (cached renderers keep the file's colours otherwise).
+    fn dark_filter(&self, id: DocId) -> Option<pdfcraft_render::DarkPalette> {
+        let style = self.session.dark_style(id).unwrap_or_default();
+        (self.session.dark_pages(id) == Some(true)
+            && !style.renderer_draws()
+            && self.session.reading_colors(id).is_none_or(|colors| colors.params.is_none()))
+        .then_some(style.palette)
     }
 
     pub(crate) fn page(&self, a: &Args) -> Result<usize> {
@@ -346,6 +365,33 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
         RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
         RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
     }
+}
+
+/// `premultiplied` (RGBA, premultiplied alpha) in the desktop's dark page colours of `palette`:
+/// each pixel's colour is mapped unpremultiplied, as the GUI maps it.
+fn dark_filtered(premultiplied: &[u8], palette: pdfcraft_render::DarkPalette) -> Vec<u8> {
+    let mut rgba = premultiplied.to_vec();
+    for px in rgba.as_chunks_mut::<4>().0 {
+        let a = u32::from(px[3]);
+        if a == 0 {
+            continue;
+        }
+        let straight = if a == 255 { *px } else { px.map(|c| ((u32::from(c) * 255 + a / 2) / a).min(255) as u8) };
+        let mut mapped = pdfcraft_render::dark_page_rgba_in([straight[0], straight[1], straight[2], px[3]], palette);
+        if a != 255 {
+            for c in &mut mapped[..3] {
+                *c = ((u32::from(*c) * a + 127) / 255) as u8;
+            }
+        }
+        *px = mapped;
+    }
+    rgba
+}
+
+/// `premultiplied` in the dark page colours of `palette`, as the renderer's pixel type.
+fn dark_pixels(premultiplied: &[u8], palette: pdfcraft_render::DarkPalette) -> pdfcraft_render::Pixels {
+    let bytes = dark_filtered(premultiplied, palette);
+    pdfcraft_render::Pixels::from(bytes.as_chunks::<4>().0.iter().map(|px| u32::from_ne_bytes(*px)).collect::<Vec<u32>>())
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
