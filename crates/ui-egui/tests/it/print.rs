@@ -983,6 +983,45 @@ fn cached_papers_apply_immediately_and_refresh_in_background() {
 }
 
 #[test]
+fn uncached_printer_switch_resets_driver_papers_to_standard_presets() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            spool::Printer { name: "Label Printer".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Laser Printer".into(), default: false, two_sided: None, description: String::new() },
+        ]
+    }));
+    h.state_mut().printer_papers_source = Some(Arc::new(|printer: &str| {
+        if printer == "Label Printer" {
+            vec![("Special Label 300x500".into(), (300.0, 500.0))]
+        } else {
+            vec![("Laser 350x550".into(), (350.0, 550.0))]
+        }
+    }));
+    h.state_mut().default_paper_source = Some(Arc::new(|_| None));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().print_draft.papers.iter().any(|(n, _)| n == "Special Label 300x500"));
+
+    // Switch printer via printer-change site: apply_printer_papers(Vec::new()) clears old papers immediately
+    h.state_mut().print_draft.printer = Some("Laser Printer".into());
+    h.state_mut().print_draft.apply_printer_papers(Vec::new());
+    assert!(
+        !h.state().print_draft.papers.iter().any(|(n, _)| n == "Special Label 300x500"),
+        "Custom label paper from previous printer cleared immediately"
+    );
+    assert!(h.state().print_draft.papers.iter().any(|(n, _)| n == "US Letter"), "Standard presets remain available");
+}
+
+#[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};
     let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;

@@ -436,6 +436,7 @@ impl PdfCraftApp {
                     d.printers = printers;
                     d.printers_loading = false;
                     if changed && let Some(p) = d.printer.clone() {
+                        d.apply_printer_papers(Vec::new());
                         self.read_papers_in_background(p);
                     }
                 }
