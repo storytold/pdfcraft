@@ -791,10 +791,40 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     let saved = h.state().persist();
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
+    assert_eq!(json["print_paper_overridden"], true, "explicitly chosen paper records override flag");
     let mut app = PdfCraftApp::new();
     app.restore(&saved);
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
+    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, paper_overridden: true, ..Default::default() };
     assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
+
+    // Default draft without override round-trips with paper_overridden remaining false.
+    let default_app = PdfCraftApp::new();
+    let default_saved = default_app.persist();
+    let default_json: serde_json::Value = serde_json::from_str(&default_saved).unwrap();
+    assert_eq!(default_json["print_paper_overridden"], false);
+    let mut restored_default = PdfCraftApp::new();
+    restored_default.restore(&default_saved);
+    assert!(!restored_default.print_draft.paper_overridden);
+
+    // Opening print with a printer default paper selects that paper when paper_overridden is false.
+    let mut default_h = harness();
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+    default_h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Office Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    default_h.state_mut().printer_papers_source = Some(Arc::new(|_| vec![("A4".into(), (595.28, 841.89))]));
+    default_h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Office Printer" { Some(("A4".into(), (595.28, 841.89))) } else { None }));
+    assert!(default_h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (default_h.state().print_draft.printers_loading || default_h.state().print_draft.papers_loading.is_some())
+        && std::time::Instant::now() < deadline
+    {
+        default_h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(default_h.state().print_draft.paper, a4);
+    assert!(!default_h.state().print_draft.paper_overridden);
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));
     restarted.run_steps(3);
@@ -822,6 +852,7 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
         let mut app = PdfCraftApp::new();
         app.restore(&serde_json::json!({"print_paper": name}).to_string());
         assert_eq!(app.print_draft.paper, index);
+        assert!(!app.print_draft.paper_overridden);
         assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_paper"], *name);
     }
     for invalid in [
@@ -854,10 +885,204 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
 }
 
 #[test]
+fn legacy_settings_restore_unsets_override_and_open_selects_printer_default() {
+    use pdfcraft_engine::print::{PAPERS, spool};
+    use std::sync::Arc;
+    let letter = PAPERS.iter().position(|(name, _)| *name == "US Letter").unwrap();
+    let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    let mut h = harness();
+    let legacy = serde_json::json!({
+        "print_paper": "US Letter",
+    })
+    .to_string();
+    h.state_mut().restore(&legacy);
+    assert_eq!(h.state().print_draft.paper, letter);
+    assert!(!h.state().print_draft.paper_overridden, "legacy settings restore leaves paper_overridden as false");
+
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Office Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().printer_papers_source = Some(Arc::new(|_| vec![("A4".into(), (595.28, 841.89))]));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Office Printer" { Some(("A4".into(), (595.28, 841.89))) } else { None }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.paper, a4);
+    assert!(!h.state().print_draft.paper_overridden);
+}
+
+#[test]
+fn auto_select_default_paper_leaves_label_stock_unchanged() {
+    let mut draft = pdfcraft_ui_egui::PrintDraft {
+        printer: Some("Office Printer".into()),
+        handling: pdfcraft_ui_egui::PrintHandling::Label,
+        paper: pdfcraft_engine::print::LABEL_PAPER,
+        ..Default::default()
+    };
+    let a4 = pdfcraft_engine::print::PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    let source: pdfcraft_ui_egui::DefaultPaperSource = std::sync::Arc::new(move |_| Some(("A4".into(), (595.28, 841.89))));
+    draft.auto_select_default_paper_with(Some(&source));
+    assert_eq!(draft.paper, pdfcraft_engine::print::LABEL_PAPER);
+    assert_eq!(draft.paper_before_label, Some(a4));
+}
+
+#[test]
+fn auto_select_default_paper_preserves_user_orientation() {
+    let mut draft = pdfcraft_ui_egui::PrintDraft {
+        printer: Some("Office Printer".into()),
+        orientation: pdfcraft_engine::print::Orientation::Landscape,
+        ..Default::default()
+    };
+    let source: pdfcraft_ui_egui::DefaultPaperSource = std::sync::Arc::new(move |_| Some(("A4".into(), (595.28, 841.89))));
+    draft.auto_select_default_paper_with(Some(&source));
+    assert_eq!(draft.orientation, pdfcraft_engine::print::Orientation::Landscape);
+}
+
+#[test]
+fn cached_papers_apply_immediately_and_refresh_in_background() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+
+    let mut h = harness();
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Cached Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().printer_papers_source = Some(Arc::new(move |_| {
+        calls_clone.fetch_add(1, Ordering::SeqCst);
+        vec![("A4".into(), (595.28, 841.89))]
+    }));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Cached Printer" { Some(("A4".into(), (595.28, 841.89))) } else { None }));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let a4 = h.state().print_draft.paper;
+
+    h.state_mut().dialog = None;
+
+    assert!(h.state_mut().execute("print.dialog"));
+    assert_eq!(h.state().print_draft.paper, a4);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.papers_loading.is_some() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn uncached_printer_switch_resets_driver_papers_to_standard_presets() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            spool::Printer { name: "Label Printer".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Laser Printer".into(), default: false, two_sided: None, description: String::new() },
+        ]
+    }));
+    h.state_mut().printer_papers_source = Some(Arc::new(|printer: &str| {
+        if printer == "Label Printer" {
+            vec![("Special Label 300x500".into(), (300.0, 500.0))]
+        } else {
+            vec![("Laser 350x550".into(), (350.0, 550.0))]
+        }
+    }));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Label Printer" { Some(("Special Label 300x500".into(), (300.0, 500.0))) } else { None }));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.paper_name(), "Special Label 300x500");
+    assert!(!h.state().print_draft.paper_overridden);
+
+    // Switch printer via printer-change site: reset unoverridden custom paper and apply_printer_papers(Vec::new()) clears old papers immediately
+    h.state_mut().print_draft.printer = Some("Laser Printer".into());
+    h.state_mut().print_draft.reset_unoverridden_custom_paper();
+    h.state_mut().print_draft.apply_printer_papers(Vec::new());
+    assert_eq!(h.state().print_draft.paper_name(), "US Letter");
+    assert!(
+        !h.state().print_draft.papers.iter().any(|(n, _)| n == "Special Label 300x500"),
+        "Custom label paper from previous printer cleared immediately"
+    );
+    assert!(h.state().print_draft.papers.iter().any(|(n, _)| n == "US Letter"), "Standard presets remain available");
+
+    // Explicit override is preserved
+    h.state_mut().print_draft.papers.push(("User Custom 400x600".into(), (400.0, 600.0)));
+    h.state_mut().print_draft.paper = h.state().print_draft.papers.len() - 1;
+    h.state_mut().print_draft.paper_overridden = true;
+    h.state_mut().print_draft.reset_unoverridden_custom_paper();
+    assert_eq!(h.state().print_draft.paper_name(), "User Custom 400x600");
+}
+
+#[test]
+fn printer_list_refresh_resets_unoverridden_custom_paper_when_default_printer_changes() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+
+    let mut h = harness();
+    let initial_printers = vec![
+        spool::Printer { name: "Label Printer".into(), default: true, two_sided: None, description: String::new() },
+        spool::Printer { name: "Laser Printer".into(), default: false, two_sided: None, description: String::new() },
+    ];
+    let updated_printers = vec![spool::Printer { name: "Laser Printer".into(), default: true, two_sided: None, description: String::new() }];
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let initial_p = initial_printers.clone();
+    let updated_p = updated_printers.clone();
+    h.state_mut().printer_source =
+        Some(Arc::new(move || if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { initial_p.clone() } else { updated_p.clone() }));
+    h.state_mut().printer_papers_source = Some(Arc::new(|printer: &str| {
+        if printer == "Label Printer" {
+            vec![("Special Label 300x500".into(), (300.0, 500.0))]
+        } else {
+            vec![("Laser 350x550".into(), (350.0, 550.0))]
+        }
+    }));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Label Printer" { Some(("Special Label 300x500".into(), (300.0, 500.0))) } else { None }));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.paper_name(), "Special Label 300x500");
+
+    // Trigger background printer list refresh with the updated printers list (where Laser Printer is default)
+    h.state_mut().open_print();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Laser Printer has no default paper, so paper should be a standard preset ("US Letter"), not Printer A's custom paper
+    assert_ne!(h.state().print_draft.paper_name(), "Special Label 300x500");
+    assert_eq!(h.state().print_draft.paper_name(), "US Letter");
+}
+
+#[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};
     let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;
-    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4"}"#.into()));
+    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4","print_paper_overridden":true}"#.into()));
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
     h.get_by_value("A4");
@@ -912,4 +1137,46 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
+}
+
+/// #5861: The print dialog supports all papers detected from the printer driver, matches custom
+/// page sizes against them, and imposes on the chosen dimensions.
+#[test]
+fn printer_papers_and_properties_selection() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    // Initial state offers standard PAPERS.
+    assert!(h.state().print_draft.papers.len() >= 21);
+    assert_eq!(h.state().print_draft.paper_name(), "US Letter");
+
+    // When the driver offers additional custom papers, they are available in d.papers.
+    let custom_paper = ("Custom 333x444".to_string(), (333.0, 444.0));
+    h.state_mut().print_draft.papers.push(custom_paper.clone());
+    let custom_index = h.state().print_draft.papers.len() - 1;
+
+    h.state_mut().print_draft.paper = custom_index;
+    assert_eq!(h.state().print_draft.paper_name(), "Custom 333x444");
+    assert_eq!(h.state().print_draft.paper_size(), (333.0, 444.0));
+
+    // Matching page at 100% finds the custom paper
+    assert_eq!(h.state().print_draft.matching_paper((333.0, 444.0)), Some(custom_index));
+
+    // Imposed settings use the exact dimensions of the detected paper
+    let settings = h.state().print_draft.settings(1, &["1".into()]).unwrap();
+    assert_eq!(settings.paper, (333.0, 444.0));
+
+    // Page Setup button is present in the dialog
+    h.get_by_label("Page Setup…");
+
+    // Applying driver paper adapts paper selection and orientation
+    h.state_mut().print_draft.apply_driver_paper("4 x 6 in label (101.6 x 152.4 mm)".into(), (288.0, 432.0));
+    assert_eq!(h.state().print_draft.paper, pdfcraft_engine::print::LABEL_PAPER);
+    assert_eq!(h.state().print_draft.orientation, pdfcraft_engine::print::Orientation::Portrait);
+
+    // Landscape driver media adapts orientation to Landscape
+    h.state_mut().print_draft.apply_driver_paper("Landscape Custom".into(), (500.0, 300.0));
+    assert_eq!(h.state().print_draft.orientation, pdfcraft_engine::print::Orientation::Landscape);
+    assert_eq!(h.state().print_draft.paper_name(), "Landscape Custom");
 }

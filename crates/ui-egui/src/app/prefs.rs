@@ -36,6 +36,7 @@ fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
 }
 
 impl PdfCraftApp {
+    /// Sets the user's interface theme preference (Light, Dark, or System).
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
         if let Some(ctx) = self.ctx.clone() {
@@ -163,7 +164,16 @@ impl PdfCraftApp {
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
-        v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["print_paper"] = serde_json::json!(
+            self.print_draft
+                .papers
+                .get(self.print_draft.paper)
+                .map(|(name, _)| name.as_str())
+                .or_else(|| pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name))
+        );
+        let size = self.print_draft.paper_size();
+        v["print_paper_size"] = serde_json::json!([size.0, size.1]);
+        v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
         v.to_string()
     }
 
@@ -280,12 +290,30 @@ impl PdfCraftApp {
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
         }
-        if let Some(paper) = v
-            .get("print_paper")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|name| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name))
-        {
-            self.print_draft.paper = paper;
+        if let Some(name) = v.get("print_paper").and_then(serde_json::Value::as_str) {
+            let saved_size = v.get("print_paper_size").and_then(|s| {
+                let w = s.get(0)?.as_f64()?;
+                let h = s.get(1)?.as_f64()?;
+                if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None }
+            });
+            let matched_pos = self
+                .print_draft
+                .papers
+                .iter()
+                .position(|(n, s)| n == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0))
+                .or_else(|| {
+                    pdfcraft_engine::print::PAPERS.iter().position(|(canonical, s)| {
+                        *canonical == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0)
+                    })
+                });
+            if let Some(paper) = matched_pos {
+                self.print_draft.paper = paper;
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            } else if let Some(size) = saved_size {
+                self.print_draft.papers.push((name.to_string(), size));
+                self.print_draft.paper = self.print_draft.papers.len() - 1;
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            }
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
