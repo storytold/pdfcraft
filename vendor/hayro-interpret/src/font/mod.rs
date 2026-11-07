@@ -179,6 +179,19 @@ impl OutlineGlyph {
         self.font.glyph_advance_width(self.char_code)
     }
 
+    /// PdfCraft patch: for a glyph of a vertical-writing Type0 font, its width w0 (the
+    /// horizontal displacement from `/W` or `/DW`), which is how wide the glyph sits across the
+    /// column (ISO 32000-2 §9.7.4.3). `None` for horizontal writing, where
+    /// [`advance_width`](Self::advance_width) gives it.
+    pub fn vertical_glyph_width(&self) -> Option<f32> {
+        match &self.font {
+            OutlineFont::Type0(font) if !font.is_horizontal() => {
+                Some(font.code_horizontal_width(self.char_code))
+            }
+            _ => None,
+        }
+    }
+
     /// Get the cache key for this glyph's font.
     ///
     /// This identifies the font uniquely, even when `font_data()` returns `None`

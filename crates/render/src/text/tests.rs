@@ -569,6 +569,47 @@ fn vertical_ligatures_stay_in_their_column() {
     assert_eq!(text.line_rects(0..3).len(), 1, "one column");
 }
 
+/// A column of Latin capitals in a vertical font, tracked out with negative character spacing
+/// (pdf.js issue 20930: `-40 Tc` puts 40 pt between 24 pt letters). Across the column each glyph
+/// is as wide as its `/W` width w0 and centred on the column (ISO 32000-2 §9.7.4.3), so the
+/// letters stay one line and Find matches the word. Boxes as wide as each outline made a narrow
+/// letter's line allowance smaller than the tracking, and the column broke into lines.
+#[test]
+fn tracked_vertical_latin_stays_one_line() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 5 beginbfchar <0024> <0041> <0025> <0042> <0026> <0043> <0027> <0044> <0028> <0045> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.to_vec()));
+    let widths: Vec<Object> = [(36, 667), (37, 667), (38, 722), (39, 722), (40, 667)]
+        .into_iter()
+        .flat_map(|(cid, w)| [Object::Integer(cid), Object::Array(vec![Object::Integer(w)])])
+        .collect();
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestVerticalLatin",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "DW" => 1000, "W" => widths, "DW2" => vec![Object::Integer(880), Object::Integer(-1000)], "CIDToGIDMap" => "Identity"
+    });
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestVerticalLatin", "Encoding" => "Identity-V", "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 24 Tf -40 Tc 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET".to_vec()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(500)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(text.plain_text(), "ABCDE");
+    assert_eq!(text.find("ABCDE"), vec![0..5]);
+    // Each box spans w0 (here 24 pt × 0.667 or 0.722) centred on the column at x = 100.
+    for (g, w0) in text.glyphs.iter().zip([667.0, 667.0, 722.0, 722.0, 667.0]) {
+        let [x0, _, x1, _] = g.rect;
+        assert!((x1 - x0 - 24.0 * w0 / 1000.0).abs() < 0.01, "{:?} is w0 wide: {:?}", g.text, g.rect);
+        assert!(((x0 + x1) / 2.0 - 100.0).abs() < 0.01, "{:?} is centred on the column: {:?}", g.text, g.rect);
+    }
+}
+
 #[test]
 fn upright_mapping_round_trips() {
     let r = [10.0, 20.0, 30.0, 25.0];
