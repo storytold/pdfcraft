@@ -90,11 +90,11 @@ impl<'a> Recipe<'a> {
         for step in &self.steps {
             let before = bytes.len();
             match *step {
-                "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
+                "convert" => bytes = session.convert_to_pdf(name, &bytes).map_err(|e| failed(format!("convert: {e}")))?.1,
                 "ocr" => {
-                    let recognizers = ocr::recognizers(&self.ocr).map_err(failed)?;
-                    let result =
-                        ocr::recognize_file(name, bytes, None, self.ocr.clone(), &recognizers, self.javascript, |_, _| true).map_err(failed)?;
+                    let recognizers = ocr::recognizers(&self.ocr).map_err(|e| failed(format!("ocr: {e}")))?;
+                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &recognizers, self.javascript, |_, _| true)
+                        .map_err(|e| failed(format!("ocr: {e}")))?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
                     );
@@ -102,9 +102,9 @@ impl<'a> Recipe<'a> {
                     continue;
                 }
                 "optimize" => {
-                    let id = session.open(name, None, bytes.clone(), None).map_err(failed)?;
+                    let id = session.open(name, None, bytes.clone(), None).map_err(|e| failed(format!("optimize: {e}")))?;
                     let settings = optimize::Settings { color: self.images, gray: self.images, mono: self.mono, ..Default::default() };
-                    let (candidate, _) = session.optimized_bytes(id, &settings, &[])?;
+                    let (candidate, _) = session.optimized_bytes(id, &settings, &[]).map_err(|e| failed(format!("optimize: {e}")))?;
                     session.close(id);
                     if candidate.len() < bytes.len() {
                         bytes = candidate;
@@ -285,7 +285,16 @@ impl Automation {
             }
         }
         let skipped = files.iter().filter(|file| file["status"] == "skipped").count();
-        Ok(json!({"dry_run":dry_run,"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
+        let log = files
+            .iter()
+            .filter_map(|f| match (f.get("path")?.as_str()?, f.get("status")?.as_str()?) {
+                (path, "error") => Some(format!("{path}: {}", f.get("error")?.as_str()?)),
+                (path, "skipped") => Some(format!("{path}: skipped: {}", f.get("reason")?.as_str()?)),
+                (path, _) => Some(path.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(json!({"dry_run":dry_run,"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files,"log":log}))
     }
 }
 
@@ -321,6 +330,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn doc_batch_dry_run_lists_outputs_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("input")).unwrap();
@@ -334,5 +344,43 @@ mod tests {
         assert_eq!(report["files"][0]["status"], "planned", "{report}");
         assert!(report["files"][0]["output"].as_str().unwrap().ends_with("out/a.pdf"), "{report}");
         assert!(!dir.path().join("out").exists());
+    }
+
+    #[test]
+    fn batch_log_names_failed_file_step_and_reason() {
+        let recipe = Recipe {
+            steps: vec!["optimize"],
+            images: optimize::ImageSettings::REDUCE,
+            mono: optimize::MonoSettings::REDUCE,
+            ocr: ocr::OcrSettings::default(),
+            javascript: false,
+        };
+
+        let input_dir = tempfile::tempdir().expect("input dir");
+        let out_dir = tempfile::tempdir().expect("out dir");
+        let input = input_dir.path().join("broken.pdf");
+        std::fs::write(&input, b"broken").expect("broken input");
+        let input_str = input.to_str().expect("input path is UTF-8");
+        let out_str = out_dir.path().to_str().expect("out path is UTF-8");
+
+        let process_result = recipe.process(&input);
+        let process_error = match process_result {
+            Ok(_) => String::new(),
+            Err(error) => error.to_string(),
+        };
+        assert!(process_error.contains("optimize"), "step error should name the failed step: {process_error}");
+
+        let automation = Automation::new();
+        let args_value = json!({"steps":["optimize"],"paths":[input_str],"out_dir":out_str});
+        let args = Args(&args_value);
+        let result = automation.doc_batch(&args).expect("batch should return a report even when a file fails");
+        let Some(log) = result.get("log").and_then(|value| value.as_str()) else {
+            assert!(false, "batch result should carry a plain-text per-file log: {result}");
+            return;
+        };
+        assert!(log.contains("broken.pdf"), "log should name the failed file: {log}");
+        assert!(log.contains("optimize"), "log should name the failed step: {log}");
+        assert!(log.contains(&process_error), "log should give the failure reason: {log}");
+    }
     }
 }
