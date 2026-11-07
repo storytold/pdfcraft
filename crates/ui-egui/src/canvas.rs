@@ -633,6 +633,10 @@ pub struct DocView {
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
     pub picked_image: Option<crate::image_pick::PickedImage>,
+    /// A click (page, user-space point, document generation) whose picture is still being looked for.
+    pub(crate) pending_pick: Option<(usize, [f64; 2], u64)>,
+    /// The pictures of the page last asked about.
+    pub(crate) pictures: crate::image_pick::PagePictures,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
     /// Commenting state: selected comment, gestures, composer.
@@ -1015,6 +1019,8 @@ impl DocView {
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
+            pending_pick: None,
+            pictures: Default::default(),
             block_drag: None,
             pending_action: None,
             insert_at: None,
@@ -1994,17 +2000,8 @@ fn draw_pages(
         // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
         let mut copy_image = None;
         if let Some((page, at)) = view.comments.context_at {
-            // The page's content is parsed once per right-click, not on every frame the menu is open.
-            let key = egui::Id::unique("copy-image-under-menu");
-            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
-            let hit = match cached {
-                Some(c) => c.2,
-                None => {
-                    let hit = doc.page_image_at(page, at);
-                    ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
-                    hit
-                }
-            };
+            // On a page still being read, these items appear when the answer comes.
+            let hit = view.pictures.get(ui.ctx(), doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index);
             if let Some(image) = hit {
                 if ui.button(tl!("Copy Image")).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImage(page, image));

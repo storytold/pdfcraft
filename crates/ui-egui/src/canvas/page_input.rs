@@ -740,7 +740,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
-    if tool == QuickTool::Select && !input.consumed {
+    if tool != QuickTool::Select {
+        view.pending_pick = None;
+    } else if !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
     }
     crate::image_pick::drop_stale(doc, view);
