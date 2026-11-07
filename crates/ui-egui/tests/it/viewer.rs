@@ -1259,6 +1259,7 @@ fn wrapped_revision_buttons_stay_above_binding_and_open_the_saved_revision() {
 }
 
 #[test]
+/// Advanced Search lists matches and replaces its query through the find shortcut.
 fn advanced_search_lists_results_with_context() {
     let mut h = harness();
     let i = h.state().active.unwrap();

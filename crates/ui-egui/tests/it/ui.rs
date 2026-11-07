@@ -826,6 +826,7 @@ fn find_reports_no_matches() {
 }
 
 #[test]
+/// Cmd/Ctrl+F replaces a query while clicks preserve normal caret editing.
 fn find_shortcut_replaces_the_existing_query_but_clicking_keeps_editing() {
     use egui::accesskit::Role;
 

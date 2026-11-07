@@ -447,6 +447,7 @@ impl PdfCraftApp {
         Some(true)
     }
 
+    /// Execute commands from the Edit menu and its keyboard shortcuts.
     fn run_edit_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "edit.attach" => self.attach_file_dialog(),
