@@ -51,9 +51,10 @@ pub(crate) trait Structure {
             // /Type /Page; anything else is a page, whatever its /Type says, including one whose
             // /Kids is null (the same as absent, ISO 32000-2 §7.3.9) or not an array. The
             // renderer (hayro-syntax `is_page_tree_node`) and pdfcraft-model walk the tree by the
-            // same rule, so page numbers agree.
+            // same rule, so page numbers agree. /Type is read through references too.
             let kids = dict.get(b"Kids").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_array()).ok();
-            let is_node = match dict.get_type() {
+            let ty = dict.get(b"Type").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_name());
+            let is_node = match ty {
                 Ok(b"Pages") => true,
                 Ok(b"Page") => false,
                 _ => kids.is_some(),

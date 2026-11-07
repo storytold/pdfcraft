@@ -182,17 +182,28 @@ impl Iterator for PageTree<'_> {
                     *owner = Some((obj.clone(), weight(value, 0)));
                 }
             }
-            // The node's /Kids array, direct or indirect; anything else (absent, null, which is
-            // the same as absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
+            // The node's /Kids array, direct or indirect (through a chain of references, as far
+            // as `Document::resolve` follows one); anything else (absent, null, which is the same
+            // as absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
             let kids = match d.get(b"Kids") {
-                Some(Object::Ref(r)) => Some(self.doc.get(*r)).filter(|k| k.as_array().is_some()),
+                Some(r @ Object::Ref(_)) => Some(self.doc.resolve(r)).filter(|k| k.as_array().is_some()),
                 Some(Object::Array(_)) => Some(obj.clone()),
                 _ => None,
             };
             // A node is /Type /Pages, or has a /Kids array and is not /Type /Page; anything else
             // is a page, whatever its /Type says. The renderer (hayro-syntax `is_page_tree_node`)
-            // and its inspector walk the tree by the same rule, so page numbers agree.
-            let is_pages = match d.name(b"Type") {
+            // and its inspector walk the tree by the same rule, so page numbers agree. /Type is
+            // read through references too; only a reference is resolved, as `resolve` clones a
+            // direct value, however large.
+            let indirect_type = match d.get(b"Type") {
+                Some(r @ Object::Ref(_)) => Some(self.doc.resolve(r)),
+                _ => None,
+            };
+            let ty = match &indirect_type {
+                Some(t) => t.as_name(),
+                None => d.name(b"Type"),
+            };
+            let is_pages = match ty {
                 Some(b"Pages") => true,
                 Some(b"Page") => false,
                 _ => kids.is_some(),
@@ -353,6 +364,38 @@ mod tests {
         d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(order.clone()))).unwrap();
         let found: Vec<ObjRef> = pages(&d).iter().map(|p| p.obj).collect();
         assert_eq!(found, vec![first, null_kids, int_kids, ref_kids, last]);
+    }
+
+    /// /Kids and /Type are read through chains of references, as the renderer reads them: an
+    /// untyped node whose /Kids reaches its array through two references is walked, and a
+    /// dictionary whose /Type is a reference to /Page stays a page despite a direct /Kids array.
+    #[test]
+    fn kids_and_type_are_read_through_reference_chains() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = |d: &mut Document| {
+            let mut dict = Dict::new();
+            dict.set(b"Parent".to_vec(), Object::Ref(root));
+            d.add(dict)
+        };
+        let first = leaf(&mut d);
+        let array = d.add(Object::Array(vec![Object::Ref(first)]));
+        let hop = d.add(Object::Ref(array));
+        let mut node = Dict::new();
+        node.set(b"Parent".to_vec(), Object::Ref(root));
+        node.set(b"Kids".to_vec(), Object::Ref(hop));
+        let node = d.add(node);
+        let hidden = leaf(&mut d);
+        let page_name = d.add(Object::name("Page"));
+        let type_hop = d.add(Object::Ref(page_name));
+        let mut page = Dict::new();
+        page.set(b"Parent".to_vec(), Object::Ref(root));
+        page.set(b"Type".to_vec(), Object::Ref(type_hop));
+        page.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(hidden)]));
+        let page = d.add(page);
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(node), Object::Ref(page)]))).unwrap();
+        let found: Vec<ObjRef> = pages(&d).iter().map(|p| p.obj).collect();
+        assert_eq!(found, vec![first, page]);
     }
 
     #[test]
