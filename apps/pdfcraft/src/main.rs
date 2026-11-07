@@ -304,6 +304,11 @@ fn main() -> eframe::Result {
     };
     // Say why instead of exiting silently (`start_failure`).
     if let Err(e) = &result {
+        // The dialog keeps the process alive, but no window will open any more files: a launch
+        // during it must open its own window, not hand its files to this one (`Server::close`).
+        if let Some(server) = &instance {
+            server.close();
+        }
         start_failure::report(e);
     }
     result

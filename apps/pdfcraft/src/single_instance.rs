@@ -59,6 +59,8 @@ pub enum Claim {
 struct Inbox {
     paths: Vec<String>,
     wake: Option<Box<dyn Fn() + Send>>,
+    /// No window will open delivered files any more ([`Server::close`]).
+    closed: bool,
 }
 
 /// The first PdfCraft's end of the socket. A background thread accepts launches until the
@@ -73,13 +75,30 @@ impl Server {
         Self { inbox: Arc::default() }
     }
 
-    /// Queue files from another launch and wake the UI.
+    /// Queue files from another launch and wake the UI. `false`, queueing nothing, once the
+    /// server is closed: the launch must then open its own window.
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn deliver(&self, paths: Vec<String>) {
+    fn deliver(&self, paths: Vec<String>) -> bool {
         let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
+        if inbox.closed {
+            return false;
+        }
         inbox.paths.extend(paths);
         if let Some(wake) = &inbox.wake {
             wake();
+        }
+        true
+    }
+
+    /// Stop taking files: the window failed for good and the process only waits on the error
+    /// dialog (`start_failure`) before it exits. Later launches get no `ok`, so they fall back to
+    /// a window of their own as for any failed hand-off. Without this, a file double-clicked while
+    /// the dialog is up was confirmed and then never opened.
+    pub fn close(&self) {
+        let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
+        inbox.closed = true;
+        if !inbox.paths.is_empty() {
+            log::warn!("single instance: {} handed-over file(s) were never opened: {:?}", inbox.paths.len(), inbox.paths);
         }
     }
 
@@ -343,7 +362,10 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
         return Ok(());
     }
     let paths = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths);
+    if !server.deliver(paths) {
+        // Closed: hang up without `ok`, so the launch opens its own window.
+        return Ok(());
+    }
     let mut writer = stream;
     writer.write_all(b"ok\n")
 }
@@ -448,6 +470,19 @@ mod tests {
         // A launch with options keeps its own window and doesn't take over the socket.
         assert!(matches!(claim_at(&path, &["C:\\b.pdf".into()], false), Claim::Alone));
         assert!(poll().is_empty());
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn once_closed_a_launch_opens_its_own_window_and_its_files_are_not_taken() {
+        // The window failed and the error dialog is up: a file double-clicked now must not be
+        // confirmed and then lost.
+        let path = socket("closed");
+        let Claim::Primary(first) = claim_at(&path, &[], true) else { panic!("the first launch listens") };
+        let mut poll = first.connect(&egui::Context::default(), false);
+        first.close();
+        assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true), Claim::Alone));
+        assert!(poll().is_empty(), "nothing queued for a window that won't open it");
     }
 
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
