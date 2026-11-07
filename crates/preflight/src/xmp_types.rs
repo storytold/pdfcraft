@@ -16,7 +16,7 @@
 //! The other simple types are text. A field a structure doesn't define, and a property a
 //! namespace doesn't define, are left to the clauses about them.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use pdfcraft_cos::{DecodeBudget, ObjRef, Object};
 use roxmltree::Node;
@@ -48,7 +48,8 @@ enum Ty {
     Seq(&'static Ty),
     Bag(&'static Ty),
     Alt(&'static Ty),
-    Struct(&'static [Field]),
+    /// A structure: the name the specification gives its type, and its fields.
+    Struct(&'static str, &'static [Field]),
     /// A structure whose fields aren't given (`xmpMM:Pantry`).
     AnyStruct,
     /// Any of these: where editions of the specification differ.
@@ -142,7 +143,7 @@ const RESOURCE_REF: &[Field] = &[
 /// Part 2 Table 10.
 const VERSION: &[Field] = &[
     (ST_VER, "comments", Text),
-    (ST_VER, "event", Ty::Struct(RESOURCE_EVENT)),
+    (ST_VER, "event", Ty::Struct("ResourceEvent", RESOURCE_EVENT)),
     (ST_VER, "modifier", Text),
     (ST_VER, "modifyDate", Date),
     (ST_VER, "version", Text),
@@ -151,16 +152,16 @@ const VERSION: &[Field] = &[
 const JOB: &[Field] = &[(ST_JOB, "id", Text), (ST_JOB, "name", Text), (ST_JOB, "url", Text)];
 /// Part 2 Table 12.
 const BEAT_SPLICE_STRETCH: &[Field] =
-    &[(XMP_DM, "riseInDecibel", Real), (XMP_DM, "riseInTimeDuration", Ty::Struct(TIME)), (XMP_DM, "useFileBeatsMarker", Boolean)];
+    &[(XMP_DM, "riseInDecibel", Real), (XMP_DM, "riseInTimeDuration", Ty::Struct("Time", TIME)), (XMP_DM, "useFileBeatsMarker", Boolean)];
 /// Part 2 Table 13.
 const CUE_POINT_PARAM: &[Field] = &[(XMP_DM, "key", Text), (XMP_DM, "value", Text)];
 /// A marker's start and duration: FrameCount (text) in Part 2 Table 16, a Time structure in the
 /// September 2005 edition that PDF/A-2 cites. Either is taken.
-const FRAME_COUNT_OR_TIME: Ty = Ty::OneOf(&[Text, Ty::Struct(TIME)]);
+const FRAME_COUNT_OR_TIME: Ty = Ty::OneOf(&[Text, Ty::Struct("Time", TIME)]);
 /// Part 2 Table 16.
 const MARKER: &[Field] = &[
     (XMP_DM, "comment", Text),
-    (XMP_DM, "cuePointParams", Ty::Seq(&Ty::Struct(CUE_POINT_PARAM))),
+    (XMP_DM, "cuePointParams", Ty::Seq(&Ty::Struct("CuePointParam", CUE_POINT_PARAM))),
     (XMP_DM, "cuePointType", Text),
     (XMP_DM, "duration", FRAME_COUNT_OR_TIME),
     (XMP_DM, "location", Text),
@@ -173,10 +174,10 @@ const MARKER: &[Field] = &[
 ];
 /// Part 2 Table 17.
 const MEDIA: &[Field] = &[
-    (XMP_DM, "duration", Ty::Struct(TIME)),
+    (XMP_DM, "duration", Ty::Struct("Time", TIME)),
     (XMP_DM, "managed", Boolean),
     (XMP_DM, "path", Text),
-    (XMP_DM, "startTime", Ty::Struct(TIME)),
+    (XMP_DM, "startTime", Ty::Struct("Time", TIME)),
     (XMP_DM, "track", Text),
     (XMP_DM, "webStatement", Text),
 ];
@@ -191,8 +192,12 @@ const TIMECODE: &[Field] = &[(XMP_DM, "timeFormat", Text), (XMP_DM, "timeValue",
 /// Part 2 Table 22.
 const TIME_SCALE_STRETCH: &[Field] = &[(XMP_DM, "frameOverlappingPercentage", Real), (XMP_DM, "frameSize", Real), (XMP_DM, "quality", Text)];
 /// Part 2 Table 23.
-const TRACK: &[Field] =
-    &[(XMP_DM, "frameRate", Text), (XMP_DM, "markers", Ty::Seq(&Ty::Struct(MARKER))), (XMP_DM, "trackName", Text), (XMP_DM, "trackType", Text)];
+const TRACK: &[Field] = &[
+    (XMP_DM, "frameRate", Text),
+    (XMP_DM, "markers", Ty::Seq(&Ty::Struct("Marker", MARKER))),
+    (XMP_DM, "trackName", Text),
+    (XMP_DM, "trackType", Text),
+];
 /// Part 2 Table 31.
 const ANCESTOR: &[Field] = &[(PHOTOSHOP, "AncestorID", Text)];
 /// Part 2 Table 32.
@@ -236,7 +241,7 @@ const SCHEMAS: &[Schema] = &[
             ("ModifyDate", Date),
             ("Nickname", Text),
             ("Rating", Real),
-            ("Thumbnails", Ty::Alt(&Ty::Struct(THUMBNAIL))),
+            ("Thumbnails", Ty::Alt(&Ty::Struct("Thumbnail", THUMBNAIL))),
         ],
     },
     // ISO 16684-1 Table 6.
@@ -250,12 +255,12 @@ const SCHEMAS: &[Schema] = &[
         uri: "http://ns.adobe.com/xap/1.0/mm/",
         prefix: "xmpMM",
         properties: &[
-            ("DerivedFrom", Ty::Struct(RESOURCE_REF)),
+            ("DerivedFrom", Ty::Struct("ResourceRef", RESOURCE_REF)),
             ("DocumentID", Ty::Guid),
-            ("History", Ty::Seq(&Ty::Struct(RESOURCE_EVENT))),
-            ("Ingredients", Ty::Bag(&Ty::Struct(RESOURCE_REF))),
+            ("History", Ty::Seq(&Ty::Struct("ResourceEvent", RESOURCE_EVENT))),
+            ("Ingredients", Ty::Bag(&Ty::Struct("ResourceRef", RESOURCE_REF))),
             ("InstanceID", Ty::Guid),
-            ("ManagedFrom", Ty::Struct(RESOURCE_REF)),
+            ("ManagedFrom", Ty::Struct("ResourceRef", RESOURCE_REF)),
             ("Manager", Text),
             ("ManageTo", Text),
             ("ManageUI", Text),
@@ -265,22 +270,22 @@ const SCHEMAS: &[Schema] = &[
             ("RenditionClass", Text),
             ("RenditionParams", Text),
             ("VersionID", Text),
-            ("Versions", Ty::Seq(&Ty::Struct(VERSION))),
+            ("Versions", Ty::Seq(&Ty::Struct("Version", VERSION))),
             ("LastURL", Text),
-            ("RenditionOf", Ty::Struct(RESOURCE_REF)),
+            ("RenditionOf", Ty::Struct("ResourceRef", RESOURCE_REF)),
             ("SaveID", Integer),
         ],
     },
     // Part 2 Table 27.
-    Schema { uri: "http://ns.adobe.com/xap/1.0/bj/", prefix: "xmpBJ", properties: &[("JobRef", Ty::Bag(&Ty::Struct(JOB)))] },
+    Schema { uri: "http://ns.adobe.com/xap/1.0/bj/", prefix: "xmpBJ", properties: &[("JobRef", Ty::Bag(&Ty::Struct("Job", JOB)))] },
     // Part 2 Table 28.
     Schema {
         uri: "http://ns.adobe.com/xap/1.0/t/pg/",
         prefix: "xmpTPg",
         properties: &[
-            ("Colorants", Ty::Seq(&Ty::Struct(COLORANT))),
-            ("Fonts", Ty::Bag(&Ty::Struct(FONT))),
-            ("MaxPageSize", Ty::Struct(DIMENSIONS)),
+            ("Colorants", Ty::Seq(&Ty::Struct("Colorant", COLORANT))),
+            ("Fonts", Ty::Bag(&Ty::Struct("Font", FONT))),
+            ("MaxPageSize", Ty::Struct("Dimensions", DIMENSIONS)),
             ("NPages", Integer),
             ("PlateNames", Ty::Seq(&Text)),
         ],
@@ -293,14 +298,14 @@ const SCHEMAS: &[Schema] = &[
             ("absPeakAudioFilePath", Text),
             ("album", Text),
             ("altTapeName", Text),
-            ("altTimecode", Ty::Struct(TIMECODE)),
+            ("altTimecode", Ty::Struct("Timecode", TIMECODE)),
             ("artist", Text),
             ("audioModDate", Date),
             ("audioChannelType", Text),
             ("audioCompressor", Text),
             ("audioSampleRate", Integer),
             ("audioSampleType", Text),
-            ("beatSpliceParams", Ty::Struct(BEAT_SPLICE_STRETCH)),
+            ("beatSpliceParams", Ty::Struct("BeatSpliceStretch", BEAT_SPLICE_STRETCH)),
             ("cameraAngle", Text),
             ("cameraLabel", Text),
             ("cameraModel", Text),
@@ -308,31 +313,31 @@ const SCHEMAS: &[Schema] = &[
             ("client", Text),
             ("comment", Text),
             ("composer", Text),
-            ("contributedMedia", Ty::Bag(&Ty::Struct(MEDIA))),
+            ("contributedMedia", Ty::Bag(&Ty::Struct("Media", MEDIA))),
             ("copyright", Text),
             ("director", Text),
             ("directorPhotography", Text),
-            ("duration", Ty::Struct(TIME)),
+            ("duration", Ty::Struct("Time", TIME)),
             ("engineer", Text),
             ("fileDataRate", Rational),
             ("genre", Text),
             ("good", Boolean),
             ("instrument", Text),
-            ("introTime", Ty::Struct(TIME)),
+            ("introTime", Ty::Struct("Time", TIME)),
             ("key", Text),
             ("logComment", Text),
             ("loop", Boolean),
             ("numberOfBeats", Real),
-            ("markers", Ty::Seq(&Ty::Struct(MARKER))),
+            ("markers", Ty::Seq(&Ty::Struct("Marker", MARKER))),
             ("metadataModDate", Date),
-            ("outCue", Ty::Struct(TIME)),
+            ("outCue", Ty::Struct("Time", TIME)),
             ("projectName", Text),
-            ("projectRef", Ty::Struct(PROJECT_LINK)),
+            ("projectRef", Ty::Struct("ProjectLink", PROJECT_LINK)),
             ("pullDown", Text),
             ("relativePeakAudioFilePath", Text),
-            ("relativeTimestamp", Ty::Struct(TIME)),
+            ("relativeTimestamp", Ty::Struct("Time", TIME)),
             ("releaseDate", Date),
-            ("resampleParams", Ty::Struct(RESAMPLE_STRETCH)),
+            ("resampleParams", Ty::Struct("ResampleStretch", RESAMPLE_STRETCH)),
             ("scaleType", Text),
             ("scene", Text),
             ("shotDate", Date),
@@ -342,23 +347,23 @@ const SCHEMAS: &[Schema] = &[
             ("shotNumber", Text),
             ("shotSize", Text),
             ("speakerPlacement", Text),
-            ("startTimecode", Ty::Struct(TIMECODE)),
+            ("startTimecode", Ty::Struct("Timecode", TIMECODE)),
             ("stretchMode", Text),
             ("takeNumber", Integer),
             ("tapeName", Text),
             ("tempo", Real),
-            ("timeScaleParams", Ty::Struct(TIME_SCALE_STRETCH)),
+            ("timeScaleParams", Ty::Struct("TimeScaleStretch", TIME_SCALE_STRETCH)),
             ("timeSignature", Text),
             ("trackNumber", Integer),
-            ("Tracks", Ty::Bag(&Ty::Struct(TRACK))),
+            ("Tracks", Ty::Bag(&Ty::Struct("Track", TRACK))),
             ("videoAlphaMode", Text),
-            ("videoAlphaPremultipleColor", Ty::Struct(COLORANT)),
+            ("videoAlphaPremultipleColor", Ty::Struct("Colorant", COLORANT)),
             ("videoAlphaUnityIsTransparent", Boolean),
             ("videoColorSpace", Text),
             ("videoCompressor", Text),
             ("videoFieldOrder", Text),
             ("videoFrameRate", Text),
-            ("videoFrameSize", Ty::Struct(DIMENSIONS)),
+            ("videoFrameSize", Ty::Struct("Dimensions", DIMENSIONS)),
             ("videoModDate", Date),
             ("videoPixelDepth", Text),
             ("videoPixelAspectRatio", Rational),
@@ -386,7 +391,7 @@ const SCHEMAS: &[Schema] = &[
             ("Country", Text),
             ("Credit", Text),
             ("DateCreated", Date),
-            ("DocumentAncestors", Ty::Bag(&Ty::Struct(ANCESTOR))),
+            ("DocumentAncestors", Ty::Bag(&Ty::Struct("Ancestor", ANCESTOR))),
             ("Headline", Text),
             ("History", Text),
             ("ICCProfile", Text),
@@ -394,7 +399,7 @@ const SCHEMAS: &[Schema] = &[
             ("Source", Text),
             ("State", Text),
             ("SupplementalCategories", Ty::Bag(&Text)),
-            ("TextLayers", Ty::Seq(&Ty::Struct(LAYER))),
+            ("TextLayers", Ty::Seq(&Ty::Struct("Layer", LAYER))),
             ("TransmissionReference", Text),
             ("Urgency", Integer),
         ],
@@ -449,12 +454,11 @@ const SCHEMAS: &[Schema] = &[
     },
 ];
 
-/// The properties of predefined schemas whose values don't have their type, in every metadata
-/// stream among the indirect objects `objs` (ISO 32000-1 14.3.2), as `prefix:name` in name order.
-pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+/// Calls `f` with every metadata stream among the indirect objects `objs` (ISO 32000-1 14.3.2) that
+/// parses as XML, and the stream's object, each decoded once within one allowance.
+pub(crate) fn for_each_packet(objs: &[(ObjRef, std::sync::Arc<Object>)], mut f: impl FnMut(ObjRef, &roxmltree::Document<'_>)) {
     let mut budget = DecodeBudget::new(MAX_METADATA_BYTES, 0);
-    for (_, o) in objs {
+    for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
         if s.dict.name(b"Type") != Some(b"Metadata") {
             continue;
@@ -465,10 +469,9 @@ pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet
         let Ok(bytes) = budget.decode_within(s, crate::xmp::MAX_XMP_BYTES) else { continue };
         let text = unicode(&bytes);
         if let Some(parsed) = crate::xmp::parse(&text) {
-            out.extend(mistyped(&parsed));
+            f(*r, &parsed);
         }
     }
-    out
 }
 
 /// A packet's text in the Unicode encoding its byte order mark gives: UTF-16 big- or
@@ -487,17 +490,20 @@ fn unicode(bytes: &[u8]) -> String {
     }
 }
 
-/// The properties of predefined schemas in the packet `doc` whose values don't have their type,
-/// as `prefix:name` in name order.
-pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+/// The properties of predefined schemas in the packet `doc` whose values don't have their type, in
+/// name order: each by its name with the namespace's preferred prefix and by its name as the packet
+/// writes it (see [`written`]), with the type it should have as [`named`] gives it.
+pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeMap<(String, String), String> {
+    let mut out = BTreeMap::new();
+    let text = doc.input_text();
     let descriptions = doc.descendants().filter(|n| is(n, RDF, "Description") && n.parent_element().is_some_and(|p| is(&p, RDF, "RDF")));
     for d in descriptions {
         for a in d.attributes() {
             if let Some((schema, ty)) = a.namespace().and_then(|ns| property(ns, a.name()))
                 && !simple(ty, a.value())
             {
-                out.insert(format!("{}:{}", schema.prefix, a.name()));
+                let qname = text.get(a.range_qname()).unwrap_or_default();
+                out.insert((format!("{}:{}", schema.prefix, a.name()), written(qname, a.name())), named(ty));
             }
         }
         for p in d.children().filter(Node::is_element) {
@@ -505,11 +511,50 @@ pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeSet<String> {
             if let Some((schema, ty)) = name.namespace().and_then(|ns| property(ns, name.name()))
                 && !fits(ty, &p, 0)
             {
-                out.insert(format!("{}:{}", schema.prefix, name.name()));
+                let qname = text.get(p.range()).unwrap_or_default().strip_prefix('<').unwrap_or_default();
+                out.insert((format!("{}:{}", schema.prefix, name.name()), written(qname, name.name())), named(ty));
             }
         }
     }
     out
+}
+
+/// How long a prefix the packet writes is repeated.
+const MAX_PREFIX_CHARS: usize = 64;
+
+/// The property `local` as the packet writes it, from the text its qualified name begins
+/// (`qname`): `prefix:local`, or `local` alone in the default namespace. A prefix past
+/// [`MAX_PREFIX_CHARS`] is cut, with `…`.
+fn written(qname: &str, local: &str) -> String {
+    let qname = qname.split(|c: char| c.is_whitespace() || matches!(c, '>' | '/' | '=')).next().unwrap_or_default();
+    let Some((prefix, _)) = qname.split_once(':') else { return local.to_owned() };
+    let mut out: String = prefix.chars().take(MAX_PREFIX_CHARS).collect();
+    if out.len() < prefix.len() {
+        out.push('…');
+    }
+    format!("{out}:{local}")
+}
+
+/// `ty` as the XMP Specification writes value types: `Integer`, `Lang Alt`, `seq Rational`, a
+/// structure by its type's name, such as `Dimensions`.
+fn named(ty: Ty) -> String {
+    let array = |kind: &str, item: &Ty| format!("{kind} {}", named(*item));
+    match ty {
+        Text => "Text".into(),
+        Ty::Guid => "GUID".into(),
+        Integer => "Integer".into(),
+        Real => "Real".into(),
+        Boolean => "Boolean".into(),
+        Date => "Date".into(),
+        Rational => "Rational".into(),
+        LangAlt => "Lang Alt".into(),
+        Ty::Seq(item) => array("seq", item),
+        Ty::Bag(item) => array("bag", item),
+        Ty::Alt(item) => array("alt", item),
+        Ty::Struct(name, _) => name.into(),
+        Ty::AnyStruct => "struct".into(),
+        Ty::OneOf(types) => types.iter().map(|t| named(*t)).collect::<Vec<_>>().join(" or "),
+    }
 }
 
 fn property(ns: &str, name: &str) -> Option<(&'static Schema, Ty)> {
@@ -583,7 +628,7 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
             };
             array(e, &children, kind).is_some_and(|items| items.iter().all(|i| fits(*item, i, deeper)))
         }
-        Ty::Struct(fields) => {
+        Ty::Struct(_, fields) => {
             let Some(holder) = structure(e, &children, resource, description) else { return false };
             let attrs_ok = field_attributes(&holder).all(|a| match a.namespace().and_then(|ns| field(fields, ns, a.name())) {
                 Some(t) => simple(t, a.value()),

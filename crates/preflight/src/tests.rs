@@ -78,12 +78,14 @@ fn wordings_are_complete() {
     let source = include_str!("lib.rs");
     let mut said = Vec::new();
     let mut rest = source;
-    while let Some(at) = rest.find("issue(\"") {
-        rest = &rest[at + 7..];
+    // `issue(` and `located_issue(`, written on one line or, when rustfmt breaks it, on several.
+    while let Some(at) = rest.find("issue(") {
+        rest = &rest[at + 6..];
+        let Some(clause) = rest.trim_start().strip_prefix('"') else { continue };
         // Step over the clause, then take the wording that follows it.
-        let Some(end) = rest.find('"') else { break };
-        rest = &rest[end + 1..];
-        let Some(text) = rest.strip_prefix(", \"") else { continue };
+        let Some(end) = clause.find('"') else { break };
+        rest = &clause[end + 1..];
+        let Some(text) = rest.strip_prefix(',').map(str::trim_start).and_then(|r| r.strip_prefix('"')) else { continue };
         let Some(end) = text.find('"') else { break };
         said.push(&text[..end]);
         rest = text;
@@ -504,7 +506,7 @@ fn mistyped(body: &str) -> Vec<String> {
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
     );
     let parsed = xmp::parse(&xmp).expect("parses");
-    xmp_types::mistyped(&parsed).into_iter().collect()
+    xmp_types::mistyped(&parsed).into_keys().map(|(name, _)| name).collect()
 }
 
 /// [`mistyped`] for the property `p` written as an element holding `v`.
@@ -659,7 +661,7 @@ fn xmp_value_types_are_reported_by_verify() {
         format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len())
     };
     let issues = |doc: &Document| -> Vec<Issue> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").collect() };
-    // Every mistyped property, each once, in name order; not fixable.
+    // Every mistyped property, once per metadata stream, by stream and then by name; not fixable.
     let catalog = metadata(r#"crs:Contrast="high" crs:Exposure="bright""#);
     let page = metadata(r#"crs:Contrast="higher""#);
     let doc = build(
@@ -677,11 +679,19 @@ fn xmp_value_types_are_reported_by_verify() {
     assert_eq!(
         messages,
         [
-            "The XMP property crs:Contrast doesn't have the value type the XMP Specification gives it",
-            "The XMP property crs:Exposure doesn't have the value type the XMP Specification gives it"
+            "The XMP property crs:Contrast in metadata stream 3 0 R should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+            "The XMP property crs:Contrast in metadata stream 5 0 R should have the value type Integer"
         ]
     );
-    assert!(found.iter().all(|i| !i.fixable));
+    let objects: Vec<Option<ObjRef>> = found.iter().map(|i| i.object).collect();
+    assert_eq!(objects, [Some(ObjRef::new(3, 0)), Some(ObjRef::new(3, 0)), Some(ObjRef::new(5, 0))]);
+    assert!(found.iter().all(|i| !i.fixable && i.page.is_none()));
+    // Said in another language, the property and the stream go where that language puts them, and
+    // what the document wrote goes in as it stands.
+    let reordered = |w: &str| w.replace("The XMP property {property} in metadata stream {object}", "In {object}, {property}");
+    assert_eq!(found[0].said(&in_english), found[0].message);
+    assert_eq!(found[0].said(&reordered), "In 3 0 R, crs:Contrast should have the value type Integer");
     // A UTF-16 packet, either byte order, is read.
     for big in [true, false] {
         let xmp = format!(
@@ -706,7 +716,97 @@ fn xmp_value_types_are_reported_by_verify() {
         ],
         "",
     );
-    assert_eq!(issues(&doc).len(), 1);
+    let found = issues(&doc);
+    assert_eq!(found.iter().map(|i| i.object).collect::<Vec<_>>(), [Some(ObjRef::new(5, 0))]);
+}
+
+/// Holes are filled in one pass: the first `{}` from `value`, named holes from `values`, and what
+/// has nothing for it, a value's own braces and a brace left open stay as they are.
+#[test]
+fn wordings_fill_their_holes_once() {
+    let values = [("{a}", "{b}".to_owned()), ("{b}", "B".to_owned())];
+    assert_eq!(fill("x {a} {b} {c} {} {}", Some("{a}"), &values), "x {b} B {c} {a} {}");
+    assert_eq!(fill("{}", None, &[]), "{}");
+    assert_eq!(fill("open { and é {a", Some("v"), &values), "open { and é {a");
+    assert_eq!(fill("é{}ü", Some("v"), &[]), "évü");
+}
+
+/// PDF/A-2 6.6.2.3.1: a mistyped property is reported with the type the XMP Specification gives it,
+/// as the specification writes it.
+#[test]
+fn xmp_mistyped_properties_name_their_type() {
+    let types = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_iter().map(|((name, _), ty)| (name, ty)).collect()
+    };
+    let t = |name: &str, ty: &str| (name.to_owned(), ty.to_owned());
+    assert_eq!(
+        types(r#"crs:Contrast="high" crs:Exposure="bright" xmp:CreateDate="never">"#),
+        [t("crs:Contrast", "Integer"), t("crs:Exposure", "Real"), t("xmp:CreateDate", "Date")]
+    );
+    assert_eq!(
+        types("><xmpTPg:PlateNames>Cyan</xmpTPg:PlateNames><dc:title>T</dc:title>"),
+        [t("dc:title", "Lang Alt"), t("xmpTPg:PlateNames", "seq Text")]
+    );
+    assert_eq!(
+        types("><xmpTPg:MaxPageSize>A4</xmpTPg:MaxPageSize><xmpMM:History>h</xmpMM:History>"),
+        [t("xmpMM:History", "seq ResourceEvent"), t("xmpTPg:MaxPageSize", "Dimensions")]
+    );
+    assert_eq!(types("><xmpMM:Pantry>p</xmpMM:Pantry>"), [t("xmpMM:Pantry", "bag struct")]);
+}
+
+/// PDF/A-2 6.6.2.3.1: a property is known by its namespace URI, whatever prefix the packet binds
+/// to it, and is named by the namespace's preferred prefix and as the packet writes it. A property
+/// a predefined namespace doesn't define, and a namespace that isn't predefined, are left to the
+/// clauses about them.
+#[test]
+fn xmp_properties_are_known_by_namespace_uri_and_named_as_written() {
+    let crs = "http://ns.adobe.com/camera-raw-settings/1.0/";
+    let found = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_keys().collect()
+    };
+    let n = |name: &str, written: &str| (name.to_owned(), written.to_owned());
+    // Another prefix for the namespace, as an attribute and as an element, and no prefix at all.
+    assert_eq!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="high">"#)), [n("crs:Contrast", "c:Contrast")]);
+    assert_eq!(found(&format!(r#"><c:Exposure xmlns:c="{crs}">bright</c:Exposure>"#)), [n("crs:Exposure", "c:Exposure")]);
+    assert_eq!(found(&format!(r#"><Exposure xmlns="{crs}">bright</Exposure>"#)), [n("crs:Exposure", "Exposure")]);
+    assert!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="5">"#)).is_empty());
+    // The preferred prefix is written as it is.
+    assert_eq!(found(r#"crs:Contrast="high">"#), [n("crs:Contrast", "crs:Contrast")]);
+    // A long prefix is repeated only so far.
+    let long = "p".repeat(100);
+    let said = found(&format!(r#"xmlns:{long}="{crs}" {long}:Contrast="high">"#));
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].1, format!("{}…:Contrast", "p".repeat(64)));
+    // The preferred prefix bound to another namespace is not that namespace.
+    assert!(found(r#"><crs:Contrast xmlns:crs="http://example.com/not-crs/">high</crs:Contrast>"#).is_empty());
+    assert!(found(r#"xmlns:dc="http://example.com/not-dc/" dc:title="T">"#).is_empty());
+    // A property a predefined namespace doesn't define, with any value.
+    assert!(found(r#"crs:NotAProperty="high" dc:notAProperty="T">"#).is_empty());
+    assert!(found("><xmp:NotAProperty><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></xmp:NotAProperty>").is_empty());
+    // A namespace that isn't predefined, with a predefined property's local name.
+    assert!(found(r#"xmlns:ex="http://example.com/ns/" ex:Contrast="high">"#).is_empty());
+    assert!(found(r#"><ex:title xmlns:ex="http://example.com/ns/">T</ex:title>"#).is_empty());
+
+    // Through verify, the written name is said when it differs.
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" xmlns:c="{crs}" c:Contrast="high" crs:Exposure="bright"/></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").map(|i| i.message).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP property crs:Contrast in metadata stream 3 0 R, written c:Contrast, should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+        ]
+    );
 }
 
 /// PDF/A-2 6.6.2.3.1, the RDF/XML value forms XMP allows (ISO 16684-1 7.9.2.5): one `rdf:value`
