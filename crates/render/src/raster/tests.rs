@@ -8187,10 +8187,199 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
         let mut device = Draws::default();
         interpret_page(page, &mut ctx, &mut device);
         assert_eq!(device.0, 5, "every draw of /{name} was handed its pixels");
-        cache.decoded_image_decodes()
+        // (image decodes, mask decodes)
+        let masks = cache.decoded_mask_decodes();
+        (cache.decoded_image_decodes() - masks, masks)
     };
-    assert_eq!(decodes("A"), 1, "a Flate image decodes the same at every size");
-    assert_eq!(decodes("B"), 5, "a JPX soft mask decodes for the size it is drawn at");
+    assert_eq!(decodes("A"), (1, 0), "a Flate image decodes the same at every size");
+    // The image and its JPX soft mask each decode once for each of the five sizes (the mask goes
+    // through the cache too since hayro-interpret patch 82).
+    assert_eq!(decodes("B"), (5, 5), "an image with a JPX soft mask, and the mask, decode for the size they are drawn at");
+}
+
+/// A soft mask far larger than where its image is drawn is averaged down to that size and cached
+/// there (vendored hayro-interpret patch 82): a 2 × 2 image whose mask is 34,862 × 4,332, drawn 40
+/// times on one slide (pdf.js `issue16263.pdf`), was decoded and drawn at full size each time and
+/// the page took minutes. Drawn ten times at one size, the mask is now decoded once and handed
+/// over at that size rounded up to a power of two; a mask no larger than twice its drawn size
+/// keeps its own.
+#[test]
+fn a_soft_mask_far_larger_than_where_it_is_drawn_is_shrunk_once() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, Paint, PathDrawMode, SoftMask, TransformExt, interpret_page,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+    use std::io::Write;
+
+    /// Asks for every raster image at the size it is drawn at, as the renderer does, and keeps
+    /// the size of each alpha channel it was handed.
+    #[derive(Default)]
+    struct Draws(Vec<(u32, u32)>);
+    impl<'a> Device<'a> for Draws {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+            let [a, b, c, d, ..] = transform.as_coeffs();
+            let target = ((a.hypot(b) * f64::from(image.width())).ceil() as u32, (c.hypot(d) * f64::from(image.height())).ceil() as u32);
+            if let Image::Raster(r) = image {
+                r.with_rgba(|_, alpha| self.0.push(alpha.map_or((0, 0), |a| (a.width, a.height))), Some(target));
+            }
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let flate = |data: &[u8]| {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        z.write_all(data).unwrap();
+        z.finish().unwrap()
+    };
+    let rgb = flate(&[0u8; 2 * 2 * 3]);
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /SMask 6 0 R /Length {} >>",
+        rgb.len()
+    );
+    // `side` × `side` mask samples, drawn ten times at 20 × 20 points (device pixels at 72 dpi).
+    let draws = |side: u32| {
+        let alpha = flate(&(0..side * side).map(|i| (i % 256) as u8).collect::<Vec<_>>());
+        let mask = format!(
+            "<< /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>",
+            alpha.len()
+        );
+        let content = (0..10).map(|i| format!("q 20 0 0 20 {} 0 cm /A Do Q", i * 22)).collect::<Vec<_>>().join(" ");
+        let bytes = image_cache_pdf(&content, "<< /XObject << /A 5 0 R >> >>", &[(&image, &rgb), (&mask, &alpha)]);
+        let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+        let page = &parsed.pages()[0];
+        let cache = InterpreterCache::new();
+        let initial = page.initial_transform(true).to_kurbo();
+        let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 230.0, 30.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut device = Draws::default();
+        interpret_page(page, &mut ctx, &mut device);
+        (device.0, cache.decoded_image_decodes())
+    };
+    let (alphas, decodes) = draws(1000);
+    // Drawn 20 pixels square, averaged down to that rounded up to a power of two.
+    assert_eq!(alphas, vec![(32, 32); 10], "averaged down to the size it is drawn at");
+    // One decode for the image and one for its mask (here no larger than the intermediate the
+    // averaged-down sizes are made from, so that is the mask itself), plus the averaged-down mask,
+    // all shared by the ten draws.
+    assert_eq!(decodes, 3, "decoded once");
+    let (alphas, _) = draws(40);
+    assert_eq!(alphas, vec![(40, 40); 10], "no more than twice the drawn size: kept as it is");
+}
+
+/// The soft masks a small image is handed, drawn at each of `sizes` (width × height points at 72
+/// dpi): its `mask` (`width`, `height`, 8-bit samples) is larger than the 2 × 1 image, so it may
+/// be averaged down (vendored hayro-interpret patch 82). Each mask is given as its size and
+/// samples.
+fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)]) -> (Vec<(u32, u32, Vec<u8>)>, usize) {
+    soft_masks_handed_keyed(width, height, mask, sizes, ("Width", "Height"))
+}
+
+/// `soft_masks_handed`, with the mask's dimensions under `keys` (`/W` and `/H`, say).
+fn soft_masks_handed_keyed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)], keys: (&str, &str)) -> (Vec<(u32, u32, Vec<u8>)>, usize) {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, Paint, PathDrawMode, SoftMask, TransformExt, interpret_page,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+    use std::io::Write;
+
+    #[derive(Default)]
+    struct Draws(Vec<(u32, u32, Vec<u8>)>);
+    impl<'a> Device<'a> for Draws {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+            let [a, b, c, d, ..] = transform.as_coeffs();
+            let target = ((a.hypot(b) * f64::from(image.width())).ceil() as u32, (c.hypot(d) * f64::from(image.height())).ceil() as u32);
+            if let Image::Raster(r) = image {
+                r.with_rgba(|_, alpha| self.0.extend(alpha.map(|a| (a.width, a.height, a.data))), Some(target));
+            }
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let flate = |data: &[u8]| {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        z.write_all(data).unwrap();
+        z.finish().unwrap()
+    };
+    let rgb = flate(&[0u8; 2 * 3]);
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /SMask 6 0 R /Length {} >>",
+        rgb.len()
+    );
+    let alpha = flate(mask);
+    let mask_dict = format!(
+        "<< /Type /XObject /Subtype /Image /{} {width} /{} {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>",
+        keys.0,
+        keys.1,
+        alpha.len()
+    );
+    let content = sizes.iter().map(|(w, h)| format!("q {w} 0 0 {h} 0 0 cm /A Do Q")).collect::<Vec<_>>().join(" ");
+    let bytes = image_cache_pdf(&content, "<< /XObject << /A 5 0 R >> >>", &[(&image, &rgb), (&mask_dict, &alpha)]);
+    let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+    let page = &parsed.pages()[0];
+    let cache = InterpreterCache::new();
+    let initial = page.initial_transform(true).to_kurbo();
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 400.0, 400.0), &cache, page.xref(), InterpreterSettings::default());
+    let mut device = Draws::default();
+    interpret_page(page, &mut ctx, &mut device);
+    (device.0, cache.decoded_image_decodes())
+}
+
+/// An averaged-down soft mask (vendored hayro-interpret patch 82):
+/// - takes each source sample into the target sample its centre falls in: seven columns
+///   `0 0 0 255 0 0 0`, drawn three wide and so averaged to four, give `0 0 127 0` (by left edges,
+///   `0 127 0 0`);
+/// - is never sized past the samples a truncated stream decodes: a mask that says it is 100 rows
+///   but holds 10, drawn 20 high, is handed no rows that no sample covers;
+/// - is cached per drawn size, rounded up to a power of two: the same image drawn 20 and then 200
+///   points wide is handed its mask at 32 and then at its own 100, not the first draw's 32 again,
+///   and drawn 20 and 21 wide it is handed one mask of 32 both times, whether the mask's
+///   dimensions are under `/Width` and `/Height` or `/W` and `/H`;
+/// - is made, at every size, from one intermediate mask at most 4096 on a side, so a mask wider
+///   than that, drawn at four sizes, is decoded in full once and not four times.
+#[test]
+fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
+    let (handed, _) = soft_masks_handed(7, 1, &[0, 0, 0, 255, 0, 0, 0], &[(3, 1)]);
+    assert_eq!(handed, vec![(4, 1, vec![0, 0, 127, 0])], "centres, not left edges");
+    let (handed, _) = soft_masks_handed(100, 100, &[255; 100 * 10], &[(20, 20)]);
+    // 32 wide (20 rounded up to a power of two), and 10 rows, the ones decoded, not 32: all opaque.
+    assert_eq!(handed, vec![(32, 10, vec![255; 32 * 10])], "no uncovered rows");
+    let sizes = |draws: &[(u32, u32)]| -> Vec<(u32, u32)> {
+        soft_masks_handed(100, 100, &[255; 100 * 100], draws).0.iter().map(|(w, h, _)| (*w, *h)).collect()
+    };
+    assert_eq!(sizes(&[(20, 20), (200, 200)]), vec![(32, 32), (100, 100)], "each draw at its own size");
+    assert_eq!(sizes(&[(20, 20), (21, 21)]), vec![(32, 32), (32, 32)], "draws a pixel apart share one");
+    // The same with the mask's dimensions under the abbreviated `/W` and `/H`, which an image is
+    // read with too.
+    let (handed, _) = soft_masks_handed_keyed(100, 100, &[255; 100 * 100], &[(20, 20), (200, 200)], ("W", "H"));
+    let abbreviated: Vec<(u32, u32)> = handed.iter().map(|(w, h, _)| (*w, *h)).collect();
+    assert_eq!(abbreviated, vec![(32, 32), (100, 100)], "each draw at its own size, under /W and /H");
+    // Columns alternating 0 and 255, so every averaged-down sample is about half: within 8, as a
+    // sample covering 19 or 20 columns, say, holds 9 or 10 opaque ones.
+    let wide: Vec<u8> = (0..5000 * 2).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+    let (handed, decodes) = soft_masks_handed(5000, 2, &wide, &[(20, 1), (40, 1), (80, 1), (160, 1)]);
+    let sizes: Vec<(u32, u32)> = handed.iter().map(|(w, h, _)| (*w, *h)).collect();
+    assert_eq!(sizes, vec![(32, 1), (64, 1), (128, 1), (256, 1)]);
+    assert!(handed.iter().all(|(_, _, data)| data.iter().all(|&a| a.abs_diff(127) <= 8)), "{handed:?}");
+    // The image at each of the four sizes, the 4096-wide intermediate once, and the mask at each
+    // of the four sizes made from it. Without the intermediate there are 8, each mask size a full
+    // decode.
+    assert_eq!(decodes, 9, "the full mask decoded once");
 }
 
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
