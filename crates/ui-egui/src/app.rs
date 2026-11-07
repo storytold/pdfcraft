@@ -893,10 +893,11 @@ impl PdfCraftApp {
                             || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y))
                             || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y))
                     });
-                    let undo = !redo && child_ui.input_mut(|i| {
-                        i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z))
-                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Z))
-                    });
+                    let undo = !redo
+                        && child_ui.input_mut(|i| {
+                            i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z))
+                                || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Z))
+                        });
                     if redo {
                         self.redo_in(idx);
                     } else if undo {

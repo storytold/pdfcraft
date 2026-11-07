@@ -123,10 +123,7 @@ impl PdfCraftApp {
         let detached_id = self.views.get(index).filter(|v| v.detached).map(|v| v.id);
         self.close_tab(index);
         if let Some(id) = detached_id {
-            ctx.send_viewport_cmd_to(
-                egui::ViewportId::from_hash_of(("detached-doc", id)),
-                egui::ViewportCommand::Close,
-            );
+            ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of(("detached-doc", id)), egui::ViewportCommand::Close);
         }
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.

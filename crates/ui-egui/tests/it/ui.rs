@@ -2084,9 +2084,7 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
 
     h.ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, mut vp| {
-        egui::Window::from_viewport(vp.ids.this, vp.builder.clone())
-            .collapsible(false)
-            .show(ctx, |ui| (vp.viewport_ui_cb)(ui));
+        egui::Window::from_viewport(vp.ids.this, vp.builder.clone()).collapsible(false).show(ctx, |ui| (vp.viewport_ui_cb)(ui));
     });
 
     h.state_mut().detach_tab(ids[1]);
@@ -2101,8 +2099,8 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
     h.get_by_label("Don't save").click();
     h.step();
 
-    let close_sent = h.output().viewport_output.get(&child_viewport_id)
-        .is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    let close_sent =
+        h.output().viewport_output.get(&child_viewport_id).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
     assert!(close_sent, "ViewportCommand::Close must be sent to child viewport on close resolution");
 
     h.run_steps(2);
@@ -2124,9 +2122,7 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
 
     h.ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, mut vp| {
-        egui::Window::from_viewport(vp.ids.this, vp.builder.clone())
-            .collapsible(false)
-            .show(ctx, |ui| (vp.viewport_ui_cb)(ui));
+        egui::Window::from_viewport(vp.ids.this, vp.builder.clone()).collapsible(false).show(ctx, |ui| (vp.viewport_ui_cb)(ui));
     });
 
     h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
@@ -2142,8 +2138,8 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
     h.get_by_label("Save").click();
     h.step();
 
-    let close_sent = h.output().viewport_output.get(&child_viewport_id)
-        .is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    let close_sent =
+        h.output().viewport_output.get(&child_viewport_id).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
     assert!(close_sent, "ViewportCommand::Close must be sent to child viewport on close resolution");
 
     h.run_steps(4);
@@ -2392,15 +2388,8 @@ fn detached_tab_preserves_detachment_on_document_replacement() {
     h.run_steps(3);
 
     // Verify detachment is preserved and active tab remains undisturbed
-    assert!(
-        h.state().views[1].detached,
-        "document_replaced must preserve detachment state"
-    );
-    assert_eq!(
-        h.state().active,
-        active_before,
-        "active tab index must remain unchanged"
-    );
+    assert!(h.state().views[1].detached, "document_replaced must preserve detachment state");
+    assert_eq!(h.state().active, active_before, "active tab index must remain unchanged");
 }
 
 #[test]
@@ -2439,28 +2428,15 @@ fn detached_window_edit_commit_routes_to_target_view_without_modifying_docked_ta
     assert!(committed, "commit_typing_in should succeed");
 
     // Tab B must receive the edit while Tab A remains unmodified
-    assert!(
-        h.state().session.get(tab_b_id).unwrap().dirty,
-        "Detached Tab B should receive the committed edit and become dirty"
-    );
-    assert!(
-        !h.state().session.get(tab_a_id).unwrap().dirty,
-        "Docked Tab A must NOT receive edits committed for detached Tab B"
-    );
-    assert!(
-        h.state().views[1].fill_text.is_none(),
-        "Tab B's open typing box should be committed and cleared"
-    );
+    assert!(h.state().session.get(tab_b_id).unwrap().dirty, "Detached Tab B should receive the committed edit and become dirty");
+    assert!(!h.state().session.get(tab_a_id).unwrap().dirty, "Docked Tab A must NOT receive edits committed for detached Tab B");
+    assert!(h.state().views[1].fill_text.is_none(), "Tab B's open typing box should be committed and cleared");
 
     // 2. Pending edit on Tab B processed during show_detached_windows pass
     h.state_mut().views[1].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.run_steps(2);
 
-    assert_eq!(
-        h.state().views[1].pending_edit,
-        None,
-        "Tab B's pending edit should be processed in detached window pass"
-    );
+    assert_eq!(h.state().views[1].pending_edit, None, "Tab B's pending edit should be processed in detached window pass");
     let tab_b_doc = h.state().session.get(tab_b_id).unwrap();
     assert_eq!(tab_b_doc.info.pages[0].rotation, 90, "Tab B's page 0 should have 90 degree rotation");
 
@@ -2514,11 +2490,7 @@ fn main_window_keyboard_shortcuts_execute_during_detached_save_prompt() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Minus);
     h.run_steps(2);
 
-    assert_eq!(
-        h.state().views[0].zoom,
-        initial_zoom,
-        "Zoom out shortcut in main window should restore zoom while detached save prompt is active"
-    );
+    assert_eq!(h.state().views[0].zoom, initial_zoom, "Zoom out shortcut in main window should restore zoom while detached save prompt is active");
 
     // View toggle shortcut: Command + 2 (Fit to Width)
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num2);
@@ -2533,11 +2505,7 @@ fn main_window_keyboard_shortcuts_execute_during_detached_save_prompt() {
     assert_eq!(h.state().views[0].current, 0, "Tab A starts on page 0");
     h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
-    assert_eq!(
-        h.state().views[0].current,
-        1,
-        "Page navigation shortcut should execute in main window while detached save prompt is active"
-    );
+    assert_eq!(h.state().views[0].current, 1, "Page navigation shortcut should execute in main window while detached save prompt is active");
 }
 
 #[test]
@@ -2572,17 +2540,9 @@ fn detached_window_undo_redo_targets_detached_view_without_affecting_docked_tab(
     h.run_steps(2);
 
     // Tab B rotation should be undone
-    assert_eq!(
-        h.state().session.get(tab_b_id).unwrap().info.pages[0].rotation,
-        0,
-        "Tab B's rotation must be undone via Cmd+Z in detached viewport"
-    );
+    assert_eq!(h.state().session.get(tab_b_id).unwrap().info.pages[0].rotation, 0, "Tab B's rotation must be undone via Cmd+Z in detached viewport");
     // Tab A should be completely unaffected
-    assert_eq!(
-        h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation,
-        0,
-        "Docked Tab A must remain completely unaffected"
-    );
+    assert_eq!(h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation, 0, "Docked Tab A must remain completely unaffected");
     assert_eq!(h.state().active, Some(0), "Tab A must remain the active docked tab");
 }
 
