@@ -4235,13 +4235,14 @@ fn a_shared_layer_list_is_cleaned_once() {
 }
 
 /// A removed off layer leaves every list that names it, or its dictionary, name included, stays in
-/// the file: a sub-list of the default `/Order`, a radio-button group, a usage rule, and the
-/// alternate configurations in `/Configs`.
+/// the file: a sub-list of the default `/Order` (its heading too, once it names no layer), a
+/// radio-button group (a group left empty goes), a usage rule (one that names it directly too), and
+/// the alternate configurations in `/Configs`.
 #[test]
 fn a_removed_layer_leaves_every_configuration() {
     use crate::sanitize::{Hidden, remove_hidden};
     let mut doc = pdf(vec![
-        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [7 0 R [(Group) 6 0 R]] /RBGroups [[6 0 R 7 0 R]] /AS [<< /Event /Print /OCGs [6 0 R] /Category [/Print] >>] >> /Configs [8 0 R] >> >>".to_vec(),
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [7 0 R [(Group) 6 0 R]] /RBGroups [[6 0 R 7 0 R] [6 0 R]] /AS [<< /Event /Print /OCGs [6 0 R] /Category [/Print] >> << /Event /View /OCGs 6 0 R /Category [/View] >>] >> /Configs [8 0 R] >> >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R >> >> >>".to_vec(),
         stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (Gone) Tj ET EMC BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
@@ -4256,4 +4257,9 @@ fn a_removed_layer_leaves_every_configuration() {
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
     assert!(has(b"(Shown layer)") && has(b"(Other view)"), "the layer that stays and the configuration stay");
     assert!(!has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+    assert!(!has(b"(Group)"), "the heading of a sub-list left with no layer stayed");
+    let catalog = doc.get(doc.root().unwrap());
+    let config = catalog.as_dict().and_then(|c| c.get(b"OCProperties")).and_then(Object::as_dict).and_then(|p| p.get(b"D")).and_then(Object::as_dict);
+    let group = Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]);
+    assert_eq!(config.and_then(|d| d.get(b"RBGroups")), Some(&Object::Array(vec![group])), "a radio-button group left empty stayed");
 }

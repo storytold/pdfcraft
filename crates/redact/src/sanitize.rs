@@ -372,29 +372,43 @@ fn once(
 }
 
 /// `o` without the entries `keep` refuses, through nested arrays (an `/Order` holds sub-lists, and
-/// `/RBGroups` holds groups), each array written by reference cleaned [`once`].
-fn filtered(doc: &mut Document, o: &Object, keep: &impl Fn(&Object) -> bool, depth: usize, cleaned: &mut Cleaned) -> Result<Object, RedactError> {
+/// `/RBGroups` holds groups), each array written by reference cleaned [`once`]. `None` when `keep`
+/// refuses `o` itself, or when `o` is a sub-list (`depth` above 0) that named a layer and names
+/// none now: it goes, with the heading that labelled it.
+fn filtered(
+    doc: &mut Document,
+    o: &Object,
+    keep: &impl Fn(&Object) -> bool,
+    depth: usize,
+    cleaned: &mut Cleaned,
+) -> Result<Option<Object>, RedactError> {
     if depth > MAX_DIRECT_DEPTH {
         return Err(RedactError::TooDeep);
     }
-    let out = once(doc, o, cleaned, |doc, o, cleaned| {
+    if !keep(o) {
+        return Ok(None);
+    }
+    once(doc, o, cleaned, |doc, o, cleaned| {
         let Object::Array(a) = o else { return Ok(Some(o.clone())) };
         let mut out = Vec::new();
-        for x in a.iter().filter(|x| keep(x)) {
-            out.push(filtered(doc, x, keep, depth + 1, cleaned)?);
+        for x in a {
+            out.extend(filtered(doc, x, keep, depth + 1, cleaned)?);
         }
-        Ok(Some(Object::Array(out)))
-    })?;
-    Ok(out.unwrap_or_else(|| Object::Array(Vec::new())))
+        // Anything but a text string (a heading) is a layer or a sub-list.
+        let names = |l: &[Object]| l.iter().any(|x| !matches!(x, Object::String(_)));
+        let emptied = depth > 0 && names(a.as_slice()) && !names(out.as_slice());
+        Ok((!emptied).then_some(Object::Array(out)))
+    })
 }
 
 /// An optional-content configuration without the layers `keep` refuses, in every list that names
-/// them: on, off, order, locked, radio-button groups and usage rules (a rule left with no layer
-/// goes). A removed layer still named in any of them would stay in the file, its name included.
+/// them: on, off, order, locked, radio-button groups and usage rules (a rule, group or sub-list left
+/// with no layer goes). A removed layer still named in any of them would stay in the file, its name
+/// included.
 fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bool, cleaned: &mut Cleaned) -> Result<Dict, RedactError> {
     for k in [&b"ON"[..], b"OFF", b"Order", b"Locked", b"RBGroups"] {
         if let Some(v) = d.get(k).cloned() {
-            let v = filtered(doc, &v, keep, 0, cleaned)?;
+            let v = filtered(doc, &v, keep, 0, cleaned)?.unwrap_or_else(|| Object::Array(Vec::new()));
             d.set(k.to_vec(), v);
         }
     }
@@ -406,7 +420,7 @@ fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bo
             kept.extend(once(doc, rule, cleaned, |doc, rule, cleaned| {
                 let Some(mut rule) = rule.as_dict().cloned() else { return Ok(None) };
                 if let Some(layers) = rule.get(b"OCGs").cloned() {
-                    let layers = filtered(doc, &layers, keep, 0, cleaned)?;
+                    let Some(layers) = filtered(doc, &layers, keep, 0, cleaned)? else { return Ok(None) };
                     if doc.resolve(&layers).as_array().is_some_and(Vec::is_empty) {
                         return Ok(None);
                     }
