@@ -119,6 +119,18 @@ const MAX_PAGE_TREE_DEPTH: usize = 256;
 /// this one).
 const MAX_USER_UNIT: f64 = 75_000.0;
 
+/// PdfCraft patch: whether a `/Kids` entry is an intermediate node of the page tree. A node is
+/// `/Type /Pages`, or has `/Kids` and is not `/Type /Page`: ISO 32000-2 §7.7.3.2 requires both
+/// keys of a node, but writers leave `/Type` out, and a page has no `/Kids` (§7.7.3.3), so the
+/// key tells them apart. pdfcraft-model's page walk uses the same rule.
+fn is_page_tree_node(dict: &Dict<'_>) -> bool {
+    match dict.get::<Name<'_>>(TYPE).as_deref() {
+        Some(PAGES) => true,
+        Some(PAGE) => false,
+        _ => dict.contains_key(KIDS),
+    }
+}
+
 fn resolve_pages<'a>(
     pages_dict: &Dict<'a>,
     entries: &mut Vec<Page<'a>>,
@@ -156,17 +168,19 @@ fn resolve_pages<'a>(
     let kids = pages_dict.get::<Array<'a>>(KIDS)?;
 
     for dict in kids.iter::<Dict<'_>>() {
-        match dict.get::<Name<'_>>(TYPE).as_deref() {
-            Some(PAGES) => {
-                resolve_pages(&dict, entries, ctx.clone(), resources.clone(), visited, depth + 1);
-            }
+        if is_page_tree_node(&dict) {
+            resolve_pages(
+                &dict,
+                entries,
+                ctx.clone(),
+                resources.clone(),
+                visited,
+                depth + 1,
+            );
+        } else if let Some(page) = Page::new(&dict, &ctx, resources.clone(), false) {
             // Let's be lenient and assume it's a `Page` in case it's `None` or something else
             // (see corpus test case 0083781).
-            _ => {
-                if let Some(page) = Page::new(&dict, &ctx, resources.clone(), false) {
-                    entries.push(page);
-                }
-            }
+            entries.push(page);
         }
     }
 

@@ -47,20 +47,24 @@ pub(crate) trait Structure {
                 continue;
             }
             let Ok(dict) = self.get_dictionary(id) else { continue };
-            match dict.get_type() {
-                Ok(b"Page") => {
-                    // Keep the effective u32 page-count bound without trusting /Count.
-                    if u32::try_from(pages.len()).ok().and_then(|n| n.checked_add(1)).is_none() {
-                        return pages;
-                    }
-                    pages.push(id);
+            // A node is /Type /Pages, or has /Kids and is not /Type /Page; anything else is a
+            // page, whatever its /Type says. The renderer (hayro-syntax `is_page_tree_node`) and
+            // pdfcraft-model walk the tree by the same rule, so page numbers agree.
+            let is_node = match dict.get_type() {
+                Ok(b"Pages") => true,
+                Ok(b"Page") => false,
+                _ => dict.has(b"Kids"),
+            };
+            if is_node {
+                if let Ok(kids) = dict.get(b"Kids").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_array()) {
+                    pending.extend(kids.iter().rev().filter_map(|k| k.as_reference().ok()).map(|id| (id, depth + 1)));
                 }
-                Ok(b"Pages") => {
-                    if let Ok(kids) = dict.get(b"Kids").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_array()) {
-                        pending.extend(kids.iter().rev().filter_map(|k| k.as_reference().ok()).map(|id| (id, depth + 1)));
-                    }
+            } else {
+                // Keep the effective u32 page-count bound without trusting /Count.
+                if u32::try_from(pages.len()).ok().and_then(|n| n.checked_add(1)).is_none() {
+                    return pages;
                 }
-                _ => {}
+                pages.push(id);
             }
         }
         pages
