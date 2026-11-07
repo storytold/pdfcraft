@@ -1778,6 +1778,59 @@ fn missing_fields_and_built_names_are_flagged() {
     assert_eq!(order.fields[3].reads, ["qty"], "the names it does know are still read");
 }
 
+/// An order form's rows, as a public one lays them out: an editable drop-down quantity whose blank
+/// option, and starting value, is a single space, a prefilled price, the row's product and a total
+/// over the rows. A blank quantity is 0, so its row is 0; a quantity cleared to nothing on a row
+/// without a price leaves the product nothing to multiply, and it is 0 too, not 1.
+#[test]
+fn an_order_form_with_blank_drop_down_quantities_totals_only_the_chosen_rows() {
+    let tx = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [250 {y} 350 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let qty = |name: &str, y: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 393216 /T ({name}) /Opt [( ) (1) (2) (3)] /V ( ) /Rect [50 {y} 150 {}] /P 3 0 R >>",
+            y + 20
+        )
+    };
+    let prd = |row: u32| {
+        format!("/AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"PRD\", new Array \\(\"QTY {row}\", \"price {row}\"\\)\\);) >> >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        qty("QTY 0", 700),
+        tx("price 0", 700, "/V (605)"),
+        tx("Total 0", 700, &format!("/V (0) {}", prd(0))),
+        qty("QTY 1", 660),
+        tx("price 1", 660, "/V (780)"),
+        tx("Total 1", 660, &format!("/V (0) {}", prd(1))),
+        qty("QTY 2", 620),
+        tx("price 2", 620, ""),
+        tx("Total 2", 620, &format!("/V (0) {}", prd(2))),
+        tx(
+            "Total",
+            580,
+            r#"/V (0) /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\("SUM", new Array \("Total 0", "Total 1", "Total 2"\)\);) >> >>"#,
+        ),
+    ];
+    let mut doc = document(&objs);
+    let totals = |doc: &Document| {
+        let all = fields(doc);
+        ["Total 0", "Total 1", "Total 2", "Total"].map(|n| field(&all, n).value.first().cloned().unwrap_or_default())
+    };
+    recalculate(&mut doc).unwrap();
+    assert_eq!(totals(&doc), ["0", "0", "0", "0"], "every quantity blank: a single space is worth 0");
+    set_value(&mut doc, "QTY 0", &FieldValue::Text("2".into())).unwrap();
+    assert_eq!(totals(&doc), ["1210", "0", "0", "1210"], "only the chosen row");
+    set_value(&mut doc, "QTY 2", &FieldValue::Text(String::new())).unwrap();
+    assert_eq!(totals(&doc), ["1210", "0", "0", "1210"], "a quantity cleared on a row without a price");
+    let doc = reopen(&doc);
+    assert_eq!(totals(&doc), ["1210", "0", "0", "1210"], "kept across a save");
+}
+
 /// `/CO` as other tools leave it: a calculated field missing, a field without a calculation, an
 /// entry repeated, a reference to nothing and a number. The order reads around them, and setting
 /// the order writes `/CO` afresh.

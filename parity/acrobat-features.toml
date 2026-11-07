@@ -4770,8 +4770,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/af/tests.rs::validation_and_calculation", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/forms/src/af/tests.rs::a_calculation_over_fields_without_values_is_0_for_every_operation"]
-notes = "SUM, PRD, AVG, MIN, MAX over fields and groups; fields without a value are left out, and when none of the listed fields has one, every operation gives 0 (a product too, not 1)"
+evidence = ["crates/forms/src/af/tests.rs::validation_and_calculation", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/forms/src/af/tests.rs::a_calculation_over_fields_without_values_is_0_for_every_operation", "crates/forms/src/af/tests.rs::a_blank_option_of_a_single_space_is_a_value_worth_0", "crates/forms/src/tests.rs::an_order_form_with_blank_drop_down_quantities_totals_only_the_chosen_rows"]
+notes = "SUM, PRD, AVG, MIN, MAX over fields and groups; fields without a value are left out, and when none of the listed fields has one, every operation gives 0 (a product too, not 1); a drop-down's blank option of a single space is a value worth 0"
 
 [[feature]]
 id = "form.simplified-notation"
