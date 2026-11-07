@@ -164,3 +164,46 @@ fn a_line_break_stays_a_space_beside_latin_or_hangul_and_between_side_by_side_te
     assert!(row.find("東京大阪").is_empty());
     assert_eq!(row.find("東京 大阪"), vec![0..4]);
 }
+
+/// Vertical glyphs (WMode 1) of `size` points, one per character, written downwards: each
+/// column starts at `top` with its left edge at `x`: (x, top, text) per column, in reading order.
+/// Each column is one line, as the text device groups a vertical flow.
+fn columns(cols: &[(f32, f32, &str)], size: f32) -> PageText {
+    let mut text = PageText::default();
+    for (line, &(x, top, chars)) in (0u32..).zip(cols) {
+        for (k, c) in chars.chars().enumerate() {
+            let y = top + size * k as f32;
+            // Written downwards: the em box's edge towards the next line is its left one.
+            text.glyphs.push(TextGlyph {
+                text: c.into(),
+                rect: [x, y, x + size, y + size],
+                quad: [[x, y], [x, y + size], [x + size, y + size], [x + size, y]],
+                direction: [0.0, 1.0],
+            });
+            text.line_of.push(line);
+            text.space_before.push(false);
+        }
+    }
+    text
+}
+
+#[test]
+fn a_word_divided_between_vertical_columns_is_found_in_both() {
+    // Japanese set vertically: columns run top to bottom and follow each other to the left.
+    // "検知機構" breaks after "検知" at the foot of the right column.
+    let text = columns(&[(40.0, 10.0, "装置の検知"), (25.0, 10.0, "機構です")], 10.0);
+    let hits = text.find("検知機構");
+    assert_eq!(hits, vec![3..7]);
+    // One highlight per column: the foot of the right one and the head of the left one.
+    assert_eq!(text.line_rects(hits[0].clone()), vec![[40.0, 40.0, 50.0, 60.0], [25.0, 10.0, 35.0, 30.0]]);
+    assert_eq!(
+        text.text_of(3..7),
+        "検知
+機構"
+    );
+
+    // A column that stands to the right of the one before does not continue it.
+    let back = columns(&[(40.0, 10.0, "装置の検知"), (55.0, 10.0, "機構です")], 10.0);
+    assert!(back.find("検知機構").is_empty());
+    assert_eq!(back.find("検知 機構"), vec![3..7]);
+}
