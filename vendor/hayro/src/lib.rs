@@ -245,6 +245,8 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
+    // PdfCraft patch (32): each page starts with its full allowance of backdrop tiles.
+    renderer::reset_backdrop_tiles();
     let mut device = Renderer::new(
         pix_width,
         pix_height,
