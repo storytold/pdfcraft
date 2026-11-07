@@ -938,6 +938,19 @@ impl Metrics {
         }
     }
 
+    /// Whether the embedded program draws an outline for `code`. Known (`Some`) only for a subset
+    /// Type 0 font over a readable TrueType program, where a dropped glyph is left empty; `None`
+    /// when the program can't tell, for example a simple or CFF font. [`Metrics::encode`] accepts
+    /// any code with a `/W` entry (#1443), so a caller that would rather use another subset of the
+    /// same face than draw nothing asks this too. An empty space glyph is normal.
+    pub fn has_outline(&self, code: u32) -> Option<bool> {
+        if !self.composite || self.outlined_cids.is_empty() {
+            return None;
+        }
+        let cid = self.cid(code);
+        Some(self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1))
+    }
+
     /// Whether `code` shows exactly `c` and has a glyph for it.
     fn shows(&self, code: u32, c: char) -> bool {
         self.unicode.text(code).is_some_and(|t| t.chars().eq(std::iter::once(c))) && self.has_glyph(code)
@@ -1561,4 +1574,4 @@ mod encoding_tests {
 
 mod thai;
 use thai::composite_glyph_maps;
-pub use thai::{LegacyThaiFont, recovered_thai_map};
+pub use thai::{ExistingThaiRun, LegacyThaiFont, recovered_thai_map};

@@ -10753,7 +10753,13 @@ fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_fon
 
 #[test]
 fn existing_thai_subset_uses_shaped_matching_face_without_embedding_variable_font() {
-    let Some(_) = pdfcraft_fonts::document_thai_font() else { return };
+    // The matching full face is the optional craft-fonts input; CI builds with it.
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!(
+            "skipping existing_thai_subset_uses_shaped_matching_face_without_embedding_variable_font: built without craft-fonts (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
     // Synthetic source subset: only one Thai letter is encoded. No binary fixture or font
     // is committed; the complete, openly licensed matching face is the optional build input.
     let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
@@ -10779,6 +10785,35 @@ fn existing_thai_subset_uses_shaped_matching_face_without_embedding_variable_fon
     let next = "Hello ผู้ใช้ น้ำ ๔๕๖";
     text::rewrite_block(&mut doc, 0, 0, Some(next), &text::BlockStyle::default()).unwrap();
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, next);
+}
+
+/// The bundled Thai face is Regular: a subset of the same family that its descriptor marks bold
+/// (a variable-font instance keeps the family name) is not completed with it silently. The
+/// edit is refused, unchanged, until a replacement is chosen explicitly.
+#[test]
+fn a_bold_thai_subset_is_not_completed_with_the_regular_bundled_face() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!(
+            "skipping a_bold_thai_subset_is_not_completed_with_the_regular_bundled_face: built without craft-fonts (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        f.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    })
+    .unwrap();
+    assert!(text::text_lines(&doc, 0).unwrap()[0].bold, "the descriptor makes the source bold");
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("ผู้ใช้"), &text::BlockStyle::default()).expect_err("no silent Regular completion");
+    assert!(!error.to_string().is_empty());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
 }
 
 #[test]
@@ -10833,16 +10868,453 @@ fn grouped_text_preparation_keeps_unsafe_compositing_paths_and_malformed_forms_i
         let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
         let result = text::forms::prepare(&mut doc, 0).unwrap();
         assert_eq!(result.expanded, 0, "unsafe input {page_ops}, {form_ops}, {extra}");
-        assert!(!result.refused.is_empty());
+        let [refused] = result.refused.as_slice() else { panic!("one refusal for {page_ops}, {form_ops}, {extra}: {:?}", result.refused) };
+        assert!(refused.starts_with("Body: "), "the refusal names the group: {refused}");
         assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
     }
 }
 
+/// A form whose content gives an operator a surplus operand (`0 /Inner Do`) is left grouped. The
+/// renderer draws the last operand, while the inlined copy's resources are renamed at a fixed
+/// position: the inner artwork would lose its resource and silently vanish.
 #[test]
-fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_after_reopen() {
-    // Remap existing OFL Inter outlines to synthetic Thai glyph slots; no proprietary font
-    // fixture is needed. Removing layout/cmap tables reproduces legacy PDF font subsetting.
+fn grouped_text_with_surplus_resource_operands_is_left_grouped() {
+    let form = |body: &str| {
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Inner 7 0 R >> >>", body)
+    };
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Body 6 0 R >> >> /Contents 4 0 R >>"
+            .to_string(),
+        stream("", "/Body Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("BT /F1 14 Tf 40 500 Td (body) Tj ET 0 /Inner Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >>", "0 0 10 10 re f"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 0);
+    assert!(result.refused.iter().any(|r| r.starts_with("Body: ")), "{:?}", result.refused);
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+    // The same form with well-formed operands is prepared, its inner artwork renamed with it.
+    let objs: Vec<String> =
+        objs.iter().enumerate().map(|(i, o)| if i == 5 { form("BT /F1 14 Tf 40 500 Td (body) Tj ET /Inner Do") } else { o.clone() }).collect();
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 1);
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let xobjects = page.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"XObject").and_then(|x| doc.dict(x))).unwrap();
+    for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.iter().filter(|op| op.is("Do")) {
+        assert!(xobjects.contains(op.last_name().unwrap()), "every drawn name resolves: {op:?}");
+    }
+}
+
+/// Text grouped deeper than preparation opens is reported, not passed over: of nine nested
+/// forms, eight are opened and the ninth, which holds the text, is named in the refusals.
+#[test]
+fn grouped_text_nested_past_the_level_limit_is_reported() {
+    let forms: Vec<(String, String)> = (1..=9)
+        .map(|i| (format!("Body{i}"), if i < 9 { format!("/Body{} Do", i + 1) } else { "BT /F1 14 Tf 40 500 Td (deep) Tj ET".into() }))
+        .collect();
+    let mut doc = page_with_forms("/Body1 Do", &forms);
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 8);
+    assert_eq!(result.refused, ["Body9: its text is grouped more than 8 levels deep"]);
+    // Eight levels are still opened completely: the ninth, one level less deep, is prepared.
+    let mut doc = page_with_forms("/Body2 Do", &forms);
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.refused.len()), (8, 0));
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "deep"));
+}
+
+/// A form that draws only an image (itself, or through a form it draws) is artwork: it is
+/// neither expanded nor counted. Text reached through a nested form still is.
+#[test]
+fn grouped_image_artwork_is_not_prepared() {
+    let image = "q 10 0 0 10 0 0 cm /Im Do Q";
+    for forms in [vec![("Logo", image)], vec![("Logo", "/Inner Do"), ("Inner", image)]] {
+        let forms: Vec<(String, String)> = forms.into_iter().map(|(n, b)| (n.to_string(), b.to_string())).collect();
+        let mut doc = page_with_forms("/Logo Do", &forms);
+        let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let result = text::forms::prepare(&mut doc, 0).unwrap();
+        assert_eq!((result.expanded, result.refused.len()), (0, 0), "{forms:?}");
+        assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "{forms:?}");
+    }
+    let forms = [("Logo".to_string(), "/Inner Do".to_string()), ("Inner".to_string(), "BT /F1 14 Tf 40 500 Td (inner) Tj ET".to_string())];
+    let mut doc = page_with_forms("/Logo Do", &forms);
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 2);
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "inner"));
+}
+
+/// The `Do` is matched to its resource by the name's bytes as written, which need not be UTF-8.
+#[test]
+fn grouped_text_under_a_non_utf8_resource_name_is_prepared() {
+    let mut doc = page_with_forms("/F#FF Do", &[("F#FF".into(), "BT /F1 14 Tf 40 500 Td (named) Tj ET".into())]);
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.refused.len()), (1, 0), "{:?}", result.refused);
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "named"));
+}
+
+/// A transparency group that blends in DeviceRGB composites as the page does only on a page
+/// whose own group says DeviceRGB too. On a page that names no blending space the processor
+/// chooses one (often CMYK in print), so inlining could change colours: that group is refused.
+#[test]
+fn grouped_text_in_an_rgb_group_needs_a_page_that_blends_in_rgb() {
+    for page_group in [false, true] {
+        let mut doc = page_with_forms("/Body Do", &[("Body".into(), "0 0 0 1 k BT /F1 14 Tf 40 500 Td (body) Tj ET".into())]);
+        let group = || build(&["<< /S /Transparency /CS /DeviceRGB >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+        let Object::Stream(mut s) = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).as_ref().clone() else { panic!("fixture") };
+        s.dict.set(b"Group".to_vec(), Object::Dict(group()));
+        doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(s));
+        if page_group {
+            doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Group".to_vec(), Object::Dict(group()))).unwrap();
+        }
+        let result = text::forms::prepare(&mut doc, 0).unwrap();
+        if page_group {
+            assert_eq!((result.expanded, result.refused.len()), (1, 0), "{:?}", result.refused);
+        } else {
+            assert_eq!(result.expanded, 0);
+            assert!(result.refused.iter().any(|r| r.contains("colour space of its own")), "{:?}", result.refused);
+        }
+    }
+}
+
+/// The damaged THSarabunPSK map is repaired with entries after the last `endcmap`: a stream with
+/// a second block that repeats corrupt destinations must not override the corrective entries.
+#[test]
+fn grouped_legacy_thai_map_repair_follows_every_block_of_the_damaged_map() {
+    let damaged = b"begincmap 1 begincodespacerange <0000> <ffff> endcodespacerange \
+        1 beginbfrange <00ff><01ff><0032> endbfrange 17 beginbfrange \
+        <00d9><00d9><0e04> <00e2><00e2><0e0d> <00fa><00fa><0e25> <0100><0100><0e2b> <0102><0102><0e2d> \
+        <0164><0164><0e4c> <0166><0166><0e31> <0168><0168><0e47> \
+        <00d6><00d6><000f> <00f0><00f0><0029> <00f8><00f8><0023> <0105><0105><003e> <0107><0107><0040> \
+        <0109><0109><003e> <0111><0111><004e> <0160><0160><004e> <0161><0161><004f> endbfrange endcmap\n\
+        begincmap 2 beginbfchar <0103> <0036> <0107> <0040> endbfchar endcmap";
+    // ฮา: codes 259 and 263, which the second block maps to "6@" again.
+    let mut doc = page_with_forms("/Body Do", &[("Body".into(), "BT /F1 14 Tf 40 500 Td <01030107> Tj ET".into())]);
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), damaged);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.repaired_fonts), (1, 1));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "ฮา"), "{:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+}
+
+/// A Thai run whose glyphs a subsetter split across two subsets of the face is kept in that
+/// face: each cluster comes from a subset that has it. A cluster no subset has is refused with
+/// the reason, and the document is unchanged.
+#[test]
+fn editing_legacy_thai_shapes_a_run_across_subsets_of_the_same_face() {
+    // F1 lacks ค (glyph 217), F2 lacks ข (215); "ขค" needs both.
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let mut without_kho_khai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khai, 215);
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let first = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(first));
+    let second = legacy_thai_font(&mut doc, "GHIJKL+THSarabunPSK", &without_kho_khai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(second));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the face's subsets together have every glyph");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    let shown = shown_codes(&doc);
+    assert!(shown.contains(&("F1".into(), vec![0x00, 0xd6])) && shown.contains(&("F1".into(), vec![0x00, 0xd7])), "ก and ข from F1: {shown:?}");
+    assert!(shown.contains(&("F2".into(), vec![0x00, 0xd9])), "ค from the subset that has it, F2: {shown:?}");
+    assert_eq!(page_font_programs(&doc).iter().filter(|(_, program)| program.is_some()).count(), 2, "no font program is added");
+    // ฆ (glyph 219) is in no subset of the face.
+    let mut neither = legacy_thai_program();
+    drop_sfnt_glyph(&mut neither, 219);
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let only = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &neither, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(only));
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กฆ"), &style).unwrap_err().to_string();
+    assert!(error.contains("THSarabunPSK") && error.contains("load the complete original font"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
+/// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is
+/// shaped with its own layout like any source font, not by the legacy shaper (which would ask
+/// for Windows PUA alternates such a face doesn't need).
+#[test]
+fn a_thai_subset_with_mark_positioning_is_shaped_with_its_own_layout() {
     let mut program = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = program[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    program[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        program[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("ปู่"), &style).expect("its own layout positions the marks");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "ปู่");
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font == "F1"), "drawn in the source resource's own codes: {:?}", shown_codes(&doc));
+}
+
+/// A legacy subset beside a complete face of the same family that has its own Thai mark
+/// positioning (as Load font adds): what the subset lacks comes from the complete face, in its
+/// codes, rather than the edit being refused.
+#[test]
+fn a_legacy_subset_is_completed_by_a_positioned_face_of_the_same_family() {
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let mut complete = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(complete[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = complete[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    complete[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        complete[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+    let full = legacy_thai_font(&mut doc, "THSarabunPSK", &complete, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(full));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the complete face has ค");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    assert!(shown_codes(&doc).contains(&("F2".into(), vec![0x00, 0xd9])), "ค from the complete face: {:?}", shown_codes(&doc));
+}
+
+/// `program` with its `cmap` replaced by one mapping Thai to the legacy THSarabunPSK glyph order
+/// (U+0E01–U+0E3A to glyphs 214–271, U+0E3F–U+0E5B to 272–298), as a complete face's own does,
+/// and A–Z to glyphs 36–61 (any outlines do: only what the program covers matters here).
+fn with_legacy_thai_cmap(mut program: Vec<u8>) -> Vec<u8> {
+    let groups = [(0x41u32, 0x5au32, 36u32), (0x0e01, 0x0e3a, 214), (0x0e3f, 0x0e5b, 272)];
+    let mut cmap: Vec<u8> = [0u16, 1, 3, 10].iter().flat_map(|v| v.to_be_bytes()).collect();
+    cmap.extend(12u32.to_be_bytes());
+    cmap.extend(12u16.to_be_bytes());
+    cmap.extend(0u16.to_be_bytes());
+    for value in [16 + 12 * groups.len() as u32, 0, groups.len() as u32] {
+        cmap.extend(value.to_be_bytes());
+    }
+    for (first, last, glyph) in groups {
+        cmap.extend([first, last, glyph].iter().flat_map(|v| v.to_be_bytes()));
+    }
+    program.resize(program.len().next_multiple_of(4), 0);
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let record = (0..count).map(|i| 12 + i * 16).find(|&r| &program[r..r + 4] == b"cmap").unwrap();
+    let at = program.len() as u32;
+    program[record + 8..record + 12].copy_from_slice(&at.to_be_bytes());
+    program[record + 12..record + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+    program.extend(cmap);
+    program
+}
+
+/// A legacy subset beside a complete face of the same family that can't be reused in its
+/// existing codes (its encoding is a CMap stream, as Load font writes for a CFF face): the span
+/// the subset can't show is shaped by the complete program with its own layout, all of it in
+/// that one face, instead of being refused.
+#[test]
+fn a_legacy_subset_is_completed_by_a_complete_program_it_cannot_reuse_in_place() {
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+    let mut full = legacy_thai_font(&mut doc, "THSarabunPSK", &complete, LEGACY_THAI_UNICODE);
+    let encoding = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap",
+    )));
+    full.set(b"Encoding".to_vec(), Object::Ref(encoding));
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(full));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the complete program shapes what the subset lacks");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    assert!(
+        lines.iter().all(|l| pdfcraft_fonts::embedding::face_key(&l.base_font) == "thsarabunpsk"),
+        "the same face throughout: {:?}",
+        lines.iter().map(|l| &l.base_font).collect::<Vec<_>>()
+    );
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font != "F1"), "no cluster split from the subset: {:?}", shown_codes(&doc));
+}
+
+/// The complete program that takes over a span shapes all of its rows, a Latin-only one too,
+/// even where its existing PDF encoding has no Latin; and it must have the source's own style:
+/// a Regular program never completes text that the subset's descriptor marks bold.
+#[test]
+fn a_complete_program_takes_the_whole_span_only_in_the_source_style() {
+    let fixture = |bold: bool| {
+        let mut without_kho_khwai = legacy_thai_program();
+        drop_sfnt_glyph(&mut without_kho_khwai, 217);
+        let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let mut legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+        if bold {
+            let Some(Object::Array(mut descendants)) = legacy.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+            let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!("fixture") };
+            let Some(Object::Dict(mut descriptor)) = descendant.get(b"FontDescriptor").cloned() else { panic!("fixture") };
+            descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+            descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+            legacy.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        }
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+        let mut full = legacy_thai_font(&mut doc, "THSarabunPSK", &complete, LEGACY_THAI_UNICODE);
+        let encoding = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap",
+        )));
+        full.set(b"Encoding".to_vec(), Object::Ref(encoding));
+        doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(full));
+        doc
+    };
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let mut doc = fixture(false);
+    text::rewrite_block(&mut doc, 0, 0, Some("กขค\nABC"), &style).expect("every row shaped by the complete program");
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "กขค\nABC");
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font != "F1" && font != "F2"), "{:?}", shown_codes(&doc));
+    let mut doc = fixture(true);
+    assert!(text::text_lines(&doc, 0).unwrap()[0].bold, "the descriptor makes the subset bold");
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).is_err(), "no Regular program for bold text");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+/// Exporters set the descriptor's Italic flag on upright faces (seen on a THSarabunPSK header
+/// subset: `/Flags 96`, `/ItalicAngle 0`). Such a subset is still the same style as its upright
+/// siblings, so they complete what it lacks; a real slant (`/ItalicAngle -12`) is not.
+#[test]
+fn an_italic_flag_alone_does_not_separate_subsets_of_one_face() {
+    for (angle, completes) in [(0, true), (-12, false)] {
+        let mut without_kho_khwai = legacy_thai_program();
+        drop_sfnt_glyph(&mut without_kho_khwai, 217);
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let mut flagged = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+        let Some(Object::Array(mut descendants)) = flagged.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!("fixture") };
+        let Some(Object::Dict(mut descriptor)) = descendant.get(b"FontDescriptor").cloned() else { panic!("fixture") };
+        descriptor.set(b"Flags".to_vec(), Object::Int(96));
+        descriptor.set(b"ItalicAngle".to_vec(), Object::Int(angle));
+        descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        flagged.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(flagged));
+        let upright = legacy_thai_font(&mut doc, "GHIJKL+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(upright));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style);
+        assert_eq!(edited.is_ok(), completes, "ItalicAngle {angle}: {:?}", edited.err());
+        if completes {
+            assert!(shown_codes(&reopen(&doc)).contains(&("F2".into(), vec![0x00, 0xd9])), "ค from the upright sibling");
+        }
+    }
+}
+
+/// A subset keeps only what its document used. One without อ or any tone alternate still takes
+/// text that needs neither, in the source face; text that needs an alternate it lacks is refused.
+#[test]
+fn editing_legacy_thai_needs_only_the_glyphs_the_text_uses() {
+    let mut sparse = legacy_thai_program();
+    for gid in [258, 347, 352, 353] {
+        drop_sfnt_glyph(&mut sparse, gid);
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &sparse, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("ปู่"), &style).unwrap_err().to_string();
+    assert!(error.contains("contextual mark") && error.contains("U+0E48"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("every glyph this text needs is in the subset");
+    assert_eq!(edited.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    assert!(shown_codes(&doc).iter().all(|(font, _)| font == "F1"), "{:?}", shown_codes(&doc));
+}
+
+/// A subset may give a character a code whose glyph it emptied (its `/W` still lists it). The
+/// edit then uses another subset of the face that draws it, rather than drawing nothing.
+#[test]
+fn editing_legacy_thai_skips_a_subset_whose_glyph_is_empty() {
+    // Both subsets map A (glyph 36 in Inter) through ToUnicode; F1 has emptied it.
+    let unicode = [LEGACY_THAI_UNICODE, b" 1 beginbfchar <0024> <0041> endbfchar"].concat();
+    let mut empty_a = legacy_thai_program();
+    drop_sfnt_glyph(&mut empty_a, 36);
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let first = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &empty_a, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(first));
+    let second = legacy_thai_font(&mut doc, "GHIJKL+THSarabunPSK", &legacy_thai_program(), &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(second));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("กA"), &style).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กA");
+    let shown = shown_codes(&doc);
+    assert!(shown.contains(&("F2".into(), vec![0x00, 0x24])), "A from the subset that has its outline: {shown:?}");
+    assert!(!shown.contains(&("F1".into(), vec![0x00, 0x24])), "not from the one that emptied it: {shown:?}");
+}
+
+/// Each two-byte code a page's content shows, with the font resource it is shown in.
+fn shown_codes(doc: &Document) -> Vec<(String, Vec<u8>)> {
+    let mut font = String::new();
+    let mut shown = Vec::new();
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        if op.is("Tf") {
+            font = String::from_utf8_lossy(op.name(0).unwrap_or_default()).into_owned();
+        }
+        let strings: Vec<Vec<u8>> = match op.op.as_slice() {
+            b"Tj" | b"'" => op.operands.last().and_then(Object::as_string).map(|s| s.bytes.clone()).into_iter().collect(),
+            b"TJ" => {
+                op.operands.first().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_string).map(|s| s.bytes.clone()).collect()
+            }
+            _ => Vec::new(),
+        };
+        for bytes in strings {
+            shown.extend(bytes.chunks(2).map(|c| (font.clone(), c.to_vec())));
+        }
+    }
+    shown
+}
+
+/// Where table `tag` starts in an sfnt.
+fn sfnt_table(program: &[u8], tag: &[u8; 4]) -> usize {
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let record = (0..count).map(|i| 12 + i * 16).find(|&r| &program[r..r + 4] == tag).unwrap();
+    u32::from_be_bytes(program[record + 8..record + 12].try_into().unwrap()) as usize
+}
+
+/// Empty glyph `gid` of an sfnt as a subsetter drops it: its data stays as the previous glyph's
+/// padding, and every other glyph keeps its outline.
+fn drop_sfnt_glyph(program: &mut [u8], gid: usize) {
+    let long = program[sfnt_table(program, b"head") + 51] == 1;
+    let (loca, size) = (sfnt_table(program, b"loca"), if long { 4 } else { 2 });
+    let next = program[loca + (gid + 1) * size..][..size].to_vec();
+    program[loca + gid * size..][..size].copy_from_slice(&next);
+}
+
+/// Inter's outlines in a legacy THSarabunPSK subset's glyph order; no proprietary font fixture is
+/// needed. The slots where that order has a Thai vowel or tone mark, or a mark-like Windows PUA
+/// alternate, take no advance (the source font is checked for that before its glyphs are trusted)
+/// and the others 500 units. Removing the layout and `cmap` tables reproduces legacy subsetting.
+fn legacy_thai_program() -> Vec<u8> {
+    let mut program = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let hmtx = sfnt_table(&program, b"hmtx");
+    for gid in (214..=298usize).chain(342..=368) {
+        let mark = match gid {
+            342..=368 => !matches!(gid, 342 | 357),
+            _ => matches!(gid + if gid <= 271 { 0xd2b } else { 0xd2f }, 0x0e31 | 0x0e34..=0x0e3a | 0x0e47..=0x0e4e),
+        };
+        let advance: u16 = if mark { 0 } else { 500 };
+        program[hmtx + gid * 4..hmtx + gid * 4 + 2].copy_from_slice(&advance.to_be_bytes());
+    }
     let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
     let records: Vec<_> = program[12..12 + count * 16]
         .as_chunks::<16>()
@@ -10855,6 +11327,38 @@ fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_aft
     for (index, record) in records.iter().enumerate() {
         program[12 + index * 16..28 + index * 16].copy_from_slice(record);
     }
+    program
+}
+
+/// A THSarabunPSK Identity-H font over `program` (a [`legacy_thai_program`]), mapping `unicode`.
+fn legacy_thai_font(doc: &mut Document, base_font: &str, program: &[u8], unicode: &[u8]) -> Dict {
+    let raw = doc.add(Object::Stream(Stream::flate(Dict::new(), program)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(raw));
+    let mut descendant = Dict::new();
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    descendant.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+    descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(65535), Object::Int(500)]));
+    let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), unicode)));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type0"));
+    font.set(b"BaseFont".to_vec(), Object::name(base_font));
+    font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+    font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(descendant)]));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+    font
+}
+
+/// The intact ToUnicode of a legacy THSarabunPSK subset: nominal Thai and two tone alternates.
+const LEGACY_THAI_UNICODE: &[u8] =
+    b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
+
+#[test]
+fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_after_reopen() {
+    // Remap existing OFL Inter outlines to synthetic Thai glyph slots; no proprietary font
+    // fixture is needed. Removing layout/cmap tables reproduces legacy PDF font subsetting.
+    let program = legacy_thai_program();
     for bold in [false, true] {
         let mut doc = text_page("BT /F1 17.5 Tf 0.42 Tc 1.1 Tw 86 Tz 1.5 Ts 2 Tr 0.6 w 0.2 0.3 0.4 rg 50 650 Td <00d601090119> Tj ET");
         let raw = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));

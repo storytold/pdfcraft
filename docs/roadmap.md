@@ -1,6 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964 / #3185: grouped source text and Thai font/style preservation; estimates unchanged)
+> **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M7 #2964 / #3185: grouped source text and Thai font/style preservation, with reported deep or unsafe groups and a per-glyph check of the Thai map repair; estimates unchanged)
 
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)

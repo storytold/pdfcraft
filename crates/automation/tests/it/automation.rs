@@ -11458,10 +11458,32 @@ fn explicit_bundled_thai_font_choice_layout_edit_undo_and_reopen() {
     ok(&mut a, "doc_save", json!({"doc":doc,"path":"edited.pdf"}));
     let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, reopened), edited);
-    assert!(a.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"text":"น้ำ 😀","font_resource":"builtin:thai"})).is_err());
+    let Err(ToolError::Failed(m)) =
+        a.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"text":"น้ำ 😀","font_resource":"builtin:thai"}))
+    else {
+        panic!("Noto Sans Thai has no emoji")
+    };
+    assert!(m.contains("Noto Sans Thai") && m.contains("U+1F600"), "the error names the font and the character: {m}");
     assert_eq!(page_text(&mut a, reopened), edited);
     let image = a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":144})).unwrap();
     assert!(image.iter().any(|c| matches!(c, Content::Png { .. })));
+}
+
+/// `text_prepare` refuses what it can't act on, changing nothing: a page with no grouped text
+/// (with the reason), and a page the document doesn't have.
+#[test]
+fn text_prepare_refuses_pages_without_grouped_text() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let Err(ToolError::Failed(m)) = a.call("text_prepare", &json!({"doc":doc,"page":1})) else { panic!("nothing to prepare") };
+    assert!(m.contains("no supported grouped text"), "{m}");
+    let Err(ToolError::InvalidArgs(m)) = a.call("text_prepare", &json!({"doc":doc,"page":2})) else { panic!("no page 2") };
+    assert!(m.contains("out of range"), "{m}");
+    assert!(a.call("edit_undo", &json!({"doc":doc})).is_err(), "nothing was recorded to undo");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], false);
 }
 
 #[test]
@@ -11518,14 +11540,25 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     let id = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
     let before = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
     assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["count"], 0);
-    ok(&mut a, "text_prepare", json!({"doc":id,"page":1}));
+    let prepared = ok(&mut a, "text_prepare", json!({"doc":id,"page":1}));
+    assert_eq!(
+        [&prepared["prepared_groups"], &prepared["repaired_fonts"], &prepared["refused_groups"]],
+        [&json!(1), &json!(0), &json!([])],
+        "{prepared}"
+    );
     assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap(), before, "preparing must not change pixels");
     assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["paragraphs"][0]["text"], old);
-    let args = json!({"doc":id,"page":1,"paragraph":1,"text":new,"font_resource":"builtin:thai"});
-    if pdfcraft_fonts::document_thai_font().is_none() {
-        assert!(a.call("text_edit", &args).is_err());
-        return;
-    }
+    // The bundled Thai face is an optional build input. Without it, `builtin:thai` is refused and
+    // the grouped edit, undo, redo and save checks run on Latin text in Helvetica instead.
+    let thai = json!({"doc":id,"page":1,"paragraph":1,"text":new,"font_resource":"builtin:thai"});
+    let (new, args) = if pdfcraft_fonts::document_thai_font().is_some() {
+        (new, thai)
+    } else {
+        let Err(ToolError::Failed(m)) = a.call("text_edit", &thai) else { panic!("builtin:thai needs the bundled Thai face") };
+        assert!(m.contains("builtin:thai"), "{m}");
+        let latin = "Edited body";
+        (latin, json!({"doc":id,"page":1,"paragraph":1,"text":latin,"font":"helvetica"}))
+    };
     ok(&mut a, "text_edit", args);
     assert_eq!(ok(&mut a, "text_lines", json!({"doc":id,"page":1}))["lines"][0]["text"].as_str().unwrap().trim(), new);
     assert_eq!(page_text(&mut a, id)[1], old, "a shared form's other page must not change");

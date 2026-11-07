@@ -11,11 +11,13 @@
 //! Drawing a form inline paints the same pixels unless the form is a transparency group whose
 //! compositing differs from painting its parts one by one: a knockout group, a group that uses
 //! a blend mode other than Normal inside, or a group drawn translucent, blended or under a soft
-//! mask, or a group with a blending colour space (`/CS`) other than the page's: its contents
-//! composite in that space and are then converted (ISO 32000-2 §11.6.6), inline they would
-//! composite in the page's. Those are refused rather than changed, as is tagged form content (its structure link
-//! would be lost) and content whose marked content or text objects don't balance (inlined, they
-//! would change the scope of the page's own). A form in a layer (`/OC`) keeps its membership as `/OC … BDC … EMC`.
+//! mask, or a group with a blending colour space (`/CS`) the page group doesn't name too: its
+//! contents composite in that space and are then converted (ISO 32000-2 §11.6.6), inline they
+//! would composite in the page's, which a page without one leaves to the PDF processor. Those
+//! are refused rather than changed, as is tagged form content (its structure link would be lost)
+//! and content whose marked content or text objects don't balance (inlined, they would change
+//! the scope of the page's own). A form in a layer (`/OC`) keeps its membership as
+//! `/OC … BDC … EMC`.
 //!
 //! A pattern's matrix maps pattern space to the default space of the content stream that uses it
 //! (ISO 32000-2 §8.7.2): inside the form that is the form's space at the `Do`, on the page it is
@@ -42,10 +44,20 @@ const MAX_MOVED_PATTERNS: usize = 256;
 /// A name map for one resource category: form name → name in the page's resources.
 type Renames = Vec<(Vec<u8>, Vec<u8>)>;
 
-/// What [`ungroup_ops`] gives back: the ops that draw the form inline, the page resources with
-/// the form's merged in, and the pattern copies to add to the document, each under the name in
-/// the merged `/Pattern` dictionary that the ops already use.
-pub(crate) type Ungrouped = (Vec<Op>, Dict, Vec<(Vec<u8>, Object)>);
+/// What [`ungroup_ops`] gives back.
+pub(crate) struct Ungrouped {
+    /// The ops that draw the form inline.
+    pub(crate) ops: Vec<Op>,
+    /// The page resources with the form's merged in.
+    pub(crate) resources: Dict,
+    /// The pattern copies to add to the document, each under the name in the merged `/Pattern`
+    /// dictionary that the ops already use.
+    pub(crate) patterns: Vec<(Vec<u8>, Object)>,
+    /// Whether the form shows text, in its own content or in a Form XObject it draws (at any
+    /// depth [`MAX_NESTING`] allows). Text inside a tiling pattern or Type 3 glyph doesn't count:
+    /// inlining the form doesn't make it editable. Image-only and vector-only forms are artwork.
+    pub(crate) shows_text: bool,
+}
 
 /// Ungroup form `name` from the page's `resources`. `translucent` says whether the graphics state
 /// at the `Do` is translucent, blended or soft-masked, which a transparency group composites as a
@@ -122,14 +134,15 @@ pub(crate) fn ungroup_ops(
         return Err(refuse("its content has parts that can't be read"));
     }
     let mut ops = parsed.ops;
-    {
+    let shows_text = {
         // Check every form, including non-group forms, for recursive/unsupported content.
         // The form itself is being read: drawing itself again counts as blending.
-        let mut walk = BlendWalk { path: form.as_ref().into_iter().collect(), known: HashMap::new(), reads: 0, budget };
+        let mut walk = BlendWalk { path: form.as_ref().into_iter().collect(), known: HashMap::new(), reads: 0, budget, text: false };
         if blends_inside(doc, &form_res, &ops, 0, &mut walk) {
             return Err(refuse("it has blend modes, recursive forms, or nested content that cannot be verified"));
         }
-    }
+        walk.text
+    };
 
     // Merge the form's resources into a copy of the page's, renaming what clashes.
     let mut merged = resources.clone();
@@ -196,6 +209,13 @@ pub(crate) fn ungroup_ops(
             b"ET" if !in_text => return Err(refuse("its content ends a text object it didn't begin")),
             b"ET" => in_text = false,
             _ => {}
+        }
+        // A name is renamed at the operand position below, but the renderer takes operands from
+        // the end and ignores surplus ones before them: with a surplus operand the drawn name
+        // would keep its old spelling while its resource moved, and draw nothing or the wrong
+        // thing. The parser keeps such operands without counting them as skipped.
+        if takes_operands(&op.op).is_some_and(|n| op.operands.len() > n) {
+            return Err(refuse("its content gives an operator more operands than it takes"));
         }
         let slot: Option<(&[u8], usize)> = match op.op.as_slice() {
             b"Tf" | b"Do" | b"gs" | b"sh" | b"cs" | b"CS" => {
@@ -345,7 +365,7 @@ pub(crate) fn ungroup_ops(
     if layer.is_some() {
         out.push(Op::new("EMC", Vec::new()));
     }
-    Ok((out, merged, patterns))
+    Ok(Ungrouped { ops: out, resources: merged, patterns, shows_text })
 }
 
 /// A copy of pattern `entry` whose `/Matrix` maps its space to the page's default space instead
@@ -389,13 +409,30 @@ const MAX_NESTING: usize = 8;
 const MAX_NESTED_READS: usize = 64;
 
 /// What [`blends_inside`] carries through its nested reads: the forms on the current path (a
-/// form drawing itself), the answer for each form with resources of its own (its answer doesn't
-/// depend on who draws it), and how many reads it has made.
+/// form drawing itself), the answers for each form with resources of its own (whether it blends
+/// and whether it shows text; neither depends on who draws it), how many reads it has made, and
+/// whether the content being walked shows text itself or through a Form XObject it draws.
 struct BlendWalk<'a> {
     path: Vec<pdfcraft_cos::ObjRef>,
-    known: HashMap<pdfcraft_cos::ObjRef, bool>,
+    known: HashMap<pdfcraft_cos::ObjRef, (bool, bool)>,
     reads: usize,
     budget: &'a mut DecodeBudget,
+    text: bool,
+}
+
+/// Whether `op` shows text (ISO 32000-2 §9.4.3, Table 107).
+fn shows_text(op: &Op) -> bool {
+    matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"")
+}
+
+/// How many operands an operator that names a resource takes (ISO 32000-2 Annex A), its name
+/// being the first of them: only for those whose name is read at a fixed position here.
+fn takes_operands(op: &[u8]) -> Option<usize> {
+    match op {
+        b"Do" | b"gs" | b"sh" | b"cs" | b"CS" => Some(1),
+        b"Tf" | b"BDC" | b"DP" => Some(2),
+        _ => None,
+    }
 }
 
 /// Whether `op` draws a Form XObject (`Do`), Type 3 font (`Tf`) or tiling pattern (`scn`/`SCN`) from
@@ -430,11 +467,21 @@ fn inherits_resources(doc: &Document, resources: &Dict, op: &Op) -> bool {
 
 /// Whether `ops` blend through a used graphics state, nested form or pattern. Unreadable,
 /// recursive or over-budget nested content is treated as blending, so preparation refuses it.
+/// Sets `walk.text` when `ops` show text, or a Form XObject they draw does; text in a tiling
+/// pattern's cell is not the page's text and is not counted.
 fn blends_inside(doc: &Document, resources: &Dict, ops: &[Op], depth: usize, walk: &mut BlendWalk<'_>) -> bool {
     let category = |cat: &[u8]| resources.get(cat).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     let (states, xobjects, patterns) = (category(b"ExtGState"), category(b"XObject"), category(b"Pattern"));
     let state_blends = |g: Option<&Object>| g.map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).is_some_and(|gs| blends(doc, &gs));
+    if ops.iter().any(shows_text) {
+        walk.text = true;
+    }
     for op in ops {
+        // Read at operand 0 below; with a surplus operand the renderer draws another name, which
+        // this walk can't vouch for.
+        if takes_operands(&op.op).is_some_and(|n| op.operands.len() > n) {
+            return true;
+        }
         if op.is("gs") && state_blends(op.name(0).and_then(|n| states.get(n))) {
             return true;
         }
@@ -466,10 +513,12 @@ fn blends_inside(doc: &Document, resources: &Dict, ops: &[Op], depth: usize, wal
             _ => continue,
         };
         let r = o.as_ref();
-        if let Some(known) = r.and_then(|r| walk.known.get(&r)) {
-            if *known {
+        let drawn_form = op.is("Do");
+        if let Some((known, text)) = r.and_then(|r| walk.known.get(&r)).copied() {
+            if known {
                 return true;
             }
+            walk.text |= drawn_form && text;
             continue;
         }
         if depth >= MAX_NESTING || r.is_some_and(|r| walk.path.contains(&r)) || walk.reads >= MAX_NESTED_READS {
@@ -487,11 +536,14 @@ fn blends_inside(doc: &Document, resources: &Dict, ops: &[Op], depth: usize, wal
         if let Some(r) = r {
             walk.path.push(r);
         }
+        let outer_text = std::mem::replace(&mut walk.text, false);
         let blends = blends_inside(doc, &own, &inner.ops, depth + 1, walk);
+        let inner_text = walk.text;
+        walk.text = outer_text || (drawn_form && inner_text);
         if let Some(r) = r {
             walk.path.retain(|x| *x != r);
             if has_own {
-                walk.known.insert(r, blends);
+                walk.known.insert(r, (blends, inner_text));
             }
         }
         if blends {
@@ -508,14 +560,13 @@ pub(crate) fn page_blend_space(doc: &Document, page: &Dict) -> Option<Object> {
     group.get(b"CS").map(|cs| (*doc.resolve(cs)).clone())
 }
 
-/// Whether a group blending in `cs` composites as the page does: in the page group's own space
-/// when it names one, else in DeviceRGB, the space viewers composite a page in on screen.
+/// Whether a group blending in `cs` composites as the page does: only when the page group names
+/// the same space. A page that names none composites in a space the PDF processor chooses
+/// (ISO 32000-2 §11.4.7): DeviceRGB on screen, but often DeviceCMYK when printed, where a group
+/// that blends in DeviceRGB converts its CMYK and gray colours through RGB and inline they would
+/// not be. Such a group is refused rather than changed.
 fn same_blend_space(doc: &Document, cs: &Object, page_space: Option<&Object>) -> bool {
-    let cs = doc.resolve(cs);
-    match page_space {
-        Some(page) => *cs == *page,
-        None => cs.as_name() == Some(b"DeviceRGB"),
-    }
+    page_space.is_some_and(|page| *doc.resolve(cs) == *page)
 }
 
 /// Whether `d`'s `key` is the name `want`, directly or through an indirect object (any value may

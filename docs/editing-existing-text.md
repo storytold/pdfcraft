@@ -5,11 +5,16 @@ page in an undoable **Prepare grouped text** step. The group's original operator
 placement and resources become page content; shared forms on other pages stay unchanged.
 Headless callers use `text_prepare`, then list `text_paragraphs` and call `text_edit`.
 This edits existing glyph operators; it adds neither a cover rectangle nor an Add Text box.
-Preparation refuses knockout/blended groups, incompatible colour spaces, tagged forms,
-recursive forms, unfinished paths and unreadable content. Decoding is capped at 16 MiB,
-64 placements and eight expansion levels per page. Unsupported groups remain intact.
-A narrowly fingerprinted legacy THSarabunPSK exporter map can also be repaired in copied page
-fonts; the repair log records both preparation and character-map recovery.
+Preparation refuses knockout/blended groups, groups that blend in a colour space the page
+group does not also name (including DeviceRGB on a page that names none), tagged forms,
+recursive forms, unfinished paths and unreadable content. Forms that draw only images or
+vector artwork are left grouped. Decoding is capped at 16 MiB, 64 placements and eight
+expansion levels per page; text grouped deeper is reported. Unsupported groups remain intact:
+`text_prepare` lists each with its reason, and the app records them in the repair log when it
+prepares other groups on the page. When no group on a page can be prepared, the app says
+nothing; the text stays grouped. A narrowly fingerprinted legacy THSarabunPSK exporter map
+can also be repaired in copied page fonts, only when every glyph the subset kept advances as
+its assumed Thai character does; the repair log records both preparation and map recovery.
 
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
@@ -59,7 +64,9 @@ add a font binary or change the release font pin. Fonts shared by releases belon
 THSarabunPSK subsets, PdfCraft reconstructs an editor-only Unicode cmap from the PDF's
 Unicode and CID-to-glyph maps. HarfRust uses the retained Thai positional glyphs, and the
 saved text refers to the original PDF font resources. Several subsets of the same exact
-face can supply Thai and punctuation glyphs; Regular and Bold stay separate. Source font
+face can supply Thai and punctuation glyphs, including a Thai run whose clusters are split
+across subsets, and a subset whose glyph for a character is empty is skipped; Regular and
+Bold stay separate. Source font
 programs are never modified or replaced. Text settings, including character/word spacing,
 horizontal scale, rise, color and paint mode, remain in the PDF text state.
 
@@ -68,14 +75,25 @@ complete original face or an explicit replacement. Cross-family replacement requ
 explicit choice. The document-font menu offers **Noto Sans Thai**: pass its `text_fonts`
 resource (normally `builtin:thai`) as `text_edit.font_resource` or a range's `font_resource`. This replacement
 requires the optional craft-fonts Thai input and currently uses Regular. A matching Noto
-subset can still be completed by that same bundled family.
+subset can still be completed by that same bundled family when it is Regular and upright; a
+subset its name or descriptor marks bold or italic needs an explicit replacement.
 
 The bundled variable Thai face is written as bounded Type 3 glyph outlines, with shaped
 vowel/tone positions and logical Unicode text, rather than embedded as a static font.
 Saved paragraphs can be reopened and edited again without installing a font. Modern Thai
-shaping uses the source's GPOS mark positioning; GSUB substitution is optional, as specified by
+shaping uses the source's GPOS mark positioning (a `mark` or `mkmk` feature in the script and language system the shaper
+selects for Thai, not just a GPOS table); GSUB substitution is optional, as specified by
 [the OpenType Thai model](https://learn.microsoft.com/en-us/typography/script-development/thai).
-Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS.
+Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS; their
+alternates are used only when each kept one has a mark's zero advance (or, for the two
+consonant forms, an advance). A THSarabunPSK program with its own Thai mark
+positioning, such as a complete face loaded with Load font, is shaped by that layout instead,
+still in its own codes. One without it takes the legacy path only when every Thai glyph it keeps
+is where the legacy glyph order puts it, and is otherwise shaped as an ordinary source font. A
+subset needs only the glyphs its new text uses. When no subset can show the new text in its
+existing codes, a complete program of the same face and style (one added with Load font, CFF
+included) shapes the whole span with its own layout, Latin rows too, rather than the edit being
+refused; a Regular program never completes text the source marks bold or italic.
 Mixed contextual style runs and dictionary word segmentation remain limited. No font binary
 or release pin changes are needed.
 

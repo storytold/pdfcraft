@@ -20,6 +20,10 @@ pub struct Preparation {
     pub repaired_fonts: usize,
 }
 
+/// How many levels of nested groups preparation opens on one page. Text nested deeper stays
+/// grouped and is reported in [`Preparation::refused`].
+const MAX_LEVELS: usize = 8;
+
 /// Prepare grouped source text atomically, within eight levels and 64 placements per page.
 /// Shared forms and other pages are untouched. Preparation is a distinct undoable engine edit.
 pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError> {
@@ -28,7 +32,8 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
     let mut bytes_left = 16usize << 20;
     let mut visits = 0usize;
     let mut decode = pdfcraft_cos::DecodeBudget::new(16 << 20, 0);
-    for _ in 0..8 {
+    // One pass opens one level of every placement; the last pass only reports what is deeper.
+    for pass in 0..=MAX_LEVELS {
         let p = page_dict(&next, page)?;
         let streams = strict_streams(&next, &p.dict)?;
         let pieces = Pieces::join(&streams.iter().map(|(_, b)| b.as_slice()).collect::<Vec<_>>());
@@ -63,11 +68,18 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                 continue;
             }
             let translucent = expand::translucent_at(&next, &merged, &ops, at);
-            match expand::ungroup_ops(&next, &merged, image.name.as_bytes(), translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
-                Ok((inline, mut res, patterns)) => {
-                    // Pure vector artwork needs no preparation. Nested text groups are visited
-                    // on the next pass, with their inherited placement and clip still in force.
-                    if !inline.iter().any(|o| matches!(o.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"" | b"Do")) {
+            // The resource name exactly as the `Do` writes it: a name need not be UTF-8, and
+            // `image.name` is only its display form.
+            let name = op.last_name().map_or_else(|| image.name.as_bytes().to_vec(), <[u8]>::to_vec);
+            match expand::ungroup_ops(&next, &merged, &name, translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
+                Ok(expand::Ungrouped { ops: inline, resources: mut res, patterns, shows_text }) => {
+                    // Vector and image artwork needs no preparation. Nested text groups are
+                    // visited on the next pass, with their inherited placement and clip in force.
+                    if !shows_text {
+                        continue;
+                    }
+                    if pass == MAX_LEVELS {
+                        result.refused.push(format!("{}: its text is grouped more than {MAX_LEVELS} levels deep", image.name));
                         continue;
                     }
                     let data_len = pdfcraft_content::serialize_ops(&inline).len();
@@ -140,8 +152,10 @@ fn repair_thai_fonts(doc: &mut Document, page: usize) -> Result<usize, EditError
         // remain. The original map's accidental oversized range is still overridden for Thai.
         let Some(Object::Stream(tu)) = font.get(b"ToUnicode").map(|r| doc.resolve(r)).as_deref().cloned() else { continue };
         let old = pdfcraft_cos::DecodeBudget::new(1 << 20, 0).decode_strict(&tu)?;
+        // After the last `endcmap`: a stream with more than one must not have an earlier block
+        // (or its oversized range) after the corrective entries.
         let marker = b"endcmap";
-        let Some(at) = old.windows(marker.len()).position(|w| w == marker) else { continue };
+        let Some(at) = old.windows(marker.len()).rposition(|w| w == marker) else { continue };
         let mut added = format!("\n{} beginbfchar\n", map.len());
         for (code, ch) in map {
             added.push_str(&format!("<{code:04x}> <{:04x}>\n", u32::from(ch)));

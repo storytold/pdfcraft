@@ -3,7 +3,9 @@
 //! Some THSarabunPSK Identity-H subsets retain original glyph IDs but write Latin/control
 //! destinations for Thai in ToUnicode (including an accidental 00ff..01ff range). The intact
 //! Thai anchors identify the original nominal Thai order. Only that complete fingerprint is
-//! accepted; correct maps and unrelated fonts are never changed. No font artwork is bundled.
+//! accepted, and then only when every glyph the subset kept advances as its assumed character
+//! does (a mark takes none); correct maps and unrelated fonts are never changed. No font
+//! artwork is bundled.
 
 use super::{Dict, Document, Metrics, dict, only_char, unicode_map};
 use pdfcraft_cos::{DecodeBudget, Object};
@@ -12,6 +14,7 @@ use std::collections::BTreeMap;
 /// Recover the nominal Thai codes and the presentation marks of this damaged legacy export.
 /// The caller must record the repair, and attach the map to a copy of the page's font.
 pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)>> {
+    use skrifa::{MetadataProvider as _, raw::TableProvider as _};
     let base = String::from_utf8_lossy(font.name(b"BaseFont")?);
     let family = base.rsplit('+').next()?;
     if !matches!(family, "THSarabunPSK" | "THSarabunPSK-Bold" | "THSarabunPSK-Italic" | "THSarabunPSK-BoldItalic")
@@ -101,14 +104,12 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
     if !(body || attachment || bold) {
         return None;
     }
-    let mut out: Vec<_> = (214u16..=298)
-        .filter_map(|gid| {
-            let unicode = u32::from(gid) + if gid <= 271 { 0xd2b } else { 0xd2f };
-            char::from_u32(unicode).map(|ch| (gid, ch))
-        })
-        .collect();
+    let nominal = (214u16..=298).filter_map(|gid| {
+        let unicode = u32::from(gid) + if gid <= 271 { 0xd2b } else { 0xd2f };
+        char::from_u32(unicode).map(|ch| (gid, ch))
+    });
     // Contextual marks have the same character as the nominal mark, with a moved outline.
-    out.extend([
+    let contextual = [
         (343, '\u{0e34}'),
         (344, '\u{0e35}'),
         (347, '\u{0e48}'),
@@ -118,8 +119,52 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
         (356, '\u{0e4c}'),
         (358, '\u{0e31}'),
         (360, '\u{0e47}'),
-    ]);
+    ];
+    // The anchors identify the exporter; the font program confirms each glyph. Every glyph the
+    // subset kept must advance as the character it is given (a vowel or tone mark set on its
+    // base takes no advance, every other character does), else the order differs somewhere and
+    // nothing is mapped. A glyph the subset dropped is left unmapped: no code can draw it, and
+    // its advance is the subsetter's filler, not the glyph's.
+    let program = embedded_truetype(doc, &desc)?;
+    let face = skrifa::FontRef::new(&program).ok()?;
+    let loca = face.loca(None).ok()?;
+    let advances = face.glyph_metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let mut out = Vec::new();
+    for (gid, ch) in nominal.chain(contextual) {
+        let at = usize::from(gid);
+        if !loca.get_raw(at).zip(loca.get_raw(at + 1)).is_some_and(|(start, end)| end > start) {
+            continue;
+        }
+        if advances.advance_width(skrifa::GlyphId::new(u32::from(gid))).is_none_or(|w| (w == 0.0) != is_thai_mark(ch)) {
+            return None;
+        }
+        out.push((gid, ch));
+    }
     Some(out)
+}
+
+/// Whether a Thai character is a vowel or tone mark set above or below its base, with no advance
+/// of its own (U+0E31, U+0E34–U+0E3A, U+0E47–U+0E4E). Sara Am and the other vowels advance.
+fn is_thai_mark(ch: char) -> bool {
+    matches!(u32::from(ch), 0x0e31 | 0x0e34..=0x0e3a | 0x0e47..=0x0e4e)
+}
+
+/// The glyph a legacy THSarabunPSK program draws Thai character `ch` with: U+0E01–U+0E3A are
+/// glyphs 214–271 and U+0E3F–U+0E5B glyphs 272–298 (the order `recovered_thai_map` assumes).
+fn legacy_glyph(ch: u32) -> Option<u32> {
+    match ch {
+        0x0e01..=0x0e3a => ch.checked_sub(0xd2b),
+        0x0e3f..=0x0e5b => ch.checked_sub(0xd2f),
+        _ => None,
+    }
+}
+
+/// The TrueType program (`/FontFile2`) of a CIDFont, decoded within the editor's size cap.
+fn embedded_truetype(doc: &Document, descendant: &Dict) -> Option<Vec<u8>> {
+    let descriptor = dict(doc, descendant.get(b"FontDescriptor"))?;
+    let program = doc.resolve(descriptor.get(b"FontFile2")?);
+    let Object::Stream(program) = program.as_ref() else { return None };
+    DecodeBudget::new(super::MAX_SFNT, 0).decode_within(program, super::MAX_SFNT).ok()
 }
 
 /// Source glyph positions and the original PDF character codes that draw them. Empty codes
@@ -185,18 +230,23 @@ pub(super) fn composite_glyph_maps(
     // See https://linux.thai.net/~thep/th-otf/shaping.html (legacy PUA assignments).
     let family = metrics.base_font.rsplit('+').next().unwrap_or(&metrics.base_font);
     let alternate_meanings = metrics.text_of(352).is_some_and(|t| t == "่") && metrics.text_of(353).is_some_and(|t| t == "้");
+    // Each alternate the subset kept must advance as its form does: U+F700 and U+F70F are ฐ and
+    // ญ without their descenders, the rest marks with no advance of their own. Any that doesn't
+    // means another glyph order, and then none is used: the wrong mark would draw silently.
+    let kept: Vec<(usize, u32)> = (342u32..=368).enumerate().filter(|&(_, gid)| outlined(gid)).collect();
+    let in_order =
+        kept.iter().all(|&(index, gid)| advances.advance_width(skrifa::GlyphId::new(gid)).is_some_and(|w| (w > 0.0) == matches!(index, 0 | 15)));
     if family.starts_with("THSarabunPSK")
         && unicode.get(&0x0e01) == Some(&214)
         && unicode.get(&0x0e2d) == Some(&258)
         && (alternate_meanings || unicode.contains_key(&0xf70a))
+        && in_order
     {
-        for (index, gid) in (342u32..=368).enumerate() {
-            if outlined(gid)
-                && let Some(code) = match &cid_map {
-                    None => u16::try_from(gid).ok(),
-                    Some(_) => codes.get(&gid).copied(),
-                }
-            {
+        for (index, gid) in kept {
+            if let Some(code) = match &cid_map {
+                None => u16::try_from(gid).ok(),
+                Some(_) => codes.get(&gid).copied(),
+            } {
                 unicode.insert(0xf700 + index as u32, gid);
                 codes.entry(gid).or_insert(code);
             }
@@ -205,19 +255,26 @@ pub(super) fn composite_glyph_maps(
     Some((unicode, codes))
 }
 
-/// Shape legacy Thai using the PDF's own outlines and return codes for that same font.
-/// No font program, family, weight or size is replaced. A subset missing a contextual glyph
-/// is refused so the caller can try another subset of the same face or ask for its full font.
+/// Shape Thai in a THSarabunPSK source font's own outlines and return codes for that same font.
+/// No font program, family, weight or size is replaced. A program with OpenType Thai mark
+/// positioning (a complete face loaded with Load font, say) is shaped by that layout; one
+/// without it must be a verified legacy positional program, shaped with its nominal glyphs and
+/// Windows PUA alternates. A subset missing a glyph the text needs is refused, so the caller can
+/// try another subset of the same face or ask for its full font.
 pub struct LegacyThaiFont {
     bytes: Vec<u8>,
     codes: BTreeMap<u32, u16>,
     space: f64,
+    /// The program positions Thai marks itself (GPOS `mark`/`mkmk`).
+    positioned: bool,
 }
 
 impl LegacyThaiFont {
-    /// Read and verify the source font once for all wrapping/preview measurements.
+    /// Read and verify the source font once for all wrapping/preview measurements. `None` for
+    /// another family, a font with no Thai, and a program without Thai mark positioning whose
+    /// Thai glyphs are not in the legacy order: the nominal and alternate marks this shaper
+    /// assumes can't be trusted there, so it is shaped as an ordinary source font.
     pub fn from_pdf(doc: &Document, font: &Dict, space: f64) -> Result<Option<Self>, String> {
-        use skrifa::MetadataProvider as _;
         let m = Metrics::from_dict(doc, font);
         if !m.base_font.rsplit('+').next().unwrap_or(&m.base_font).starts_with("THSarabunPSK") {
             return Ok(None);
@@ -226,14 +283,24 @@ impl LegacyThaiFont {
             return Err("the source space width is invalid".into());
         }
         let bytes = super::embedded_sfnt(doc, font).ok_or("the source Thai font has no readable glyph program")?;
-        let face = skrifa::FontRef::new(&bytes).map_err(|e| e.to_string())?;
-        let cmap = face.charmap();
-        if cmap.map('ก').is_none() || cmap.map('อ').is_none() || cmap.map('\u{f70a}').is_none() {
+        let positioned = crate::source_shaping::has_thai_layout(&bytes);
+        let (unicode, codes) = composite_glyph_maps(doc, font, &bytes, &m, &mut DecodeBudget::new(1 << 17, 0))
+            .ok_or("the Thai source glyph codes cannot be recovered safely")?;
+        // A subset keeps only the glyphs its document used, so no particular letter or alternate
+        // is required here: [`Self::shape`] refuses a text whose glyphs, or required alternates
+        // ([`require_pua`]), the subset lacks. Without its own positioning, every Thai glyph it
+        // does keep must be where the legacy order puts that character, or one of the PUA
+        // alternates for a mark (or for ฐ and ญ without their descenders).
+        let mut thai = unicode.range(0x0e01..=0x0e5b).peekable();
+        if thai.peek().is_none() {
             return Ok(None);
         }
-        let (_, codes) = composite_glyph_maps(doc, font, &bytes, &m, &mut DecodeBudget::new(1 << 17, 0))
-            .ok_or("the Thai source glyph codes cannot be recovered safely")?;
-        Ok(Some(Self { bytes, codes, space }))
+        let usable = positioned
+            || thai.all(|(&ch, &gid)| {
+                legacy_glyph(ch) == Some(gid)
+                    || ((342..=368).contains(&gid) && (char::from_u32(ch).is_some_and(is_thai_mark) || matches!(ch, 0x0e0d | 0x0e10)))
+            });
+        Ok(usable.then_some(Self { bytes, codes, space, positioned }))
     }
 
     /// Shape into glyphs that are already in this exact source face.
@@ -242,8 +309,11 @@ impl LegacyThaiFont {
         if text.len() > 262_144 || text.contains(['\n', '\r']) {
             return Err("shape one bounded Thai source row at a time".into());
         }
-        let face = skrifa::FontRef::new(&self.bytes).map_err(|e| e.to_string())?;
-        require_pua(&face.charmap(), text)?;
+        // Only the legacy shaper needs the PUA alternates; a positioned program moves its marks.
+        if !self.positioned {
+            let face = skrifa::FontRef::new(&self.bytes).map_err(|e| e.to_string())?;
+            require_pua(&face.charmap(), text)?;
+        }
         let mut shaped = crate::source_shaping::ShapedRun { glyphs: Vec::new(), advance: 0.0 };
         let mut codes = Vec::new();
         // Legacy PDF subsets often omit the space glyph. Keep its measured PDF advance as a
@@ -251,7 +321,11 @@ impl LegacyThaiFont {
         for piece in text.split_inclusive(' ') {
             let word = piece.strip_suffix(' ').unwrap_or(piece);
             if !word.is_empty() {
-                let run = crate::source_shaping::shape_legacy_thai(&self.bytes, word)?;
+                let run = if self.positioned {
+                    crate::source_shaping::shape(&self.bytes, word)?
+                } else {
+                    crate::source_shaping::shape_legacy_thai(&self.bytes, word)?
+                };
                 for mut glyph in run.glyphs {
                     let code = self
                         .codes
@@ -330,9 +404,175 @@ fn require_pua(cmap: &skrifa::charmap::Charmap<'_>, text: &str) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use super::recovered_thai_map;
-    use pdfcraft_cos::{Dict, Document, Object};
+    use super::{LegacyThaiFont, Metrics, composite_glyph_maps, is_thai_mark, recovered_thai_map};
+    use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, Stream};
     use std::collections::HashMap;
+
+    /// Where table `tag` starts in an sfnt.
+    fn table(program: &[u8], tag: &[u8; 4]) -> usize {
+        let count = u16::from_be_bytes([program[4], program[5]]) as usize;
+        let record = (0..count).map(|i| 12 + i * 16).find(|&r| &program[r..r + 4] == tag).unwrap();
+        u32::from_be_bytes(program[record + 8..record + 12].try_into().unwrap()) as usize
+    }
+
+    /// Set glyph `gid`'s advance (a long `hmtx` entry).
+    fn set_advance(program: &mut [u8], gid: usize, advance: u16) {
+        let long = u16::from_be_bytes(program[table(program, b"hhea") + 34..][..2].try_into().unwrap()) as usize;
+        assert!(gid < long, "a long hmtx entry");
+        let at = table(program, b"hmtx") + gid * 4;
+        program[at..at + 2].copy_from_slice(&advance.to_be_bytes());
+    }
+
+    /// Empty glyph `gid`, as a subsetter drops it: its data is left as the previous glyph's padding.
+    fn drop_glyph(program: &mut [u8], gid: usize) {
+        let long = program[table(program, b"head") + 51] == 1;
+        let loca = table(program, b"loca");
+        if long {
+            let next: [u8; 4] = program[loca + (gid + 1) * 4..][..4].try_into().unwrap();
+            program[loca + gid * 4..][..4].copy_from_slice(&next);
+        } else {
+            let next: [u8; 2] = program[loca + (gid + 1) * 2..][..2].try_into().unwrap();
+            program[loca + gid * 2..][..2].copy_from_slice(&next);
+        }
+    }
+
+    /// Inter's outlines standing in for a THSarabunPSK subset (no proprietary font is used): the
+    /// glyphs where the exporter's order has a Thai mark or a mark-like alternate take no
+    /// advance, the others 500 units.
+    fn thai_ordered_program() -> Vec<u8> {
+        let mut program = crate::script::INTER_REGULAR.to_vec();
+        for gid in 214..=368usize {
+            let mark = match gid {
+                214..=298 => is_thai_mark(char::from_u32(gid as u32 + if gid <= 271 { 0xd2b } else { 0xd2f }).unwrap()),
+                342..=368 => !matches!(gid, 342 | 357),
+                _ => continue,
+            };
+            set_advance(&mut program, gid, if mark { 0 } else { 500 });
+        }
+        program
+    }
+
+    /// A THSarabunPSK Identity-H font over `program`, with `to_unicode`.
+    fn thai_font(doc: &mut Document, program: &[u8], to_unicode: &[u8]) -> Dict {
+        let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), to_unicode)));
+        let file = doc.add(Object::Stream(Stream::flate(Dict::new(), program)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(file));
+        let mut desc = Dict::new();
+        desc.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+        desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        let mut font = Dict::new();
+        font.set(b"Subtype".to_vec(), Object::name("Type0"));
+        font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+THSarabunPSK"));
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(desc)]));
+        font.set(b"ToUnicode".to_vec(), Object::Ref(tu));
+        font
+    }
+
+    /// The exporter's damaged map: intact anchors, Latin/control destinations for the other Thai
+    /// codes, and the oversized range first.
+    const DAMAGED: &[u8] = b"begincmap 1 begincodespacerange <0000> <ffff> endcodespacerange \
+          1 beginbfrange <00ff><01ff><0032> endbfrange 17 beginbfrange \
+          <00d9><00d9><0e04> <00e2><00e2><0e0d> <00fa><00fa><0e25> <0100><0100><0e2b> <0102><0102><0e2d> \
+          <0164><0164><0e4c> <0166><0166><0e31> <0168><0168><0e47> \
+          <00d6><00d6><000f> <00f0><00f0><0029> <00f8><00f8><0023> <0105><0105><003e> <0107><0107><0040> \
+          <0109><0109><003e> <0111><0111><004e> <0160><0160><004e> <0161><0161><004f> endbfrange endcmap";
+
+    /// The anchors identify the exporter, but the glyph order is still checked glyph by glyph: a
+    /// mark where a letter belongs (or the reverse) anywhere in the kept glyphs refuses the whole
+    /// map, and a glyph the subset dropped is left unmapped whatever its filler advance says.
+    #[test]
+    fn recovered_thai_map_checks_every_kept_glyph_against_the_font_program() {
+        let mut doc = Document::new_empty();
+        let font = thai_font(&mut doc, &thai_ordered_program(), DAMAGED);
+        let recovered: HashMap<_, _> = recovered_thai_map(&doc, &font).unwrap().into_iter().collect();
+        assert_eq!(recovered[&262], 'ั');
+        assert_eq!(recovered[&297], '๘');
+        // 259–261 are ฮ, ฯ and ะ, between the last anchor (อ, 258) and the first mark: a font that
+        // put Mai Han-akat one glyph earlier passes every anchor and only this check sees it.
+        let mut shifted = thai_ordered_program();
+        set_advance(&mut shifted, 261, 0);
+        set_advance(&mut shifted, 262, 500);
+        let shifted = thai_font(&mut doc, &shifted, DAMAGED);
+        assert!(recovered_thai_map(&doc, &shifted).is_none(), "a kept glyph that advances unlike its character refuses the map");
+        let mut dropped = thai_ordered_program();
+        drop_glyph(&mut dropped, 262);
+        set_advance(&mut dropped, 262, 500);
+        let dropped = thai_font(&mut doc, &dropped, DAMAGED);
+        let recovered = recovered_thai_map(&doc, &dropped).unwrap();
+        assert!(recovered.iter().all(|(gid, _)| *gid != 262), "a dropped glyph is not mapped");
+        assert!(recovered.iter().any(|(gid, _)| *gid == 263));
+        let mut unreadable = font.clone();
+        let Some(Object::Array(desc)) = unreadable.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut desc)) = desc.first().cloned() else { panic!("fixture") };
+        desc.remove(b"FontDescriptor");
+        unreadable.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(desc)]));
+        assert!(recovered_thai_map(&doc, &unreadable).is_none(), "without the program nothing is verified, so nothing is mapped");
+    }
+
+    /// `program` without the tables a legacy subsetter leaves out.
+    fn without_tables(program: &[u8], tags: &[&[u8; 4]]) -> Vec<u8> {
+        let mut program = program.to_vec();
+        let count = u16::from_be_bytes([program[4], program[5]]) as usize;
+        let records: Vec<Vec<u8>> =
+            program[12..12 + count * 16].chunks(16).filter(|r| !tags.iter().any(|t| &r[..4] == t.as_slice())).map(<[u8]>::to_vec).collect();
+        program[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+        for (i, record) in records.iter().enumerate() {
+            program[12 + i * 16..28 + i * 16].copy_from_slice(record);
+        }
+        program
+    }
+
+    /// A THSarabunPSK program with its own Thai mark positioning is shaped by that layout; one
+    /// without it only if every Thai glyph it keeps is where the legacy order has that character
+    /// (the legacy shaper skips the positioning check). A subset needs no particular glyph.
+    #[test]
+    fn thai_source_programs_are_shaped_by_their_own_layout_or_as_verified_legacy() {
+        let unicode = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
+        // `Some(positioned)` when the program can be shaped in place.
+        let mode = |program: &[u8], unicode: &[u8]| {
+            let mut doc = Document::new_empty();
+            let font = thai_font(&mut doc, program, unicode);
+            LegacyThaiFont::from_pdf(&doc, &font, 0.25).unwrap().map(|f| f.positioned)
+        };
+        let stripped = without_tables(&thai_ordered_program(), &[b"cmap", b"GSUB", b"GPOS"]);
+        assert_eq!(mode(&stripped, unicode), Some(false), "a legacy positional subset");
+        let positioned = without_tables(&thai_ordered_program(), &[b"cmap", b"GSUB"]);
+        assert_eq!(mode(&positioned, unicode), Some(true), "a face with Thai mark positioning uses it");
+        // ก at another glyph than the legacy order's.
+        let moved = b"2 beginbfrange <00d7> <010f> <0e02> <0110> <012a> <0e3f> endbfrange 1 beginbfchar <0024> <0e01> endbfchar";
+        assert_eq!(mode(&stripped, moved), None, "out of the legacy order and without its own positioning");
+        assert_eq!(mode(&positioned, moved), Some(true), "its own layout doesn't depend on the legacy order");
+        // Some of the legacy glyphs, no ก or อ among them.
+        assert_eq!(mode(&stripped, b"1 beginbfrange <00d7> <00e0> <0e02> endbfrange"), Some(false));
+        assert_eq!(mode(&stripped, b"1 beginbfchar <0024> <0041> endbfchar"), None, "no Thai at all");
+    }
+
+    /// The Windows PUA alternates are used only when each one the subset kept advances as its
+    /// form does: one mark out of place withdraws them all, so the shaper refuses instead of
+    /// drawing another mark.
+    #[test]
+    fn legacy_thai_alternates_need_their_glyph_order_confirmed() {
+        let unicode = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
+        let alternates = |program: &[u8]| {
+            let mut doc = Document::new_empty();
+            let font = thai_font(&mut doc, program, unicode);
+            let metrics = Metrics::from_dict(&doc, &font);
+            let (map, _) = composite_glyph_maps(&doc, &font, program, &metrics, &mut DecodeBudget::new(1 << 20, 0)).unwrap();
+            map.range(0xf700..=0xf71a).map(|(u, g)| (*u, *g)).collect::<Vec<_>>()
+        };
+        let ordered = alternates(&thai_ordered_program());
+        assert!(ordered.contains(&(0xf70a, 352)) && ordered.contains(&(0xf710, 358)), "{ordered:?}");
+        let mut misplaced = thai_ordered_program();
+        set_advance(&mut misplaced, 352, 500);
+        assert!(alternates(&misplaced).is_empty(), "one misplaced alternate withdraws them all");
+        // A dropped alternate is simply absent; the others still come from the kept glyphs.
+        let mut dropped = thai_ordered_program();
+        drop_glyph(&mut dropped, 353);
+        let kept = alternates(&dropped);
+        assert!(kept.contains(&(0xf70a, 352)) && !kept.iter().any(|(_, g)| *g == 353), "{kept:?}");
+    }
 
     #[test]
     fn damaged_legacy_thai_map_recovers_consonants_vowels_and_contextual_tones_only_for_its_fingerprint() {
@@ -342,15 +582,8 @@ mod tests {
           <0164><0164><0e4c> <0166><0166><0e31> <0168><0168><0e47> \
           <00d6><00d6><000f> <00f0><00f0><0029> <00f8><00f8><0023> <0105><0105><003e> <0107><0107><0040> \
           <0109><0109><003e> <0111><0111><004e> <0160><0160><004e> <0161><0161><004f> <00ff><01ff><0032> endbfrange endcmap";
-        let tu = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), data)));
-        let mut desc = Dict::new();
-        desc.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
-        let mut font = Dict::new();
-        font.set(b"Subtype".to_vec(), Object::name("Type0"));
-        font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+THSarabunPSK"));
-        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
-        font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(desc)]));
-        font.set(b"ToUnicode".to_vec(), Object::Ref(tu));
+        let mut font = thai_font(&mut doc, &thai_ordered_program(), data);
+        let tu = font.get(b"ToUnicode").and_then(Object::as_ref).unwrap();
         // The corrupt range is declared before explicit anchors in the actual exporter.
         let data = String::from_utf8_lossy(data)
             .replace("18 beginbfrange", "1 beginbfrange <00ff><01ff><0032> endbfrange 17 beginbfrange")

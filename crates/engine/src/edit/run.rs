@@ -194,6 +194,9 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
+    /// [`Session::prepare_text`](crate::Session::prepare_text).
+    pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
 }
 
 impl EditCtx {
@@ -223,6 +226,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            prepared: None,
         }
     }
 
@@ -734,6 +738,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     result.refused.first().cloned().unwrap_or_else(|| "this page has no supported grouped text to prepare".into()),
                 ));
             }
+            cx.prepared = Some(result);
         }
         Edit::RegisterTextFont { page, bytes } => {
             pdfcraft_edit::text::register_text_font(doc, *page, bytes)?;

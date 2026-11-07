@@ -88,3 +88,5 @@ fn align_from(code: Option<i64>) -> Align {
 
 #[cfg(test)]
 mod arabic_tests;
+#[cfg(test)]
+mod thai_tests;

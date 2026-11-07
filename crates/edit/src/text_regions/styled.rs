@@ -107,13 +107,34 @@ impl FontResolver<'_> {
 struct LegacyFace {
     glyphs: Option<pdfcraft_fonts::pdf::LegacyThaiFont>,
     metrics: Metrics,
+    /// Weight and slant ([`FontStyle::of`]).
+    style: FontStyle,
 }
 
 struct PreparedCharacters {
     values: Vec<StyledChar>,
     substituted: Option<String>,
-    outlined_thai: std::collections::HashSet<String>,
-    legacy_thai: HashMap<String, LegacyFace>,
+    thai: ThaiShaping,
+}
+
+/// How the Thai spans of an edit are shaped, by the font name their characters carry.
+#[derive(Default)]
+struct ThaiShaping {
+    /// Draft-only names drawn with the bundled Thai outlines.
+    outlined: std::collections::HashSet<String>,
+    /// Source faces shaped in their existing codes, by resource name.
+    legacy: HashMap<String, LegacyFace>,
+    /// Draft-only names whose rows, Latin ones included, are shaped and embedded with the
+    /// complete program of this same-face resource: a span its subsets can't show in place.
+    program: HashMap<String, String>,
+}
+
+/// How a Thai span keeps its source face ([`legacy_thai_font`]).
+enum ThaiSpan {
+    /// In this resource's existing codes.
+    InPlace(String),
+    /// Shaped by this same-face resource's complete program with its own layout.
+    Program(String),
 }
 
 struct CharacterPreparation<'a> {
@@ -133,8 +154,7 @@ impl CharacterPreparation<'_> {
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
         let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let thai_choice = builtin_thai_choice(fonts);
-        let mut outlined_thai = std::collections::HashSet::new();
-        let mut legacy_thai = HashMap::new();
+        let mut thai = ThaiShaping::default();
         let mut chars = Vec::new();
         let mut substituted = None;
         let mut fallback = FallbackBuilder::new(max_glyphs);
@@ -146,13 +166,17 @@ impl CharacterPreparation<'_> {
             // Interface fallback fonts never enter a PDF.
             let selected_resource = overrides.get(&index).and_then(|r| r.resource.as_deref()).or(style.resource.as_deref());
             let use_thai_outlines = if selected_resource == Some(thai_choice.as_str()) {
-                let face = pdfcraft_fonts::document_thai_font()
-                    .ok_or_else(|| EditError::Invalid("the bundled Thai font is unavailable in this build; load a complete Thai font".into()))?;
+                let face = pdfcraft_fonts::document_thai_font().ok_or_else(|| {
+                    EditError::Invalid(format!(
+                        "the bundled Thai font ({thai_choice}) is not in this build, which has no craft-fonts Thai face; load a complete Thai font or choose one the page lists"
+                    ))
+                })?;
                 if !pdfcraft_fonts::embedding::covers(face.bytes, span) {
-                    return Err(EditError::Invalid(format!(
-                        "{} cannot show every character in this selection; choose a font that covers the text",
-                        face.family
-                    )));
+                    let missing = span.chars().find(|c| !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
+                    return Err(EditError::Invalid(match missing {
+                        Some(c) => format!("{} has no glyph for {c} (U+{:04X}); choose a font that covers the text", face.family, u32::from(c)),
+                        None => format!("{} cannot show every character in this selection; choose a font that covers the text", face.family),
+                    }));
                 }
                 substituted = Some(face.family.to_owned());
                 true
@@ -173,7 +197,7 @@ impl CharacterPreparation<'_> {
                     }),
                 };
                 match chosen {
-                    Some(chosen) => legacy_thai_font(resolver.doc, resolver.fonts, &chosen, span, &mut legacy_thai)?,
+                    Some(chosen) => legacy_thai_font(resolver.doc, resolver.fonts, &chosen, span, &mut thai.legacy)?,
                     None => None,
                 }
             } else {
@@ -194,10 +218,26 @@ impl CharacterPreparation<'_> {
                 {
                     resolver.metrics.insert(name.clone(), m);
                 }
-                outlined_thai.insert(name.clone());
+                thai.outlined.insert(name.clone());
                 Some(name)
             } else {
                 None
+            };
+            let (existing_thai, program_name) = match existing_thai {
+                Some(ThaiSpan::InPlace(name)) => (Some(name), None),
+                Some(ThaiSpan::Program(resource)) => {
+                    // Draft-only too: another span may still show this resource's existing codes.
+                    let mut name = format!("PCProgramThai{index}");
+                    while resolver.metrics.contains_key(&name) {
+                        name.push('_');
+                    }
+                    if let Some(m) = resolver.metrics.get(&source.font).cloned() {
+                        resolver.metrics.insert(name.clone(), m);
+                    }
+                    thai.program.insert(name.clone(), resource);
+                    (None, Some(name))
+                }
+                None => (None, None),
             };
             let start = range.start;
             for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
@@ -212,7 +252,7 @@ impl CharacterPreparation<'_> {
                 }
                 let text = ch.to_string();
                 let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-                let name = if let Some(name) = &outline_name {
+                let name = if let Some(name) = outline_name.as_ref().or(program_name.as_ref()) {
                     name.clone()
                 } else if let Some(name) = &existing_thai {
                     name.clone()
@@ -245,7 +285,7 @@ impl CharacterPreparation<'_> {
             }
             substituted = Some(written.family.to_owned());
         }
-        Ok(PreparedCharacters { values: chars, substituted, outlined_thai, legacy_thai })
+        Ok(PreparedCharacters { values: chars, substituted, thai })
     }
 }
 
@@ -324,8 +364,7 @@ struct ShapedRows {
 fn prepare_shaped_rows(
     doc: &Document,
     fonts: &Dict,
-    outlined_thai: &std::collections::HashSet<String>,
-    legacy_thai: &HashMap<String, LegacyFace>,
+    thai: &ThaiShaping,
     rows: &[Vec<StyledChar>],
     kept: &[bool],
     advance: impl Fn(&StyledChar) -> f64,
@@ -342,7 +381,7 @@ fn prepare_shaped_rows(
             let segment = row.get(at..end).unwrap_or_default();
             advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
             let text: String = segment.iter().map(|character| character.0).collect();
-            if let Some(shaped) = shape_source(doc, fonts, outlined_thai, legacy_thai, &item.2, &text)? {
+            if let Some(shaped) = shape_source(doc, fonts, thai, &item.2, &text)? {
                 runs.insert((row_index, at), shaped);
             }
             at = end;
@@ -791,7 +830,7 @@ fn legacy_thai_font(
     source: &TextLine,
     span: &str,
     cache: &mut HashMap<String, LegacyFace>,
-) -> Result<Option<String>, EditError> {
+) -> Result<Option<ThaiSpan>, EditError> {
     if !source.base_font.rsplit('+').next().unwrap_or(&source.base_font).starts_with("THSarabunPSK")
         || !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
     {
@@ -808,13 +847,39 @@ fn legacy_thai_font(
             let Some(font) = fonts.get(entry.key().as_bytes()).and_then(|f| doc.dict(f)) else { continue };
             let metrics = Metrics::from_dict(doc, &font);
             let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, source_space(doc, fonts, &metrics)).ok().flatten();
-            entry.insert(LegacyFace { glyphs, metrics });
+            let style = FontStyle::of(doc, &font, &metrics);
+            entry.insert(LegacyFace { glyphs, metrics, style });
         }
     }
-    for row in span.split(['\n', '\r']).filter(|row| !row.is_empty()) {
-        shape_existing_thai(cache, &source.font, row)?;
+    // A face none of whose subsets can be shaped in place (no Thai, or neither positioned nor in
+    // the legacy glyph order) is shaped like any other source font (`shape_source`).
+    if !has_thai_source_face(cache, &family) {
+        return Ok(None);
     }
-    Ok(Some(source.font.clone()))
+    let rows = || span.split(['\n', '\r']).filter(|row| !row.is_empty());
+    for row in rows() {
+        if let Err(error) = shape_existing_thai(cache, &source.font, row) {
+            // Not in the face's existing codes. A complete program of the face that shapes every
+            // row with its own layout (one Load font added as CFF, or whose contextual glyphs it
+            // gave no code yet) takes the whole span, so no cluster is split between fonts.
+            let Some(source_font) = fonts.get(source.font.as_bytes()).and_then(|f| doc.dict(f)) else { return Err(error) };
+            let complete = program_candidates(doc, fonts, &source.font, source_font, &source.base_font)
+                .into_iter()
+                .find(|(_, font)| rows().all(|row| shape_with_program(doc, font, row).is_some()));
+            return match complete {
+                Some((name, _)) => Ok(Some(ThaiSpan::Program(name))),
+                None => Err(error),
+            };
+        }
+    }
+    Ok(Some(ThaiSpan::InPlace(source.font.clone())))
+}
+
+/// Whether a subset of the face `family` (a [`face_key`](pdfcraft_fonts::embedding::face_key))
+/// in `cache` can be shaped in place: a THSarabunPSK program with its own Thai mark positioning,
+/// or a verified legacy positional one.
+fn has_thai_source_face(cache: &HashMap<String, LegacyFace>, family: &str) -> bool {
+    cache.values().any(|face| face.glyphs.is_some() && pdfcraft_fonts::embedding::face_key(&face.metrics.base_font) == family)
 }
 
 /// A visual row may use several subsets of the same exact face (often a separate subset for
@@ -829,7 +894,9 @@ fn shape_existing_thai(cache: &HashMap<String, LegacyFace>, primary: &str, text:
     candidates.extend(
         cache
             .iter()
-            .filter(|(name, face)| name.as_str() != primary && pdfcraft_fonts::embedding::face_key(&face.metrics.base_font) == family)
+            .filter(|(name, face)| {
+                name.as_str() != primary && face.style == first.style && pdfcraft_fonts::embedding::face_key(&face.metrics.base_font) == family
+            })
             .map(|(name, face)| (name.as_str(), face)),
     );
     // Stable source-first choice, then resource name; never depend on hash iteration order.
@@ -851,42 +918,42 @@ fn shape_existing_thai(cache: &HashMap<String, LegacyFace>, primary: &str, text:
                 end = next + c.len_utf8();
             }
             let segment = text.get(at..end).ok_or_else(|| EditError::Invalid("invalid Thai character boundary".into()))?;
-            let mut selected = None;
-            let mut why = String::new();
-            for (name, face) in &candidates {
-                if let Some(font) = &face.glyphs {
-                    match font.shape(segment) {
-                        Ok(shaped) => {
-                            selected = Some((*name, shaped));
-                            break;
-                        }
-                        Err(e) => {
-                            if why.is_empty() {
-                                why = e;
-                            }
-                        }
-                    }
-                }
-            }
-            let (name, shaped) = selected.ok_or_else(|| {
+            let unshaped = |why: String| {
                 EditError::Invalid(format!(
                     "{} cannot keep this edit in the original face: {}; load the complete original font or explicitly choose a replacement",
                     first.metrics.base_font,
                     if why.is_empty() { "its source glyph program is incomplete" } else { &why }
                 ))
-            })?;
-            for (mut glyph, code) in shaped.shaped.glyphs.into_iter().zip(shaped.codes) {
-                glyph.position[0] += run.advance;
-                resources.push((name.to_owned(), code));
-                run.glyphs.push(glyph);
+            };
+            // The whole run in one subset keeps any kerning between its clusters. A subsetter may
+            // instead have split the run's glyphs across subsets of the face: then each cluster
+            // (a base and the marks on it, which shape together) comes from a subset that has it.
+            let pieces = match shape_in_one_subset(&candidates, segment) {
+                Ok(whole) => vec![whole],
+                Err(_) => thai_clusters(segment)
+                    .into_iter()
+                    .map(|cluster| shape_in_one_subset(&candidates, cluster).map_err(unshaped))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            for (name, shaped) in pieces {
+                for (mut glyph, code) in shaped.shaped.glyphs.into_iter().zip(shaped.codes) {
+                    glyph.position[0] += run.advance;
+                    resources.push((name.to_owned(), code));
+                    run.glyphs.push(glyph);
+                }
+                run.advance += shaped.shaped.advance;
             }
-            run.advance += shaped.shaped.advance;
         } else {
             let logical = ch.to_string();
             let found = candidates.iter().find_map(|(name, face)| {
                 let code = face.metrics.encode(&logical)?;
-                let cid = face.metrics.codes(&code).first()?.0;
-                Some((*name, code, face.metrics.width(cid)))
+                let first = face.metrics.codes(&code).first()?.0;
+                // `encode` accepts a CID the subset emptied (#1443): drawing it would show nothing.
+                // Try the next subset; a space then falls back to its measured gap below.
+                if face.metrics.has_outline(first) == Some(false) {
+                    return None;
+                }
+                Some((*name, code, face.metrics.width(first)))
             });
             let (name, code, width) = if let Some(found) = found {
                 found
@@ -919,10 +986,45 @@ fn shape_existing_thai(cache: &HashMap<String, LegacyFace>, primary: &str, text:
     Ok(ShapedText { run, font: ShapedFont::Existing(resources) })
 }
 
+/// Shape `text` in the first candidate subset that has every glyph it needs, and name it. The
+/// error is the first subset's reason (empty when no candidate has a usable glyph program).
+fn shape_in_one_subset<'a>(candidates: &[(&'a str, &LegacyFace)], text: &str) -> Result<(&'a str, pdfcraft_fonts::pdf::ExistingThaiRun), String> {
+    let mut why = String::new();
+    for (name, face) in candidates {
+        let Some(font) = &face.glyphs else { continue };
+        match font.shape(text) {
+            Ok(shaped) => return Ok((name, shaped)),
+            Err(e) if why.is_empty() => why = e,
+            Err(_) => {}
+        }
+    }
+    Err(why)
+}
+
+/// `text` (a run of Thai characters) cut before each character that doesn't attach to the one
+/// before it: a cluster is a base or leading vowel with the vowels and tone marks above and below
+/// it, and Sara Am, whose Nikhahit sits on the base. Legacy presentation forms (U+F700–U+F71A)
+/// are kept with what precedes them.
+fn thai_clusters(text: &str) -> Vec<&str> {
+    let attaches = |c: char| matches!(u32::from(c), 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0xf700..=0xf71a);
+    let mut starts: Vec<usize> = text.char_indices().filter(|(at, c)| *at == 0 || !attaches(*c)).map(|(at, _)| at).collect();
+    starts.push(text.len());
+    // Each boundary is a `char_indices` position or the end, strictly increasing: every `get`
+    // succeeds and no cluster is empty.
+    starts.windows(2).filter_map(|w| text.get(*w.first()?..*w.get(1)?)).collect()
+}
+
 /// Whether the approved Thai face can replace this source, whose embedded subset cannot
 /// shape the replacement. A usable complete source program always takes precedence.
 fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: &str) -> bool {
     let Some(face) = pdfcraft_fonts::document_thai_font() else { return false };
+    // The bundled face is Regular and upright. A source its descriptor or name marks bold or
+    // italic keeps that style, so completing it with these outlines would be a silent change:
+    // it needs an explicit choice instead. (Variable-font instances often keep the family name.)
+    let style = fonts.get(source.font.as_bytes()).and_then(|f| doc.dict(f)).map(|f| FontStyle::of(doc, &f, &Metrics::from_dict(doc, &f)));
+    if style.map_or(source.bold || source.italic, |s| s.bold || s.italic) {
+        return false;
+    }
     if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
         || !pdfcraft_fonts::embedding::matching_faces(&source.base_font).iter().any(|f| std::ptr::eq(*f, face))
         || !pdfcraft_fonts::embedding::covers(face.bytes, span)
@@ -972,45 +1074,97 @@ fn shape_thai_row(text: &str) -> Result<pdfcraft_fonts::source_shaping::ShapedRu
     Ok(pdfcraft_fonts::source_shaping::ShapedRun { glyphs, advance })
 }
 
+/// The resources whose complete program may shape text in the face of `base_font`: `source`
+/// (the resource `name`) first, then the page's other fonts of that face (at most 128).
+fn program_candidates(doc: &Document, fonts: &Dict, name: &str, source: Dict, base_font: &str) -> Vec<(String, Dict)> {
+    let key = pdfcraft_fonts::embedding::face_key(base_font);
+    let style = FontStyle::of(doc, &source, &Metrics::from_dict(doc, &source));
+    let mut candidates = vec![(name.to_owned(), source)];
+    candidates.extend(
+        fonts
+            .iter()
+            .filter_map(|(n, f)| Some((String::from_utf8_lossy(n).into_owned(), doc.dict(f)?)))
+            .filter(|(_, f)| {
+                let m = Metrics::from_dict(doc, f);
+                pdfcraft_fonts::embedding::face_key(&m.base_font) == key && FontStyle::of(doc, f, &m) == style
+            })
+            .take(128),
+    );
+    candidates
+}
+
+/// A font's weight and slant, for matching subsets and complete programs of one face: a Regular
+/// program never completes text that a descriptor marks bold, say.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FontStyle {
+    bold: bool,
+    italic: bool,
+}
+
+impl FontStyle {
+    /// Bold from the name or the descriptor's weight ([`Metrics`]); italic from the name or a
+    /// non-zero `/ItalicAngle`. The descriptor's Italic flag alone isn't trusted: exporters set
+    /// it on upright faces (a THSarabunPSK subset with `/Flags 96` and `/ItalicAngle 0`).
+    fn of(doc: &Document, font: &Dict, metrics: &Metrics) -> Self {
+        let descendant =
+            font.get(b"DescendantFonts").and_then(|d| doc.resolve(d).as_array().and_then(|a| a.first()).cloned()).and_then(|d| doc.dict(&d));
+        let descriptor = descendant.as_ref().unwrap_or(font).get(b"FontDescriptor").and_then(|d| doc.dict(d));
+        let angle = descriptor.as_ref().and_then(|d| d.get(b"ItalicAngle")).and_then(|a| doc.resolve(a).as_f64()).unwrap_or(0.0);
+        let name = metrics.base_font.to_ascii_lowercase();
+        Self { bold: metrics.bold, italic: name.contains("italic") || name.contains("oblique") || (angle.is_finite() && angle.abs() > 0.1) }
+    }
+}
+
+/// `text` shaped by `font`'s embedded program with its own layout, when the program covers it.
+fn shape_with_program(doc: &Document, font: &Dict, text: &str) -> Option<(Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun)> {
+    let bytes = pdfcraft_fonts::pdf::embedded_sfnt(doc, font)?;
+    if !pdfcraft_fonts::embedding::covers(&bytes, text) {
+        return None;
+    }
+    let shaped = pdfcraft_fonts::source_shaping::shape(&bytes, text).ok()?;
+    Some((bytes, shaped))
+}
+
 /// Shape in the source or an explicitly registered matching full face. Never use interface fonts.
-fn shape_source(
-    doc: &Document,
-    fonts: &Dict,
-    outlined_thai: &std::collections::HashSet<String>,
-    legacy_thai: &HashMap<String, LegacyFace>,
-    name: &str,
-    text: &str,
-) -> Result<Option<ShapedText>, EditError> {
-    if outlined_thai.contains(name) {
+fn shape_source(doc: &Document, fonts: &Dict, thai: &ThaiShaping, name: &str, text: &str) -> Result<Option<ShapedText>, EditError> {
+    if thai.outlined.contains(name) {
         let shaped = shape_thai_row(text)?;
         return Ok(Some(ShapedText { run: shaped, font: ShapedFont::ThaiOutlines }));
+    }
+    if let Some(resource) = thai.program.get(name) {
+        let font = fonts
+            .get(resource.as_bytes())
+            .and_then(|f| doc.dict(f))
+            .ok_or_else(|| EditError::Invalid("the complete font resource is missing".into()))?;
+        let family = Metrics::from_dict(doc, &font).base_font;
+        let (bytes, shaped) = shape_with_program(doc, &font, text)
+            .ok_or_else(|| EditError::Invalid(format!("{family} cannot shape this text with its own layout; choose a font that covers it")))?;
+        return Ok(Some(ShapedText { run: shaped, font: ShapedFont::Program { bytes, family } }));
     }
     if !pdfcraft_fonts::source_shaping::required(text) {
         return Ok(None);
     }
     let source =
         fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)).ok_or_else(|| EditError::Invalid("the shaped text has no font resource".into()))?;
-    let metrics = Metrics::from_dict(doc, &source);
-    if metrics.base_font.rsplit('+').next().unwrap_or(&metrics.base_font).starts_with("THSarabunPSK")
+    let family = Metrics::from_dict(doc, &source).base_font;
+    // In the face's existing codes first; what they can't show, a complete program of the face
+    // may (`legacy_thai_font` already gave the span to one that can).
+    let in_place = (family.rsplit('+').next().unwrap_or(&family).starts_with("THSarabunPSK")
         && text.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
-    {
-        return shape_existing_thai(legacy_thai, name, text).map(Some);
-    }
-    let family = metrics.base_font;
-    let mut candidates = vec![source];
-    candidates.extend(
-        fonts
-            .iter()
-            .filter_map(|(_, f)| doc.dict(f))
-            .filter(|f| pdfcraft_fonts::embedding::face_key(&Metrics::from_dict(doc, f).base_font) == pdfcraft_fonts::embedding::face_key(&family)),
-    );
-    for font in candidates {
-        if let Some(bytes) = pdfcraft_fonts::pdf::embedded_sfnt(doc, &font)
-            && pdfcraft_fonts::embedding::covers(&bytes, text)
-            && let Ok(shaped) = pdfcraft_fonts::source_shaping::shape(&bytes, text)
-        {
+        && has_thai_source_face(&thai.legacy, &pdfcraft_fonts::embedding::face_key(&family)))
+    .then(|| shape_existing_thai(&thai.legacy, name, text));
+    let in_place = match in_place {
+        Some(Ok(shaped)) => return Ok(Some(shaped)),
+        Some(Err(error)) => Some(error),
+        None => None,
+    };
+    for (_, font) in program_candidates(doc, fonts, name, source, &family) {
+        if let Some((bytes, shaped)) = shape_with_program(doc, &font, text) {
             return Ok(Some(ShapedText { run: shaped, font: ShapedFont::Program { bytes, family } }));
         }
+    }
+    if let Some(error) = in_place {
+        return Err(error);
     }
     let fallback = pdfcraft_fonts::document_thai_font()
         .filter(|_| text.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)))
@@ -1302,8 +1456,7 @@ pub(crate) fn rewrite_styled_block(
         max_glyphs,
     }
     .prepare()?;
-    let outlined_thai = prepared.outlined_thai;
-    let legacy_thai = prepared.legacy_thai;
+    let thai = prepared.thai;
     let chars = prepared.values;
     let substituted = prepared.substituted;
     let size_of = |source: &TextLine, index: usize| {
@@ -1354,7 +1507,7 @@ pub(crate) fn rewrite_styled_block(
             }
             let segment = items.get(at..end).unwrap_or_default();
             let string: String = segment.iter().map(|v| v.0).collect();
-            if let Some(shaped) = shape_source(doc, &fonts, &outlined_thai, &legacy_thai, &item.2, &string)? {
+            if let Some(shaped) = shape_source(doc, &fonts, &thai, &item.2, &string)? {
                 let shaped = &shaped.run;
                 let source = lines.get(item.1).unwrap_or(first);
                 let scale =
@@ -1406,7 +1559,7 @@ pub(crate) fn rewrite_styled_block(
     let at = if split { start } else { o.bt_op };
     validate_contextual_rows(&rows, &kept)?;
     let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
-    let shaped = prepare_shaped_rows(doc, &fonts, &outlined_thai, &legacy_thai, &rows, &kept, advance)?;
+    let shaped = prepare_shaped_rows(doc, &fonts, &thai, &rows, &kept, advance)?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
