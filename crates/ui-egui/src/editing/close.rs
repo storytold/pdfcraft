@@ -151,11 +151,21 @@ impl PdfCraftApp {
     }
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
-    pub(super) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+    /// The save it waited for may have taken a later frame (the user choosing where), and an OCR
+    /// review started meanwhile holds the close as it holds a new one: the document stays open,
+    /// and Quit or Close all stops there.
+    pub(crate) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+        let whole = req == CloseRequest::Quit || req == CloseRequest::All;
+        if self.hold_close_for_ocr_review(index) || (whole && self.hold_for_any_ocr_review()) {
+            if req == CloseRequest::Quit {
+                self.forget_quit_session();
+            }
+            return;
+        }
         self.close_tab(index);
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
-        if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
+        if whole && self.close_request.is_none() {
             match self.first_dirty() {
                 Some(_) => {
                     // A question about the next document is a new one.
@@ -195,8 +205,14 @@ impl PdfCraftApp {
     /// document with unsaved changes, or an OCR review not yet accepted or rejected, which holds
     /// Close and Quit the same way.
     pub(crate) fn sync_unsaved_flag(&self) {
-        let at_risk = self.first_dirty().is_some() || self.ocr_review_index().is_some();
-        self.unsaved_flag.store(at_risk, std::sync::atomic::Ordering::Relaxed);
+        self.unsaved_flag.store(self.work_at_risk(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether leaving would lose work: a document with unsaved changes, or an OCR review not yet
+    /// accepted or rejected. The browser's reload warning and the embedding page (`host_dirty`)
+    /// both hear this.
+    pub(crate) fn work_at_risk(&self) -> bool {
+        self.first_dirty().is_some() || self.ocr_review_index().is_some()
     }
 
     /// Intercept window close while documents have unsaved changes or an OCR review is open.

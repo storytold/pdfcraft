@@ -1140,6 +1140,12 @@ impl OcrVerify {
         if self.reread.is_some() {
             return; // the page re-read in flight replaces these words; one worker at a time
         }
+        // A review of another document stays until it is accepted or rejected: a run here would
+        // replace its corrections.
+        if self.has_reading() && self.doc != Some(id) {
+            self.message = tl!("Accept or reject the OCR review of the other document before running OCR here").to_string();
+            return;
+        }
         if let Some(why) = app.session.get(id).and_then(|d| d.read_only_reason.clone()) {
             self.message = why;
             self.phase = Phase::RecoverableError;
@@ -3094,6 +3100,74 @@ mod tests {
         app.request_close_tab(0);
         assert_eq!(app.views.len(), 1, "after Reject the document closes");
         assert!(app.views.iter().all(|v| v.id != a));
+    }
+
+    /// Three open documents with a review of the first one, a word of it corrected.
+    fn reviewing_the_first_of_three() -> (PdfCraftApp, DocId) {
+        let mut app = PdfCraftApp::new();
+        let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+        }
+        let a = app.views.first().expect("a is open").id;
+        let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        app.ocr_verify.load(a, job.guard.clone(), vec![page]);
+        assert!(app.ocr_verify.correct((0, 0), "Edited"));
+        (app, a)
+    }
+
+    /// A close that waited for a save (the user choosing where, while the app runs on) checks
+    /// again for a review started meanwhile: the reviewed document stays open, and Close all and
+    /// Quit stop there.
+    #[test]
+    fn a_close_after_a_save_holds_for_a_review_started_meanwhile() {
+        let (mut app, a) = reviewing_the_first_of_three();
+        let ctx = egui::Context::default();
+        app.active = Some(2);
+        app.close_and_continue(&ctx, 0, crate::CloseRequest::Tab(a));
+        assert_eq!(app.views.len(), 3, "the reviewed document stays open");
+        assert_eq!(app.active, Some(0), "and comes to the front");
+        assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "with its review as it was");
+        app.close_and_continue(&ctx, 1, crate::CloseRequest::All);
+        assert_eq!(app.views.len(), 3, "Close all closes nothing while the review is open");
+        app.note_quit_session();
+        app.close_and_continue(&ctx, 2, crate::CloseRequest::Quit);
+        assert_eq!(app.views.len(), 3, "Quit closes nothing either");
+        assert!(!app.allow_quit && app.quit_session.is_none(), "and the quit is called off");
+        assert!(app.ocr_verify.reject());
+        app.close_and_continue(&ctx, 0, crate::CloseRequest::Tab(a));
+        assert_eq!(app.views.len(), 2, "after Reject the document closes");
+    }
+
+    /// Run OCR on another document while a review is held leaves the review alone and says why.
+    #[test]
+    fn a_run_on_another_document_keeps_the_review() {
+        let (mut app, a) = reviewing_the_first_of_three();
+        FAIL_LAUNCH.with(|f| f.set(true));
+        app.active = Some(1);
+        with_state(&mut app, |v, app| v.start_run(app));
+        FAIL_LAUNCH.with(|f| f.set(false));
+        assert!(app.ocr_verify.message.contains("other document"), "{}", app.ocr_verify.message);
+        assert!(app.ocr_verify.holds_reading_of(a), "the review is still of the first document");
+        assert_eq!(app.ocr_verify.phase, Phase::ReviewReady);
+        assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"));
+    }
+
+    /// The embedding page hears an open review as work it would lose, as the reload warning does,
+    /// and hears it go once the review is rejected.
+    #[test]
+    fn the_embedding_page_hears_an_open_review() {
+        let (mut app, _) = reviewing_the_first_of_three();
+        let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = reports.clone();
+        app.host_dirty = Some(Box::new(move |dirty| sink.lock().expect("not poisoned").push(dirty)));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+        h.run_steps(2);
+        assert_eq!(reports.lock().expect("not poisoned").last(), Some(&true), "an open review is work at risk");
+        assert!(h.state_mut().ocr_verify.reject());
+        h.run_steps(2);
+        assert_eq!(reports.lock().expect("not poisoned").last(), Some(&false), "rejected, nothing is at risk");
     }
 
     /// A run of one page shows that page when its reading lands, not page 1.

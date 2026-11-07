@@ -585,7 +585,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            // An OCR review not yet accepted or rejected is work the page would lose, too.
+            let dirty = self.work_at_risk();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
