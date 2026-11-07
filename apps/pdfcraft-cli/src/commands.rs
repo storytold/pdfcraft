@@ -18,24 +18,30 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
+    // The document as the app opens it: the notes about damage repaired while opening, which the
+    // app shows in Document Properties, and for a dynamic XFA form the laid-out pages and fields.
+    let mut session = pdfcraft_engine::Session::new();
+    let opened = session.open("info.pdf", None, bytes.clone(), password).ok().and_then(|id| session.get(id));
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
-    let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
-        .then(|| {
-            let mut s = pdfcraft_engine::Session::new();
-            let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
-            let d = s.get(id)?;
-            d.xfa.as_ref().map(|x| {
-                info = d.info.clone();
-                // The in-memory layout is an appended revision, not the file being inspected.
-                info.file_size = bytes.len();
-                serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
-            })
+    let xfa_layout = opened.filter(|_| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)).and_then(|d| {
+        d.xfa.as_ref().map(|x| {
+            info = d.info.clone();
+            // The in-memory layout is an appended revision, not the file being inspected.
+            info.file_size = bytes.len();
+            serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
         })
-        .flatten();
+    });
     // What the document declares as a standard, read the way the Standards panel reads it, so
     // `info` and the app agree. A file that declares nothing leaves these null and empty.
-    let declared =
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map(|doc| pdfcraft_preflight::declared(&doc)).unwrap_or_default();
+    let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok();
+    let declared = cos.as_ref().map(pdfcraft_preflight::declared).unwrap_or_default();
+    // The app's notes include what it repaired after reading the objects (a page tree rebuilt
+    // from the pages found by scanning); a file it cannot open still has what reading repaired.
+    let repairs = opened
+        .map(pdfcraft_engine::Document::repair_log)
+        .filter(|log| !log.is_empty())
+        .or_else(|| cos.as_ref().map(|c| c.repair_log().to_vec()))
+        .unwrap_or_default();
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
@@ -56,6 +62,7 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
         "custom_properties": info.custom.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
         "warnings": info.warnings,
+        "repairs": repairs,
     });
     stdout_line(format_args!("{}", serde_json::to_string_pretty(&json).unwrap_or_default()))?;
     Ok(())
