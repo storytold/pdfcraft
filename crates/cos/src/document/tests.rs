@@ -1193,6 +1193,11 @@ fn parses_as_object_stream(file: &[u8]) -> bool {
     matches!(parse_indirect(file, 0, &|_| None), Ok((_, Object::Stream(s))) if s.dict.name(b"Type") == Some(b"ObjStm"))
 }
 
+/// A scan budget that never runs out.
+fn unlimited() -> usize {
+    usize::MAX
+}
+
 #[test]
 fn the_object_stream_pre_check_never_rejects_what_parses_as_one() {
     // Two inputs from review: header-shaped text, and `>>` + `stream` + newline, inside a
@@ -1205,14 +1210,26 @@ fn the_object_stream_pre_check_never_rejects_what_parses_as_one() {
     ] {
         let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
         assert!(parses_as_object_stream(&file), "test input must be an object stream: {dict}");
-        assert!(may_be_object_stream(&file, 7), "{dict}");
+        assert!(may_be_object_stream(&file, 7, &mut unlimited()), "{dict}");
     }
     // Ordinary streams stay out; their data is never read.
     let plain = b"1 0 obj\n<< /Length 9 >>\nstream\nObjStm # \nendstream\nendobj\n";
-    assert!(!may_be_object_stream(plain, 7));
-    assert!(!may_be_object_stream(b"1 0 obj\n[ /ObjStm ]\nendobj\n", 7));
+    assert!(!may_be_object_stream(plain, 7, &mut unlimited()));
+    assert!(!may_be_object_stream(b"1 0 obj\n[ /ObjStm ]\nendobj\n", 7, &mut unlimited()));
     // Unterminated: not certain, so a candidate.
-    assert!(may_be_object_stream(b"1 0 obj\n<< /Note (open ", 7));
+    assert!(may_be_object_stream(b"1 0 obj\n<< /Note (open ", 7, &mut unlimited()));
+    // The scan is charged to the shared budget on every path, and a spent budget says "maybe"
+    // without reading.
+    let open = b"1 0 obj\n<< /Note (open ";
+    let mut budget = 1000;
+    assert!(may_be_object_stream(open, 7, &mut budget));
+    assert_eq!(budget, 1000 - (open.len() - 7));
+    let mut budget = 3;
+    assert!(may_be_object_stream(plain, 7, &mut budget), "a budget too small for the dictionary is a candidate");
+    assert_eq!(budget, 0);
+    let mut budget = 0;
+    assert!(may_be_object_stream(plain, 7, &mut budget));
+    assert_eq!(budget, 0);
     // Random dictionaries built from tricky pieces: whatever parses as an object stream is
     // a candidate.
     let pieces: [&str; 22] = [
@@ -1257,7 +1274,7 @@ fn the_object_stream_pre_check_never_rejects_what_parses_as_one() {
         let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
         if parses_as_object_stream(&file) {
             hits += 1;
-            assert!(may_be_object_stream(&file, 7), "rejected an object stream: {dict:?}");
+            assert!(may_be_object_stream(&file, 7, &mut unlimited()), "rejected an object stream: {dict:?}");
         }
     }
     assert!(hits > 1000, "the generator must produce object streams ({hits})");
