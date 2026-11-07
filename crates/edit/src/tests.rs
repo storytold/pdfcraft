@@ -8490,6 +8490,29 @@ fn a_word_with_invisible_extra_spacing_stays_on_its_line() {
     assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["for company A", "EROSOL"]);
 }
 
+/// Word's own PDF export draws each run in its own `q <page clip> W* n BT … ET Q` and puts a few
+/// thousandths of an em of `Tc` on some words (`0.0235 Tc` at 11.04 pt). That spacing can't be
+/// seen either, so "Yu" + "karida" + "da" stay one line instead of three paragraphs.
+#[test]
+fn word_export_spacing_of_a_few_thousandths_of_an_em_stays_on_its_line() {
+    let run = |spacing: &str, x: &str, text: &str| format!("q 0 0 612 792 re W* n BT {spacing} /F1 11.04 Tf 1 0 0 1 {x} 700 Tm ({text}) Tj ET Q ");
+    let page = |a: &str, b: &str| text_page(&format!("{}{}{}", run(a, "72", "Yu"), run("", "85.55", "karida esas dosya"), run(b, "174.52", "da")));
+    let texts = |page: &Document| text::text_blocks(page, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&page("0.0235 Tc", "-0.036 Tc")), ["Yukarida esas dosyada"]);
+    // Word's largest nudge, in opposite directions on the line's first and last run.
+    assert_eq!(texts(&page("0.0413 Tc", "-0.0413 Tc")), ["Yukarida esas dosyada"]);
+    assert_eq!(texts(&page("0.03 Tw", "-0.03 Tw")), ["Yukarida esas dosyada"]);
+    // The limit is ten thousandths of an em, 0.1104 at 11.04 pt: just under it joins, just over splits.
+    assert_eq!(texts(&page("", "0.10 Tc")), ["Yukarida esas dosyada"]);
+    assert_eq!(texts(&page("", "0.12 Tc")), ["Yukarida esas dosya", "da"]);
+    assert_eq!(texts(&page("", "0.10 Tw")), ["Yukarida esas dosyada"]);
+    assert_eq!(texts(&page("", "0.12 Tw")), ["Yukarida esas dosya", "da"]);
+
+    // Visible tracking or word spacing still keeps a run apart.
+    assert_eq!(texts(&page("0.5 Tc", "")), ["Yu", "karida esas dosyada"]);
+    assert_eq!(texts(&page("0.5 Tw", "")), ["Yu", "karida esas dosyada"]);
+}
+
 /// #3573: past the 256-level marked-content cap every `EMC` must still close its own sequence,
 /// so `/ActualText` nested that deep is neither dropped nor applied to too little text.
 #[test]

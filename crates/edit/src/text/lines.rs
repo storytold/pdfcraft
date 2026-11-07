@@ -319,20 +319,27 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
     Ok(lines)
 }
 
+/// Character and word spacing that differs by less than this many thousandths of an em is not
+/// seen, so runs that differ only by it continue one line. Word nudges single words by up to about
+/// four in either direction, and a line is compared with its first run, so two nudged words can
+/// differ by twice that. Visible tracking (`0.5 Tc` at 12 pt is about 42) still keeps runs apart.
+const INVISIBLE_SPACING: f64 = 10.0;
+
 /// Joining independent text objects is safe only when they use the same text and graphics
 /// transforms and spacing. In particular, a nearby rotated label isn't part of this line.
 fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
     let within = |a: &[f64], b: &[f64], tolerance: f64| a.iter().zip(b).all(|(a, b)| (a - b).abs() < tolerance);
     let same = |a: &[f64], b: &[f64]| within(a, b, 1e-6);
     let (a, b) = (&line.origin.state, TextState::of(&shown.state));
-    // Spacing that differs by less than a thousandth of an em, the unit glyph widths are given in,
-    // can't be seen. Some producers still write it (`0.0001 Tc` on one word of a line).
+    // Spacing that differs by less than a hundredth of an em can't be seen. Producers still write
+    // it on one word of a line: `0.0001 Tc` (Word through macOS Quartz), and up to about four
+    // thousandths of an em (Word's own PDF export, e.g. `0.0413 Tc` at 11 pt).
     let em = shown.state.size.abs() / 1000.0;
     line.scope == shown.scope
         && line.paint == shown.paint
         && same(&line.origin.tm[..4], &shown.tm.0[..4])
         && same(&line.origin.ctm, &shown.state.ctm.0)
-        && within(&[a.char_spacing, a.word_spacing], &[b.char_spacing, b.word_spacing], em.max(1e-6))
+        && within(&[a.char_spacing, a.word_spacing], &[b.char_spacing, b.word_spacing], (INVISIBLE_SPACING * em).max(1e-6))
         && same(&[a.scale, a.rise], &[b.scale, b.rise])
         && a.fill.len() == b.fill.len()
         && a.fill.iter().zip(&b.fill).all(|(a, b)| a.op == b.op && a.operands == b.operands)
