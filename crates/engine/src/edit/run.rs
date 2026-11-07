@@ -660,7 +660,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::ResetForm { names } => {
-            pdfcraft_forms::reset(doc, names.as_deref())?;
+            match cx.js.as_mut() {
+                Some(js) => pdfcraft_forms::reset_with(doc, names.as_deref(), js)?,
+                None => pdfcraft_forms::reset(doc, names.as_deref())?,
+            };
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;

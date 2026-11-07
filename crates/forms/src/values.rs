@@ -660,6 +660,11 @@ fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
+    reset_with(doc, names, &mut NoScripts)
+}
+
+/// [`reset`], running custom Calculate (and Format) scripts after restoring the defaults.
+pub fn reset_with(doc: &mut Document, names: Option<&[String]>, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
@@ -691,6 +696,6 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         write_value(doc, &tmp, &v, &mut NoScripts)?;
         changed += 1;
     }
-    recalculate(doc)?;
+    recalculate_with(doc, scripts)?;
     Ok(changed)
 }

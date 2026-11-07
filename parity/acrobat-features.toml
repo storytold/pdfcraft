@@ -4866,8 +4866,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.clear"]
 tools = ["form_reset"]
-evidence = ["crates/forms/src/tests.rs::reset_restores_defaults", "crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::clearing_a_kids_value_does_not_bring_back_its_parents"]
-notes = "back to /DV; undoable"
+evidence = ["crates/forms/src/tests.rs::reset_restores_defaults", "crates/forms/src/tests.rs::reset_with_scripts_calculates_once_after_restoring_the_default", "crates/engine/src/tests/lf003.rs::targeted_reset_recalculates_custom_script_and_survives_history_and_save", "crates/engine/src/tests/lf003.rs::full_reset_recalculates_custom_script_after_restoring_total_default", "crates/automation/tests/it/automation.rs::reset_form_recalculates_custom_script_through_tools", "crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::clearing_a_kids_value_does_not_bring_back_its_parents"]
+notes = "back to /DV; custom Calculate runs afterward in /CO order when JavaScript is on, while native AF calculation also runs with JavaScript off; undoable. Reset/Calculate observations were confirmed in one Acrobat Reader configuration, not all versions or settings."
 
 [[feature]]
 id = "form.submit-form"
