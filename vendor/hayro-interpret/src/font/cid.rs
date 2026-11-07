@@ -53,9 +53,8 @@ pub(crate) struct Type0Font {
     identity_to_unicode: bool,
     /// PdfCraft patch: an Arial the PDF doesn't embed, as a TrueType CID font (`CIDFontType2`)
     /// whose CIDs aren't of an Adobe character collection. Its CIDToGIDMap gives glyph indexes
-    /// in the author's Arial, which numbers its first 258 glyphs in the standard Macintosh order
-    /// of the TrueType `post` table (#5889).
-    mac_glyph_order: bool,
+    /// in the author's Arial, whose first 258 glyphs [`arial_glyph_name`] names (#5889).
+    arial_glyph_order: bool,
 }
 
 impl Type0Font {
@@ -161,7 +160,7 @@ impl Type0Font {
 
         // PdfCraft patch: the descendant names the font program itself; a Type 0 font's own
         // `/BaseFont` may carry the CMap's name after it.
-        let mac_glyph_order = fallback
+        let arial_glyph_order = fallback
             && !adobe_collection
             && descendant_font
                 .get::<Name<'_>>(SUBTYPE)
@@ -192,7 +191,7 @@ impl Type0Font {
             to_unicode_is_cid_indexed,
             adobe_collection,
             identity_to_unicode,
-            mac_glyph_order,
+            arial_glyph_order,
         })
     }
 
@@ -219,8 +218,8 @@ impl Type0Font {
         // PdfCraft patch: the CID of an Arial the PDF doesn't embed names an Arial glyph, which
         // the substitute draws by that name. Taken as the substitute's own glyph index it drew
         // an unrelated glyph: "Low Power" as "@ck 'Dck Yf" (#5889).
-        if self.mac_glyph_order
-            && let Some(glyph) = self.map_via_mac_glyph_name(cid)
+        if self.arial_glyph_order
+            && let Some(glyph) = self.map_via_arial_glyph_name(cid)
         {
             return glyph;
         }
@@ -335,10 +334,10 @@ impl Type0Font {
     }
 
     /// PdfCraft patch: the substitute's glyph for the Arial glyph that `cid` gives, found by
-    /// that glyph's name in the standard Macintosh order. `None` past the 258 glyphs the order
-    /// names, and for a substitute that isn't a name-keyed CFF font (the standard substitutes
-    /// are); .notdef for a name the substitute has no glyph for.
-    fn map_via_mac_glyph_name(&self, cid: u32) -> Option<GlyphId> {
+    /// that glyph's name ([`arial_glyph_name`]). `None` past Arial's first 258 glyphs, and for a
+    /// substitute that isn't a name-keyed CFF font (the standard substitutes are); .notdef for a
+    /// name the substitute has no glyph for.
+    fn map_via_arial_glyph_name(&self, cid: u32) -> Option<GlyphId> {
         let FontType::Cff(c) = &self.font_type else {
             return None;
         };
@@ -346,10 +345,10 @@ impl Type0Font {
             return None;
         }
         let gid = self.cid_to_gid_map.map(u16::try_from(cid).ok()?);
-        let name = *DEFAULT_GLYPH_NAMES.get(usize::try_from(gid.to_u32()).ok()?)?;
-        // `.null` and `nonmarkingreturn` draw nothing, and `nonbreakingspace` is a space.
+        let name = arial_glyph_name(gid.to_u32())?;
+        // `.null` and `nonmarkingreturn` draw nothing.
         let name = match name {
-            ".null" | "nonmarkingreturn" | "nonbreakingspace" => "space",
+            ".null" | "nonmarkingreturn" => "space",
             name => name,
         };
         Some(c.glyph_index_by_name(name).unwrap_or(GlyphId::NOTDEF))
@@ -645,6 +644,31 @@ fn is_arial(name: &str) -> bool {
         && ["", "Regular", "Bold", "Italic", "BoldItalic"]
             .iter()
             .any(|s| without_mt(&style).eq_ignore_ascii_case(s))
+}
+
+/// PdfCraft patch: the name of Arial's glyph `gid`, for its first 258 glyphs; `None` past them.
+/// Arial follows the standard Macintosh order of the TrueType `post` table (Apple's TrueType
+/// Reference Manual) up to `ellipsis` (171), then leaves out two of its glyphs:
+/// `nonbreakingspace` (172; Arial's no-break space is glyph 3) and `apple` (210). It has `Euro`
+/// where the order has `currency` (Arial's 188), and ends with U+00AF and U+00B7 (Arial's
+/// `overscore` and `middot`), named as the substitute names those characters. Its 194 and 216
+/// (`periodcentered` and `macron` in both lists) are U+2219 and U+02C9 in Arial; the substitute
+/// draws its U+00B7 and U+00AF for them, which look the same.
+fn arial_glyph_name(gid: u32) -> Option<&'static str> {
+    let mac = |index: u32| {
+        DEFAULT_GLYPH_NAMES
+            .get(usize::try_from(index).ok()?)
+            .copied()
+    };
+    match gid {
+        0..=171 => mac(gid),
+        172..=187 | 189..=208 => mac(gid + 1),
+        188 => Some("Euro"),
+        209..=255 => mac(gid + 2),
+        256 => Some("macron"),
+        257 => Some("periodcentered"),
+        _ => None,
+    }
 }
 
 /// PdfCraft patch: `name` without a trailing `MT` in any letter case (Monotype's mark in
