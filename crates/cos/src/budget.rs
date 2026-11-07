@@ -692,6 +692,38 @@ mod image_tests {
         assert_eq!(budget.work_left(), u64::MAX);
     }
 
+    /// PDFBOX-3932: an image and soft mask declared `/Predictor 15` that their writer never
+    /// applied, so their rows carry no PNG filter-type byte. Exported, they were "shorter than
+    /// their size says"; they are read as the samples they are, and tagged rows as before.
+    #[test]
+    fn an_image_whose_rows_carry_no_png_tags_decodes_to_its_samples() {
+        let doc = Document::new_empty();
+        let samples: Vec<u8> = (0..36u8).map(|i| 200 - i).collect();
+        let image = |height: Option<i64>, raw: Vec<u8>| {
+            let mut parms = Dict::new();
+            parms.set(b"Predictor".to_vec(), Object::Int(15));
+            parms.set(b"Colors".to_vec(), Object::Int(3));
+            parms.set(b"Columns".to_vec(), Object::Int(3));
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(3));
+            if let Some(h) = height {
+                dict.set(b"Height".to_vec(), Object::Int(h));
+            }
+            dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            Stream::from_raw(dict, raw)
+        };
+        let untagged = pdfcraft_filters::encode_flate(&samples);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert_eq!(budget.decode(&doc, &image(Some(4), untagged.clone()), 1 << 20).unwrap(), samples);
+        // Without a height to tell, the predictor is undone, as before.
+        assert_ne!(budget.decode(&doc, &image(None, untagged.clone()), 1 << 20).ok(), Some(samples.clone()));
+        assert_ne!(budget.decode(&doc, &image(Some(5), untagged), 1 << 20).ok(), Some(samples.clone()));
+        let p = pdfcraft_filters::Params { predictor: 15, colors: 3, columns: 3, ..pdfcraft_filters::Params::default() };
+        let tagged = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &p, &samples).unwrap();
+        assert_eq!(budget.decode(&doc, &image(Some(4), tagged), 1 << 20).unwrap(), samples);
+    }
+
     /// The images of a file share its globals, so an image refused doesn't read them: this one's
     /// can't be read, which is how to tell.
     #[test]
