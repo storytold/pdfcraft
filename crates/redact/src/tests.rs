@@ -1670,6 +1670,12 @@ fn image_and_a_tail(catalog: &str, image: &str, image_dict: &str, tail: &[u8]) -
     ])
 }
 
+/// The refusal of the check of what content still draws through its resources (`resource_ops`).
+fn unread_content_refusal<T: std::fmt::Debug>(result: &Result<T, RedactError>) -> bool {
+    matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. }))
+        if detail == "redaction could not fully read the content that uses these resources")
+}
+
 /// What the page draws can't be told when a content stream the redaction leaves as it was holds
 /// bytes the parser can't read: the redaction of an image is refused, as it was already on a page
 /// with fonts or properties to clean up.
@@ -1680,7 +1686,7 @@ fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_the_redaction_of_an_image(
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
         let result = apply(&mut doc, None);
         if refused {
-            assert!(matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { .. }))), "{result:?}");
+            assert!(unread_content_refusal(&result), "{result:?}");
         } else {
             assert_eq!(result.map(|r| r.images_removed).ok(), Some(1));
         }
@@ -1696,7 +1702,7 @@ fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() 
         let mut doc = image_and_a_tail("/OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >>", "ImOC", "/OC 7 0 R", tail);
         let result = remove_hidden(&mut doc, &[Hidden::HiddenLayers]);
         if refused {
-            assert!(matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { .. }))), "{result:?}");
+            assert!(unread_content_refusal(&result), "{result:?}");
         } else {
             assert!(result.unwrap().iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0));
         }
