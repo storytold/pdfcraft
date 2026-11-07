@@ -51,11 +51,18 @@ const SETTLE_SECONDS: u64 = 5;
 struct Limits {
     /// For a scripted helper's answer or exit ([`ANSWER_SECONDS`]).
     answer: Duration,
-    /// For `xdg-email`'s early failure ([`SETTLE_SECONDS`]).
+    /// For `xdg-email`'s and the new Outlook's early failure ([`SETTLE_SECONDS`]).
     settle: Duration,
+    /// For a system tool asked which email program is the default ([`DETECT_SECONDS`]).
+    detect: Duration,
 }
 
-const LIMITS: Limits = Limits { answer: Duration::from_secs(ANSWER_SECONDS), settle: Duration::from_secs(SETTLE_SECONDS) };
+/// How long the system's own tools may take to name the default email program. They answer in
+/// well under a second; one that stalls must not keep the request pending, so it counts as none.
+const DETECT_SECONDS: u64 = 15;
+
+const LIMITS: Limits =
+    Limits { answer: Duration::from_secs(ANSWER_SECONDS), settle: Duration::from_secs(SETTLE_SECONDS), detect: Duration::from_secs(DETECT_SECONDS) };
 
 /// The largest file put inside a message file for the new Outlook (it is read into memory and
 /// encoded). Mail services refuse much smaller attachments anyway.
@@ -466,10 +473,32 @@ fn system_program(system_root: Option<&std::ffi::OsStr>, name: &str) -> Option<P
 
 /// A command's standard output when it ran and succeeded.
 fn output(command: &mut Command) -> Option<String> {
-    command.stdin(Stdio::null()).stderr(Stdio::null());
+    output_within(command, LIMITS.detect)
+}
+
+/// What a tool prints when it succeeds within `limit`; `None` when it fails, can't be started, or
+/// is still running then (it is killed).
+fn output_within(command: &mut Command, limit: Duration) -> Option<String> {
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     hide_console(command);
-    let out = command.output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    // Read on a thread: a tool that fills the pipe must not stop itself from finishing.
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stdout.read_to_end(&mut text);
+        text
+    });
+    match wait(&mut child, limit) {
+        Some(true) => reader.join().ok().map(|text| String::from_utf8_lossy(&text).into_owned()),
+        Some(false) => None,
+        None => {
+            // Killing it closes the pipe, which ends the reader.
+            let _ = child.kill();
+            reap(child);
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -630,6 +659,10 @@ fn mapi_answer(line: &str) -> Option<Option<Why>> {
 
 /// Write the unsent message for the new Outlook and open it there.
 fn open_message_file(olk: &Path, message: &Path, compose: &Compose) -> Option<Why> {
+    open_message_file_within(olk, message, compose, LIMITS)
+}
+
+fn open_message_file_within(olk: &Path, message: &Path, compose: &Compose, limits: Limits) -> Option<Why> {
     let bytes = match std::fs::metadata(&compose.path) {
         Ok(m) if m.len() > MAX_MESSAGE_FILE_BYTES => {
             return Some(Why::Failed(format!("the file is larger than {} MB", MAX_MESSAGE_FILE_BYTES / (1024 * 1024))));
@@ -646,12 +679,19 @@ fn open_message_file(olk: &Path, message: &Path, compose: &Compose) -> Option<Wh
     };
     let mut command = Command::new(olk);
     command.arg(&message).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    match command.spawn() {
-        Ok(child) => {
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => return Some(Why::Failed(format!("{} could not be started: {e}", olk.display()))),
+    };
+    // Outlook that stops with an error at once did not open the message; one still running at the
+    // settle time (starting up) or stopped without one (handed to a running Outlook) did.
+    match wait(&mut child, limits.settle) {
+        Some(false) => Some(Why::Failed(format!("{} stopped with an error", olk.display()))),
+        Some(true) => None,
+        None => {
             reap(child);
             None
         }
-        Err(e) => Some(Why::Failed(format!("{} could not be started: {e}", olk.display()))),
     }
 }
 
@@ -1357,7 +1397,7 @@ mod tests {
     fn a_helper_that_does_not_answer_in_time_is_reported() {
         let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
         let shell = Path::new("/bin/sh");
-        let quick = Limits { answer: Duration::from_millis(300), settle: Duration::from_millis(300) };
+        let quick = Limits { answer: Duration::from_millis(300), settle: Duration::from_millis(300), detect: Duration::from_millis(300) };
         assert_eq!(run_within(shell, &sh("sleep 5"), None, Watch::Exit, quick), Some(Why::NoAnswer));
         assert_eq!(run_within(shell, &sh("sleep 5"), None, Watch::Answers, quick), Some(Why::NoAnswer));
         // Still running at the settle time counts as opened.
@@ -1377,7 +1417,7 @@ mod tests {
     #[cfg(unix)]
     fn an_answer_line_that_is_not_utf8_does_not_end_the_reading() {
         let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
-        let limits = Limits { answer: Duration::from_secs(10), settle: Duration::from_secs(1) };
+        let limits = Limits { answer: Duration::from_secs(10), settle: Duration::from_secs(1), detect: Duration::from_secs(1) };
         let reason = run_within(Path::new("/bin/sh"), &sh("printf 'failed \\202chec\\n'"), None, Watch::Answers, limits);
         assert!(matches!(&reason, Some(Why::Failed(why)) if why.ends_with("chec")), "{reason:?}");
         let reason = run_within(Path::new("/bin/sh"), &sh("printf 'noise \\202\\ncode 3\\n'"), None, Watch::Answers, limits);
@@ -1393,6 +1433,53 @@ mod tests {
     }
 
     /// Each send's message gets a folder and a file of its own; nothing already there is touched.
+    /// A tool that stalls while naming the default email program counts as naming none.
+    #[test]
+    #[cfg(unix)]
+    fn a_tool_that_stalls_in_detection_is_cut_off() {
+        let sh = |script: &str| {
+            let mut c = Command::new("/bin/sh");
+            c.args(["-c", script]);
+            c
+        };
+        let limit = Duration::from_millis(300);
+        assert_eq!(output_within(&mut sh("echo found"), Duration::from_secs(10)).as_deref(), Some("found\n"));
+        assert_eq!(output_within(&mut sh("exit 1"), Duration::from_secs(10)), None);
+        let started = Instant::now();
+        assert_eq!(output_within(&mut sh("echo started; sleep 5"), limit), None);
+        assert!(started.elapsed() < Duration::from_secs(3), "it is not waited for");
+        // Plenty of output is read while the tool runs, not after.
+        let big = output_within(&mut sh("head -c 1000000 /dev/zero | tr '\\0' x"), Duration::from_secs(10)).unwrap();
+        assert_eq!(big.len(), 1_000_000);
+    }
+
+    /// The new Outlook that stops with an error did not open the message; one that is still
+    /// starting, or that hands the message to a running Outlook and stops, did.
+    #[test]
+    #[cfg(unix)]
+    fn the_new_outlook_failing_at_startup_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pdfcraft-mail-olk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let file = dir.join("Invoice.pdf");
+        std::fs::write(&file, b"%PDF-1.4").unwrap();
+        let mut c = compose();
+        c.path = file;
+        let limits = Limits { answer: Duration::from_secs(10), settle: Duration::from_millis(400), detect: Duration::from_secs(1) };
+        let message = dir.join("sent").join("Invoice.eml");
+        assert!(matches!(open_message_file_within(&fake("fails", "exit 3"), &message, &c, limits), Some(Why::Failed(_))));
+        assert_eq!(open_message_file_within(&fake("hands-over", "exit 0"), &message, &c, limits), None);
+        assert_eq!(open_message_file_within(&fake("starting", "sleep 3"), &message, &c, limits), None);
+        assert!(matches!(open_message_file_within(&dir.join("missing"), &message, &c, limits), Some(Why::Failed(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     #[cfg(unix)]
     fn a_file_that_cannot_be_run_is_not_the_program() {

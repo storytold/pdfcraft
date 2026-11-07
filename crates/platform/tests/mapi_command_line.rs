@@ -23,6 +23,23 @@ fn run_plan(body: String) -> (usize, Option<String>) {
     }
 }
 
+/// Standard base64, padded (what the helper's `FromBase64String` reads).
+fn decode(text: &str) -> Vec<u8> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let (mut bits, mut count) = (0u32, 0);
+    for byte in text.bytes().filter(|b| *b != b'=') {
+        bits = bits << 6 | ALPHABET.iter().position(|a| *a == byte).expect("a base64 character") as u32;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    out
+}
+
 #[test]
 fn a_long_body_stays_under_the_windows_limit() {
     for (name, body) in [("ASCII", "a".repeat(50_000)), ("CJK", "漢".repeat(50_000))] {
@@ -41,6 +58,7 @@ fn a_long_body_stays_under_the_windows_limit() {
         // Base64 grows 3 bytes to 4 characters: the 4th line holds the whole body.
         let bytes = body.len();
         assert_eq!(lines[3].len(), bytes.div_ceil(3) * 4, "{name}: the body is whole on its line");
+        assert_eq!(decode(lines[3]), body.as_bytes(), "{name}: the line decodes to the body, byte for byte");
     }
 }
 
