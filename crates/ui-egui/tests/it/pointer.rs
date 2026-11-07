@@ -2240,3 +2240,25 @@ fn a_camera_click_released_off_its_page_moves_nothing() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0));
 }
+
+/// Delete and Escape with a dialog open are the dialog's: the link selected behind it with the Link
+/// tool stays and stays selected. Delete removed it, and Escape deselected it as it closed the
+/// dialog.
+#[test]
+fn delete_and_escape_under_a_dialog_leave_the_selected_link() {
+    for key in [egui::Key::Delete, egui::Key::Escape] {
+        let mut h = open(link_pdf(), "150", false);
+        link_tool(&mut h);
+        let on_link = at(&h, 150.0, 325.0);
+        mouse_click(&mut h, on_link);
+        assert_eq!(h.state().views[0].links.selected, Some((0, 0)));
+        h.state_mut().dialog = Some(Dialog::Shortcuts);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().links().len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(s.views[0].links.selected, Some((0, 0)), "{key:?}: still selected");
+        assert_eq!(s.dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+    }
+}

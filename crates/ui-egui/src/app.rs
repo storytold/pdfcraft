@@ -264,6 +264,7 @@ impl PdfCraftApp {
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
+            page_keys: Default::default(),
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
@@ -340,6 +341,24 @@ impl PdfCraftApp {
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
+    /// Whether something over the pages has the keyboard: a dialog or prompt, the palette, the
+    /// hotbar's tools window, a popup or a menu of the menu bar. `menu_keys`: this frame carries the
+    /// keys a menu click stands for (Edit ▸ Delete), which are the pages' though the menu bar still
+    /// counts as open on that frame.
+    pub(crate) fn over_pages(&self, ctx: &egui::Context, menu_keys: bool) -> bool {
+        self.covers_pages()
+            || self.hotbar.picker_open()
+            || egui::Popup::is_any_open(ctx)
+            || !menu_keys && (craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx))
+    }
+
+    /// A dialog, a prompt or the palette is drawn over the pages.
+    pub(crate) fn covers_pages(&self) -> bool {
+        // The palette isn't drawn in full screen.
+        let palette = self.palette_open && !(self.full_screen && self.active.is_some());
+        self.modal_open() || self.pending_full_screen.is_some() || palette
+    }
+
     pub(crate) fn modal_open(&self) -> bool {
         self.dialog.is_some()
             || self.close_request.is_some()
@@ -599,10 +618,12 @@ impl eframe::App for PdfCraftApp {
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);
         // The keys a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
-        if !self.menu_input.is_empty() {
+        let menu_keys = !self.menu_input.is_empty();
+        if menu_keys {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
+        self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx, menu_keys));
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.

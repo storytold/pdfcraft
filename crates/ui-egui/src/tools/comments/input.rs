@@ -6,6 +6,7 @@ use super::paint::{closes_at, drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
+use crate::page_keys::PageKeys;
 use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 
 /// Comment input on one page, before text selection runs. `press` is what this page has to do with
@@ -698,13 +699,14 @@ impl Gestures<'_> {
     }
 }
 
-/// Delete / Escape handling for comments (only while no text field has focus).
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
+/// Delete / Escape handling for comments (only while no text field has focus, and nothing is over
+/// the pages).
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
     let cv = &mut view.comments;
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if keys.pressed(ctx, egui::Key::Escape) {
         // One step back per press: cancel the gesture, then deselect, then drop the tool (a
         // comment tool, or a Fill & Sign one: its Text tool would otherwise open a box at every
         // click with no way out by the keyboard).
@@ -717,7 +719,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     }
     if allowed
         && cv.selected.is_some()
-        && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        && (keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace))
         && let Some(edit) = delete_selected(cv)
     {
         view.pending_edit = Some(edit);

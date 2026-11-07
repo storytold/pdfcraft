@@ -8,6 +8,7 @@ use pdfcraft_render::{DocInfo, LinkTarget};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, widgets};
@@ -172,12 +173,14 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     }
 }
 
-/// Delete removes the selected link; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
+/// Delete removes the selected link; Escape clears the selection. Not while something is over the
+/// pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
     if view.links.selected.is_none() || ctx.egui_wants_keyboard_input() {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
+    let esc = keys.pressed(ctx, egui::Key::Escape);
     if del && let Some((page, index)) = view.links.selected.take() {
         view.pending_edit = Some(Edit::DeleteLink { page, index });
     } else if esc {

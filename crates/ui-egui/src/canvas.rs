@@ -29,6 +29,7 @@ mod navigation;
 mod organize;
 pub(super) mod page_cursor;
 mod page_input;
+pub(super) mod page_keys;
 pub(super) mod page_pointer;
 pub(super) mod page_router;
 pub mod scroll_speed;
@@ -2932,6 +2933,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // No dialog, close prompt or palette over the page: only then does page input count.
     let modal = app.modal_open();
     let unobstructed = !modal && !app.palette_open;
+    // A menu click can open a dialog after the frame's first look.
+    app.page_keys = app.page_keys.also(app.covers_pages());
+    let keys = app.page_keys;
     let organize_zoom = app.organize_zoom;
     let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
@@ -3194,19 +3198,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
+    comments::keys(ui.ctx(), keys, view, &mut tool, allowed);
     if preparing {
-        crate::prepare::keys(ui.ctx(), view);
+        crate::prepare::keys(ui.ctx(), keys, view);
     }
     if tool != QuickTool::EditText {
         view.image_selection = None;
         crate::content_ui::release_image_selection(view, &added);
     }
     if editing_content {
-        crate::content_ui::keys(ui.ctx(), view, tool == QuickTool::EditText);
+        crate::content_ui::keys(ui.ctx(), keys, view, tool == QuickTool::EditText);
     }
     if tool == QuickTool::Link {
-        crate::link_ui::keys(ui.ctx(), view);
+        crate::link_ui::keys(ui.ctx(), keys, view);
     } else {
         view.links.selected = None;
     }

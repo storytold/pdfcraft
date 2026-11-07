@@ -13,6 +13,7 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::comments;
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme;
 use crate::widgets;
@@ -717,21 +718,23 @@ fn cancel_marquee(prep: &mut PrepareView) {
     }
 }
 
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
+/// Delete removes the selected fields and Escape deselects them, while no text field has focus and
+/// nothing is over the pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    if view.prepare.marquee_before.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if view.prepare.marquee_before.is_some() && keys.take(ctx, egui::Key::Escape) {
         cancel_marquee(&mut view.prepare);
         return;
     }
     if view.prepare.selected.is_none() {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
     if del {
         view.pending_edit = delete_selected(view);
-    } else if esc {
+    } else if keys.pressed(ctx, egui::Key::Escape) {
         view.prepare.selected = None;
         view.prepare.also.clear();
     }

@@ -25,6 +25,13 @@ pub(crate) struct Hotbar {
     picker_open: bool,
 }
 
+impl Hotbar {
+    /// The Hotbar tools window is open.
+    pub(crate) fn picker_open(&self) -> bool {
+        self.picker_open
+    }
+}
+
 impl Default for Hotbar {
     /// Create a default vertical floating hotbar positioned in the document margin.
     fn default() -> Self {

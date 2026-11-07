@@ -4315,3 +4315,65 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
+
+/// A square drawn and selected with the Select tool.
+fn selected_square() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h
+}
+
+/// Delete or Backspace with a dialog open is the dialog's: the comment selected behind it stays.
+/// Both deleted it.
+#[test]
+fn delete_under_a_dialog_leaves_the_selected_comment() {
+    use pdfcraft_ui_egui::Dialog;
+    for (dialog, key) in [(Dialog::Shortcuts, egui::Key::Delete), (Dialog::About, egui::Key::Backspace)] {
+        let mut h = selected_square();
+        h.state_mut().dialog = Some(dialog);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment stays selected");
+    }
+}
+
+/// Escape with a dialog open closes the dialog and nothing else: the comment stays selected. It
+/// was deselected too.
+#[test]
+fn escape_under_a_dialog_closes_it_and_keeps_the_selected_comment() {
+    let mut h = selected_square();
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and nothing else");
+}
+
+/// With a menu of the menu bar open, Delete is the menu's: the comment stays. It was deleted.
+#[test]
+fn delete_with_a_menu_open_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "View");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+}
+
+/// Edit ▸ Delete removes the selected comment: the key a menu click stands for is not under the
+/// menu it came from.
+#[test]
+fn edit_delete_removes_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Delete").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty());
+}
