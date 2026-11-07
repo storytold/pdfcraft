@@ -199,8 +199,42 @@ impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        self.run_event(event, script, target, value, fields, false)
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, RunFlags { log: false, reset: false }))
+    }
+}
+
+/// Only a reset's post-default Calculate/Format uses a read-only document bootstrap. Other
+/// field edits retain the upstream script policy, including later edits in the same batch.
+pub(crate) struct ResetScripts<'a>(&'a mut JsRunner);
+
+#[derive(Clone, Copy)]
+struct RunFlags {
+    log: bool,
+    reset: bool,
+}
+
+impl Scripts for ResetScripts<'_> {
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        self.0.run_event(event, script, target, value, fields, true)
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.0.run_logged(event, script, target, value, fields, RunFlags { log: false, reset: true }))
+    }
+}
+
+impl JsRunner {
+    pub(crate) fn for_reset(&mut self) -> ResetScripts<'_> {
+        ResetScripts(self)
+    }
+
+    fn run_event(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], reset: bool) -> ScriptResult {
         // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-        self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
+        self.run_logged(event, script, target, value, fields, RunFlags { log: true, reset }).unwrap_or_else(|| ScriptResult {
             rc: true,
             value: value.to_string(),
             changes: Vec::new(),
@@ -208,15 +242,17 @@ impl Scripts for JsRunner {
         })
     }
 
-    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
-        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false))
-    }
-}
-
-impl JsRunner {
     /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
     /// when the script failed.
-    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
+    fn run_logged(
+        &mut self,
+        event: FieldEvent,
+        script: &str,
+        target: &Field,
+        value: &str,
+        fields: &[Field],
+        flags: RunFlags,
+    ) -> Option<ScriptResult> {
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -229,8 +265,12 @@ impl JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
-        if log {
+        let o = if flags.reset {
+            pdfcraft_js::run_shared_for_reset(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default())
+        } else {
+            pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default())
+        };
+        if flags.log {
             self.output.absorb(&o);
         }
         if o.error.is_some() {

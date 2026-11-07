@@ -661,7 +661,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::ResetForm { names } => {
             match cx.js.as_mut() {
-                Some(js) => pdfcraft_forms::reset_with(doc, names.as_deref(), js)?,
+                Some(js) => pdfcraft_forms::reset_with(doc, names.as_deref(), &mut js.for_reset())?,
                 None => pdfcraft_forms::reset(doc, names.as_deref())?,
             };
         }

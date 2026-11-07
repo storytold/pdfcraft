@@ -356,6 +356,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // has no room for is left out and counted.
     let mut h = Host {
         fields: Arc::new(Vec::new()),
+        effects_enabled: true,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
@@ -393,6 +394,61 @@ fn document_level_functions_are_available() {
         Limits::default(),
     );
     assert_eq!(o.value, "8");
+}
+
+#[test]
+fn reset_bootstrap_defines_helpers_without_changing_fields_or_requesting_resets() {
+    let fields = Arc::new(vec![
+        FieldState::new("price", FieldType::Text, vec!["17".into()]),
+        FieldState::new("total", FieldType::Text, vec!["84".into()]),
+        FieldState::new("note", FieldType::Text, vec![]),
+    ]);
+    let docs = vec!["var factor = 2; function totalForPrice() { return Number(getField('price').value) * factor; } getField('price').value = '0'; this.pageNum = 2; this.resetForm(['price']); console.println('bootstrap');".into()];
+    let script = "getField('note').value = event.name + ':' + event.target.name + ':' + this.pageNum; event.value = totalForPrice(); console.println('calculate');";
+    let event = Event::field("Calculate", "total", "84");
+    let protected = run_shared_for_reset(script, &event, &doc(), Arc::clone(&fields), &docs, Limits::default());
+    assert_eq!((protected.error.as_deref(), protected.value.as_str()), (None, "34"));
+    assert_eq!(protected.changed.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["note"]);
+    assert_eq!(protected.changed[0].value, ["Calculate:total:0"]);
+    assert!(protected.requests.is_empty());
+    assert_eq!(protected.console, ["bootstrap", "calculate"]);
+
+    // Ordinary field runs keep their existing bootstrap policy.
+    let ordinary = run_shared(script, &event, &doc(), fields, &docs, Limits::default());
+    assert_eq!(ordinary.value, "0");
+    assert!(ordinary.changed.iter().any(|f| f.name == "price"));
+    assert_eq!(ordinary.requests, [Request::GoToPage(2), Request::Reset(vec!["price".into()])]);
+}
+
+#[test]
+fn reset_bootstrap_error_still_runs_the_real_field_script_with_effects() {
+    let fields = Arc::new(vec![FieldState::new("price", FieldType::Text, vec!["17".into()]), FieldState::new("note", FieldType::Text, vec![])]);
+    let docs = vec!["function helper() { return getField('price').value; } getField('price').value = '0'; throw new Error('init failed');".into()];
+    let outcome = run_shared_for_reset(
+        "getField('note').value = helper(); event.value = helper();",
+        &Event::field("Calculate", "note", ""),
+        &doc(),
+        fields,
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((outcome.error.as_deref(), outcome.value.as_str()), (None, "17"));
+    assert!(outcome.doc_errors.iter().any(|error| error.contains("init failed")), "{outcome:?}");
+    assert_eq!(outcome.changed.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["note"]);
+}
+
+#[test]
+fn reset_field_event_is_fresh_after_document_bootstrap() {
+    let docs = vec!["event.name = 'Wrong'; event.value = '0'; event.rc = false; event.targetName = 'wrong';".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = event.name + ':' + event.rc + ':' + event.target.name + ':' + event.targetName;",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((outcome.error.as_deref(), outcome.value.as_str()), (None, "Calculate:true:total:total"));
 }
 
 /// #3940: a document script that throws after defining a helper (here calling an Acrobat method

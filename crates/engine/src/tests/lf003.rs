@@ -60,6 +60,97 @@ fn value(session: &Session, id: DocId, name: &str) -> Vec<String> {
     session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().value.clone()
 }
 
+fn with_document_script(bytes: Vec<u8>, script: &str) -> Vec<u8> {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    pdfcraft_forms::set_document_script(&mut doc, "init", Some(script)).unwrap();
+    pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+}
+
+#[test]
+fn reset_calculate_reads_defaults_despite_unguarded_document_initializer() {
+    for all in [false, true] {
+        let (mut session, id) = open(with_document_script(form(all, false), "getField('price').value = '0';"));
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+        let _ = session.take_js_output(id);
+
+        session.apply(id, Edit::ResetForm { names: if all { None } else { Some(vec!["price".into()]) } }).unwrap();
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+
+        let saved = session.save_bytes(id).unwrap();
+        let (reopened, reopened_id) = open(saved.as_ref().clone());
+        assert_eq!((value(&reopened, reopened_id, "price"), value(&reopened, reopened_id, "total")), (vec!["17".into()], vec!["34".into()]));
+        session.undo(id).unwrap();
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+        session.redo(id).unwrap();
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+    }
+}
+
+#[test]
+fn button_reset_and_unchanged_default_are_not_overwritten_by_document_bootstrap() {
+    for all in [false, true] {
+        let (mut session, id) = open(with_document_script(form(all, false), "getField('price').value = '0';"));
+        let action = if all { "this.resetForm();" } else { "this.resetForm(['price']);" };
+        let outcome = session.run_javascript(id, action, Some("reset_button")).unwrap();
+        assert!(outcome.error.is_none(), "{outcome:?}");
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+    }
+
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "price", &FieldValue::Text("17".into())).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let (mut session, id) = open(with_document_script(bytes, "getField('price').value = '0';"));
+    session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+}
+
+#[test]
+fn guarded_conditional_and_target_document_initializers_leave_reset_values_coherent() {
+    for script in [
+        "if (event.name === 'Open') getField('price').value = '0';",
+        "if (getField('price').value !== 17) getField('price').value = '0';",
+        "getField('total').value = '0';",
+    ] {
+        let (mut session, id) = open(with_document_script(form(false, false), script));
+        session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+        assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]), "{script}");
+    }
+    let (mut session, id) = open(with_document_script(form(false, true), "getField('price').value = '0';"));
+    session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+}
+
+#[test]
+fn reset_bootstrap_keeps_document_helpers_and_real_calculate_effects() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+    pdfcraft_forms::add_field(&mut doc, 0, [20.0, 120.0, 180.0, 140.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("note")).unwrap();
+    pdfcraft_forms::set_field_script(
+        &mut doc,
+        "total",
+        "calculate",
+        Some("getField('note').value = event.name + ':' + event.target.name + ':' + event.rc; event.value = totalForPrice(); console.println('calculate');"),
+    )
+    .unwrap();
+    pdfcraft_forms::set_field_script(&mut doc, "total", "format", Some("console.println('format'); event.value = String(event.value) + '!';"))
+        .unwrap();
+    pdfcraft_forms::set_document_script(
+        &mut doc,
+        "init",
+        Some("var factor = 2; function totalForPrice() { return Number(getField('price').value) * factor; } getField('price').value = '0'; this.resetForm(['price']); console.println('bootstrap');"),
+    )
+    .unwrap();
+    let (mut session, id) = open(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    let _ = session.take_js_output(id);
+    session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+    assert_eq!(
+        (value(&session, id, "price"), value(&session, id, "total"), value(&session, id, "note")),
+        (vec!["17".into()], vec!["34".into()], vec!["Calculate:total:true".into()])
+    );
+    let output = session.take_js_output(id);
+    assert_eq!(output.console, ["bootstrap", "calculate", "bootstrap", "format"]);
+    assert!(output.requests.is_empty(), "bootstrap reset requests are not applied or reported: {output:?}");
+}
+
 #[test]
 fn targeted_reset_recalculates_custom_script_and_survives_history_and_save() {
     let (mut session, id) = open(form(false, false));
@@ -168,9 +259,10 @@ fn form_with_dependent(order: &[&str]) -> Vec<u8> {
 #[test]
 fn reset_obeys_both_calculation_orders() {
     for (order, expected_tax) in [(["total", "tax"], "35"), (["tax", "total"], "85")] {
-        let (mut session, id) = open(form_with_dependent(&order));
+        let (mut session, id) = open(with_document_script(form_with_dependent(&order), "getField('price').value = '0';"));
         let _ = session.take_js_output(id);
         session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+        assert_eq!(value(&session, id, "price"), ["17"]);
         assert_eq!(value(&session, id, "total"), ["34"]);
         assert_eq!(value(&session, id, "tax"), [expected_tax], "order {order:?}");
     }
@@ -179,14 +271,14 @@ fn reset_obeys_both_calculation_orders() {
 #[test]
 fn javascript_off_preserves_scripted_defaults_but_native_af_still_calculates() {
     for all in [false, true] {
-        let (mut session, id) = open(form(all, false));
+        let (mut session, id) = open(with_document_script(form(all, false), "getField('price').value = '0';"));
         session.set_javascript(false);
         session.apply(id, Edit::ResetForm { names: if all { None } else { Some(vec!["price".into()]) } }).unwrap();
         assert_eq!(value(&session, id, "price"), ["17"]);
         assert_eq!(value(&session, id, "total"), [if all { "999" } else { "84" }]);
         assert!(session.take_js_output(id).console.is_empty());
     }
-    let (mut session, id) = open(form(true, true));
+    let (mut session, id) = open(with_document_script(form(true, true), "getField('price').value = '0';"));
     session.set_javascript(false);
     session.apply(id, Edit::ResetForm { names: None }).unwrap();
     assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
@@ -209,7 +301,7 @@ fn failing_calculate_reports_error_and_keeps_the_restored_values() {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(form(all, false))).unwrap();
         pdfcraft_forms::set_field_script(&mut doc, "total", "calculate", Some("throw new Error('lf003 calculation failed');")).unwrap();
         let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-        let (mut session, id) = open(bytes);
+        let (mut session, id) = open(with_document_script(bytes, "getField('price').value = '0';"));
         let _ = session.take_js_output(id);
         session.apply(id, Edit::ResetForm { names: if all { None } else { Some(vec!["price".into()]) } }).unwrap();
         assert_eq!(value(&session, id, "price"), ["17"]);
@@ -218,6 +310,62 @@ fn failing_calculate_reports_error_and_keeps_the_restored_values() {
         assert!(output.errors.iter().any(|error| error.contains("lf003 calculation failed")), "{output:?}");
         session.undo(id).unwrap();
         assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+    }
+}
+
+#[test]
+fn invalid_real_calculate_write_rolls_back_the_entire_reset() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+    pdfcraft_forms::add_field(&mut doc, 0, [20.0, 120.0, 180.0, 140.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("note")).unwrap();
+    pdfcraft_forms::set_props(&mut doc, "note", &FieldProps { max_len: Some(Some(3)), ..Default::default() }).unwrap();
+    pdfcraft_forms::set_field_script(
+        &mut doc,
+        "total",
+        "calculate",
+        Some("getField('note').value = 'too long'; event.value = Number(getField('price').value) * 2;"),
+    )
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let (mut session, id) = open(with_document_script(bytes, "getField('price').value = '0';"));
+    let before = session.save_bytes(id).unwrap();
+    let err = session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap_err();
+    assert!(err.to_string().contains("note") && err.to_string().contains("3"), "{err}");
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+    assert_eq!(session.get(id).unwrap().can_undo(), None);
+    assert_eq!(session.save_bytes(id).unwrap().as_ref(), before.as_ref());
+}
+
+#[test]
+fn format_runs_once_after_calculate_but_document_console_bootstrap_repeats() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+    pdfcraft_forms::set_document_script(&mut doc, "init", Some("console.println('doc-run'); app.alert('doc-alert'); this.print();")).unwrap();
+    pdfcraft_forms::set_field_script(
+        &mut doc,
+        "total",
+        "format",
+        Some("console.println('format'); this.resetForm(['price']); event.value = String(event.value) + '!';"),
+    )
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    for reset in [false, true] {
+        let (mut session, id) = open(bytes.clone());
+        let _ = session.take_js_output(id);
+        if reset {
+            session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+            assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["17".into()], vec!["34".into()]));
+        } else {
+            session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("43".into()) }).unwrap();
+            assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["43".into()], vec!["86".into()]));
+        }
+        let output = session.take_js_output(id);
+        assert_eq!(output.console, ["doc-run", "lf003-calculate", "doc-run", "format"]);
+        assert_eq!(output.alerts.len(), 2, "document bootstrap alerts remain visible for both events");
+        assert!(output.alerts.iter().all(|alert| alert.text == "doc-alert"));
+        if reset {
+            assert_eq!(output.requests, [js::Request::Reset(vec!["price".into()])], "only the true Format request is logged");
+        } else {
+            assert_eq!(output.requests, [js::Request::Print, js::Request::Print, js::Request::Reset(vec!["price".into()])]);
+        }
     }
 }
 

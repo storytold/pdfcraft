@@ -1,5 +1,5 @@
 use super::globals::{event_object, install};
-use super::host::{Host, Shared, text};
+use super::host::{Host, Shared, error, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
 use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
 
@@ -28,6 +28,12 @@ const MAX_CONDITIONALS: usize = 4096;
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
+
+#[derive(Clone, Copy)]
+struct RunConfig {
+    limits: Limits,
+    bootstrap_effects: bool,
+}
 
 /// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
 /// and comments are skipped; brackets in regular expressions and templates count, which only
@@ -108,6 +114,32 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared_inner(script, event, doc, fields, doc_scripts, limits, true)
+}
+
+/// Run a reset's field event with document globals but without applying bootstrap field writes
+/// or host requests. The actual Calculate/Format script runs with effects enabled.
+pub fn run_shared_for_reset(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    limits: Limits,
+) -> Outcome {
+    run_shared_inner(script, event, doc, fields, doc_scripts, limits, false)
+}
+
+fn run_shared_inner(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    limits: Limits,
+    bootstrap_effects: bool,
+) -> Outcome {
+    let config = RunConfig { limits, bootstrap_effects };
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
         return failed(why);
@@ -135,7 +167,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, limits)));
+                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, config)));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -143,7 +175,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, kept, skipped, limits)
+    run_here(script, event, doc, fields, kept, skipped, config)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -192,7 +224,7 @@ fn run_here(
     fields: Arc<Vec<FieldState>>,
     doc_scripts: &[(usize, &str)],
     skipped: &[(usize, String)],
-    limits: Limits,
+    config: RunConfig,
 ) -> Outcome {
     let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
         Ok(ctx) => ctx,
@@ -201,10 +233,11 @@ fn run_here(
             return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
         }
     };
-    ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
-    ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    ctx.runtime_limits_mut().set_loop_iteration_limit(config.limits.loop_iterations);
+    ctx.runtime_limits_mut().set_recursion_limit(config.limits.recursion);
     ctx.insert_data(RefCell::new(Host {
         fields,
+        effects_enabled: config.bootstrap_effects,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
@@ -217,7 +250,7 @@ fn run_here(
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
-        let ev = event_object(&mut ctx, event);
+        let mut ev = event_object(&mut ctx, event);
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
@@ -227,6 +260,15 @@ fn run_here(
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
+        if !config.bootstrap_effects {
+            // A document initializer may have assigned to `event` as well as to a field.
+            // The actual Calculate/Format must start with its own original event values.
+            ev = event_object(&mut ctx, event);
+            ctx.global_object().set(js_string!("event"), ev.clone(), true, &mut ctx)?;
+        }
+        // A fresh context is used for each field event. Restore effects before the actual
+        // script, even when a document initializer threw after defining useful globals.
+        host(&ctx)?.try_borrow_mut().map_err(|_| error("the script host is already in use"))?.effects_enabled = true;
         let r = ctx.eval(Source::from_bytes(script))?;
         if !r.is_undefined() {
             out.result = Some(text(&r, &mut ctx)?);
