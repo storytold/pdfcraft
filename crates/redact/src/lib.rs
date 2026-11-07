@@ -22,15 +22,21 @@ pub mod codes;
 mod image;
 mod interp;
 mod overlay;
+mod pattern_guard;
 pub mod patterns;
 pub mod sanitize;
 mod tags;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_verify;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
+pub mod verify;
 
 use interp::{Mode, Scope, process};
+pub use pattern_guard::PatternProblem;
+pub use verify::{Proof, ProofOptions, Snapshot};
 
 pub type Rgb = [f64; 3];
 
@@ -49,6 +55,8 @@ pub enum RedactError {
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
     /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
+    #[error("page {page} cannot be redacted safely: {reason}; nothing was changed")]
+    Pattern { page: usize, reason: PatternProblem },
     #[error("{0}")]
     Undrawable(String),
     #[error(
@@ -59,6 +67,11 @@ pub enum RedactError {
         "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
     )]
     OverlayLimit,
+    /// A stream the redaction created to draw the marks' boxes and labels can't be read back, so
+    /// the proof can't tell it apart from content that was there before and nothing can be
+    /// exempted from the sweep.
+    #[error("a stream the redaction created can't be read back, so the result can't be proven")]
+    OverlayUnreadable,
     /// The structure tree couldn't be cleaned completely (#3302): an element written in place that
     /// would need changing, an element whose inherited page can't be found, or a tree too large to
     /// walk. Tags that kept the removed text or annotation would undo the redaction.
@@ -137,6 +150,8 @@ fn overlay_look(doc: &Document, d: &Dict) -> pdfcraft_annot::OverlayLook {
 /// What [`apply`] removed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Report {
+    /// Patterns dropped from a page's resources because nothing painted with them any more.
+    pub patterns_removed: usize,
     pub marks: usize,
     pub pages: usize,
     pub glyphs: usize,
@@ -164,7 +179,7 @@ pub struct Report {
     pub overlays: Vec<ObjRef>,
 }
 
-fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let v: Vec<f64> = doc.resolve(o?).as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
     (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
 }
@@ -388,6 +403,38 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
     Ok(report)
 }
 
+// Shared appearance stream references can keep a removed annotation's pattern cell reachable
+// from an unselected page. Collect only the appearance map and its state streams, not unrelated
+// annotation data such as fonts or metadata.
+fn appearance_refs(doc: &Document, annotation: &Dict) -> Option<HashSet<ObjRef>> {
+    const MAX_REFERENCES: usize = 16_384;
+    let mut references = HashSet::new();
+    let Some(ap) = annotation.get(b"AP") else { return Some(references) };
+    if let Some(reference) = ap.as_ref() {
+        references.insert(reference);
+    }
+    let resolved_ap = doc.resolve(ap);
+    let Some(appearances) = resolved_ap.as_dict() else { return Some(references) };
+    for key in [b"N".as_slice(), b"R", b"D"] {
+        let Some(value) = appearances.get(key) else { continue };
+        if let Some(reference) = value.as_ref() {
+            references.insert(reference);
+        }
+        let resolved = doc.resolve(value);
+        if let Object::Dict(states) = &*resolved {
+            for (_, state) in states.iter() {
+                if let Some(reference) = state.as_ref() {
+                    references.insert(reference);
+                    if references.len() > MAX_REFERENCES {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    Some(references)
+}
+
 /// [`apply`] without the copy: an error can leave `doc` part redacted.
 fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
     let images = pdfcraft_cos::ImageBudget::new(doc);
@@ -420,6 +467,16 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // content rewriting and verification instead of scanning all marks for every page.
     let groups: Vec<_> = chosen.chunk_by(|a, b| a.page == b.page).filter_map(|group| group.first().map(|mark| (mark.page, group))).collect();
     let by_page: Vec<_> = groups.iter().map(|(page, _)| *page).collect();
+    // A pattern pruned from a selected page can remain reachable through another page's
+    // resources. When a selected page had patterns, inspect every page after the rewrite.
+    let source_pages = pdfcraft_model::pages(doc);
+    let shared_pattern_possible = by_page.iter().any(|&pi| {
+        source_pages
+            .get(pi)
+            .and_then(|page| page.dict.get(b"Resources"))
+            .map(|resources| doc.resolve(resources))
+            .is_some_and(|resources| resources.as_dict().is_some_and(|dict| dict.get(b"Pattern").is_some()))
+    });
     // Budget failures must leave even a direct library caller's document untouched.
     let mut remaining = overlay::MAX_BYTES;
     let overlays = groups
@@ -439,6 +496,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         widget_owner,
         removed_everywhere: HashSet::new(),
         images,
+        removed_appearances: HashSet::new(),
+        appearance_scan_limit: false,
+        pruned_patterns: Vec::new(),
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -449,7 +509,18 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     if applying.images.refused() > 0 {
         return Err(RedactError::ImagesPastAllowance);
     }
-    let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, mut images, .. } = applying;
+    let Applying {
+        mut report,
+        doomed_fields,
+        doomed_xobjects,
+        retired_properties,
+        mut removed_everywhere,
+        mut images,
+        mut removed_appearances,
+        mut appearance_scan_limit,
+        pruned_patterns,
+        ..
+    } = applying;
 
     // 2b. Replies and pop-ups of a removed annotation can be listed on another page than their
     // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.
@@ -472,6 +543,19 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
                     d.get(b"IRT").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x)) && d.name(b"Subtype") != Some(b"Widget");
                 let is_popup = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x));
                 if removed_everywhere.contains(&r) || is_reply || is_popup {
+                    // A reply or pop-up removed here can share its appearance with an annotation
+                    // that stays on an unselected page, like one removed under a mark: the
+                    // all-pages pattern check must see it.
+                    if !appearance_scan_limit {
+                        match appearance_refs(doc, d) {
+                            Some(references) => removed_appearances.extend(references),
+                            None => appearance_scan_limit = true,
+                        }
+                        if removed_appearances.len() > 16_384 {
+                            appearance_scan_limit = true;
+                            removed_appearances.clear();
+                        }
+                    }
                     if removed_everywhere.insert(r) {
                         grew = true;
                         if is_reply {
@@ -532,6 +616,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // A removed image or form must not stay reachable through another resource dictionary (an
     // inherited or shared /Resources): a full save keeps whatever is still referenced.
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
+    // Likewise a pruned pattern: a /Pages node above the page can still name its cell.
+    interp::unlink_pruned_patterns(doc, &pruned_patterns)?;
     report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects, &mut images)?;
 
     // 5. Verify: nothing readable may remain under a region.
@@ -554,6 +640,29 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     if residue > 0 {
         return Err(RedactError::Residue(residue));
     }
+    // The interpreter can remove a pattern's paint while another use keeps the cell reachable.
+    // Inspect the finished selected pages, including rewritten Forms, and all pages if a removed
+    // pattern or appearance may still be shared. Retained unsafe cells refuse the redaction;
+    // `apply` runs on a copy, so the refusal leaves the caller's document as it was.
+    let shared_appearance_possible = appearance_scan_limit
+        || !removed_appearances.is_empty()
+            && pdfcraft_model::pages(doc).iter().enumerate().any(|(index, page)| {
+                !by_page.contains(&index)
+                    && annots_of(doc, &page.dict).iter().any(|annotation| {
+                        doc.resolve(annotation).as_dict().is_some_and(|dict| {
+                            appearance_refs(doc, dict).is_none_or(|refs| refs.iter().any(|reference| removed_appearances.contains(reference)))
+                        })
+                    })
+            });
+    let first_page = by_page.first().map_or(1, |p| p + 1);
+    let check_pages =
+        if shared_pattern_possible || shared_appearance_possible { (0..pdfcraft_model::pages(doc).len()).collect::<Vec<_>>() } else { by_page };
+    // A pruned pattern may also stay named by a /Pages node no page inherits from, or by one a
+    // page with a broken /Parent link still reaches: then every page-tree node is inspected too.
+    pattern_guard::check(doc, &check_pages, shared_pattern_possible || !pruned_patterns.is_empty())?;
+    // Whatever reference keeps a pruned pattern in the file -- one no walk above follows -- the
+    // full save would write it: prove it safe or refuse.
+    pattern_guard::check_pruned_unreachable(doc, &pruned_patterns, first_page)?;
     // The previous revision still holds the removed content: the next save must rewrite, and the
     // rewritten file is a different file from its source, so it gets a new identifier.
     doc.require_full_save_with_new_id();
@@ -641,6 +750,13 @@ struct Applying {
     removed_everywhere: HashSet<ObjRef>,
     /// What clearing images may spend, across the run's pages.
     images: pdfcraft_cos::ImageBudget,
+    /// Appearance streams of the annotations removed, on any page: one shared with a kept
+    /// annotation keeps a pruned pattern's cell reachable (see `pattern_guard`).
+    removed_appearances: HashSet<ObjRef>,
+    /// Too many appearance references to track: the pattern guard inspects every page.
+    appearance_scan_limit: bool,
+    /// Pattern objects pruned from a page's resources, which page-tree nodes may still name.
+    pruned_patterns: Vec<ObjRef>,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -651,7 +767,7 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, images, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, images, pruned_patterns, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
@@ -724,6 +840,11 @@ fn redact_page_content(
             },
             pi,
         )?;
+        // A pattern this page selected but no surviving paint draws leaves its resources, so
+        // its cell -- a content stream this pass does not enter -- cannot stay in the file.
+        // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
+        let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
+        report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
         retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
         type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
         doc.update_dict(page.obj, |d| {
@@ -752,7 +873,7 @@ fn remove_page_annotations(
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_fields, widget_owner, removed_everywhere, .. } = applying;
+    let Applying { report, doomed_fields, widget_owner, removed_everywhere, removed_appearances, appearance_scan_limit, .. } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
     let mut removed: Vec<ObjRef> = Vec::new();
@@ -810,6 +931,25 @@ fn remove_page_annotations(
         }
     }
     removed_everywhere.extend(removed.iter().copied());
+    // A removed annotation's appearance streams can be shared with a kept one on another page,
+    // which would keep a pruned pattern's cell reachable: remember them for the pattern guard.
+    for reference in &removed {
+        if *appearance_scan_limit {
+            break;
+        }
+        if let Some(annotation) = doc.get(*reference).as_dict() {
+            match appearance_refs(doc, annotation) {
+                Some(references) => {
+                    removed_appearances.extend(references);
+                    if removed_appearances.len() > 16_384 {
+                        *appearance_scan_limit = true;
+                        removed_appearances.clear();
+                    }
+                }
+                None => *appearance_scan_limit = true,
+            }
+        }
+    }
     // Pop-ups dropped with their parent below count too: a reply on another page may answer one.
     for a in &annots {
         let Some(r) = a.as_ref() else { continue };
