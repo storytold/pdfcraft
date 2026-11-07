@@ -77,6 +77,11 @@ pub(super) fn word_num(n: f64, cents: bool) -> String {
 /// Decode XML (`html == false`) or HTML (`html == true`) character and entity references in a
 /// single pass so `&amp;lt;` becomes `&lt;` rather than `<`, and invalid or unrecognized
 /// references remain literal without panicking.
+/// Decode XML or HTML character references in `s` in a single pass.
+///
+/// When `html` is `false`, only the five predefined XML entities (`&lt;`, `&gt;`, `&amp;`,
+/// `&quot;`, `&apos;`) and numeric character references (`&#...;`, `&#x...;`, `&#X...;`) are
+/// decoded. When `html` is `true`, W3C HTML 4 / XHTML 1.0 named entities are decoded as well.
 pub(super) fn decode_entities(s: &str, html: bool) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -98,6 +103,8 @@ pub(super) fn decode_entities(s: &str, html: bool) -> String {
     out
 }
 
+/// Parse a character reference starting at the leading `&` of `s`, returning the decoded `char`
+/// and the byte length of the reference (including `&` and `;`).
 fn entity_at(s: &str, html: bool) -> Option<(char, usize)> {
     if let Some(body) = s.strip_prefix("&#") {
         let (radix, digits, prefix_len) = match body.strip_prefix(['x', 'X']) {
@@ -138,6 +145,7 @@ fn entity_at(s: &str, html: bool) -> Option<(char, usize)> {
     Some((ch, 1 + semi + 1))
 }
 
+/// Look up a W3C HTML 4 / XHTML 1.0 named entity (excluding the five XML entities).
 fn html_named_entity(name: &str) -> Option<char> {
     if let Some(idx) = LATIN1_ENTITIES.iter().position(|&n| n == name) {
         return char::from_u32(0xA0 + idx as u32);
@@ -177,3 +185,26 @@ const HTML_ENTITIES: &[(&str, char)] = &[
     ("supe", '\u{2287}'), ("oplus", '\u{2295}'), ("otimes", '\u{2297}'), ("perp", '\u{22A5}'), ("sdot", '\u{22C5}'), ("lceil", '\u{2308}'), ("rceil", '\u{2309}'), ("lfloor", '\u{230A}'),
     ("rfloor", '\u{230B}'), ("lang", '\u{2329}'), ("rang", '\u{232A}'), ("loz", '\u{25CA}'), ("spades", '\u{2660}'), ("clubs", '\u{2663}'), ("hearts", '\u{2665}'), ("diams", '\u{2666}'),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{HTML_ENTITIES, LATIN1_ENTITIES, decode_entities};
+
+    #[test]
+    fn every_listed_html_entity_decodes_including_eight_byte_boundary() {
+        for (i, &name) in LATIN1_ENTITIES.iter().enumerate() {
+            let expected = char::from_u32(0xA0 + i as u32).unwrap().to_string();
+            let input = format!("&{name};");
+            assert_eq!(decode_entities(&input, true), expected, "entity {name}");
+            assert_eq!(decode_entities(&input, false), input, "xml mode leaves {name} literal");
+        }
+        for &(name, ch) in HTML_ENTITIES {
+            assert!(name.len() <= 8, "entity name {name} exceeds 8-byte parser limit");
+            let input = format!("&{name};");
+            assert_eq!(decode_entities(&input, true), ch.to_string(), "entity {name}");
+            assert_eq!(decode_entities(&input, false), input, "xml mode leaves {name} literal");
+        }
+        assert_eq!(decode_entities("&thetasym;", true), "\u{03D1}");
+        assert_eq!(decode_entities("&thetasymx;", true), "&thetasymx;");
+    }
+}
