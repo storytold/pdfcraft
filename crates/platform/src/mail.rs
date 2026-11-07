@@ -46,6 +46,17 @@ pub const MAPI_SECONDS: u32 = 30;
 /// counts as opened.
 const SETTLE_SECONDS: u64 = 5;
 
+/// The waits [`run`] applies; tests give shorter ones.
+#[derive(Clone, Copy)]
+struct Limits {
+    /// For a scripted helper's answer or exit ([`ANSWER_SECONDS`]).
+    answer: Duration,
+    /// For `xdg-email`'s early failure ([`SETTLE_SECONDS`]).
+    settle: Duration,
+}
+
+const LIMITS: Limits = Limits { answer: Duration::from_secs(ANSWER_SECONDS), settle: Duration::from_secs(SETTLE_SECONDS) };
+
 /// The largest file put inside a message file for the new Outlook (it is read into memory and
 /// encoded). Mail services refuse much smaller attachments anyway.
 pub const MAX_MESSAGE_FILE_BYTES: u64 = 150 * 1024 * 1024;
@@ -467,6 +478,10 @@ fn execute(plan: Plan, compose: &Compose) -> Answer {
 
 /// Run a helper and watch it as `watch` says. `None` when it worked.
 fn run(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch) -> Option<Why> {
+    run_within(program, args, stdin, watch, LIMITS)
+}
+
+fn run_within(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch, limits: Limits) -> Option<Why> {
     let mut command = Command::new(program);
     command.args(args).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
     command.stdout(if watch == Watch::Answers { Stdio::piped() } else { Stdio::null() });
@@ -488,7 +503,7 @@ fn run(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch) -> Op
         });
     }
     match watch {
-        Watch::Exit => match wait(&mut child, Duration::from_secs(ANSWER_SECONDS)) {
+        Watch::Exit => match wait(&mut child, limits.answer) {
             Some(true) => None,
             Some(false) => {
                 let mut said = String::new();
@@ -504,7 +519,7 @@ fn run(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch) -> Op
                 Some(Why::NoAnswer)
             }
         },
-        Watch::Started => match wait(&mut child, Duration::from_secs(SETTLE_SECONDS)) {
+        Watch::Started => match wait(&mut child, limits.settle) {
             Some(true) => None,
             Some(false) => Some(Why::Failed(format!("{} stopped with an error", program.display()))),
             None => {
@@ -512,7 +527,7 @@ fn run(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch) -> Op
                 None
             }
         },
-        Watch::Answers => watch_answers(child),
+        Watch::Answers => watch_answers(child, limits.answer),
     }
 }
 
@@ -536,8 +551,8 @@ fn reap(mut child: Child) {
     });
 }
 
-/// The Simple MAPI script's first answer line, within [`ANSWER_SECONDS`].
-fn watch_answers(mut child: Child) -> Option<Why> {
+/// The Simple MAPI script's first answer line, within `limit` ([`ANSWER_SECONDS`]).
+fn watch_answers(mut child: Child, limit: Duration) -> Option<Why> {
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         reap(child);
@@ -545,9 +560,16 @@ fn watch_answers(mut child: Child) -> Option<Why> {
     };
     let (line_tx, line_rx) = channel();
     let reader = std::thread::Builder::new().name("pdfcraft-mail-read".into()).spawn(move || {
-        for line in std::io::BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
-            if let Some(answer) = mapi_answer(&line) {
+        // Read by bytes: PowerShell writes in the console's code page, and a line that isn't
+        // UTF-8 (a localized error message) must not end the reading.
+        let mut lines = std::io::BufReader::new(stdout);
+        let mut raw = Vec::new();
+        loop {
+            raw.clear();
+            if !matches!(lines.read_until(b'\n', &mut raw), Ok(n) if n > 0) {
+                break;
+            }
+            if let Some(answer) = mapi_answer(&String::from_utf8_lossy(&raw)) {
                 let _ = line_tx.send(answer);
                 return;
             }
@@ -558,7 +580,7 @@ fn watch_answers(mut child: Child) -> Option<Why> {
         reap(child);
         return Some(Why::Failed("the email helper's answer could not be read".into()));
     }
-    let answer = match line_rx.recv_timeout(Duration::from_secs(ANSWER_SECONDS)) {
+    let answer = match line_rx.recv_timeout(limit) {
         Ok(answer) => answer,
         Err(RecvTimeoutError::Timeout) => {
             let _ = child.kill();
@@ -605,21 +627,58 @@ fn open_message_file(olk: &Path, message: &Path, compose: &Compose) -> Option<Wh
         },
         Err(e) => return Some(Why::Failed(e.to_string())),
     };
-    let written = message
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(message, unsent_message(compose, &file_name(&compose.path), &bytes)));
-    if let Err(e) = written {
-        return Some(Why::Failed(format!("the message could not be written: {e}")));
-    }
+    let message = match write_message(message, unsent_message(compose, &file_name(&compose.path), &bytes).as_bytes()) {
+        Ok(message) => message,
+        Err(e) => return Some(Why::Failed(format!("the message could not be written: {e}"))),
+    };
     let mut command = Command::new(olk);
-    command.arg(message).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    command.arg(&message).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     match command.spawn() {
         Ok(child) => {
             reap(child);
             None
         }
         Err(e) => Some(Why::Failed(format!("{} could not be started: {e}", olk.display()))),
+    }
+}
+
+/// Write the message under a folder of its own beside `message` (its name is kept, so the new
+/// Outlook shows it): one folder per send, made with `create_dir`, which fails on anything already
+/// there, and the file made new, so a send never overwrites another's and a planted file or link is
+/// never followed. Folders from earlier sends over a day old are removed. Where the file is.
+fn write_message(message: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
+    use std::hash::BuildHasher;
+    use std::io::Write;
+    let root = message.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(root)?;
+    prune(root, Duration::from_secs(24 * 60 * 60));
+    let name = message.file_name().unwrap_or_default();
+    let mut last = None;
+    for attempt in 0..8u32 {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let unique = std::hash::RandomState::new().hash_one((std::process::id(), nanos, attempt));
+        let folder = root.join(format!("{unique:016x}"));
+        match std::fs::create_dir(&folder) {
+            Ok(()) => {
+                let file = folder.join(name);
+                std::fs::OpenOptions::new().write(true).create_new(true).open(&file)?.write_all(contents)?;
+                return Ok(file);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free folder")))
+}
+
+/// Remove the folders in `root` last changed more than `age` ago (best effort: one in use stays).
+fn prune(root: &Path, age: Duration) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e > age);
+        if old && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
 }
 
@@ -776,6 +835,8 @@ fn fill(template: &str, values: &[(&str, String)]) -> String {
 const MAPI_SCRIPT: &str = r##"$ErrorActionPreference = 'Stop'
 trap { 'failed ' + $_.Exception.Message; exit 0 }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+# Answers go out as UTF-8, not the console's code page (a localized error message is not ASCII).
+[Console]::OutputEncoding = $utf8
 $text = { param($b) $utf8.GetString([Convert]::FromBase64String($b)) }
 $path = & $text ([Console]::In.ReadLine()); $name = & $text ([Console]::In.ReadLine()); $subject = & $text ([Console]::In.ReadLine()); $body = & $text ([Console]::In.ReadLine())
 $to = [string[]]@((& $text ([Console]::In.ReadLine())) -split "`n" | Where-Object { $_ -ne '' })
@@ -834,7 +895,12 @@ public static class PdfCraftMapi {
 	public static void Run(string path, string name, string subject, string body, string[] to, uint caller, int seconds) {
 		var before = Titled(subject, caller);
 		uint result = 0;
-		var worker = new Thread(delegate() { result = Send(path, name, subject, body, to); });
+		string failure = null;
+		// An exception on this thread would end the process with no answer, so it is caught here.
+		var worker = new Thread(delegate() {
+			try { result = Send(path, name, subject, body, to); }
+			catch (Exception e) { failure = e.Message.Replace("\r", " ").Replace("\n", " "); }
+		});
 		worker.SetApartmentState(ApartmentState.STA);
 		worker.IsBackground = true;
 		worker.Start();
@@ -847,7 +913,8 @@ public static class PdfCraftMapi {
 			if (told) { Console.WriteLine("opened"); Console.Out.Flush(); }
 			else if (DateTime.UtcNow > until) { Console.WriteLine("hung"); Console.Out.Flush(); return; }
 		}
-		if (!told) { Console.WriteLine("code " + result); Console.Out.Flush(); }
+		if (failure != null) { Console.WriteLine("failed " + failure); Console.Out.Flush(); }
+		else if (!told) { Console.WriteLine("code " + result); Console.Out.Flush(); }
 	}
 }
 '@
@@ -1267,6 +1334,70 @@ mod tests {
         let plan =
             Plan { program: Some("Mail".into()), route: Route::Run { command: shell.into(), args: sh("exit 1"), stdin: None, watch: Watch::Exit } };
         assert!(matches!(execute(plan, &c), Answer::NotAttached { program: Some(_), why: Why::Failed(_), .. }));
+    }
+
+    /// The waits are the caller's: a helper that never answers, or never stops, is killed and reported.
+    #[test]
+    #[cfg(unix)]
+    fn a_helper_that_does_not_answer_in_time_is_reported() {
+        let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
+        let shell = Path::new("/bin/sh");
+        let quick = Limits { answer: Duration::from_millis(300), settle: Duration::from_millis(300) };
+        assert_eq!(run_within(shell, &sh("sleep 5"), None, Watch::Exit, quick), Some(Why::NoAnswer));
+        assert_eq!(run_within(shell, &sh("sleep 5"), None, Watch::Answers, quick), Some(Why::NoAnswer));
+        // Still running at the settle time counts as opened.
+        assert_eq!(run_within(shell, &sh("sleep 2"), None, Watch::Started, quick), None);
+        // A helper that stops without a line, or whose line isn't one of ours, gives no answer.
+        assert_eq!(
+            run_within(shell, &sh("echo hello"), None, Watch::Answers, quick),
+            Some(Why::Failed("the email helper stopped without an answer".into()))
+        );
+        // A script that stalls before reading its input is still cut off at the limit.
+        let big = "x".repeat(1 << 20);
+        assert_eq!(run_within(shell, &sh("sleep 5"), Some(&big), Watch::Exit, quick), Some(Why::NoAnswer));
+    }
+
+    /// A line in the console's code page (not UTF-8) must not hide the answer after it.
+    #[test]
+    #[cfg(unix)]
+    fn an_answer_line_that_is_not_utf8_does_not_end_the_reading() {
+        let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
+        let limits = Limits { answer: Duration::from_secs(10), settle: Duration::from_secs(1) };
+        let reason = run_within(Path::new("/bin/sh"), &sh("printf 'failed \\202chec\\n'"), None, Watch::Answers, limits);
+        assert!(matches!(&reason, Some(Why::Failed(why)) if why.ends_with("chec")), "{reason:?}");
+        let reason = run_within(Path::new("/bin/sh"), &sh("printf 'noise \\202\\ncode 3\\n'"), None, Watch::Answers, limits);
+        assert_eq!(reason, Some(Why::LogonFailed));
+    }
+
+    #[test]
+    fn the_mapi_script_answers_in_utf8_and_catches_its_worker_threads_exceptions() {
+        let script = mapi_script(1);
+        assert!(script.contains("[Console]::OutputEncoding = $utf8"));
+        assert!(script.contains("catch (Exception e) { failure ="));
+        assert!(script.contains("Console.WriteLine(\"failed \" + failure)"));
+    }
+
+    /// Each send's message gets a folder and a file of its own; nothing already there is touched.
+    #[test]
+    fn unsent_messages_never_share_or_overwrite_a_path() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-mail-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let wanted = root.join("Invoice.eml");
+        let first = write_message(&wanted, b"one").unwrap();
+        let second = write_message(&wanted, b"two").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.file_name(), wanted.file_name(), "the name is kept");
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        assert_eq!(std::fs::read(&second).unwrap(), b"two");
+        // A file planted at the wanted name is left alone.
+        std::fs::write(&wanted, b"planted").unwrap();
+        write_message(&wanted, b"three").unwrap();
+        assert_eq!(std::fs::read(&wanted).unwrap(), b"planted");
+        // Folders over a day old go; new ones stay.
+        prune(&root, Duration::ZERO);
+        assert!(!first.exists() && !second.exists());
+        assert!(wanted.exists(), "a file, not a folder, is not pruned");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The AppleScript for Mail compiles (`osacompile` reads Mail's dictionary without starting it).
