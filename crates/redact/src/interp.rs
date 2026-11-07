@@ -31,7 +31,7 @@ mod prune;
 
 use layers::strip_hidden_layers;
 use prune::{clip_out, extgstate_font, prune_form_resources};
-pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns};
+pub(crate) use prune::{prune, prune_extgstates, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
@@ -85,6 +85,9 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// When the active font was set by an `/ExtGState` `/Font` entry (`gs`), the resource name of
+    /// that graphics state dictionary (cleared when `Tf` sets a font).
+    font_gs: Option<Vec<u8>>,
     /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
@@ -109,10 +112,16 @@ pub(crate) struct Output {
     /// can unlink the original from the resource dictionary (a full save keeps whatever is still
     /// referenced, which would otherwise retain the removed image or form bytes).
     pub replaced: Vec<Vec<u8>>,
+    /// New ExtGState resources the rewritten content refers to: (resource name, object).
+    pub ext_gstates: Vec<(Vec<u8>, ObjRef)>,
+    /// ExtGState resource names dropped or replaced in this scope.
+    pub replaced_ext_gstates: Vec<Vec<u8>>,
     /// The original objects behind `replaced`, nested scopes included. Other resource
     /// dictionaries may name them too (an inherited or shared /Resources, or the caller's when a
     /// form has none of its own): [`unlink_doomed`] removes those entries.
     pub doomed: Vec<ObjRef>,
+    /// Rewritten form/image objects, including nested replacements, that may retain parent-tree keys.
+    pub replacements: Vec<ObjRef>,
     /// Pattern resource names a painting operator that survived the rewrite still uses. A name
     /// this scope saw selected but never painted with afterwards is pruned from the page's
     /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
@@ -137,6 +146,42 @@ pub(crate) struct Output {
     pub ambiguous: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
+}
+
+impl Output {
+    pub fn has_resource_changes(&self) -> bool {
+        !self.xobjects.is_empty() || !self.replaced.is_empty() || !self.ext_gstates.is_empty() || !self.replaced_ext_gstates.is_empty()
+    }
+
+    pub fn apply_resources(&self, doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
+        // A form with no /Resources of its own draws these names through this dictionary.
+        // Read that use before any entry is removed; an unreadable form keeps the names by
+        // failing the redaction rather than dropping a font or pattern it still paints.
+        let inherited = if self.replaced_ext_gstates.is_empty() { None } else { Some(resource_ops(doc, res, content)?) };
+        if !self.xobjects.is_empty() || !self.replaced.is_empty() {
+            let mut xo = res_dict(doc, res, b"XObject");
+            prune(&mut xo, &self.replaced, content);
+            for (n, r) in &self.xobjects {
+                xo.set(n.clone(), Object::Ref(*r));
+            }
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+        }
+        if !self.ext_gstates.is_empty() || !self.replaced_ext_gstates.is_empty() {
+            let mut egs = res_dict(doc, res, b"ExtGState");
+            if let Some(ops) = &inherited {
+                prune_extgstates(&mut egs, &self.replaced_ext_gstates, ops);
+            }
+            for (n, r) in &self.ext_gstates {
+                egs.set(n.clone(), Object::Ref(*r));
+            }
+            if egs.is_empty() {
+                res.remove(b"ExtGState");
+            } else {
+                res.set(b"ExtGState".to_vec(), Object::Dict(egs));
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct Scope<'a> {
@@ -314,6 +359,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        font_gs: None,
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
@@ -361,6 +407,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         processed.push((done.ops, done.changed));
     }
     if scope.mode == Mode::Apply {
+        walk.finish_apply(doc, scope, &mut processed);
         clean_replacements(doc, resources, &original, &mut processed, scope.report);
     }
     walk.out.streams = processed.into_iter().zip(comment_edges).map(|((ops, changed), edges)| changed.then(|| piece_bytes(&ops, edges))).collect();
@@ -419,6 +466,8 @@ struct Walk {
     xobjects: Dict,
     /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
     patterns: Vec<Vec<u8>>,
+    redacted_font_gs: HashSet<Vec<u8>>,
+    surviving_font_gs: HashSet<Vec<u8>>,
     fallback: Rc<Metrics>,
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
@@ -438,6 +487,8 @@ impl Walk {
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
             patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
+            redacted_font_gs: HashSet::new(),
+            surviving_font_gs: HashSet::new(),
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
@@ -464,10 +515,7 @@ impl Walk {
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
-                self.graphics_state(doc, scope, &op);
-                Some(op)
-            }
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => self.graphics_state(doc, scope, resources, op, piece),
             b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
                 self.text_state(&op);
                 Some(op)
@@ -514,6 +562,54 @@ impl Walk {
         piece.ops.extend(kept);
     }
 
+    fn finish_apply(&mut self, doc: &mut Document, scope: &mut Scope<'_>, processed: &mut [(Vec<Op>, bool)]) {
+        for gs_name in &self.redacted_font_gs {
+            if self.surviving_font_gs.contains(gs_name) {
+                continue;
+            }
+            let Some(gs_val) = self.ext_gstates.get(gs_name).cloned() else { continue };
+            let gs_ref = gs_val.as_ref();
+            let Some(mut d) = doc.resolve(&gs_val).as_dict().cloned() else { continue };
+            if let Some(font_obj) = d.remove(b"Font") {
+                if let Some(fr) = font_obj.as_ref() {
+                    self.out.doomed.push(fr);
+                }
+                if let Some(fr) = doc.resolve(&font_obj).as_array().and_then(|a| a.first()).and_then(Object::as_ref)
+                    && !self.fonts_res.iter().any(|(_, v)| v.as_ref() == Some(fr))
+                {
+                    self.out.doomed.push(fr);
+                }
+            }
+            if let Some(gr) = gs_ref {
+                self.out.doomed.push(gr);
+            }
+            self.out.replaced_ext_gstates.push(gs_name.clone());
+            let only_type = d.iter().all(|(k, _)| k.as_slice() == b"Type");
+            if only_type {
+                for (ops, changed) in &mut *processed {
+                    let before = ops.len();
+                    ops.retain(|op| !(op.is("gs") && op.name(0) == Some(gs_name.as_slice())));
+                    if ops.len() != before {
+                        *changed = true;
+                    }
+                }
+            } else {
+                let nr = doc.add(Object::Dict(d));
+                let n = fresh_name(scope, &self.ext_gstates);
+                self.ext_gstates.set(n.clone(), Object::Ref(nr));
+                self.out.ext_gstates.push((n.clone(), nr));
+                for (ops, changed) in &mut *processed {
+                    for op in ops {
+                        if op.is("gs") && op.name(0) == Some(gs_name.as_slice()) {
+                            *op = Op::new("gs", vec![Object::Name(n.clone())]);
+                            *changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Path construction: collects the operator and grows the path's bounding box.
     fn construct_path(&mut self, op: Op) {
         let o = op.op.as_slice();
@@ -535,14 +631,14 @@ impl Walk {
 
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
+        let o = op.op.as_slice();
         let body = std::mem::take(&mut self.path);
         let bbox = self.path_box.take();
         let clips = std::mem::replace(&mut self.clip, false);
-        let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
+        let hit = scope.mode == Mode::Apply && o != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
             // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
-            let o = op.op.as_slice();
             let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
             let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
             uses_patterns(&mut self.out, &self.gs, fills, strokes);
@@ -562,7 +658,7 @@ impl Walk {
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
     }
 
-    fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+    fn graphics_state(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) -> Option<Op> {
         match op.op.as_slice() {
             b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
             b"Q" => {
@@ -575,18 +671,20 @@ impl Walk {
                     self.gs.ctm = Matrix(m).then(&self.gs.ctm);
                 }
             }
-            b"Tf" => self.select_font(doc, scope, op),
+            b"Tf" => self.select_font(doc, scope, &op),
             _ => {
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
-                    (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
-                    // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
-                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                if let Some(new) = extgstate_op(doc, scope, &op, (&mut self.gs, &self.fallback), resources, &mut self.ext_gstates, &mut self.out) {
+                    piece.changed = true;
+                    return new;
                 }
             }
         }
+        Some(op)
     }
 
     fn select_font(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+        self.gs.font_gs = None;
         self.gs.size = op.num(1).unwrap_or(self.gs.size);
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
@@ -679,8 +777,17 @@ impl Walk {
             self.out.vertical = true;
         }
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        let has_surviving = new_items.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty()));
+        if (removed == 0 || has_surviving)
+            && let Some(fg) = &self.gs.font_gs
+        {
+            self.surviving_font_gs.insert(fg.clone());
+        }
         if removed == 0 {
             return Some(op);
+        }
+        if let Some(fg) = &self.gs.font_gs {
+            self.redacted_font_gs.insert(fg.clone());
         }
         if scope.mode == Mode::Verify {
             self.out.residue += removed;
@@ -890,6 +997,241 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     (out, removed)
 }
 
+enum StreamOutcome {
+    Unchanged,
+    Removed,
+    Rewritten(ObjRef),
+}
+
+fn sanitize_stream_form(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    (r, s): (ObjRef, &Stream),
+    gs: Gs,
+    resources: &Dict,
+    out: &mut Output,
+) -> StreamOutcome {
+    if s.dict.get(b"OC").is_some_and(|oc| scope.xobject_layer_hidden(doc, r, oc)) {
+        scope.layer_blocks += 1;
+        if scope.mode == Mode::Verify {
+            return StreamOutcome::Unchanged;
+        }
+        out.doomed.push(r);
+        return StreamOutcome::Removed;
+    }
+    let bbox = s.dict.get(b"BBox").and_then(|b| {
+        let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
+        (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    });
+    if let Some(bb) = bbox
+        && !scope.everywhere()
+        && !scope.hits(gs.ctm.bbox(bb))
+    {
+        return StreamOutcome::Unchanged;
+    }
+    if scope.depth >= MAX_DEPTH {
+        if scope.mode == Mode::Verify {
+            if scope.everywhere() {
+                scope.layer_blocks += 1;
+            }
+            return StreamOutcome::Unchanged;
+        }
+        scope.report.forms_removed += 1;
+        out.doomed.push(r);
+        return StreamOutcome::Removed;
+    }
+    // Strict, like page content: a Form read only in part counts as undecodable.
+    let data = if scope.budget.enter_form() {
+        scope.budget.decode_strict(s)
+    } else {
+        Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
+    };
+    let data = match data {
+        Ok(d) => d,
+        // Past the page's budget nothing more is read: apply refuses the page, and
+        // verification counts the form as content that may remain.
+        Err(e) if scope.budget.exhausted() => {
+            if scope.mode == Mode::Apply {
+                out.error = Some(e);
+            } else if scope.everywhere() {
+                scope.layer_blocks += 1;
+            } else {
+                out.residue += 1;
+            }
+            return StreamOutcome::Unchanged;
+        }
+        Err(_) if scope.mode == Mode::Apply => {
+            scope.report.forms_removed += 1;
+            out.doomed.push(r);
+            return StreamOutcome::Removed;
+        }
+        Err(_) => {
+            // Apply drops an undecodable Form while sanitizing. Count it during Verify
+            // so a zero-count preflight cannot leave its potentially hidden bytes behind.
+            if scope.everywhere() {
+                scope.layer_blocks += 1;
+            }
+            return StreamOutcome::Unchanged;
+        }
+    };
+    let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
+    let res = own.clone().unwrap_or_else(|| resources.clone());
+    let saved_fonts = std::mem::take(&mut scope.fonts);
+    scope.depth += 1;
+    let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, gs);
+    scope.depth -= 1;
+    scope.fonts = saved_fonts;
+    out.residue += inner.residue;
+    out.vertical |= inner.vertical;
+    out.ambiguous |= inner.ambiguous;
+    out.doomed.extend_from_slice(&inner.doomed);
+    out.retired_properties.extend(inner.retired_properties.clone());
+    // A Type 3 glyph without resources shown inside the form may paint with the page's
+    // patterns (the renderer resolves its names there), whether or not the form has
+    // /Resources of its own.
+    out.keeps_all_patterns |= inner.keeps_all_patterns;
+    out.tag_changes.extend(inner.tag_changes.clone());
+    out.replacements.extend_from_slice(&inner.replacements);
+    out.error = inner.error.clone().or(out.error.take());
+    // A form without /Resources of its own paints with its caller's patterns, so what it
+    // still paints keeps the caller's entry. Only the painted side is passed up: a name
+    // the form selected but no longer paints with is left for the caller to keep.
+    if own.is_none() {
+        out.patterns_painted.extend(inner.patterns_painted.iter().cloned());
+    }
+    if scope.mode == Mode::Verify {
+        return StreamOutcome::Unchanged;
+    }
+    let new_data = inner.streams.first().cloned().flatten();
+    if new_data.is_none() && !inner.has_resource_changes() {
+        return StreamOutcome::Unchanged;
+    }
+    let mut dict = s.dict.clone();
+    dict.remove(b"Length");
+    if new_data.is_some() {
+        // As for page content streams: the source text of an added item (Edit ▸ Add
+        // content) would keep what the rewrite removed.
+        dict.remove(b"PCAdded");
+    }
+    let mut cleaned_res = res.clone();
+    let effective_data = new_data.as_deref().unwrap_or(&data);
+    let content = [effective_data.to_vec()];
+    if let Err(error) = inner.apply_resources(doc, &mut cleaned_res, &content) {
+        out.error = Some(error);
+        return StreamOutcome::Unchanged;
+    }
+    if new_data.is_some() {
+        match prune_properties(doc, &mut cleaned_res, &content) {
+            Ok(retired) => out.retired_properties.extend(retired),
+            Err(error) => {
+                out.error = Some(error);
+                return StreamOutcome::Unchanged;
+            }
+        }
+        if let Err(error) = prune_form_resources(doc, &mut cleaned_res, &content) {
+            out.error = Some(error);
+            return StreamOutcome::Unchanged;
+        }
+        if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, &content) {
+            out.error = Some(error);
+            return StreamOutcome::Unchanged;
+        }
+    }
+    if cleaned_res != res {
+        dict.set(b"Resources".to_vec(), Object::Dict(cleaned_res));
+    }
+    let (changed, empty) = tags::touched(doc, &res, &data, effective_data);
+    let stream = match new_data {
+        Some(d) => Stream::flate(dict, &d),
+        None => Stream { dict, raw: s.raw.clone() },
+    };
+    let nr = doc.add(Object::Stream(stream));
+    out.tag_changes.push((r, nr, changed, empty));
+    out.replacements.push(nr);
+    out.doomed.push(r);
+    scope.report.forms_rewritten += 1;
+    StreamOutcome::Rewritten(nr)
+}
+
+fn extgstate_op(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    op: &Op,
+    (gs, fallback): (&mut Gs, &Rc<Metrics>),
+    resources: &Dict,
+    ext_gstates: &mut Dict,
+    out: &mut Output,
+) -> Option<Option<Op>> {
+    let name = op.name(0)?.to_vec();
+    let gs_val = ext_gstates.get(&name)?.clone();
+    let gs_ref = gs_val.as_ref();
+    let d = doc.resolve(&gs_val).as_dict()?.clone();
+    if let Some((font, vertical, size)) = extgstate_font(doc, scope, ext_gstates, &name, fallback) {
+        (gs.font, gs.vertical, gs.size) = (font, vertical, size);
+        gs.font_gs = Some(name.clone());
+        gs.type3_inherits = extgstate_type3_inherits(doc, ext_gstates, &name);
+    }
+    let smask_obj = d.get(b"SMask")?;
+    let smask_ref = smask_obj.as_ref();
+    let smask_dict = doc.resolve(smask_obj).as_dict()?.clone();
+    let g_ref = smask_dict.get(b"G").and_then(Object::as_ref)?;
+    let g_obj = doc.get(g_ref);
+    let Object::Stream(s) = &*g_obj else { return None };
+    let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+    let fctm = m.then(&gs.ctm);
+    match sanitize_stream_form(doc, scope, (g_ref, s), Gs { ctm: fctm, ..gs.clone() }, resources, out) {
+        StreamOutcome::Unchanged => None,
+        StreamOutcome::Removed => {
+            if let Some(sr) = smask_ref {
+                out.doomed.push(sr);
+            }
+            if let Some(gr) = gs_ref {
+                out.doomed.push(gr);
+            }
+            out.replaced_ext_gstates.push(name.clone());
+            let mut new_d = d;
+            new_d.remove(b"SMask");
+            let only_type = new_d.iter().all(|(k, _)| k.as_slice() == b"Type");
+            if only_type {
+                if gs.font_gs.as_deref() == Some(name.as_slice()) {
+                    gs.font_gs = None;
+                }
+                Some(None)
+            } else {
+                let nr = doc.add(Object::Dict(new_d));
+                let n = fresh_name(scope, ext_gstates);
+                ext_gstates.set(n.clone(), Object::Ref(nr));
+                out.ext_gstates.push((n.clone(), nr));
+                if gs.font_gs.as_deref() == Some(name.as_slice()) {
+                    gs.font_gs = Some(n.clone());
+                }
+                Some(Some(Op::new("gs", vec![Object::Name(n)])))
+            }
+        }
+        StreamOutcome::Rewritten(nr) => {
+            if let Some(sr) = smask_ref {
+                out.doomed.push(sr);
+            }
+            if let Some(gr) = gs_ref {
+                out.doomed.push(gr);
+            }
+            out.replaced_ext_gstates.push(name.clone());
+            let mut new_smask = smask_dict;
+            new_smask.set(b"G".to_vec(), Object::Ref(nr));
+            let mut new_d = d;
+            new_d.set(b"SMask".to_vec(), Object::Dict(new_smask));
+            let new_gs_ref = doc.add(Object::Dict(new_d));
+            let n = fresh_name(scope, ext_gstates);
+            ext_gstates.set(n.clone(), Object::Ref(new_gs_ref));
+            out.ext_gstates.push((n.clone(), new_gs_ref));
+            if gs.font_gs.as_deref() == Some(name.as_slice()) {
+                gs.font_gs = Some(n.clone());
+            }
+            Some(Some(Op::new("gs", vec![Object::Name(n)])))
+        }
+    }
+}
+
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
 fn xobject(
     doc: &mut Document,
@@ -934,6 +1276,7 @@ fn xobject(
                     let n = fresh_name(scope, xobjects);
                     xobjects.set(n.clone(), Object::Ref(nr));
                     out.xobjects.push((n.clone(), nr));
+                    out.replacements.push(nr);
                     out.replaced.push(name);
                     out.doomed.push(r);
                     scope.report.images_cleared += 1;
@@ -950,154 +1293,20 @@ fn xobject(
         Some(b"Form") => {
             let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
             let fctm = m.then(&gs.ctm);
-            let bbox = s.dict.get(b"BBox").and_then(|b| {
-                let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
-                (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
-            });
-            if let Some(bb) = bbox
-                && !scope.everywhere()
-                && !scope.hits(fctm.bbox(bb))
-            {
-                return None;
-            }
-            // Too deep: this form cannot be read, so it goes (Apply) or the page is left alone
-            // (Verify), as a form that will not decode does. The page's decode budget below is what
-            // keeps a fan-out or a cycle from costing 2^50 walks.
-            if scope.depth >= MAX_DEPTH {
-                if scope.mode == Mode::Verify {
-                    // Sanitization removes a Form it cannot enter, so the verification scan
-                    // must count that conservative removal or it may decide to skip the pass.
-                    if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    }
-                    return None;
-                }
-                scope.report.forms_removed += 1;
-                out.replaced.push(name);
-                out.doomed.push(r);
-                return Some(None);
-            }
-            // Strict, like page content: a Form read only in part counts as undecodable.
-            let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(s)
-            } else {
-                Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
-            };
-            let data = match data {
-                Ok(d) => d,
-                // Past the page's budget nothing more is read: apply refuses the page, and
-                // verification counts the form as content that may remain.
-                Err(e) if scope.budget.exhausted() => {
-                    if scope.mode == Mode::Apply {
-                        out.error = Some(e);
-                    } else if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    } else {
-                        out.residue += 1;
-                    }
-                    return None;
-                }
-                Err(_) if scope.mode == Mode::Apply => {
-                    scope.report.forms_removed += 1;
+            match sanitize_stream_form(doc, scope, (r, s), Gs { ctm: fctm, ..gs.clone() }, resources, out) {
+                StreamOutcome::Unchanged => None,
+                StreamOutcome::Removed => {
                     out.replaced.push(name);
-                    out.doomed.push(r);
-                    return Some(None);
+                    Some(None)
                 }
-                Err(_) => {
-                    // Apply drops an undecodable Form while sanitizing. Count it during Verify
-                    // so a zero-count preflight cannot leave its potentially hidden bytes behind.
-                    if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    }
-                    return None;
-                }
-            };
-            let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
-            let res = own.clone().unwrap_or_else(|| resources.clone());
-            let saved_fonts = std::mem::take(&mut scope.fonts);
-            scope.depth += 1;
-            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
-            scope.depth -= 1;
-            scope.fonts = saved_fonts;
-            out.residue += inner.residue;
-            out.vertical |= inner.vertical;
-            out.ambiguous |= inner.ambiguous;
-            out.doomed.extend_from_slice(&inner.doomed);
-            out.retired_properties.extend(inner.retired_properties);
-            // A Type 3 glyph without resources shown inside the form may paint with the page's
-            // patterns (the renderer resolves its names there), whether or not the form has
-            // /Resources of its own.
-            out.keeps_all_patterns |= inner.keeps_all_patterns;
-            out.tag_changes.extend(inner.tag_changes);
-            out.error = inner.error.or(out.error.take());
-            // A form without /Resources of its own paints with its caller's patterns, so what it
-            // still paints keeps the caller's entry. Only the painted side is passed up: a name
-            // the form selected but no longer paints with is left for the caller to keep.
-            if own.is_none() {
-                out.patterns_painted.extend(inner.patterns_painted);
-            }
-            if scope.mode == Mode::Verify {
-                return None;
-            }
-            let new_data = inner.streams.into_iter().next().flatten();
-            if new_data.is_none() && inner.xobjects.is_empty() && inner.replaced.is_empty() {
-                return None;
-            }
-            let mut dict = s.dict.clone();
-            dict.remove(b"Length");
-            if new_data.is_some() {
-                // As for page content streams: the source text of an added item (Edit ▸ Add
-                // content) would keep what the rewrite removed.
-                dict.remove(b"PCAdded");
-            }
-            let mut cleaned_res = res.clone();
-            // Install rewritten nested forms before finding live property names: a new form may
-            // still inherit its caller's resources, and its new Do name must resolve here.
-            if !inner.xobjects.is_empty() || !inner.replaced.is_empty() {
-                let mut xo = res_dict(doc, &cleaned_res, b"XObject");
-                if let Some(data) = &new_data {
-                    prune(&mut xo, &inner.replaced, std::slice::from_ref(data));
-                }
-                for (name, reference) in &inner.xobjects {
-                    xo.set(name.clone(), Object::Ref(*reference));
-                }
-                cleaned_res.set(b"XObject".to_vec(), Object::Dict(xo));
-            }
-            if let Some(data) = &new_data {
-                let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut cleaned_res, content) {
-                    Ok(retired) => out.retired_properties.extend(retired),
-                    Err(error) => {
-                        out.error = Some(error);
-                        return None;
-                    }
-                }
-                if let Err(error) = prune_form_resources(doc, &mut cleaned_res, content) {
-                    out.error = Some(error);
-                    return None;
-                }
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
-                    out.error = Some(error);
-                    return None;
+                StreamOutcome::Rewritten(nr) => {
+                    let n = fresh_name(scope, xobjects);
+                    xobjects.set(n.clone(), Object::Ref(nr));
+                    out.xobjects.push((n.clone(), nr));
+                    out.replaced.push(name);
+                    Some(Some(Op::new("Do", vec![Object::Name(n)])))
                 }
             }
-            if cleaned_res != res {
-                dict.set(b"Resources".to_vec(), Object::Dict(cleaned_res));
-            }
-            let (changed, empty) = tags::touched(doc, &res, &data, new_data.as_deref().unwrap_or(&data));
-            let stream = match new_data {
-                Some(d) => Stream::flate(dict, &d),
-                None => Stream { dict, raw: s.raw.clone() },
-            };
-            let nr = doc.add(Object::Stream(stream));
-            out.tag_changes.push((r, nr, changed, empty));
-            let n = fresh_name(scope, xobjects);
-            xobjects.set(n.clone(), Object::Ref(nr));
-            out.xobjects.push((n.clone(), nr));
-            out.replaced.push(name);
-            out.doomed.push(r);
-            scope.report.forms_rewritten += 1;
-            Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
         _ => None,
     }

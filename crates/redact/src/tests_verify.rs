@@ -290,7 +290,10 @@ fn a_survivor_in_a_page_thumbnail_is_found() {
     // the object sweep can find it.
     let thumb = stream("/Type /XObject /Subtype /Image /Width 7 /Height 3 /ColorSpace /DeviceGray /BitsPerComponent 8", b"junk SECRETVALUE junk");
     let mut doc = marked(Spec { page: "/Thumb 7 0 R", extra: vec![thumb], ..Spec::default() });
-    let (_, proof) = run(&mut doc);
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Thumb".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
     let s = surface(&proof, Surface::DecodedStreams);
     assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
     assert!(s.locations.iter().any(|l| l.contains("(raw)")), "{:?}", s.locations);
