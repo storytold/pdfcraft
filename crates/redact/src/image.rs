@@ -12,7 +12,7 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
 
 /// Most pixels an image may have to be cleared in place (larger ones are removed), or to be stored
 /// again without shared `/JBIG2Globals` (see [`without_globals`]).
-const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
+pub(crate) const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
 
 fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
