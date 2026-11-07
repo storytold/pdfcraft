@@ -12,7 +12,10 @@ fn page(parts: &[&str]) -> PageText {
 // The original straightforward search is an independent oracle for valid page metadata.
 fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
     let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
-    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    // Soft hyphens and zero width characters draw nothing and are skipped on both sides.
+    let visible =
+        |s: String| s.chars().filter(|c| !matches!(c, '\u{AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')).collect::<String>();
+    let needle: Vec<char> = visible(fold(query)).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() || limit == 0 {
         return Vec::new();
     }
@@ -21,7 +24,7 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
         if i > 0 && (page.space_before[i] || page.line_of[i] != page.line_of[i - 1]) && chars.last().is_some_and(|&(c, _)| c != ' ') {
             chars.push((' ', i));
         }
-        for c in fold(&glyph.text).chars() {
+        for c in visible(fold(&glyph.text)).chars() {
             let c = if c.is_whitespace() { ' ' } else { c };
             if c != ' ' || chars.last().is_none_or(|&(last, _)| last != ' ') {
                 chars.push((c, i));
@@ -69,7 +72,7 @@ fn whole_word_rejection_keeps_overlapping_candidates() {
 
 #[test]
 fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
-    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية"];
+    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية", "\u{AD}", "a\u{200B}"];
     let mut seed = 1234567u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -109,4 +112,29 @@ fn long_repeated_prefix_search_preserves_the_last_match_and_limit() {
     let query = format!("{}b", "a".repeat(4095));
     assert_eq!(text.find_opts_limited(&query, false, false, 1), vec![126977..131073]);
     assert!(text.find(&format!("{}c", "a".repeat(4095))).is_empty());
+}
+
+/// pdf.js issue 13226 stores "Mitarbeiterinnen" with soft hyphens at its hyphenation points, and
+/// issue 9186 puts zero width spaces next to the gaps between words. Find skips both characters
+/// (and the other invisible joiners) in the page and in the query, and a match still starts and
+/// ends on visible letters.
+#[test]
+fn find_skips_soft_hyphens_and_zero_width_characters() {
+    let word = page(&["M", "i", "t", "\u{AD}", "a", "r", "b", "e", "i", "\u{AD}", "t", "e", "r", "i", "n", "n", "e", "n"]);
+    assert_eq!(word.find("Mitarbeiterinnen"), vec![0..18]);
+    assert_eq!(word.find_opts("Mitarbeiterinnen", true, true), vec![0..18]);
+    assert_eq!(word.find("arbei"), vec![4..9]);
+    // Inside one word, a piece of it is not a whole word.
+    assert!(word.find_opts("terinnen", false, true).is_empty());
+    // A query that carries the soft hyphens still matches.
+    assert_eq!(word.find("Mit\u{AD}arbei\u{AD}terinnen"), vec![0..18]);
+
+    let mut gaps = page(&["is", "\u{200B}", "\u{200B}", "made", "\u{2060}", "as"]);
+    gaps.space_before = vec![false, false, true, false, false, true];
+    assert_eq!(gaps.find("is made"), vec![0..4]);
+    assert_eq!(gaps.find_opts("made as", false, true), vec![3..6]);
+    for joiner in ['\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}'] {
+        assert_eq!(page(&["ab", &joiner.to_string(), "cd"]).find("abcd"), vec![0..3], "{joiner:?}");
+    }
+    assert!(page(&["\u{200B}"]).find("\u{200B}").is_empty());
 }
