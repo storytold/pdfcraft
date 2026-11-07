@@ -66,7 +66,13 @@ fn content_bytes(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> R
             if budget.remaining() == 0 {
                 unsupported(index, "decoding the content takes more than 16 MiB")
             } else {
-                unsupported(index, format!("content cannot be decoded strictly: {e}"))
+                // The decoder's own reason: `CosError::Filter`'s text would say again that the data
+                // couldn't be decoded.
+                let why = match e {
+                    pdfcraft_cos::CosError::Filter(why) => why,
+                    other => other.to_string(),
+                };
+                unsupported(index, format!("content cannot be decoded strictly: {why}"))
             }
         })?;
         all.extend_from_slice(&decoded);
