@@ -813,6 +813,13 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// PdfCraft patch (32): this renderer, drawing a tiling cell, painted something outside every
+    /// transparency group with a blend mode other than Normal, so the cell has to be drawn over
+    /// its backdrop (see [`Renderer::draw_tiles_on_backdrop`]).
+    cell_blends: bool,
+    /// PdfCraft patch (32): the tiling pattern `paint_setup` just set up is one whose cell blends
+    /// (`cell_blends`); the fill or stroke that asked for it draws its tiles on the backdrop.
+    backdrop_tiles: bool,
 }
 
 /// PdfCraft patch (27): which inks a pass of a `DeviceCMYK` group draws, and whether the
@@ -920,6 +927,8 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            cell_blends: false,
+            backdrop_tiles: false,
         }
     }
 
@@ -1026,6 +1035,8 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                cell_blends: false,
+                backdrop_tiles: false,
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1595,6 +1606,8 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            cell_blends: false,
+            backdrop_tiles: false,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
@@ -1661,6 +1674,8 @@ impl Renderer {
 
     #[must_use]
     fn set_paint(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
+        // PdfCraft patch (32): set again by a tiling pattern whose cell blends.
+        self.backdrop_tiles = false;
         // PdfCraft patch (22): in a knockout erase pass every paint clears what is under its
         // shape (a transparent fill with `Compose::Copy`, weighted by coverage).
         let element_mode = self.knockout_pass().map(|pass| pass.element_mode);
@@ -1703,6 +1718,116 @@ impl Renderer {
             self.ctx.pop_clip_path();
         }
         self.ctx.set_blend_mode(knockout_blend_mode());
+    }
+
+    /// PdfCraft patch (32): whether a tiling pattern set up now may draw its cell over the
+    /// backdrop (`backdrop_tiles`). In a knockout group or its passes every element replaces
+    /// what is under it, so there the cell keeps the image paint.
+    fn may_draw_tiles_on_backdrop(&self) -> bool {
+        !self.erasing && !self.in_knockout() && self.knockout_passes.is_empty() && self.ink.pass.is_none()
+    }
+
+    /// PdfCraft patch (32): paints `shape` (in user space under `transform`; filled with
+    /// `fill_rule`, or stroked with the context's stroke when `is_stroke`) with tiling pattern
+    /// `paint` by drawing the pattern's cell again in every tile the shape reaches, straight over
+    /// what is under it. ISO 32000-2 §11.6.7 treats a tiling pattern's definition as a
+    /// non-isolated, non-knockout group, "as if the pattern definition were re-executed
+    /// independently for each tile, taking into account the colour of the backdrop" (NOTE 1),
+    /// so a blend mode inside the cell blends with the page. The cell pixmap, drawn on a
+    /// transparent canvas, is the isolated shortcut that NOTE 1 allows only for cells painted
+    /// entirely with Normal. When the fill or stroke itself composites with a blend mode or a
+    /// soft mask, the tiles are drawn in a layer carrying those.
+    ///
+    /// Returns `false`, having drawn nothing, when the paint isn't a tiling pattern, the
+    /// geometry is degenerate, or the shape reaches more than [`MAX_BACKDROP_TILES`] tiles; the
+    /// caller then paints the cell pixmap already set up.
+    fn draw_tiles_on_backdrop(&mut self, paint: &Paint<'_>, shape: &BezPath, transform: Affine, fill_rule: FillRule, is_stroke: bool) -> bool {
+        let Paint::Pattern(pattern) = paint else { return false };
+        let Pattern::Tiling(t) = pattern.as_ref() else { return false };
+        let (clip, clip_rule) = if is_stroke {
+            let scale = f64::from(max_factor(&transform));
+            if !scale.is_finite() || scale <= 0.0 {
+                return false;
+            }
+            let outline = kurbo::stroke(shape.iter(), self.ctx.stroke(), &kurbo::StrokeOpts::default(), 0.25 / scale);
+            (transform * outline, FillRule::NonZero)
+        } else {
+            (transform * shape.clone(), fill_rule)
+        };
+        let canvas = Rect::new(0.0, 0.0, f64::from(self.ctx.width()), f64::from(self.ctx.height()));
+        let area = clip.bounding_box().intersect(canvas);
+        if area.width() <= 0.0 || area.height() <= 0.0 {
+            // Nothing of the shape is on the canvas.
+            return true;
+        }
+        if !(t.matrix.determinant().abs() > 1e-12) {
+            return false;
+        }
+        // The area in pattern space, and the lattice indices of the tiles whose `/BBox` reaches
+        // it. A negative step gives the same lattice (ISO 32000-2 §8.7.3.1, Table 74).
+        let reach = t.matrix.inverse().transform_rect_bbox(area);
+        let (xs, ys) = (f64::from(t.x_step).abs(), f64::from(t.y_step).abs());
+        let bbox = t.bbox;
+        // Tile `i` spans `bbox.x0 + i xs ..= bbox.x1 + i xs`.
+        let i0 = ((reach.x0 - bbox.x1) / xs).ceil();
+        let i1 = ((reach.x1 - bbox.x0) / xs).floor();
+        let j0 = ((reach.y0 - bbox.y1) / ys).ceil();
+        let j1 = ((reach.y1 - bbox.y0) / ys).floor();
+        if i1 < i0 || j1 < j0 {
+            // No tile reaches the area.
+            return true;
+        }
+        let tiles = (i1 - i0 + 1.0) * (j1 - j0 + 1.0);
+        if !tiles.is_finite() || tiles > f64::from(MAX_BACKDROP_TILES) {
+            return false;
+        }
+        // An index past what `f64` holds exactly (a pattern matrix translated far away) would
+        // place the tiles wrongly, or saturate in the cast below and draw them off the canvas.
+        if [i0, i1, j0, j1].iter().any(|index| index.abs() > MAX_TILE_INDEX) {
+            return false;
+        }
+        // At most `MAX_BACKDROP_TILES` (checked above), so the cast is exact.
+        if !take_backdrop_tiles(tiles as u32) {
+            return false;
+        }
+
+        let outer = self.ctx.save_current_state();
+        let outer_mask = self.cur_mask.clone();
+        let (inside_pattern, color_replacement) = (self.inside_pattern, self.color_replacement);
+        let blend = self.ctx.blend_mode();
+        let layered = blend != peniko::BlendMode::default() || outer_mask.is_some();
+        self.push_clip_path_inner(&clip, clip_rule);
+        if layered {
+            self.ctx.push_layer(None, Some(blend), None, outer_mask.clone(), None);
+            self.ctx.reset_mask();
+            self.cur_mask = None;
+        }
+        // The cell starts from the default transparency parameters (§11.6.7).
+        self.ctx.set_blend_mode(peniko::BlendMode::default());
+        let cell_start = self.ctx.save_current_state();
+        self.inside_pattern = true;
+        // A pattern cell is painted as one artwork (see the cell pixmap's renderer).
+        self.color_replacement = None;
+        // Finite whole numbers within `MAX_TILE_INDEX`, at most `MAX_BACKDROP_TILES` apart each
+        // way (checked above).
+        let (i0, i1, j0, j1) = (i0 as i64, i1 as i64, j0 as i64, j1 as i64);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let offset = Affine::translate((i as f64 * xs, j as f64 * ys));
+                t.interpret(self, t.matrix * offset, is_stroke);
+                self.ctx.restore_state(cell_start.clone());
+                self.cur_mask = None;
+            }
+        }
+        if layered {
+            self.ctx.pop_layer();
+        }
+        self.ctx.pop_clip_path();
+        self.ctx.restore_state(outer);
+        self.cur_mask = outer_mask;
+        self.inside_pattern = inside_pattern;
+        self.color_replacement = color_replacement;
+        true
     }
 
     fn draw_shape(&mut self, path: &BezPath, is_stroke: bool) {
@@ -1869,11 +1994,15 @@ impl Renderer {
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
                                 ink: InkState::default(),
+                                cell_blends: false,
+                                backdrop_tiles: false,
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
                                 * Affine::translate((-bbox.x0, -bbox.y0));
                             t.interpret(&mut renderer, initial_transform, is_stroke);
+                            // PdfCraft patch (32): see `backdrop_tiles`.
+                            self.backdrop_tiles = renderer.cell_blends && self.may_draw_tiles_on_backdrop();
                             let mut pix = Pixmap::new(pix_width, pix_height);
                             renderer.ctx.flush();
                             let mut resources = vello_cpu::Resources::default();
@@ -1933,10 +2062,14 @@ impl Renderer {
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
                             ink: InkState::default(),
+                            cell_blends: false,
+                            backdrop_tiles: false,
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
                         t.interpret(&mut renderer, initial_transform, is_stroke);
+                        // PdfCraft patch (32): see `backdrop_tiles`.
+                        self.backdrop_tiles = renderer.cell_blends && self.may_draw_tiles_on_backdrop();
                         let mut pix = Pixmap::new(pix_width, pix_height);
                         renderer.ctx.flush();
                         let mut resources = vello_cpu::Resources::default();
@@ -1996,6 +2129,10 @@ impl Renderer {
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
         let PaintSetup::Clip(clip_path) = self.set_paint(&paint, path, true) else { return };
+        // PdfCraft patch (32): a tiling cell that blends is drawn over the backdrop.
+        if self.backdrop_tiles && self.draw_tiles_on_backdrop(&paint, path, transform, FillRule::NonZero, true) {
+            return;
+        }
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, FillRule::NonZero);
         }
@@ -2025,6 +2162,10 @@ impl Renderer {
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
         let PaintSetup::Clip(clip_path) = self.set_paint(&paint, path, false) else { return };
+        // PdfCraft patch (32): a tiling cell that blends is drawn over the backdrop.
+        if self.backdrop_tiles && self.draw_tiles_on_backdrop(&paint, path, transform, fill_rule, false) {
+            return;
+        }
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, fill_rule);
         }
@@ -2239,6 +2380,8 @@ impl<'a> Device<'a> for Renderer {
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
                                         ink: InkState::default(),
+                                        cell_blends: false,
+                                        backdrop_tiles: false,
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
@@ -2393,6 +2536,11 @@ impl<'a> Device<'a> for Renderer {
         if self.erasing {
             self.erase_groups += 1;
             return;
+        }
+        // PdfCraft patch (32): a group composited with a blend mode other than Normal, outside
+        // every other group, blends with what is under the tiling cell (see `set_blend_mode`).
+        if blend_mode != BlendMode::Normal && self.image_transparency_stack.is_empty() {
+            self.cell_blends = true;
         }
         // PdfCraft patch (26): an image or group of another pass than the current one clears
         // what is under its shape instead of painting: its layer, drawn at full opacity with no
@@ -2608,6 +2756,10 @@ impl<'a> Device<'a> for Renderer {
                 // PdfCraft patch: apply the reading-colours mapping before painting.
                 let paint = self.replaced(paint, false);
                 let PaintSetup::Clip(clip_path) = self.set_paint(&paint, &path, false) else { return };
+                // PdfCraft patch (32): a tiling cell that blends is drawn over the backdrop.
+                if self.backdrop_tiles && self.draw_tiles_on_backdrop(&paint, &path, transform, *fill_rule, false) {
+                    return;
+                }
                 if let Some(clip_path) = clip_path.as_ref() {
                     self.push_clip_path_inner(clip_path, *fill_rule);
                 }
@@ -2646,6 +2798,11 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        // PdfCraft patch (32): outside every group, a blend mode other than Normal blends with
+        // what is under the tiling cell this renderer may be drawing.
+        if blend_mode != BlendMode::Normal && self.image_transparency_stack.is_empty() {
+            self.cell_blends = true;
+        }
         // PdfCraft patch (26): the blend mode of the element about to paint, for its pass (an
         // erase pass paints nothing, and its content's modes are not the element's).
         if !self.erasing
@@ -2661,6 +2818,46 @@ impl<'a> Device<'a> for Renderer {
         };
         self.ctx.set_blend_mode(mode);
     }
+}
+
+/// PdfCraft patch (32): the most tiles a fill or stroke draws its tiling cell in, over the
+/// backdrop, when the cell blends (see `Renderer::draw_tiles_on_backdrop`); each one interprets
+/// the cell's content again. A shape reaching more tiles takes the cell pixmap, as if the cell
+/// were an isolated group.
+const MAX_BACKDROP_TILES: u32 = 256;
+
+/// PdfCraft patch (32): the most tiles one page draws over the backdrop, counted across every
+/// fill and stroke and every nesting level (a blending cell drawn inside another one's tile, or
+/// inside a cell pixmap, draws from the same allowance). Each tile interprets its cell again,
+/// rasterizing any pattern inside it, so the per-shape [`MAX_BACKDROP_TILES`] alone doesn't bound
+/// the page. Once it is spent, shapes take the cell pixmap.
+const MAX_PAGE_BACKDROP_TILES: u32 = 4096;
+
+/// PdfCraft patch (32): the largest tile index drawn over the backdrop: integers up to here are
+/// exact in `f64`, and well inside `i64`.
+const MAX_TILE_INDEX: f64 = 4_503_599_627_370_496.0; // 2^52
+
+thread_local! {
+    /// PdfCraft patch (32): what is left of [`MAX_PAGE_BACKDROP_TILES`] on this thread (a page
+    /// renders on one thread; [`reset_backdrop_tiles`] refills it for each one).
+    static BACKDROP_TILES_LEFT: std::cell::Cell<u32> = const { std::cell::Cell::new(MAX_PAGE_BACKDROP_TILES) };
+}
+
+/// PdfCraft patch (32): refill the page's allowance of tiles drawn over the backdrop.
+pub(crate) fn reset_backdrop_tiles() {
+    BACKDROP_TILES_LEFT.with(|left| left.set(MAX_PAGE_BACKDROP_TILES));
+}
+
+/// PdfCraft patch (32): take `tiles` from the page's allowance; `false`, taking nothing, when
+/// fewer are left.
+fn take_backdrop_tiles(tiles: u32) -> bool {
+    BACKDROP_TILES_LEFT.with(|left| match left.get().checked_sub(tiles) {
+        Some(rest) => {
+            left.set(rest);
+            true
+        }
+        None => false,
+    })
 }
 
 /// PdfCraft patch (backport of hayro 0.8): largest per-channel error allowed when approximating
@@ -2756,6 +2953,8 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        cell_blends: false,
+        backdrop_tiles: false,
     };
 
     let bg_color = mask.background_color().to_rgba();

@@ -319,6 +319,9 @@ impl CacheKey for TilingPattern<'_> {
 struct StencilPatternDevice<'a, 'b, T: Device<'a>> {
     inner: &'b mut T,
     paint: Paint<'a>,
+    /// PdfCraft patch (96): the blend modes of the transparency groups the cell is inside, outermost
+    /// first. Groups are not drawn as groups here; see `set_blend_mode`.
+    groups: Vec<BlendMode>,
 }
 
 impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
@@ -326,6 +329,7 @@ impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
         Self {
             inner: device,
             paint,
+            groups: Vec::new(),
         }
     }
 }
@@ -349,7 +353,11 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
         self.inner.push_clip_path(clip_path);
     }
 
-    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+    /// PdfCraft patch (96): see `set_blend_mode`. Nesting is bounded by the interpreter's nesting
+    /// depth.
+    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, blend_mode: BlendMode) {
+        self.groups.push(blend_mode);
+    }
 
     fn draw_glyph(
         &mut self,
@@ -374,7 +382,18 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
         self.inner.pop_clip_path();
     }
 
-    fn pop_transparency_group(&mut self) {}
+    fn pop_transparency_group(&mut self) {
+        self.groups.pop();
+    }
 
-    fn set_blend_mode(&mut self, _: BlendMode) {}
+    /// PdfCraft patch (96): an uncoloured pattern may set transparency parameters (ISO 32000-2
+    /// §11.6.7: its restriction is on colours alone), and its blend modes blend its stencil
+    /// shapes, painted in the pattern's colour, like a coloured pattern's. Inside a transparency
+    /// group the shapes are drawn straight onto the device, so the group as a whole composites
+    /// with its own blend mode: each shape takes the outermost group's mode, and a mode set
+    /// inside the group, which blends only with the group's other shapes, is not forwarded.
+    fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        let blend_mode = self.groups.first().copied().unwrap_or(blend_mode);
+        self.inner.set_blend_mode(blend_mode);
+    }
 }
