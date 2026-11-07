@@ -64,3 +64,8 @@ pub mod xfa_session;
 
 #[cfg(test)]
 mod tests;
+
+mod menu;
+#[cfg(not(target_arch = "wasm32"))]
+pub use menu::interactive;
+pub use menu::{InteractiveEvent, MenuItem};

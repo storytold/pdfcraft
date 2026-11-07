@@ -353,6 +353,7 @@ pub(crate) fn info(d: &Document) -> Value {
                     },
                     "new_window": new_window,
                 }),
+                pdfcraft_render::LinkTarget::JavaScript(s) => json!({ "javascript": s }),
                 pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
             },
         })).collect::<Vec<_>>(),

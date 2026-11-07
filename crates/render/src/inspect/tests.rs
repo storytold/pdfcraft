@@ -1871,6 +1871,115 @@ trailer << /Root 1 0 R >>
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
 }
 
+#[cfg(test)]
+mod javascript_links_tests {
+    use super::*;
+    use lopdf::dictionary;
+
+    #[test]
+    fn shared_javascript_actions_have_a_document_wide_source_budget() {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        let page = d.new_object_id();
+        let action = d.add_object(dictionary! { "S" => "JavaScript", "JS" => Object::string_literal(vec![b'x'; 256 << 10]) });
+        // Distinct annotations share the action: repeated references to the same annotation
+        // are intentionally deduplicated by inspection before the source budget is charged.
+        let mut annots: Vec<_> = (0..33)
+            .map(|_| {
+                Object::Reference(d.add_object(
+                    dictionary! { "Type" => "Annot", "Subtype" => "Link", "Rect" => vec![0.into(),0.into(),50.into(),50.into()], "A" => action },
+                ))
+            })
+            .collect();
+        let ordinary = d.add_object(dictionary! { "Subtype" => "Link", "Rect" => vec![0.into(),0.into(),50.into(),50.into()], "Dest" => vec![Object::Reference(page), Object::Name(b"Fit".to_vec())] });
+        annots.push(Object::Reference(ordinary));
+        d.objects.insert(page, dictionary! { "Type" => "Page", "Parent" => pages, "Annots" => annots }.into());
+        d.objects.insert(
+            pages,
+            dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1, "MediaBox" => vec![0.into(),0.into(),200.into(),200.into()] }
+                .into(),
+        );
+        let root = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(info.links.len(), 34, "the resource limit must not drop annotations");
+        assert!(info.has_javascript);
+        let total: usize = info
+            .links
+            .iter()
+            .map(|link| match &link.target {
+                LinkTarget::JavaScript(source) => source.len(),
+                _ => 0,
+            })
+            .sum();
+        assert!(total <= 4 << 20, "shared action sources expanded to {total} bytes");
+        assert!(matches!(&info.links[0].target, LinkTarget::JavaScript(_)));
+        assert!(matches!(&info.links[32].target, LinkTarget::Other(kind) if kind == "JavaScript"));
+        assert!(matches!(&info.links[33].target, LinkTarget::Page(0, _)), "ordinary links after the limit must still resolve");
+        assert_eq!(info.warnings.iter().filter(|warning| warning.contains("4 MiB")).count(), 1);
+    }
+
+    #[test]
+    fn javascript_link_sources_direct_indirect_stream_and_utf16() {
+        for storage in 0..7 {
+            let mut d = Document::with_version("1.7");
+            let pages = d.new_object_id();
+            let source = "app.alert('é');";
+            let string = if storage == 3 {
+                {
+                    let mut bytes = vec![0xfe, 0xff];
+                    for unit in source.encode_utf16() {
+                        bytes.extend_from_slice(&unit.to_be_bytes());
+                    }
+                    Object::String(bytes, lopdf::StringFormat::Hexadecimal)
+                }
+            } else {
+                Object::string_literal(source)
+            };
+            let js = match storage {
+                1 => Object::Reference(d.add_object(string)),
+                2 => {
+                    let mut stream = lopdf::Stream::new(dictionary! {}, source.as_bytes().to_vec());
+                    stream.compress().unwrap();
+                    Object::Reference(d.add_object(stream))
+                }
+                4 => {
+                    let cycle = d.new_object_id();
+                    d.objects.insert(cycle, Object::Reference(cycle));
+                    Object::Reference(cycle)
+                }
+                5 => {
+                    let mut stream = lopdf::Stream::new(dictionary! {}, vec![b'x'; 300 << 10]);
+                    stream.compress().unwrap();
+                    Object::Reference(d.add_object(stream))
+                }
+                6 => Object::Integer(42),
+                _ => string,
+            };
+            let action = d.add_object(dictionary! { "S" => "JavaScript", "JS" => js });
+            let annotation = d.add_object(
+                dictionary! { "Type" => "Annot", "Subtype" => "Link", "Rect" => vec![0.into(),0.into(),50.into(),50.into()], "A" => action },
+            );
+            let page = d.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "Annots" => vec![annotation.into()] });
+            d.objects.insert(pages, dictionary!{ "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1, "MediaBox" => vec![0.into(),0.into(),200.into(),200.into()] }.into());
+            let root = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+            d.trailer.set("Root", root);
+            let mut bytes = Vec::new();
+            d.save_to(&mut bytes).unwrap();
+            let info = inspect(Arc::new(bytes), None).unwrap();
+            assert!(info.has_javascript);
+            if storage >= 4 {
+                assert!(matches!(&info.links[0].target, LinkTarget::Other(kind) if kind == "JavaScript"));
+                continue;
+            }
+            let LinkTarget::JavaScript(script) = &info.links[0].target else { panic!("missing source") };
+            assert_eq!(script, source);
+        }
+    }
+}
+
 /// Inspection keeps every object it reads, converted, for as long as it runs, and nothing it
 /// reports comes from `/PieceInfo`. InDesign writes kilobytes of that private data into every
 /// page, and a 1,412-page book held over a gigabyte of it (#5873). It is left out of what

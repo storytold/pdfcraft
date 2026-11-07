@@ -25,6 +25,9 @@ impl PdfCraftApp {
         if self.modal_open() {
             return;
         }
+        if self.link_script_owns_key(ctx) {
+            return;
+        }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {

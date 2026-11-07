@@ -1,15 +1,19 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 · **Last updated:** 2026-11-06 · **Change:** patch (M6, PR #2081: integrate main f42fda73 once, preserve explicit Link execution and migrate to shared translations; estimates unchanged)
+>
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** patch (M6, PR #2081: one upstream integration, portable consent fixtures, empty-menu handling and localized Web notices; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -20,12 +24,17 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
-
+>
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (PR #2081: merge upstream pointer and annotation changes while preserving JavaScript interaction contracts; estimates unchanged)
+>
+> **Last updated:** 2026-10-24 · **Change:** minor (PR #2081 running-action lifecycle hardening; estimates unchanged)
+>
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** patch (M1, #1143: repaired aliases survive preflight, snapshots and normalized saves; retained materialized revisions report generation disagreements; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M1, #1143: explicit live xref/header generation repair policy and bounded diagnostics; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
@@ -230,6 +239,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-06 (M6, PR #2081):** Integrate main `f42fda73` locally once, retain upstream page routing and shared craft-i18n catalogs, and validate the existing explicit JavaScript Link contract. No related open PR is imported; estimates unchanged.
+
+- **2026-11-01 (M6, PR #2081):** Integrate upstream `b36bdaea` once, retain ephemeral Link execution and consent boundaries through module moves and rich messages, and harden empty popups, portable fixtures and Web notices. Estimates unchanged.
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 
@@ -248,6 +260,21 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
+- **2026-10-25 (M6, PR #2081 upstream merge):** Preserve upstream PagePointer input and annotation parent identity alongside JavaScript menus, bounded source inspection, consent and Undo. Menu activation retains the position accepted by the page. Estimates unchanged.
+
+- **2026-10-25 (M6, PR #2081 CLI follow-up):** Notify when a script document request is ignored behind pending consent; preserve the existing prompt and document. Clarify MCP page/index numbering and popup-only cancellation. Estimates unchanged.
+
+- **2026-10-24 (M6, PR #2081 targeted corrections):** Reject document-opening requests from implicit field events with a diagnostic, preserve explicit actions and consent, and document headless null-menu continuation and Undo. Estimates unchanged.
+
+- **2026-10-24 (M6, PR #2081 running lifecycle):** Preserve running link-script completions through focus, view and outside interactions before their first menu; keep document invalidation and normal menu cancellation. Reproduce lost results and errors before correcting both UI passes. Estimates unchanged.
+- **2026-10-24 (M6, PR #2081 upstream synchronization):** Merge current main locally while retaining published history, native menu lifecycle, fail-closed Link initialization and documentation; preserve merged destination navigation and tolerant ordinary form initialization. Estimates unchanged.
+
+- **2026-10-24 (M6, PR #2081 final review):** Reserve waiting-menu keys before document shortcuts, including the first arrow and Escape in full screen; retain outside command shortcuts. Synthetic regressions reproduce the first-arrow page change before the fix. Estimates unchanged.
+
+- **2026-10-24 (M6, PR #2081 local remediation):** Preserve accepted menu completions while retaining document invalidation; isolate Link initialization from existing events; correct MCP destructive metadata and cache rejected stream decodes. Add discriminating menu and lifecycle regressions. Estimates unchanged.
+
+- **2026-10-23 (M6, PR #2081):** Rebased JavaScript link actions and native menus onto main `aea5e78e`, retaining upstream script guards, form snapshot sharing, annotation budgets and viewer interactions. See [JavaScript link actions](docs/javascript-link-actions.md). All 2,698 targeted tests pass; estimates unchanged.
+- **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
 
 - **2026-11-01 (M5/M14, customizable hotbar, freehand highlight, and moveable navigation rail):** Added Freehand-Highlight (`/Subtype /Ink`, `/IT /FreehandHighlight`, Multiply blending, 100 pt max line width) inside the standard Highlight flyout and headless `comment_add`; added a customizable floating or side-docked hotbar with a full-side chrome strip mode, settings gear icon anchored at the bar end, and 24–64 px sizing; and added Left/Right docking for the navigation rail (`rail_side`). Focused unit and integration tests pass across `annot`, `automation`, and `ui-egui`. Estimates unchanged.
 - 2026-11-01: PR #2155 further review preserves inherited Form text state and soft-mask chronology during Arrange, composes crop-group moves in the proper scope, and uses affine/press-relative image resize plus a shared rotation pivot. No-op script buttons preserve hidden source text; paste coordinates, visible selection ownership, and Snapshot/Export permissions have dedicated regressions. Candidate only; estimates unchanged.
@@ -793,6 +820,11 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
+| 2026-10-25 | minor | M6, PR #2081: merge upstream page input and annotation identity changes; retain JavaScript, consent and Undo contracts. Estimates unchanged. |
+| 2026-10-25 | minor | M6, PR #2081: notify ignored document requests and clarify MCP link numbering and popup cancellation. Estimates unchanged. |
+| 2026-10-24 | minor | M6, PR #2081: filter implicit field document requests and clarify headless menu cancellation; preserve explicit actions, consent and Undo. Estimates unchanged. |
+| 2026-10-24 | minor | M6, PR #2081 local upstream synchronization: preserve published history, Link lifecycle/security contracts, merged navigation and ordinary form initialization. Estimates unchanged. |
+| 2026-10-24 | minor | M6, PR #2081 local audit remediation: accepted menu results, event compatibility, MCP metadata and bounded rejection cache. Estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
 | 2026-10-23 | minor | M11: image downsampling measures physical resolution after page-local UserUnit scaling, including shared nested forms; synthetic measurement and optimization regressions. Estimates unchanged. |
 | 2026-10-23 | minor | M10: Word table cells use the grid columns they span, including cells after a merged cell; synthetic export regression and CLI reproduction. Estimates unchanged. |

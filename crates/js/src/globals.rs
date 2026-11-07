@@ -1,6 +1,7 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, function, host, s, text, text_line};
+use super::menu::{open_doc, popup_menu};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
     Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
@@ -227,6 +228,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
+        .function(NativeFunction::from_fn_ptr(popup_menu), js_string!("popUpMenuEx"), 0)
+        .function(NativeFunction::from_fn_ptr(open_doc), js_string!("openDoc"), 1)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
@@ -276,8 +279,17 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
-    let target = e.target.as_ref().map_or(JsValue::null(), |t| field_object(ctx, t).into());
+/// Build a fresh event object: a named field takes precedence as `target`; without one,
+/// `document_target` selects the document/global object, otherwise target is null.
+/// `targetName` is empty without a field. `run_here` enables document targets for Link
+/// and its synthetic Doc/Open initialization; it also owns the global event binding's
+/// non-enumerability, which is separate from this object's property attributes.
+pub(crate) fn event_object(ctx: &mut Context, e: &Event, document_target: bool) -> JsObject {
+    let target: JsValue = match &e.target {
+        Some(t) => field_object(ctx, t).into(),
+        None if document_target => ctx.global_object().into(),
+        None => JsValue::null(),
+    };
     ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())

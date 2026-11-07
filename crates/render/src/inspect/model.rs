@@ -204,6 +204,8 @@ pub enum LinkTarget {
     /// A destination in this document: the 0-based page and where on it the view goes.
     Page(usize, DestView),
     Uri(String),
+    /// Source of a JavaScript action, decoded with a bounded stream reader.
+    JavaScript(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
     /// on turns off the other layers of its radio-button groups.

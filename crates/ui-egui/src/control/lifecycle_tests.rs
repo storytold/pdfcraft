@@ -904,3 +904,22 @@ fn one_batch_is_consumed_by_one_pass() {
     plugin.input_hook(&egui::Context::default(), &mut third);
     assert!(third.events.is_empty(), "a consumed batch is never repeated");
 }
+
+#[test]
+fn pr2081_state_reports_current_focus_during_hidden_logic() {
+    let ctx = egui::Context::default();
+    let (mut control, client) = attach(&ctx);
+    let mut host = NoopHost;
+    for (last_ui_focus, current_focus) in [(true, false), (false, true)] {
+        ctx.run_ui(egui::RawInput { focused: last_ui_focus, ..Default::default() }, |_| {}).textures_delta.clear();
+        assert_eq!(ctx.input(|i| i.focused), last_ui_focus);
+        let waiting = client.send("ui.state", json!({}));
+        let mut raw = egui::RawInput { focused: current_focus, ..Default::default() };
+        raw.viewports.entry(egui::ViewportId::ROOT).or_default().minimized = Some(true);
+        let _ = ctx.run_logic(&raw, |ctx| control.tick(ctx, &mut host));
+        assert_eq!(ctx.input(|i| i.raw.focused), current_focus, "logic received the new focus");
+        assert_eq!(ctx.input(|i| i.focused), last_ui_focus, "the processed UI state is deliberately stale");
+        let state = waiting.try_recv().expect("state is answered without drawing").expect("valid state request");
+        assert_eq!(state["window"]["focused"], json!(current_focus), "ui.state must report current focus, including focus regained");
+    }
+}

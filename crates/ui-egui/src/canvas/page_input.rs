@@ -90,6 +90,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        hide_javascript_tip: frame.env.javascript_interaction || (tool == QuickTool::Select && resp.clicked()),
     };
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
         let at = hits.at(view, o);
@@ -410,6 +411,7 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    hide_javascript_tip: bool,
 }
 
 impl PageHits<'_> {
@@ -460,6 +462,7 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            hide_javascript_tip,
         } = *self;
         // Crop mode owns every press on its page (`edit_text_ui::crop_hit`).
         if tool == QuickTool::EditText
@@ -503,7 +506,7 @@ impl PageHits<'_> {
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
         let corner = (!context && tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
-        let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
+        let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p, hide_javascript_tip);
         let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
         [link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
@@ -802,6 +805,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+        if matches!(&l.target, pdfcraft_render::LinkTarget::JavaScript(_))
+            && let Some(point) = pointer
+        {
+            frame.out.javascript_link = Some((view.id, l.page, l.index, point));
+        }
     }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
