@@ -40,12 +40,15 @@ enum Owner {
 struct Pruner<'a> {
     doc: &'a Document,
     used: HashMap<XKey, HashSet<Vec<u8>>>,
-    /// Dictionaries whose drawn names can't be known for certain (undecodable content, nesting
-    /// past the depth limit, Type 3 glyphs drawing through them). They are left untouched:
-    /// pruning must never drop an XObject something still draws.
+    /// Dictionaries whose drawn names can't be known for certain (undecodable content, Type 3
+    /// glyphs drawing through them). They are left untouched: pruning must never drop an XObject
+    /// something still draws.
     unsure: HashSet<XKey>,
     /// An overlarge glyph-resource graph is not safe to prune at all.
     glyph_budget_exhausted: bool,
+    /// Nor is a file with forms nested past [`MAX_FORM_DEPTH`]: what the forms there draw isn't
+    /// read, and they may draw it through resources shared with content that was.
+    too_deep: bool,
     glyph_work_left: usize,
     glyph_seen: HashSet<ObjRef>,
     /// An indirect font's explicit resources have one owner regardless of which page uses it.
@@ -188,7 +191,7 @@ impl Pruner<'_> {
             return;
         };
         if depth > MAX_FORM_DEPTH {
-            self.unsure.insert(key);
+            self.too_deep = true;
             return;
         }
         for op in pdfcraft_content::parse(data).ops {
@@ -209,7 +212,11 @@ impl Pruner<'_> {
         self.protect_type3_resources(resources, owner);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else { return };
         self.unsure.insert(key);
-        if depth > MAX_FORM_DEPTH || !self.partly_read.insert(owner) {
+        if depth > MAX_FORM_DEPTH {
+            self.too_deep = true;
+            return;
+        }
+        if !self.partly_read.insert(owner) {
             return;
         }
         for (name, _) in xobjects.iter() {
@@ -341,6 +348,7 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         used: HashMap::new(),
         unsure: HashSet::new(),
         glyph_budget_exhausted: false,
+        too_deep: false,
         glyph_work_left: MAX_GLYPH_RESOURCE_WORK,
         glyph_seen: HashSet::new(),
         glyph_fonts: HashSet::new(),
@@ -358,8 +366,8 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
             Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
         }
     }
-    let Pruner { used, unsure, glyph_budget_exhausted, .. } = pruner;
-    if glyph_budget_exhausted {
+    let Pruner { used, unsure, glyph_budget_exhausted, too_deep, .. } = pruner;
+    if glyph_budget_exhausted || too_deep {
         return Ok(0);
     }
     let mut removed = 0;

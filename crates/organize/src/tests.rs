@@ -2733,8 +2733,8 @@ fn extract_keeps_images_forms_drawn_around_damage_draw_through_shared_resources(
 }
 
 /// Forms are read 8 deep (`prune.rs`'s `MAX_FORM_DEPTH`). A damaged form that deep still has
-/// every form it names read as drawn, and one drawing through resources another page shares keeps
-/// what it draws from them.
+/// every form it names read as drawn: here `/Nested`, which draws through resources another page
+/// shares. Read 9 deep, it leaves the file unpruned, so what it draws from them stays.
 #[test]
 fn a_damaged_form_at_the_depth_limit_has_its_forms_read() {
     use pdfcraft_cos::ObjRef;
@@ -2760,8 +2760,78 @@ fn a_damaged_form_at_the_depth_limit_has_its_forms_read() {
     assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{names:?}");
 }
 
+/// Past the depth limit a form isn't read, nor what the forms it draws draw: one of those may draw
+/// through resources another page shares, and keep images there that page doesn't draw, so nothing
+/// is pruned. Here `/Fm` is 9 deep, whole or damaged partway, and `/Nested`, which it draws, draws
+/// `/ImA` through the resources the second page draws `/ImB` through.
+#[test]
+fn nothing_is_pruned_past_the_depth_limit() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    for (what, fm) in [("whole", whole(b"/Nested Do")), ("damaged", damaged_flate(b"0 g\n", b"/Nested Do"))] {
+        let mut src = doc_shared_form_resources(whole(b"/C Do"), fm, whole(b"/ImA Do"));
+        // Eight forms between the page and `/Fm`, each drawing the next as `/C`: `/Fm` is 9 deep.
+        let mut next = ObjRef::new(7, 0);
+        for _ in 0..8 {
+            let mut form = whole(b"/C Do");
+            form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+            form.dict.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()));
+            next = src.add(Object::Stream(form));
+        }
+        let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        src.update_dict(ObjRef::new(3, 0), |p| {
+            p.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()))
+        })
+        .unwrap();
+        let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+        let names = xobject_names(&part, 1);
+        assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{what}: {names:?}");
+    }
+}
+
+/// Down to the depth limit pruning goes on: under a page whole or damaged partway, a form 8 deep,
+/// whole or damaged, is read, and the image nothing draws, `/ImA`, still goes from the resources
+/// the second page draws `/ImB` through.
+#[test]
+fn pruning_goes_on_down_to_the_depth_limit() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let cases = [
+        ("whole", whole(b"/C Do"), whole(b"0 g")),
+        ("damaged form", whole(b"/C Do"), damaged_flate(b"0 g\n", b"0 g")),
+        ("damaged page", damaged_flate(b"/C Do\n", b"0 g"), whole(b"0 g")),
+    ];
+    for (what, page, fm) in cases {
+        let mut src = doc_shared_form_resources(page, fm, whole(b""));
+        // `/Fm` names an image, not `/Nested`: nothing is read 9 deep.
+        let image: Dict = [(b"Img".to_vec(), Object::Ref(ObjRef::new(9, 0)))].into_iter().collect();
+        let resources = Object::Dict([(b"XObject".to_vec(), Object::Dict(image))].into_iter().collect());
+        src.update_dict(ObjRef::new(7, 0), |f| f.set(b"Resources".to_vec(), resources)).unwrap();
+        // Seven forms between the page and `/Fm`, each drawing the next as `/C`: `/Fm` is 8 deep.
+        let mut next = ObjRef::new(7, 0);
+        for _ in 1..8 {
+            let mut form = whole(b"/C Do");
+            form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+            form.dict.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()));
+            next = src.add(Object::Stream(form));
+        }
+        let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        src.update_dict(ObjRef::new(3, 0), |p| {
+            p.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()))
+        })
+        .unwrap();
+        let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+        assert_eq!(xobject_names(&part, 1), [b"ImB".to_vec()], "{what}");
+    }
+}
+
 /// A chain of forms nested far past the depth limit, whole or each damaged partway, is read only
-/// down to it: the walk's depth stays bounded however long the chain is, and pruning goes on.
+/// down to it: the walk's depth stays bounded however long the chain is, and the run ends without
+/// an error, having pruned nothing.
 #[test]
 fn a_long_chain_of_forms_is_read_only_to_the_depth_limit() {
     use pdfcraft_cos::ObjRef;
@@ -2779,7 +2849,7 @@ fn a_long_chain_of_forms_is_read_only_to_the_depth_limit() {
             names = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
         }
         doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Resources".to_vec(), xobjects(names))).unwrap();
-        assert!(crate::prune::prune_unused_xobjects(&mut doc).is_ok(), "damaged: {damaged}");
+        assert!(matches!(crate::prune::prune_unused_xobjects(&mut doc), Ok(0)), "damaged: {damaged}");
     }
 }
 
