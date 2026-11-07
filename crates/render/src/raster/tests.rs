@@ -8199,6 +8199,9 @@ mod icc_profile_cache;
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 
+// A non-symbolic TrueType font reads a Unicode-platform (0, x) cmap subtable (#6581).
+mod nonsymbolic_truetype_unicode_cmap;
+
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
 fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
     let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());

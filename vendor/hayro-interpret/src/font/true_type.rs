@@ -359,6 +359,33 @@ impl EmbeddedKind {
                     glyph = Some(GlyphId::new(gid));
                 }
             }
+
+            // PdfCraft patch (#6581): when (3, 1), (1, 0) and the glyph names all give nothing,
+            // a Unicode-platform (0, x) subtable is read as Unicode, like (3, 1). A font whose
+            // only table is (0, 1), as in the file of #6581, drew every code as `.notdef`
+            // (boxes). ISO 32000-2 §9.6.5.4 names only (3, 1) and (1, 0), so this comes last and
+            // changes no code those already draw. (0, 5) holds variation sequences, not
+            // characters, and is skipped.
+            if glyph.is_none()
+                && let Ok(cmap) = self.base_font.font_ref().cmap()
+                && let Some(unicode) = glyph_names::get(lookup)
+                    .map(|n| n.to_string())
+                    .or_else(|| unicode_from_name(lookup).map(|n| n.to_string()))
+                    .and_then(|n| n.chars().next())
+            {
+                for record in cmap.encoding_records() {
+                    if record.platform_id() == PlatformId::Unicode
+                        && record.encoding_id() != 5
+                        && let Ok(subtable) = record.subtable(cmap.offset_data())
+                    {
+                        glyph = glyph.or_else(|| {
+                            subtable
+                                .map_codepoint(unicode)
+                                .filter(|g| *g != GlyphId::NOTDEF)
+                        });
+                    }
+                }
+            }
         } else if let Ok(cmap) = self.base_font.font_ref().cmap() {
             // PdfCraft patch (#4156): the Windows (3, 0) subtable comes first, and the (1, 0) one
             // only for codes it doesn't map (ISO 32000-2 §9.6.5.4: "If the font contains a (3, 0)
