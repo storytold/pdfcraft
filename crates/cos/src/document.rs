@@ -48,6 +48,9 @@ pub struct Document {
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
+    /// What loading each file object gave, a failure as well: a damaged object is otherwise
+    /// loaded again on every read, and a member of an object stream that can't be decoded
+    /// decodes the stream again (`Document::load`).
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
     /// See [`Self::unreadable_objects`]. Shared by clones, like the caches: it describes the
