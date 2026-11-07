@@ -5168,10 +5168,20 @@ fn printing_through_tools() {
     let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "path": "poster.pdf" }));
     assert!(r["sheets"].as_u64().unwrap() > 1);
     // Edge-to-edge cut marks; the old boolean still works; an unknown style is refused with an
-    // error an agent can act on.
-    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "cut_marks": "full", "path": "poster.pdf" }));
+    // error an agent can act on. The two styles must also draw differently, so a regression that
+    // parsed the value but kept drawing corner ticks would fail.
+    let r = ok(
+        &mut a,
+        "doc_print",
+        json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "cut_marks": "full", "path": "poster-full.pdf" }),
+    );
     assert!(r["sheets"].as_u64().unwrap() > 1);
-    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "cut_marks": true, "path": "poster.pdf" }));
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "cut_marks": true, "path": "poster-corners.pdf" }));
+    assert_ne!(
+        std::fs::read(dir.join("poster-full.pdf")).unwrap(),
+        std::fs::read(dir.join("poster-corners.pdf")).unwrap(),
+        "cut_marks must change the drawn marks"
+    );
     assert!(matches!(
         a.call("doc_print", &json!({ "doc": doc, "pages": "1", "layout": "poster", "cut_marks": "diagonal", "path": "poster.pdf" })),
         Err(ToolError::InvalidArgs(m)) if m.contains("cut_marks")

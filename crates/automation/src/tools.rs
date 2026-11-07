@@ -702,7 +702,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "booklet_subset": { "type": "string", "enum": ["both", "front", "back"] },
                 "binding": { "type": "string", "enum": ["left", "right"] },
                 "overlap": { "type": "number", "minimum": 0 },
-                "cut_marks": { "type": ["boolean", "string"], "description": "Poster cut marks: \"corners\" (default), ticks at the printed area's corners; \"full\", a cut line across the whole sheet (edge to edge) at each side, to cut with a straight blade; \"off\". true/false still mean corners/off." },
+                "cut_marks": { "anyOf": [{ "type": "boolean" }, { "type": "string", "enum": ["corners", "full", "off"] }], "description": "Poster cut marks: \"corners\" (default), ticks at the printed area's corners; \"full\", a cut line across the whole sheet (edge to edge) at each side, to cut with a straight blade; \"off\". true/false still mean corners/off." },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
                 "paper": { "type": "string" },

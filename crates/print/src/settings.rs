@@ -57,16 +57,16 @@ pub enum Binding {
     Right,
 }
 
-/// The cut marks a poster layout draws. Corner ticks are easy to see and never cross the
-/// picture; a line across the whole sheet lets a straight blade cut each side in one pass,
-/// across the unprintable margin the ticks stop short of. The line reaches the sheet edges
+/// The cut marks a poster layout draws. Corner ticks (the default) are easy to see and never
+/// cross the picture; a line across the whole sheet lets a straight blade cut each side in one
+/// pass, across the unprintable margin the ticks stop short of. The line reaches the sheet edges
 /// in the print-ready PDF; whether ink follows it to the paper's edge depends on the
 /// printer's non-printable margins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CutMarks {
-    #[default]
     Off,
     /// Two short ticks at each corner of the printed area.
+    #[default]
     Corners,
     /// A line across the whole sheet (edge to edge) at each side of the printed area.
     Full,

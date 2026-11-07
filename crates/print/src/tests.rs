@@ -242,21 +242,19 @@ fn poster_cut_marks_run_edge_to_edge() {
     let sheets = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: CutMarks::Full })).unwrap();
     let (w, h) = sheets[0].size;
     let m = MARGIN;
-    assert_eq!(sheets[0].lines, [[0.0, m, w, m], [0.0, h - m, w, h - m], [m, 0.0, m, h], [w - m, 0.0, w - m, h]]);
-    // Every tile of a multi-tile poster carries the full lines, each one spanning its sheet.
+    let want = [[0.0, m, w, m], [0.0, h - m, w, h - m], [m, 0.0, m, h], [w - m, 0.0, w - m, h]];
+    // Every tile of a multi-tile poster carries the same four lines, each one spanning its sheet.
     for sheet in &sheets {
-        for l in &sheet.lines {
-            let (horizontal, vertical) = (l[1] == l[3], l[0] == l[2]);
-            assert!(horizontal ^ vertical, "a cut line is straight: {l:?}");
-            let spans = |a: f64, b: f64, along: (f64, f64)| a <= along.0 + 0.001 && b >= along.1 - 0.001;
-            if horizontal {
-                assert!(spans(l[0], l[2], (0.0, sheet.size.0)), "{l:?} stops short of the sheet's edges");
-            } else {
-                assert!(spans(l[1], l[3], (0.0, sheet.size.1)), "{l:?} stops short of the sheet's edges");
-            }
-        }
-        assert_eq!(sheet.lines.len(), 4, "one line at each side of the printed area");
+        assert_eq!(sheet.size, sheets[0].size, "tiles share the sheet size");
+        assert_eq!(sheet.lines, want, "one line at each side of the printed area, edge to edge");
     }
+}
+
+/// The dialog and `doc_print` both start at corner ticks, so the enum's own default agrees rather
+/// than silently turning marks off.
+#[test]
+fn corner_cut_marks_are_the_default() {
+    assert_eq!(CutMarks::default(), CutMarks::Corners);
 }
 
 /// Issue #1335: a scale so large that the tile counts saturate is refused with the sheet-limit

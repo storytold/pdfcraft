@@ -854,15 +854,45 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
 }
 
 /// The Poster cut-marks choice (corner ticks, or lines across the whole sheet) reaches the
-/// engine settings, and corner ticks stay the default.
+/// engine settings, and every choice keeps the engine's shape.
 #[test]
 fn poster_cut_marks_choice_reaches_the_settings() {
     use pdfcraft_engine::print::{CutMarks, Layout};
     use pdfcraft_ui_egui::PrintHandling;
     let mut d = pdfcraft_ui_egui::PrintDraft { handling: PrintHandling::Poster, ..Default::default() };
-    assert_eq!(d.settings(1, &[]).unwrap().layout, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: CutMarks::Corners });
-    d.cut_marks = CutMarks::Full;
-    assert_eq!(d.settings(1, &[]).unwrap().layout, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: CutMarks::Full });
+    let layout_at = |cut_marks| Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks };
+    assert_eq!(d.settings(1, &[]).unwrap().layout, layout_at(CutMarks::Corners));
+    for choice in [CutMarks::Full, CutMarks::Off] {
+        d.cut_marks = choice;
+        assert_eq!(d.settings(1, &[]).unwrap().layout, layout_at(choice), "{choice:?}");
+    }
+}
+
+/// The Cut marks combo is clickable end to end: picking a choice through its popup updates the
+/// draft the way the preview and the print will draw it.
+#[test]
+fn the_cut_marks_combo_updates_the_draft() {
+    use pdfcraft_engine::print::CutMarks;
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Poster").click();
+    h.run_steps(2);
+    h.get_by_value("Corners").click();
+    h.run_steps(2);
+    h.get_by_label("Edge to edge").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.cut_marks, CutMarks::Full);
+    h.get_by_value("Edge to edge").click();
+    h.run_steps(2);
+    h.get_by_label("None").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.cut_marks, CutMarks::Off);
+    h.get_by_value("None").click();
+    h.run_steps(2);
+    h.get_by_label("Corners").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.cut_marks, CutMarks::Corners, "back to the default");
 }
 
 #[test]
