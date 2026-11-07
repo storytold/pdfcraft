@@ -140,12 +140,15 @@ mod tests {
     #[cfg(test)]
     fn without_gsub(bytes: &[u8]) -> Vec<u8> {
         let mut copy = bytes.to_vec();
+        // Remove the GSUB entry from the table directory (12-byte header,
+        // 16-byte records) so the GSUB lookup itself fails. Corrupting the
+        // GSUB table contents no longer guarantees that gsub() errors.
         let offset = FontRef::new(&copy).ok().and_then(|font| {
-            font.table_directory().table_records().iter().find(|record| record.tag() == skrifa::Tag::new(b"GSUB")).map(|record| record.offset())
+            font.table_directory().table_records().iter().position(|record| record.tag() == skrifa::Tag::new(b"GSUB")).map(|index| 12 + index * 16)
         });
         if let Some(offset) = offset {
             for i in 0..4 {
-                if let Some(byte) = copy.get_mut(offset as usize + i) {
+                if let Some(byte) = copy.get_mut(offset + i) {
                     *byte = b'X';
                 }
             }
