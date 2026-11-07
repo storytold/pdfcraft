@@ -19,7 +19,7 @@ pub struct ShapedRun {
 /// Complex scripts/marks require shaping instead of independently encoding characters.
 pub fn required(text: &str) -> bool {
     text.chars()
-        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e34..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
+        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
@@ -91,5 +91,10 @@ mod tests {
         }
         assert!(required("\u{0e31}"), "a Thai combining mark needs positioning");
         assert!(required("\u{0e34}"), "a Thai combining mark needs positioning");
+    }
+
+    #[test]
+    fn thai_sara_am_requires_shaping() {
+        assert!(required("\u{0e33}"), "U+0E33 THAI CHARACTER SARA AM needs shaping");
     }
 }
