@@ -128,6 +128,18 @@ impl Children {
     }
 }
 
+/// Where a chain of references starting at `r` ends: `r` itself unless its object is nothing but
+/// a reference, followed as far as `Document::resolve` follows one (32 more), so a cycle stops.
+fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
+    }
+    r
+}
+
 struct PageTree<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<ObjRef>,
@@ -166,7 +178,9 @@ impl Iterator for PageTree<'_> {
             let node = child.as_ref();
             // A successful get means next is strictly below the allocated array length.
             parent.next += 1;
-            let Some(node) = node else { continue };
+            // A kid may be a reference to an object that holds only a reference (ISO 32000-2
+            // §7.3.10): the node or page is where the chain ends, as the renderer reads it.
+            let Some(node) = node.map(|r| final_ref(self.doc, r)) else { continue };
             if self.seen.len() >= 1_000_000 {
                 self.pending.clear();
                 return None;
@@ -369,6 +383,7 @@ mod tests {
     /// /Kids and /Type are read through chains of references, as the renderer reads them: an
     /// untyped node whose /Kids reaches its array through two references is walked, and a
     /// dictionary whose /Type is a reference to /Page stays a page despite a direct /Kids array.
+    /// A kid reached through a chain of references is read where the chain ends.
     #[test]
     fn kids_and_type_are_read_through_reference_chains() {
         let mut d = doc(0);
@@ -393,9 +408,15 @@ mod tests {
         page.set(b"Type".to_vec(), Object::Ref(type_hop));
         page.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(hidden)]));
         let page = d.add(page);
-        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(node), Object::Ref(page)]))).unwrap();
+        // A kid that is a reference to a reference to a page: the page is listed, by its own
+        // object, where the chain ends.
+        let last = leaf(&mut d);
+        let last_hop = d.add(Object::Ref(last));
+        let chained = d.add(Object::Ref(last_hop));
+        let kids = vec![Object::Ref(node), Object::Ref(page), Object::Ref(chained)];
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
         let found: Vec<ObjRef> = pages(&d).iter().map(|p| p.obj).collect();
-        assert_eq!(found, vec![first, page]);
+        assert_eq!(found, vec![first, page, last]);
     }
 
     #[test]
