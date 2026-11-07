@@ -870,7 +870,7 @@ impl Session {
             seen.fill(true);
             (0..all).collect()
         } else {
-            let mut deduped = Vec::with_capacity(pages.len().min(all));
+            let mut deduped = Vec::new();
             for &p in pages {
                 if seen.get(p) == Some(&false) {
                     seen[p] = true;
@@ -2042,6 +2042,16 @@ mod tests {
         let job = s.ocr_job(id, &requested, OcrSettings::default()).unwrap();
         assert!(job.pages.is_empty());
         assert!(job.pages.capacity() <= 3, "reservation {} exceeds the 3 pages that can survive deduplication", job.pages.capacity());
+    }
+
+    #[test]
+    fn ocr_job_does_not_reserve_capacity_for_invalid_pages() {
+        let mut s = Session::new();
+        let id = s.open("t.pdf", None, Arc::new(fixture(1024)), None).unwrap();
+        let requested = vec![4096usize; 1024];
+        let job = s.ocr_job(id, &requested, OcrSettings::default()).unwrap();
+        assert!(job.pages.is_empty());
+        assert_eq!(job.pages.capacity(), 0, "no valid pages were found, so no capacity should be reserved");
     }
 
     /// #1848: an A4 scan at 300 dpi whose page box is its pixel size (2480 x 3508 pt, one pixel
