@@ -153,7 +153,8 @@ fn sign_inner(
     }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
-    let earlier_signatures = !super::validate::signature_contents(&doc).is_empty();
+    // A signature field whose /V holds an empty /Contents is not a signature yet.
+    let earlier_signatures = super::validate::signature_contents(&doc).iter().any(|der| !der.is_empty());
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =

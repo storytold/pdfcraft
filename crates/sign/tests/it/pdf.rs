@@ -150,6 +150,22 @@ fn signing_drops_need_appearances() {
     }
 }
 
+/// A field whose /V has an empty /Contents is no earlier signature: the first real one still
+/// drops `/NeedAppearances`.
+#[test]
+fn an_empty_signature_value_does_not_count_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let bytes = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+        &[
+            b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Empty) /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>",
+            b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /Contents <> >>",
+        ],
+    );
+    let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert!(form_of(&signed).get(b"NeedAppearances").is_none());
+}
+
 /// A second signer leaves the form's flags alone: changing them would count as a change to
 /// what the first signature covered.
 #[test]
