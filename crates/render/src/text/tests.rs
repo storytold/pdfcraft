@@ -1965,3 +1965,19 @@ fn text_outside_the_crop_box_is_clipped() {
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
 }
+
+/// A narrow space made by moving between two runs is a word gap in text set close, as pdftotext
+/// reads it ("slide ocean": 0.12 em between `slide` and `ocean`, letters 0.034 em apart); kerning
+/// inside a word and tracked letters stay one word.
+#[test]
+fn narrow_move_between_runs_is_a_word_gap() {
+    // A logo set this way: 1 Tf scaled to 45 pt by the text matrix, tracked 0.034 em. Helvetica's
+    // "slide" is 2.056 em wide plus its tracking; the move leaves 0.12 em.
+    let w = 2.056 + 5.0 * 0.034 + 0.0013 + 0.12;
+    let logo = format!("BT /F1 1 Tf 0.034 Tc 45 0 0 45 20 200 Tm [(s)-1.3 (lide)]TJ 0.036 Tc {w:.3} 0 Td [(oc)2.3 (ean)]TJ ET");
+    assert_eq!(page_text(&logo), "slide ocean");
+    // Kerning inside a word (TJ adjustments of a few hundredths of an em) is not a gap.
+    assert_eq!(page_text("BT /F1 45 Tf 1 0 0 1 20 200 Tm [(W)60 (ord)-40 (s)]TJ ET"), "Words");
+    // Letters tracked 0.2 em apart read as one word.
+    assert_eq!(page_text("BT /F1 20 Tf 4 Tc 1 0 0 1 20 200 Tm (track) Tj ET"), "track");
+}
