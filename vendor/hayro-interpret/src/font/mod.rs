@@ -719,33 +719,71 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
     }
 }
 
-/// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
-/// (`C39`, `G27`, `MT174`: one to three ASCII letters, then decimal or hexadecimal digits) when
-/// that number is the very code the glyph is shown with: the code's Latin-1 character.
-/// The name and the code then agree on the character, so nothing is guessed. A number naming
-/// another code (`/C1` at 233, review on #3239) and a control character read as nothing.
-/// Everything from the first `.` is dropped first, as `glyph_name_to_text` drops it.
-pub(crate) fn numbered_glyph_name_at_its_code(name: &str, code: u8) -> Option<BfString> {
+/// PdfCraft patch: the numbers a glyph name that only numbers its glyph gives (`C39`, `G27`,
+/// `MT174`: one to three ASCII letters, then one to six decimal or hexadecimal digits), for
+/// every split into letters and digits, read in decimal and in hexadecimal (`GA9` is `G` with
+/// hex `A9`); nothing for any other name. Everything from the first `.` is dropped first, as
+/// `glyph_name_to_text` drops it.
+fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
     let base = name.split('.').next().unwrap_or_default();
+    (1..=3).flat_map(move |prefix| {
+        // `from_str_radix` would also take a leading `+`: the number is digits only, and at
+        // most six of them (a code is under 256, leading zeros as in `C0032`).
+        let digits = base
+            .get(..prefix)
+            .zip(base.get(prefix..))
+            .and_then(|(letters, digits)| {
+                (letters.bytes().all(|b| b.is_ascii_alphabetic())
+                    && (1..=6).contains(&digits.len())
+                    && digits.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then_some(digits)
+            });
+        digits.into_iter().flat_map(|d| {
+            [10, 16]
+                .into_iter()
+                .filter_map(move |radix| u32::from_str_radix(d, radix).ok())
+        })
+    })
+}
+
+/// PdfCraft patch: whether every glyph name in a simple font's encoding that only numbers its
+/// glyph (see `glyph_name_numbers`) names the very code it sits at, in decimal or hexadecimal.
+/// Names the glyph list or its `uni`/`u` forms read are not numbered names. A font whose names
+/// number something else (`/Differences [1 /C70 /C105 …]`, a glyph's order in the subset)
+/// fails, and so does one where a single name numbers another code: there a name that happens
+/// to match its code (`/MT40` at 0x40, `/C1` at 233 beside `/C70` at 70, review on #3239) is a
+/// coincidence, not evidence.
+pub(crate) fn numbered_names_name_their_codes<'a>(
+    names: impl IntoIterator<Item = (u8, &'a str)>,
+) -> bool {
+    names
+        .into_iter()
+        .filter(|(_, name)| {
+            glyph_names::get(name).is_none()
+                && unicode_from_name(name).is_none()
+                && glyph_name_to_text(name).is_none()
+        })
+        .all(|(code, name)| {
+            let mut numbers = glyph_name_numbers(name).peekable();
+            numbers.peek().is_none() || numbers.any(|n| n == u32::from(code))
+        })
+}
+
+/// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
+/// (see `glyph_name_numbers`) when that number is the very code the glyph is shown with: the
+/// code's Latin-1 character, for codes above 127 too (`C174` reads `®`), as pdftotext, PDFium,
+/// MuPDF and Acrobat read it. The name and the code then agree, so nothing is guessed from an
+/// encoding table. A number naming another code (`/C1` at 233, review on #3239) and a control
+/// character read as nothing. Callers apply it only in a font where
+/// `numbered_names_name_their_codes` holds.
+pub(crate) fn numbered_glyph_name_at_its_code(name: &str, code: u8) -> Option<BfString> {
     let c = char::from(code);
     if c.is_control() {
         return None;
     }
-    // Every split into one to three letters and the number: `GA9` is `G` with hex `A9`.
-    let names_code = |prefix: usize| {
-        let (Some(letters), Some(digits)) = (base.get(..prefix), base.get(prefix..)) else {
-            return false;
-        };
-        // `from_str_radix` would also take a leading `+`: the number is digits only, and at
-        // most six of them (a code is under 256, leading zeros as in `C0032`).
-        letters.bytes().all(|b| b.is_ascii_alphabetic())
-            && (1..=6).contains(&digits.len())
-            && digits.bytes().all(|b| b.is_ascii_hexdigit())
-            && [10, 16]
-                .into_iter()
-                .any(|radix| u32::from_str_radix(digits, radix).is_ok_and(|n| n == u32::from(code)))
-    };
-    (1..=3).any(names_code).then_some(BfString::Char(c))
+    glyph_name_numbers(name)
+        .any(|n| n == u32::from(code))
+        .then_some(BfString::Char(c))
 }
 
 pub(crate) fn unicode_from_name(name: &str) -> Option<char> {
