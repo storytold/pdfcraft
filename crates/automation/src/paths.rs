@@ -41,8 +41,11 @@ impl Automation {
         let joined = lexical(&root.join(p)).ok_or_else(outside)?;
         // Followed one name at a time first: nothing outside the root or its own parent folders is
         // looked up, not even to see whether it exists. What can't be followed inside the root is
-        // said below.
-        if matches!(file_access::follow(path, &joined, root), file_access::Toward::Outside) {
+        // said below. Made absolute the way Windows reads it first: it drops a folder name's
+        // trailing dot (`in.` is `in`), but `follow` looks names up below `\\?\` folders, where it
+        // doesn't.
+        let as_read = std::path::absolute(&joined).map_err(|_| outside())?;
+        if matches!(file_access::follow(path, &as_read, root), file_access::Toward::Outside) {
             return Err(outside());
         }
         let mut existing = joined.as_path();

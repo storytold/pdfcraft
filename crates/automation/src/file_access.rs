@@ -348,6 +348,17 @@ mod tests {
         // absolute, as it does when it opens one: that path is `in\a.pdf` there.)
         #[cfg(not(windows))]
         assert!(refusal(&format!("{root}/../nowhere/../in/a.pdf")).contains("outside the read root"));
+        // A `\\?\` path is taken as written, `..` and all, so there the walk itself refuses it.
+        #[cfg(windows)]
+        {
+            let verbatim = |rest: &str| format!(r"\\?\{root}\{rest}");
+            assert_eq!(refusal(&verbatim(r"..\outside\..\x.pdf")), refusal(&verbatim(r"..\nowhere\..\x.pdf")));
+            assert!(
+                refusal(&verbatim(r"..\nowhere\x.pdf")).starts_with("automation path rejected: outside the read root"),
+                "{}",
+                refusal(&verbatim(r"..\nowhere\x.pdf"))
+            );
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 

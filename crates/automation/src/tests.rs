@@ -243,6 +243,28 @@ fn other_shares_and_device_paths_are_refused_by_name() {
     assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
 }
 
+/// Windows drops a trailing dot from a folder name when it opens a path (`root.` is `root`), so
+/// with a root, a path that names the root or a folder above it that way still reaches the file
+/// inside. A dotted name outside stays outside.
+#[cfg(windows)]
+#[test]
+fn a_trailing_dot_on_the_root_or_above_it_names_the_folder_windows_opens() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-dot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::create_dir_all(base.join("outside")).unwrap();
+    std::fs::write(base.join("root").join("a.pdf"), b"x").unwrap();
+    std::fs::write(base.join("outside").join("b.pdf"), b"x").unwrap();
+    let a = Automation::new().with_root(base.join("root")).unwrap();
+    let shown = base.to_string_lossy().into_owned();
+    for p in [format!(r"{shown}\root.\a.pdf"), format!(r"{shown}.\root\a.pdf")] {
+        let resolved = a.resolve(&p, false);
+        assert!(resolved.is_ok(), "{p}: {resolved:?}");
+    }
+    assert!(a.resolve(&format!(r"{shown}\outside.\b.pdf"), false).is_err());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A fresh, empty folder for one staging test.
 fn staging_dir(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("pdfcraft-staging-{}-{test}", std::process::id()));
