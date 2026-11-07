@@ -7979,6 +7979,48 @@ fn comparing_documents_through_tools() {
 }
 
 #[test]
+fn compare_pages_limits_text_comparison() {
+    let dir = workdir("compare-pages");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page alpha\u{c}Second page 900" }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page beta\u{c}Second page 950" }))["doc"].as_u64().unwrap();
+    let pages = page_text(&mut a, v2);
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    // Scoping the comparison to page 2 alone must report only the 950 change on page 2,
+    // not the page 1 alpha/beta change.
+    match a.call("doc_compare", &json!({ "doc": v2, "other": v1, "pages": [2] })) {
+        Ok(out) => {
+            let r = match out.into_iter().next() {
+                Some(Content::Json(v)) => v,
+                other => panic!("doc_compare with pages: expected JSON, got {other:?}"),
+            };
+            assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(0), Some(0)), "{r}");
+            assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
+            assert_eq!(r["changes"][0]["old"]["text"], "900", "{r}");
+            assert_eq!(r["changes"][0]["new"]["text"], "950", "{r}");
+            assert_eq!(r["changes"][0]["new"]["page"], 2, "{r}");
+        }
+        Err(e) => {
+            assert!(e.to_string().is_empty() && e.to_string().contains("pages"), "doc_compare accepts a pages filter to scope the text diff: {e}")
+        }
+    }
+    // Scoping to page 1 alone must report only the alpha/beta change.
+    match a.call("doc_compare", &json!({ "doc": v2, "other": v1, "pages": [1] })) {
+        Ok(out) => {
+            let r = match out.into_iter().next() {
+                Some(Content::Json(v)) => v,
+                other => panic!("doc_compare with pages: expected JSON, got {other:?}"),
+            };
+            assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
+            assert_eq!(r["changes"][0]["new"]["page"], 1, "{r}");
+        }
+        Err(e) => {
+            assert!(e.to_string().is_empty() && e.to_string().contains("pages"), "doc_compare accepts a pages filter to scope the text diff: {e}")
+        }
+    }
+}
+
+#[test]
 fn actions_through_tools() {
     let dir = workdir("actions");
     let mut a = auto(&dir);
