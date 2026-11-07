@@ -279,7 +279,10 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
 /// object where the budget allowed keeping it.
 type SaveOrder = (HashMap<ObjRef, u32>, Vec<(ObjRef, bool)>, Vec<Option<Arc<Object>>>);
 
-fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveOrder, CosError> {
+/// Number the objects reachable from the trailer. `retain` keeps parsed objects for the write
+/// pass, up to the budget. A caller that needs only the numbers passes `false`, so the traversal
+/// holds no parsed objects beyond the current one.
+fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict, retain: bool) -> Result<SaveOrder, CosError> {
     // Breadth-first walk from the trailer, assigning new numbers in visit order.
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
     // Record the type while traversing so classifying packed objects needs no second parse.
@@ -326,7 +329,7 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
         map.insert(canonical, num);
         order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
-        kept.push(kept_budget.admit(&o, reader.document.bytes()).then_some(o));
+        kept.push((retain && kept_budget.admit(&o, reader.document.bytes())).then_some(o));
     }
     Ok((map, order, kept))
 }
@@ -337,7 +340,7 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
 pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
     let mut reader = doc.object_reader();
     let trailer_in = reader.document.trailer().clone();
-    let (_, order, _) = full_save_order(&mut reader, &trailer_in)?;
+    let (_, order, _) = full_save_order(&mut reader, &trailer_in, false)?;
     Ok(order.into_iter().map(|(r, _)| r.num).collect())
 }
 
@@ -351,7 +354,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut reader = doc.object_reader();
     stamp_mod_date(&mut reader.document, opts);
     let trailer_in = reader.document.trailer().clone();
-    let (map, order, mut kept) = full_save_order(&mut reader, &trailer_in)?;
+    let (map, order, mut kept) = full_save_order(&mut reader, &trailer_in, true)?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
