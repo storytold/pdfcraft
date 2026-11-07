@@ -2292,3 +2292,53 @@ fn escape_under_a_dialog_closes_it_over_selected_edit_text_objects() {
     h.run_steps(4);
     assert_eq!(blocks(&h), 0, "the objects stayed selected: Delete removes them");
 }
+
+/// With a menu of the menu bar open, V and H are the menu's: the tool stays. V picked Select.
+#[test]
+fn the_tool_letters_with_a_menu_open_leave_the_tool() {
+    for letter in [egui::Key::V, egui::Key::H] {
+        let mut h = open(link_pdf(), "150", false);
+        link_tool(&mut h);
+        crate::support::open_menu(&mut h, "Edit");
+        h.key_press(letter);
+        h.run_steps(3);
+        assert_eq!(h.state().quick_tool, QuickTool::Link, "{letter:?} with a menu open");
+    }
+}
+
+/// With a menu of the menu bar open, Delete leaves Edit text objects that an area selected: the key
+/// is the menu's. It deleted them.
+#[test]
+fn delete_with_a_menu_open_leaves_selected_edit_text_objects() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
+    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
+    let blocks = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(1).len()
+    };
+    assert_eq!(blocks(&h), 1, "page 2's line is there");
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(blocks(&h), 1, "Delete with a menu open deletes nothing");
+}
+
+/// With a menu of the menu bar open, End is the menu's: the view stays on its page. It went to the
+/// last page.
+#[test]
+fn end_with_a_menu_open_turns_no_page() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    let current = h.state().views[0].current;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::End);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, current, "End with a menu open turns no page");
+}

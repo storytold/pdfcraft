@@ -57,7 +57,7 @@ use cache::{
 use cache::{OLD_TILES, PageTex, STALE_TAG, TEXT_TAG, TILE_BYTES, scale_tag, tag_scale, texture_bytes, tile_side};
 pub use find::Find;
 use find::find_bar;
-pub use navigation::shortcuts;
+pub(crate) use navigation::shortcuts;
 pub(crate) use organize::drop_gap;
 #[cfg(test)]
 pub(crate) use organize::grid_page_rect;

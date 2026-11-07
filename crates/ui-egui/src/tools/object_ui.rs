@@ -436,7 +436,7 @@ fn on_frame(r: Rect, p: Pos2) -> bool {
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.
-pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
+pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, doc: &Document) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
         return;
     }
@@ -446,26 +446,23 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
     let Some(xf) = view.page_xform(page) else { return };
     use egui::Key;
     let mut step = egui::Vec2::ZERO;
-    ctx.input_mut(|i| {
-        // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
-        // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
-        // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
-        // `canvas::shortcuts`.
-        i.events.retain(|e| {
-            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
-            if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
-                return true;
-            }
-            let direction = match key {
-                Key::ArrowLeft => egui::vec2(-1.0, 0.0),
-                Key::ArrowRight => egui::vec2(1.0, 0.0),
-                Key::ArrowUp => egui::vec2(0.0, -1.0),
-                Key::ArrowDown => egui::vec2(0.0, 1.0),
-                _ => return true,
-            };
-            step += direction * if modifiers.shift { 10.0 } else { 1.0 };
-            false
-        });
+    // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
+    // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
+    // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
+    // `canvas::shortcuts`.
+    keys.take_presses(ctx, |key, modifiers| {
+        if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+            return false;
+        }
+        let direction = match key {
+            Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+            Key::ArrowRight => egui::vec2(1.0, 0.0),
+            Key::ArrowUp => egui::vec2(0.0, -1.0),
+            Key::ArrowDown => egui::vec2(0.0, 1.0),
+            _ => return false,
+        };
+        step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+        true
     });
     if step == egui::Vec2::ZERO {
         return;
@@ -493,13 +490,13 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
 /// Delete (or Backspace) removes the selected objects, as in Acrobat: a paragraph selected by its
 /// frame, or everything an area selection took, goes at once instead of one typed character at a
 /// time.
-pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
+pub(crate) fn delete_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
         return;
     }
     let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };
-    use egui::{Key, Modifiers};
-    if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
+    use egui::Key;
+    if !(keys.take(ctx, Key::Delete) || keys.take(ctx, Key::Backspace)) {
         return;
     }
     // The selection stays until the edit applies: `prepare` clears it when the document changes,

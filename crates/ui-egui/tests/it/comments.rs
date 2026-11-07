@@ -4396,3 +4396,14 @@ fn escape_closing_a_dialog_over_a_comment_being_typed_keeps_the_typing() {
     let posted = comments(&h).iter().any(|c| c.contents.as_deref().is_some_and(|t| t.contains("First line")));
     assert!(open || posted, "the typing stays");
 }
+
+/// With a menu of the menu bar open, the arrows are the menu's: the selected comment stays put.
+#[test]
+fn an_arrow_with_a_menu_open_leaves_the_selected_comment_where_it_is() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].rect, before, "not moved");
+}

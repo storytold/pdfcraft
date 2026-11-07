@@ -1,4 +1,5 @@
 use super::*;
+use crate::page_keys::PageKeys;
 
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -61,22 +62,23 @@ impl PdfCraftApp {
                 }
             }
             self.tool_keys(i, ctx);
+            let keys = self.page_keys;
             if self.quick_tool == QuickTool::EditText
                 && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
             {
-                object_ui::nudge_keys(ctx, &mut self.views[i], doc);
-                object_ui::delete_keys(ctx, &mut self.views[i]);
+                object_ui::nudge_keys(ctx, keys, &mut self.views[i], doc);
+                object_ui::delete_keys(ctx, keys, &mut self.views[i]);
             } else if let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_annotation()) {
-                comments::nudge_keys(ctx, &mut self.views[i], &doc.info);
+                comments::nudge_keys(ctx, keys, &mut self.views[i], &doc.info);
             }
             // A selected field moves with the arrows too (Prepare a form, #2608), before the view
             // turns the page with them.
             if self.is_preparing()
                 && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
             {
-                prepare::nudge_keys(ctx, &mut self.views[i], doc);
+                prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
+            canvas::shortcuts(&mut self.views[i], ctx, keys, self.scroll_speed);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
@@ -85,12 +87,14 @@ impl PdfCraftApp {
 
 impl PdfCraftApp {
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
-    /// is released. Plain letters, so not while a text field, a form field, a dialog or the
-    /// palette has the keyboard.
+    /// is released. Plain letters, so not while a text field, a form field, a dialog, the palette
+    /// or a menu has the keyboard.
     fn tool_keys(&mut self, i: usize, ctx: &egui::Context) {
         use egui::Key;
+        let keys = self.page_keys;
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
-        let (plain, space) = ctx.input(|input| (input.modifiers.is_none(), input.key_down(Key::Space)));
+        let free = free && !keys.over();
+        let (plain, space) = (ctx.input(|input| input.modifiers.is_none()), PageKeys::held(ctx, Key::Space));
         if let Some(previous) = self.space_hand
             && !space
         {
@@ -102,11 +106,11 @@ impl PdfCraftApp {
         if !free || !plain {
             return;
         }
-        if ctx.input(|input| input.key_pressed(Key::V)) {
+        if keys.pressed(ctx, Key::V) {
             self.quick_tool = QuickTool::Select;
             self.space_hand = None;
         }
-        if ctx.input(|input| input.key_pressed(Key::H)) {
+        if keys.pressed(ctx, Key::H) {
             self.quick_tool = QuickTool::Hand;
             self.space_hand = None;
         }

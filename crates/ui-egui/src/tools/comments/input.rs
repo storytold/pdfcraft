@@ -747,7 +747,7 @@ pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
 /// on screen whatever the zoom, the page's rotation and the view's; the keys are taken before
 /// the view scrolls or turns the page with them. Each press is one undo step. Text markup stays
 /// with its text, and a locked comment where it is.
-pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) {
+pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
         return;
     }
@@ -763,26 +763,23 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
     }
     use egui::Key;
     let mut step = egui::Vec2::ZERO;
-    ctx.input_mut(|i| {
-        // Only an arrow pressed alone or with ⌘/Ctrl or Shift, judged by each press's own
-        // modifiers. Alt+← / Alt+→ go back and forward through the view history in
-        // `canvas::shortcuts` (#3632), and egui's key patterns would let an extra Alt through.
-        // A Ctrl that isn't the command key (macOS) is left alone, as the patterns left it.
-        i.events.retain(|e| {
-            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
-            if modifiers.alt || (modifiers.ctrl && !modifiers.command) {
-                return true;
-            }
-            let direction = match key {
-                Key::ArrowLeft => vec2(-1.0, 0.0),
-                Key::ArrowRight => vec2(1.0, 0.0),
-                Key::ArrowUp => vec2(0.0, -1.0),
-                Key::ArrowDown => vec2(0.0, 1.0),
-                _ => return true,
-            };
-            step += direction * if modifiers.command || modifiers.shift { 10.0 } else { 1.0 };
-            false
-        });
+    // Only an arrow pressed alone or with ⌘/Ctrl or Shift, judged by each press's own
+    // modifiers. Alt+← / Alt+→ go back and forward through the view history in
+    // `canvas::shortcuts` (#3632), and egui's key patterns would let an extra Alt through.
+    // A Ctrl that isn't the command key (macOS) is left alone, as the patterns left it.
+    keys.take_presses(ctx, |key, modifiers| {
+        if modifiers.alt || (modifiers.ctrl && !modifiers.command) {
+            return false;
+        }
+        let direction = match key {
+            Key::ArrowLeft => vec2(-1.0, 0.0),
+            Key::ArrowRight => vec2(1.0, 0.0),
+            Key::ArrowUp => vec2(0.0, -1.0),
+            Key::ArrowDown => vec2(0.0, 1.0),
+            _ => return false,
+        };
+        step += direction * if modifiers.command || modifiers.shift { 10.0 } else { 1.0 };
+        true
     });
     if step == egui::Vec2::ZERO {
         return;

@@ -173,7 +173,7 @@ impl PdfCraftApp {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        if ctx.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+        if self.page_keys.pressed(ctx, egui::Key::Escape) {
             self.views[i].picked_image = None;
             return;
         }

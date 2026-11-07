@@ -7,7 +7,7 @@
 //!
 //! Each module still asks for itself whether a text field has the keyboard.
 
-use egui::{Context, Key, Modifiers};
+use egui::{Context, Event, Key, Modifiers};
 
 /// One frame's keyboard, as the pages see it: their keys, or none while something is over them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -37,11 +37,37 @@ impl PageKeys {
     pub(crate) fn take(self, ctx: &Context, key: Key) -> bool {
         !self.over && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, key))
     }
+
+    /// Take the frame's key presses that `take` wants for the pages, each judged by its own
+    /// modifiers (the frame's can differ when a key is let go in the same frame). `take` says
+    /// whether it took the press; a press taken is gone for whatever reads keys next.
+    pub(crate) fn take_presses(self, ctx: &Context, mut take: impl FnMut(Key, Modifiers) -> bool) {
+        if self.over {
+            return;
+        }
+        ctx.input_mut(|i| {
+            i.events.retain(|e| match e {
+                Event::Key { key, pressed: true, modifiers, .. } => !take(*key, *modifiers),
+                _ => true,
+            });
+        });
+    }
+
+    /// Something is over the pages: their keys wait.
+    pub(crate) fn over(self) -> bool {
+        self.over
+    }
+
+    /// `key` is held down. Not the pages' alone: a key let go while something is over them is let
+    /// go all the same.
+    pub(crate) fn held(ctx: &Context, key: Key) -> bool {
+        ctx.input(|i| i.key_down(key))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use egui::{Event, Key, Modifiers, RawInput};
+    use egui::RawInput;
 
     use super::*;
 
@@ -76,6 +102,26 @@ mod tests {
             assert!(!keys.pressed(ctx, Key::Delete));
             assert!(!keys.take(ctx, Key::Delete));
             assert!(ctx.input(|i| i.key_pressed(Key::Delete)), "the key stays for the dialog");
+        });
+    }
+
+    #[test]
+    fn the_pages_take_the_presses_they_want_with_their_own_modifiers() {
+        let shifted = Event::Key { key: Key::ArrowLeft, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT };
+        frame(vec![press(Key::ArrowRight), shifted, press(Key::Escape)], |ctx| {
+            let mut seen = Vec::new();
+            PageKeys::new(true).take_presses(ctx, |key, _| {
+                seen.push(key);
+                true
+            });
+            assert!(seen.is_empty(), "nothing while something is over the pages");
+            PageKeys::new(false).take_presses(ctx, |key, modifiers| {
+                seen.push(key);
+                key == Key::ArrowLeft && modifiers.shift
+            });
+            assert_eq!(seen, [Key::ArrowRight, Key::ArrowLeft, Key::Escape]);
+            assert!(!ctx.input(|i| i.key_pressed(Key::ArrowLeft)), "the press taken is gone");
+            assert!(ctx.input(|i| i.key_pressed(Key::ArrowRight) && i.key_pressed(Key::Escape)), "the others stay");
         });
     }
 

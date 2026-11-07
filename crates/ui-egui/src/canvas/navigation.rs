@@ -352,7 +352,18 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
-pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
+/// The view's keys: its chords, then its plain keys.
+pub(crate) fn shortcuts(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::PageKeys, speed: crate::scroll_speed::ScrollSpeed) {
+    if let Some(arrows) = view_chords(view, ctx) {
+        view_keys(view, ctx, keys, speed, arrows);
+    }
+}
+
+/// The view's chords: Find and its steps, rotation, zoom and the view history. Not held back by a
+/// menu, which a command's chord closes as it runs. `None` while a text field has the keyboard,
+/// and then it has the plain keys too; else whether the arrows are the view's (a focused radio
+/// button keeps them).
+fn view_chords(view: &mut DocView, ctx: &egui::Context) -> Option<bool> {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
         view.open_find();
@@ -372,7 +383,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // radio button for the arrows that move within its group: the other page keys still work.
     let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
     if ctx.egui_wants_keyboard_input() && form_box.is_none() {
-        return;
+        return None;
     }
     let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.
@@ -395,7 +406,14 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
-    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
+    Some(arrows)
+}
+
+/// The view's plain keys: Escape, Home and End, full screen's keys, the arrows and Page Up / Page
+/// Down. Not while something is over the pages.
+fn view_keys(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::PageKeys, speed: crate::scroll_speed::ScrollSpeed, arrows: bool) {
+    use egui::Key;
+    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
         if view.camera.is_some() || view.camera_done.is_some() {
