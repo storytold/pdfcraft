@@ -1220,6 +1220,40 @@ fn a_tags_content_after_a_damaged_stream_is_not_rewritten() {
     }
 }
 
+/// A page may split its content between an operator's operands and its keyword. When the operands
+/// of the figure's `BDC` end the stream before one damaged from its start or one that doesn't
+/// decode, the `BDC` the page reads is in what wasn't read: joined without it, those operands and
+/// the next tag's read as one `BDC`, which reaches into the stream after it. Neither marking
+/// changes anything, the structure tree included.
+#[test]
+fn a_tags_operands_before_a_stream_not_read_whole_are_not_rewritten() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let rest = b" BDC q 40 0 0 20 10 150 cm /Im Do Q EMC";
+    for damaged in [true, false] {
+        let mut doc = figures_doc();
+        doc.set(ObjRef::new(4, 0), Stream::from_raw(Dict::new(), b"/Figure << /MCID 0 >>".to_vec()));
+        let hidden = if damaged {
+            damaged_flate(b"", rest)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), rest);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = doc.add(hidden);
+        let after = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC".to_vec())));
+        let listed = Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(after)]);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed)).unwrap();
+        let state = |doc: &Document| {
+            (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+        };
+        let before = state(&doc);
+        assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged), "damaged: {damaged}");
+        assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged), "damaged: {damaged}");
+        assert_eq!(state(&doc), before, "damaged: {damaged}");
+    }
+}
+
 /// A tag's content not found on the page may be in a stream that doesn't decode: it isn't known
 /// to be off the page, so neither marking changes anything, the structure tree included.
 #[test]

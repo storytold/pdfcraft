@@ -452,8 +452,11 @@ fn artifact_marked_content(
     for op in pieces.parse().ops {
         if let Some(id) = marked_id(doc, &props, &op, ids) {
             // What follows the damage is unknown: a string or comment the damage left open runs
-            // on into the next stream, so what reads as an operator after it may not be one.
-            if damage.is_some_and(|d| pieces.piece_of(op.span.start) > d) {
+            // on into the next stream, so what reads as an operator after it may not be one. An
+            // operator whose operands start before a stream not read whole and whose keyword comes
+            // after it takes them from around what wasn't read: that stream may end them itself.
+            let (first, last) = pieces.pieces_of(&op);
+            if damage.is_some_and(|d| last > d) || read.get(first..last).is_some_and(|r| r.iter().any(|r| *r != Read::Whole)) {
                 return Ok(Marked::Damaged);
             }
             found.insert(id);
