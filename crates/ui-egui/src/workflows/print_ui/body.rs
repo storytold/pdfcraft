@@ -87,7 +87,6 @@ pub(crate) fn body(
     t: &Tokens,
     sizes: &[(f64, f64)],
     labels: &[String],
-    default_paper_source: Option<&super::DefaultPaperSource>,
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
     ui.set_width(820.0);
@@ -142,14 +141,7 @@ pub(crate) fn body(
                         && let Some(p) = d.printer.clone()
                     {
                         if spool::HAS_PRINTER_PREFERENCES {
-                            d.driver_error = None;
-                            match spool::show_printer_properties(&p) {
-                                Ok(Some((name, size))) => {
-                                    d.apply_driver_paper(name, size);
-                                }
-                                Ok(None) => {}
-                                Err(e) => d.driver_error = Some(e.to_string()),
-                            }
+                            d.driver_error = spool::open_printer_preferences(&p).err().map(|e| e.to_string());
                         } else {
                             if d.driver_options.as_ref().is_none_or(|(read_for, _)| *read_for != p) && d.driver_options_loading.as_deref() != Some(p.as_str()) {
                                 // Read off the GUI thread (#1818): `poll_print` starts it next frame.
@@ -166,9 +158,8 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
-                    d.update_printer_papers();
-                    if !d.paper_overridden {
-                        d.auto_select_default_paper_with(default_paper_source);
+                    if let Some(p) = d.printer.clone() {
+                        d.read_papers_for = Some(p);
                     }
                 }
                 ui.end_row();
@@ -239,7 +230,11 @@ pub(crate) fn body(
                         && let Some(p) = d.printer.clone()
                     {
                         d.driver_error = None;
-                        match spool::show_printer_properties(&p) {
+                        #[cfg(windows)]
+                        let parent = winsafe::HWND::GetActiveWindow().map(|h| h.ptr() as isize);
+                        #[cfg(not(windows))]
+                        let parent = None;
+                        match spool::show_printer_properties(&p, parent) {
                             Ok(Some((name, size))) => {
                                 d.apply_driver_paper(name, size);
                             }

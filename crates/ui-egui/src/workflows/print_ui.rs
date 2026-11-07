@@ -37,10 +37,19 @@ pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption
 /// unless a test stands in.
 pub type DefaultPaperSource = std::sync::Arc<dyn Fn(&str) -> Option<(String, (f64, f64))> + Send + Sync>;
 
+/// Where a printer's supported paper sizes come from: the spooler driver capabilities
+/// unless a test stands in.
+pub type PrinterPapersSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::Paper> + Send + Sync>;
+
 /// The system spooler's printers, as the desktop app's [`PrinterSource`].
 pub fn system_printers() -> PrinterSource {
     std::sync::Arc::new(spool::printers)
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+type PaperInfo = (Vec<spool::Paper>, Option<spool::Paper>);
+#[cfg(not(target_arch = "wasm32"))]
+type PendingPaperInfo = (String, std::sync::mpsc::Receiver<PaperInfo>);
 
 /// The Print dialog's work in the background: the printer list being read, and the jobs being
 /// spooled, oldest first.
@@ -56,6 +65,12 @@ pub(crate) struct PrintTasks {
     /// The driver options being read, per printer (`read_options_in_background`).
     #[cfg(not(target_arch = "wasm32"))]
     options: Vec<(String, std::sync::mpsc::Receiver<Vec<spool::PrinterOption>>)>,
+    /// The papers and default paper being read in the background, per printer (`read_papers_in_background`).
+    #[cfg(not(target_arch = "wasm32"))]
+    papers: Vec<PendingPaperInfo>,
+    /// Cached papers and default paper per printer so switching printers avoids re-querying.
+    #[cfg(not(target_arch = "wasm32"))]
+    papers_cache: std::collections::HashMap<String, PaperInfo>,
     /// The browser print being drawn, a sheet a frame (`web_print`).
     #[cfg(target_arch = "wasm32")]
     web_job: Option<crate::web_print::WebPrintJob>,
@@ -168,22 +183,18 @@ impl PdfCraftApp {
             printers_loading,
             printer_picked: picked,
             units: self.units,
-            printer,
+            printer: printer.clone(),
             current_page: current,
             sheet: 0,
             selected,
             which,
             ..keep
         };
-        self.print_draft.update_printer_papers();
-        if !self.print_draft.paper_overridden {
-            self.auto_select_default_paper();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = printer {
+            self.read_papers_in_background(p);
         }
         self.dialog = Some(crate::Dialog::Print);
-    }
-
-    pub(crate) fn auto_select_default_paper(&mut self) {
-        self.print_draft.auto_select_default_paper_with(self.default_paper_source.as_ref());
     }
 
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as
@@ -286,12 +297,93 @@ impl PdfCraftApp {
         }
     }
 
+    /// Read `printer`'s papers and default paper off the GUI thread (#5861); `poll_print` picks them up.
+    /// A read already under way for the same printer is left to finish.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_papers_in_background(&mut self, printer: String) {
+        if let Some((papers, default_paper)) = self.print_tasks.papers_cache.get(&printer).cloned() {
+            self.receive_papers(printer, papers, default_paper);
+            return;
+        }
+        if self.print_tasks.papers.iter().any(|(p, _)| *p == printer) {
+            return;
+        }
+        self.print_draft.papers_loading = Some(printer.clone());
+        let papers_source = self.printer_papers_source.clone();
+        let default_source = self.default_paper_source.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake = WakeOnExit(self.ctx.clone());
+        let name = printer.clone();
+        let spawned = std::thread::Builder::new().name("printer papers".into()).spawn(move || {
+            let _wake = wake;
+            let tx = tx;
+            let info = match (&papers_source, &default_source) {
+                (None, None) => spool::printer_paper_info(&name),
+                (papers_s, def_s) => {
+                    let papers = match papers_s {
+                        Some(s) => s(&name),
+                        None => spool::printer_papers(&name),
+                    };
+                    let def = match def_s {
+                        Some(s) => s(&name),
+                        None => spool::printer_default_paper(&name),
+                    };
+                    (papers, def)
+                }
+            };
+            let _ = tx.send(info);
+        });
+        match spawned {
+            Ok(_) => self.print_tasks.papers.push((printer, rx)),
+            Err(_) => {
+                let d = &mut self.print_draft;
+                if d.papers_loading.as_deref() == Some(printer.as_str()) {
+                    d.papers_loading = None;
+                }
+            }
+        }
+    }
+
+    /// The papers and default paper read for `printer` arrived, or the read died.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn receive_papers(&mut self, printer: String, papers: Vec<spool::Paper>, default_paper: Option<spool::Paper>) {
+        self.print_tasks.papers_cache.insert(printer.clone(), (papers.clone(), default_paper.clone()));
+        let d = &mut self.print_draft;
+        if d.papers_loading.as_deref() == Some(printer.as_str()) {
+            d.papers_loading = None;
+        }
+        if d.printer.as_deref() == Some(printer.as_str()) {
+            d.apply_printer_papers(papers);
+            if !d.paper_overridden {
+                d.apply_default_paper(default_paper);
+            }
+        }
+    }
+
     /// Pick up a printer list, driver options or a spooled job that finished (each frame).
     pub(crate) fn poll_print(&mut self) {
         #[cfg(target_arch = "wasm32")]
         self.poll_web_print();
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if let Some(printer) = self.print_draft.read_papers_for.take() {
+                self.read_papers_in_background(printer);
+            }
+            let mut arrived_papers = Vec::new();
+            self.print_tasks.papers.retain(|(printer, rx)| match rx.try_recv() {
+                Ok((papers, def)) => {
+                    arrived_papers.push((printer.clone(), papers, def));
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    arrived_papers.push((printer.clone(), Vec::new(), None));
+                    false
+                }
+            });
+            for (printer, papers, def) in arrived_papers {
+                self.receive_papers(printer, papers, def);
+            }
             if let Some(printer) = self.print_draft.read_options_for.take() {
                 self.read_options_in_background(printer);
             }
@@ -322,16 +414,18 @@ impl PdfCraftApp {
                     self.print_tasks.printers = None;
                     let d = &mut self.print_draft;
                     // A picked printer that is no longer listed falls back to the default too.
-                    if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
+                    let changed = if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
                         d.printer = default_printer(&printers);
-                        d.update_printer_papers();
-                        if !d.paper_overridden {
-                            d.auto_select_default_paper_with(self.default_paper_source.as_ref());
-                        }
-                    }
+                        true
+                    } else {
+                        false
+                    };
                     d.printers = printers;
                     d.printers_loading = false;
+                    if changed && let Some(p) = d.printer.clone() {
+                        self.read_papers_in_background(p);
+                    }
                 }
             }
             let mut finished = Vec::new();

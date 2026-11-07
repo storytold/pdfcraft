@@ -87,6 +87,10 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// The printer whose papers and default paper are being read in the background.
+    pub papers_loading: Option<String>,
+    /// A printer change requested reading papers; the app starts the read on the next frame.
+    pub read_papers_for: Option<String>,
 }
 
 impl Default for PrintDraft {
@@ -137,6 +141,8 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            papers_loading: None,
+            read_papers_for: None,
         }
     }
 }
@@ -168,21 +174,33 @@ impl PrintDraft {
 
     /// Refresh `self.papers` with driver-reported media sizes, preserving the current selection.
     pub fn update_printer_papers(&mut self) {
+        self.update_printer_papers_with(None);
+    }
+
+    /// Refresh `self.papers` with driver-reported media sizes from an optional source or the driver.
+    pub fn update_printer_papers_with(&mut self, source: Option<&super::PrinterPapersSource>) {
+        let detected = if let Some(ref printer) = self.printer {
+            if let Some(source) = source { source(printer) } else { spool::printer_papers(printer) }
+        } else {
+            Vec::new()
+        };
+        self.apply_printer_papers(detected);
+    }
+
+    /// Apply driver-reported media sizes to `self.papers`, preserving the current selection.
+    pub fn apply_printer_papers(&mut self, detected: Vec<(String, (f64, f64))>) {
         let before_label = self.paper_before_label.and_then(|idx| self.papers.get(idx).cloned());
         let mut papers = default_papers();
-        if let Some(ref printer) = self.printer {
-            let detected = spool::printer_papers(printer);
-            for (name, size) in detected {
-                if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
-                    continue;
-                }
-                let norm = (size.0.min(size.1), size.0.max(size.1));
-                if !papers.iter().any(|(_, s)| {
-                    let s_norm = (s.0.min(s.1), s.0.max(s.1));
-                    (s_norm.0 - norm.0).abs() <= 0.5 && (s_norm.1 - norm.1).abs() <= 0.5
-                }) {
-                    papers.push((name, size));
-                }
+        for (name, size) in detected {
+            if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
+                continue;
+            }
+            let norm = (size.0.min(size.1), size.0.max(size.1));
+            if !papers.iter().any(|(_, s)| {
+                let s_norm = (s.0.min(s.1), s.0.max(s.1));
+                (s_norm.0 - norm.0).abs() <= 0.5 && (s_norm.1 - norm.1).abs() <= 0.5
+            }) {
+                papers.push((name, size));
             }
         }
         let current_name = self.paper_name().to_string();
@@ -217,27 +235,34 @@ impl PrintDraft {
 
     /// Auto-select the printer's default paper using an optional source (or DEVMODE / driver settings).
     pub fn auto_select_default_paper_with(&mut self, source: Option<&super::DefaultPaperSource>) {
-        if self.handling == Handling::Label {
-            return;
-        }
         if let Some(ref printer) = self.printer {
             let detected = if let Some(source) = source { source(printer) } else { spool::printer_default_paper(printer) };
-            if let Some((name, size)) = detected {
-                let overridden = self.paper_overridden;
-                self.apply_driver_paper(name, size);
-                self.paper_overridden = overridden;
+            self.apply_default_paper(detected);
+        }
+    }
+
+    /// Apply the detected default paper.
+    pub fn apply_default_paper(&mut self, detected: Option<(String, (f64, f64))>) {
+        if let Some((name, size)) = detected
+            && let Some(pos) = self.find_or_add_paper(name, size)
+        {
+            if self.handling == Handling::Label {
+                if !self.paper_overridden {
+                    self.paper_before_label = Some(pos);
+                }
+            } else {
+                self.paper = pos;
             }
         }
     }
 
-    /// Apply paper size and orientation chosen in printer properties or page setup.
-    pub fn apply_driver_paper(&mut self, name: String, size: (f64, f64)) {
+    /// Locate `(name, size)` in `self.papers`, or append it if missing. Returns the paper index.
+    pub fn find_or_add_paper(&mut self, name: String, size: (f64, f64)) -> Option<usize> {
         if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
-            return;
+            return None;
         }
-        self.paper_overridden = true;
         if let Some(pos) = self.matching_paper(size) {
-            self.paper = pos;
+            Some(pos)
         } else if !name.is_empty() {
             let norm = (size.0.min(size.1), size.0.max(size.1));
             if let Some(pos) = self.papers.iter().position(|(n, s)| {
@@ -246,20 +271,28 @@ impl PrintDraft {
                     (s_norm.0 - norm.0).abs() <= 1.0 && (s_norm.1 - norm.1).abs() <= 1.0
                 }
             }) {
-                self.paper = pos;
+                Some(pos)
             } else {
                 self.papers.push((name, size));
-                self.paper = self.papers.len() - 1;
+                Some(self.papers.len() - 1)
             }
         } else {
             let custom_name = format!("{:.1} x {:.1} pt", size.0, size.1);
             self.papers.push((custom_name, size));
-            self.paper = self.papers.len() - 1;
+            Some(self.papers.len() - 1)
         }
-        if size.0 > size.1 {
-            self.orientation = Orientation::Landscape;
-        } else if size.1 > size.0 {
-            self.orientation = Orientation::Portrait;
+    }
+
+    /// Apply paper size and orientation chosen in printer properties or page setup.
+    pub fn apply_driver_paper(&mut self, name: String, size: (f64, f64)) {
+        if let Some(pos) = self.find_or_add_paper(name, size) {
+            self.paper_overridden = true;
+            self.paper = pos;
+            if size.0 > size.1 {
+                self.orientation = Orientation::Landscape;
+            } else if size.1 > size.0 {
+                self.orientation = Orientation::Portrait;
+            }
         }
     }
 

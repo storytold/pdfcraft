@@ -240,34 +240,47 @@ pub fn printer_papers(_printer: &str) -> Vec<Paper> {
     Vec::new()
 }
 
-/// The default paper size configured for `printer` in the printer properties / DEVMODE.
-/// Returns `Some((name, (width, height)))` if readable.
 #[cfg(windows)]
-pub fn printer_default_paper(printer: &str) -> Option<Paper> {
-    let settings = craft_print::rgb::default_settings(printer).ok()?;
-    let page = craft_print::rgb::page(printer, Some(&settings)).ok()?;
-    let w_pts = (page.paper.0 * 100.0).round() / 100.0;
-    let h_pts = (page.paper.1 * 100.0).round() / 100.0;
-    let papers = printer_papers(printer);
+fn resolve_paper_name(papers: &[Paper], paper_pts: (f64, f64)) -> Paper {
+    let w_pts = (paper_pts.0 * 100.0).round() / 100.0;
+    let h_pts = (paper_pts.1 * 100.0).round() / 100.0;
     let name = papers
         .iter()
         .find(|(_, (w, h))| ((*w - w_pts).abs() <= 1.0 && (*h - h_pts).abs() <= 1.0) || ((*w - h_pts).abs() <= 1.0 && (*h - w_pts).abs() <= 1.0))
         .map(|(n, _)| n.clone())
         .unwrap_or_default();
-    Some((name, (w_pts, h_pts)))
+    (name, (w_pts, h_pts))
 }
 
-#[cfg(not(windows))]
-pub fn printer_default_paper(_printer: &str) -> Option<Paper> {
-    None
+/// The default paper size configured for `printer` in the printer properties / DEVMODE.
+/// Returns `Some((name, (width, height)))` if readable.
+pub fn printer_default_paper(printer: &str) -> Option<Paper> {
+    printer_paper_info(printer).1
+}
+
+/// Reads the supported paper sizes and the default paper size configured for `printer`.
+pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
+    let papers = printer_papers(printer);
+    #[cfg(windows)]
+    let default_paper = {
+        let settings = craft_print::rgb::default_settings(printer).ok();
+        let page = settings.as_ref().and_then(|s| craft_print::rgb::page(printer, Some(s)).ok());
+        page.map(|p| resolve_paper_name(&papers, p.paper))
+    };
+    #[cfg(not(windows))]
+    let default_paper = {
+        let _ = &papers;
+        None
+    };
+    (papers, default_paper)
 }
 
 /// Shows the printer driver's Print Settings / DocumentProperties dialog (Windows).
 /// If the user clicks OK, returns the updated paper size.
-pub fn show_printer_properties(printer: &str) -> Result<Option<Paper>, crate::PrintError> {
+pub fn show_printer_properties(printer: &str, parent: Option<isize>) -> Result<Option<Paper>, crate::PrintError> {
     #[cfg(windows)]
     {
-        let devmode = match craft_print::rgb::settings_dialog(printer, None, None) {
+        let devmode = match craft_print::rgb::settings_dialog(printer, None, parent) {
             Ok(Some(dm)) => dm,
             Ok(None) => return Ok(None),
             Err(_) => {
@@ -276,19 +289,12 @@ pub fn show_printer_properties(printer: &str) -> Result<Option<Paper>, crate::Pr
             }
         };
         let page = craft_print::rgb::page(printer, Some(&devmode)).map_err(|e| crate::PrintError::Spool(e.to_string()))?;
-        let w_pts = (page.paper.0 * 100.0).round() / 100.0;
-        let h_pts = (page.paper.1 * 100.0).round() / 100.0;
         let papers = printer_papers(printer);
-        let name = papers
-            .iter()
-            .find(|(_, (w, h))| ((*w - w_pts).abs() <= 1.0 && (*h - h_pts).abs() <= 1.0) || ((*w - h_pts).abs() <= 1.0 && (*h - w_pts).abs() <= 1.0))
-            .map(|(n, _)| n.clone())
-            .unwrap_or_default();
-        Ok(Some((name, (w_pts, h_pts))))
+        Ok(Some(resolve_paper_name(&papers, page.paper)))
     }
     #[cfg(not(windows))]
     {
-        let _ = printer;
+        let _ = (printer, parent);
         Ok(None)
     }
 }

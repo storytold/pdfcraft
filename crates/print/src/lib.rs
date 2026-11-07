@@ -43,4 +43,4 @@ pub use settings::{
 #[cfg(test)]
 use sheets::text_direction;
 pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up};
-pub use spool::{open_printer_preferences, printer_default_paper, printer_papers, show_printer_properties};
+pub use spool::{open_printer_preferences, printer_default_paper, printer_paper_info, printer_papers, show_printer_properties};
