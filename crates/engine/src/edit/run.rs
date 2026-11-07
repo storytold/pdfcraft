@@ -583,7 +583,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 doc,
                 *page,
                 *index,
-                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone() },
+                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone(), round_corners: None },
                 &cx.meta(),
             )?;
         }

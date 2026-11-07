@@ -2237,6 +2237,11 @@ fn highlight_round_corners_through_the_tools() {
     // Refuse round on non-highlight tools
     let refused = a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 50, 50], "round": true }));
     assert!(matches!(refused, Err(ToolError::InvalidArgs(_))));
+
+    // Refuse round in comment_edit on non-highlight
+    let rect = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 50, 50] }))["comment"].clone();
+    let refused_edit = a.call("comment_edit", &json!({ "doc": doc, "page": rect["page"], "index": rect["index"], "round": true }));
+    assert!(matches!(refused_edit, Err(ToolError::InvalidArgs(_))));
 }
 
 /// A rectangle's fill and a text box's text each take an opacity of their own through the tools

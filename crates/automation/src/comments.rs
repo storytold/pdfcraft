@@ -753,6 +753,11 @@ impl Automation {
             edits.push(Edit::BorderShapeAnnotation { page, index, shape });
         }
         if let Some(round) = a.opt_bool("round")? {
+            let doc = self.doc(a)?;
+            let target = doc.info.annotations.iter().find(|c| c.page == page && c.index == index);
+            if !target.is_some_and(|c| c.subtype == "Highlight") {
+                return Err(ToolError::InvalidArgs("round is for a highlight".into()));
+            }
             edits.push(Edit::RoundCornersAnnotation { page, index, round });
         }
         // After `opacity`, which sets the whole comment's.

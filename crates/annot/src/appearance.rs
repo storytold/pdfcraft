@@ -560,11 +560,31 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
     Some(form(context.rect, &out, drawing.resources))
 }
 
+/// Orient four quad points into Acrobat's Z-order (top-left, top-right, bottom-left, bottom-right).
+///
+/// If the points are in counter-clockwise order (§12.5.6.10), reorders them to avoid a bow-tie path.
+fn normalize_quad(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> ((f64, f64), (f64, f64), (f64, f64), (f64, f64)) {
+    let ccw = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| -> f64 { (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0) };
+    let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)| -> bool {
+        (ccw(a, b, c) * ccw(a, b, d) < 0.0) && (ccw(c, d, a) * ccw(c, d, b) < 0.0)
+    };
+    // In Acrobat's Z-order, diagonals p1-p4 and p2-p3 cross.
+    if cross(p1, p4, p2, p3) {
+        return (p1, p2, p3, p4);
+    }
+    // In counter-clockwise order (p1=TL, p2=BL, p3=BR, p4=TR), diagonals p1-p3 and p2-p4 cross.
+    if cross(p1, p3, p2, p4) {
+        return (p1, p4, p2, p3);
+    }
+    (p1, p2, p3, p4)
+}
+
 /// Draw a filled rounded quad using cubic Bézier curves (§12.5.5).
 ///
 /// Returns false for degenerate dimensions or non-finite coordinates so callers fall back to a
 /// straight quadrilateral.
 fn draw_rounded_quad(c: &mut String, p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
+    let (p1, p2, p3, p4) = normalize_quad(p1, p2, p3, p4);
     let (v_top, v_bot) = ((p2.0 - p1.0, p2.1 - p1.1), (p3.0 - p4.0, p3.1 - p4.1));
     let (v_right, v_left) = ((p4.0 - p2.0, p4.1 - p2.1), (p1.0 - p3.0, p1.1 - p3.1));
     let (w_top, w_bot) = (v_top.0.hypot(v_top.1), v_bot.0.hypot(v_bot.1));

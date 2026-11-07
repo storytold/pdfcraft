@@ -723,6 +723,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
             return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
         }
     }
+    if round_corners.is_some() && subtype != "Highlight" {
+        return Err(AnnotError::Invalid("only highlights have round corners".into()));
+    }
     refuse_foreign_text(doc, &d)?;
     let free_text = subtype == "FreeText";
     // Typewriter text has no box of its own: a border goes around its text, so the box grows
