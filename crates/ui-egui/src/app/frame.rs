@@ -3,6 +3,8 @@ use super::*;
 impl PdfCraftApp {
     /// Draw the running job's progress card and pass a Cancel click on to the job.
     pub(super) fn show_progress(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        widgets::opening_notice(self.opening_notice.as_ref().map(|notice| notice.label.as_str()), self.progress_notice.is_some(), ctx);
         if widgets::progress_notice(self, ctx) {
             self.cancel_optimize();
             self.cancel_scan_clean();
