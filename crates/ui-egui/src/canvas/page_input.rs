@@ -733,6 +733,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         table_preview,
         tool,
         unobstructed,
+        paper,
         ..
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
@@ -789,7 +790,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     // in Acrobat). Only what can be filled is marked: a read-only widget (its field's, or a
     // radio button's own) is left as it is drawn.
     paint_field_highlights(painter, &xf, info, form.as_slice(), i, view.highlight_fields);
-    paint_models_3d(painter, &xf, info, i);
+    paint_models_3d(painter, &xf, info, i, paper);
     // Links: the hand and the link's target, which count only for the tools that follow or
     // edit links (`Layer::reached_by`). Tips draw above the palette, so none shows while it is
     // open, even beside it. A click follows the link its press was on, released over it: one that
@@ -859,10 +860,17 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
 }
 
 /// Marks each 3D model on the page, so a page whose only content is a model (as SOLIDWORKS writes
-/// them, with a blank poster) doesn't look empty. Drawn over the page's own paper, so the colours
-/// are fixed rather than themed, as the field highlights' are.
-fn paint_models_3d(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, page: usize) {
-    let accent = Color32::from_rgb(0x1B, 0x63, 0xE0);
+/// them, with a blank poster) doesn't look empty. Drawn over the page's own `paper` (white, or the
+/// reading colours' background), so the colours follow the paper rather than the theme.
+fn paint_models_3d(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, page: usize, paper: Color32) {
+    // A model's box can reach past the crop box: nothing is drawn off the page.
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+    let dark = u16::from(paper.r()) + u16::from(paper.g()) + u16::from(paper.b()) < 3 * 128;
+    let (accent, note) = if dark {
+        (Color32::from_rgb(0x7F, 0xB0, 0xFF), Color32::from_gray(0xC0))
+    } else {
+        (Color32::from_rgb(0x1B, 0x63, 0xE0), Color32::from_gray(0x55))
+    };
     for model in info.annots_3d.iter().filter(|m| m.page == page) {
         let r = xf.user_rect(info, page, model.rect);
         painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, accent.gamma_multiply(0.6)), egui::StrokeKind::Inside);
@@ -875,17 +883,21 @@ fn paint_models_3d(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, page
             pdfcraft_render::Format3d::U3d => tl!("3D model (U3D)"),
             pdfcraft_render::Format3d::Unknown => tl!("3D model"),
         };
-        let size = (r.height() / 12.0).clamp(12.0, 22.0);
-        // Text wider than the model is cut at its outline rather than spilling onto the page.
+        let notice = tl!("PdfCraft can't show 3D models yet");
+        // Sized to fit the outline's width, so neither line is cut.
+        let room = r.width() - 8.0;
+        let mut size = (r.height() / 12.0).clamp(12.0, 22.0);
+        let widest = |size: f32| {
+            let w = |text: String, font| painter.layout_no_wrap(text, font, accent).size().x;
+            w(title.to_string(), crate::theme::semibold(size)).max(w(notice.to_string(), crate::theme::regular(size * 0.7)))
+        };
+        let wide = widest(size);
+        if wide > room {
+            size *= room / wide;
+        }
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(r));
         painter.text(r.center() - vec2(0.0, size * 0.7), egui::Align2::CENTER_CENTER, title, crate::theme::semibold(size), accent);
-        painter.text(
-            r.center() + vec2(0.0, size * 0.7),
-            egui::Align2::CENTER_CENTER,
-            tl!("PdfCraft can't show 3D models yet"),
-            crate::theme::regular(size * 0.7),
-            Color32::from_gray(0x55),
-        );
+        painter.text(r.center() + vec2(0.0, size * 0.7), egui::Align2::CENTER_CENTER, notice, crate::theme::regular(size * 0.7), note);
     }
 }
 
