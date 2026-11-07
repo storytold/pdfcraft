@@ -426,10 +426,9 @@ impl Automation {
             .collect();
         let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
             self.session
-                .compare_visual(old, new, 72.0)
+                .compare_visual_on_pages(old, new, 72.0, &pages)
                 .map_err(failed)?
                 .iter()
-                .filter(|(p, _)| pages.is_empty() || pages.contains(p))
                 .map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) }))
                 .collect()
         } else {
