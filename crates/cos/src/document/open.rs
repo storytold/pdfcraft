@@ -24,6 +24,7 @@ impl Document {
             unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
+            unreadable: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
             overlay: BTreeMap::new(),
@@ -112,6 +113,7 @@ impl Document {
             unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
+            unreadable: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
             overlay: BTreeMap::new(),
@@ -243,6 +245,7 @@ impl Document {
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
+        self.unreadable = Arc::default();
         Ok(())
     }
 

@@ -26,6 +26,11 @@ its undo/redo history.
 `page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
 follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
 
+`page_add_text` and `content_update` take one of `color` (`#RRGGBB` or a name, painted in
+DeviceRGB), `gray` (0 black to 1 white, DeviceGray `g`) and `cmyk` (`[c, m, y, k]`, each 0 to 1,
+DeviceCMYK `k`), so text added to a print file can be 100 K black. `content_list` reports `gray` or
+`cmyk` for such text.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
