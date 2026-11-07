@@ -122,6 +122,9 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
                     // Only a token from a trusted authority (valid when it stamped) is trusted
                     // time; otherwise its time is reported but validation uses the signer's
                     // own claimed time, as without a timestamp.
+                    // The trust store comes first, as in finish_validation: the builder
+                    // must reach the trusted certificate itself, never a copy of it
+                    // carried in the token, judged by the copy's own fields.
                     let mut pool = trust.certs.clone();
                     pool.extend(crate::timestamp::token_certs(raw));
                     let tsa = t.signer_certificate();
@@ -544,6 +547,9 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     if info.status != Status::Invalid {
         // An untrusted TSA is not proof of anything: the verdict stays Unknown, like an
         // ordinary signature from an unknown signer.
+        // The trust store comes first, as in finish_validation: the builder must
+        // reach the trusted certificate itself, never a copy of it carried in the
+        // token, judged by the copy's own fields.
         let mut pool = trust.certs.clone();
         pool.extend(crate::timestamp::token_certs(&contents));
         // A trusted authority whose certificate was not valid at the time it stamped proves
