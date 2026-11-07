@@ -841,19 +841,51 @@ fn find_shortcut_replaces_the_existing_query_but_clicking_keeps_editing() {
     h.get_by_role_and_label(Role::TextInput, "Find text").type_text("fox");
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("fox"));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Find text").type_text("dog");
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("dog"));
 
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("find", "brown").unwrap();
     });
     crate::support::settle(&mut h);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    let page = h.state().views[0].page_screen_rect(0).expect("page on screen").center();
+    h.hover_at(page);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: page, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
     h.run_steps(2);
-    h.get_by_role_and_label(Role::TextInput, "Find text").click();
-    h.key_press_modifiers(egui::Modifiers::NONE, egui::Key::End);
+    let field = h.get_by_role_and_label(Role::TextInput, "Find text");
+    let click_after_query = egui::pos2(field.rect().right() - 5.0, field.rect().center().y);
+    h.hover_at(click_after_query);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: click_after_query,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    h.run_steps(2);
     h.get_by_role_and_label(Role::TextInput, "Find text").type_text(" fox");
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("brown fox"));
+
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("find", "brown").unwrap();
+    });
+    crate::support::settle(&mut h);
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Find text").type_text("fox");
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("fox"));
 }
 
 #[test]
