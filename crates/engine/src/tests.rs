@@ -5212,6 +5212,35 @@ fn backgrounds_and_watermarks_from_files() {
     assert!(s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(junk) }).is_err());
 }
 
+/// The web build reads a page at a time (prepared on the page, recognised in a worker, the
+/// lines sent back as JSON); with the real ocrs engine that finds the same words as reading in
+/// one go (needs the models: `cargo xtask models`; skipped without them).
+#[test]
+fn reading_a_page_at_a_time_finds_the_same_words() {
+    let settings = ocr::OcrSettings::default();
+    let Ok(engines) = ocr::recognizers(&settings) else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Invoice 42: pay by Friday").unwrap();
+    let typed = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(typed).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png.clone()), ("scan2.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let at_once = s.ocr_job(id, &[], settings.clone()).unwrap().run(&engines, |_, _| true);
+    let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+    let mut one_by_one = Vec::new();
+    while let Some(next) = steps.next_page() {
+        let shot = next.unwrap();
+        let lines = engines.primary.recognize(shot.image().unwrap(), &pdfcraft_ocr::RecognizeOptions::default()).unwrap();
+        let sent = ocr::lines_from_json(&pdfcraft_ocr::lines_to_json(&lines), engines.primary.id()).map_err(|e| e.to_string());
+        one_by_one.push(shot.place(sent.map(|lines| ocr::StrategyOutcome { lines, ..Default::default() })));
+    }
+    assert_eq!(one_by_one, at_once);
+    assert!(at_once.len() == 2 && at_once.iter().all(|p| p.skipped.is_none() && !p.words.is_empty()), "{at_once:?}");
+}
+
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
 #[test]
