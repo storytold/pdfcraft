@@ -2779,3 +2779,68 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// The appearance a `subtype` with `/QuadPoints` `quads` draws, as text.
+fn quad_appearance(subtype: &str, quads: Vec<Object>) -> Option<String> {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name(subtype));
+    d.set(b"Rect".to_vec(), Object::Array([20, 95, 40, 110].map(Object::Int).to_vec()));
+    d.set(b"C".to_vec(), Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)]));
+    d.set(b"QuadPoints".to_vec(), Object::Array(quads));
+    appearance::build(&d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// Redaction outlines and text markup draw the quads redaction apply would use, no more: a NaN
+/// quad wrote `NaN` into the stream, and one non-number or a trailing partial quad left the other,
+/// usable quads undrawn.
+#[test]
+fn appearances_draw_only_usable_quads() {
+    let mut one_nan = QUAD;
+    one_nan[3] = f64::NAN;
+    for subtype in ["Redact", "Highlight"] {
+        let clean = quad_appearance(subtype, reals(&QUAD)).unwrap();
+        assert!(!clean.contains("NaN"), "{clean}");
+        let mut name_first = reals(&[QUAD, QUAD].concat());
+        name_first[2] = Object::name("oops");
+        let same = [
+            reals(&[one_nan, QUAD].concat()),
+            name_first,
+            reals(&[&QUAD[..], &QUAD[..4]].concat()),
+            reals(&[QUAD, [f64::INFINITY; 8]].concat()),
+        ];
+        for (i, quads) in same.into_iter().enumerate() {
+            assert_eq!(quad_appearance(subtype, quads).as_deref(), Some(clean.as_str()), "{subtype} case {i}");
+        }
+        // No usable quad draws nothing, as with no /QuadPoints.
+        assert_eq!(quad_appearance(subtype, reals(&[f64::NAN; 8])), None, "{subtype}");
+    }
+}
+
+/// The comment list reads `/QuadPoints` by the rule redaction apply does: unusable quads are left
+/// out, not read as zeros, and an indirect number is followed.
+#[test]
+fn summaries_list_only_usable_quads() {
+    let mut doc = fixture();
+    let forty = Object::Ref(doc.add(Object::Int(40)));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    // A non-number in the first quad, an indirect 40 in the second, NaN in the third, and four
+    // entries of a fourth.
+    let mut quads = reals(&[QUAD, QUAD, QUAD, QUAD].concat());
+    quads[1] = Object::name("oops");
+    quads[10] = forty;
+    quads[17] = Object::Real(f64::NAN);
+    quads.truncate(28);
+    annotation.set(b"Subtype".to_vec(), Object::name("Redact"));
+    annotation.set(b"QuadPoints".to_vec(), Object::Array(quads));
+    set_annots(&mut doc, page, entries).unwrap();
+    let summary = summaries(&doc).into_iter().find(|a| a.page == 0 && a.index == 0).unwrap();
+    assert_eq!(summary.quads, vec![QUAD.map(|v| v as f32)]);
+}

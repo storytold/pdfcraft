@@ -166,6 +166,14 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
 }
 
+/// The usable `/QuadPoints` quads, by the rule redaction apply reads them with
+/// ([`pdfcraft_geom::quad_points::usable_quads`]): a malformed or non-finite quad is not drawn (it
+/// would write `NaN` into the stream) and the others still are. `None` when none is usable.
+fn quads(d: &Dict) -> Option<Vec<[f64; 8]>> {
+    let q = pdfcraft_geom::quad_points::usable_quads(d.get(b"QuadPoints")?.as_array()?.iter().map(Object::as_f64));
+    (!q.is_empty()).then_some(q)
+}
+
 /// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
 fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     let c = match d.get(key) {
@@ -565,9 +573,9 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
     let subtype = context.subtype;
     let stroke = context.stroke;
     let c = &mut drawing.content;
-    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+    let q = quads(d)?;
     let col = stroke?;
-    for quad in q.as_chunks::<8>().0.iter() {
+    for quad in q.iter() {
         let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
         let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
         let h = (p1.0 - p3.0).hypot(p1.1 - p3.1);
@@ -612,10 +620,10 @@ fn draw_redaction(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawi
     let stroke = context.stroke;
     let c = &mut drawing.content;
     // While marked: the outline of each area (the fill comes when applied).
-    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+    let q = quads(d)?;
     let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
     c.push_str(&format!("{}1 w\n", rg_stroke(col)));
-    for quad in q.as_chunks::<8>().0.iter() {
+    for quad in q.iter() {
         c.push_str(&format!(
             "{} {} m {} {} l {} {} l {} {} l h S\n",
             n(quad[0]),
