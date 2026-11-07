@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-04 · **Change:** minor (Bosnian (`bs`) offered, its catalog from craft-i18n; previously minor: Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
@@ -72,6 +72,7 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Kazakh | `kk` | 2,539 entries | partial | no |
 | Polish | `pl` | 2,611 entries | partial | yes |
 | Slovenian | `sl` | 2,536 entries | partial | no |
+| Bosnian | `bs` | 2,492 entries (craft-i18n `locales/bs/pdfcraft.tsv`, storytold/craft-i18n#141; AI-assisted, reviewed in storytold/craft-i18n#72) | partial | no |
 | Greek | `el` | 2,545 entries | partial | no |
 | Turkish | `tr` | 2,867 entries (0 missing in `cargo xtask i18n-report`, 2026-11-03) | partial; AI-assisted, judgement calls reviewed by a native speaker, full proofreading pending | yes |
 | Lithuanian | `lt` | 2,798 (100% of current key union) | partial; community native-speaker review ([#1401](https://github.com/storytold/pdfcraft/pull/1401)) | no |
@@ -82,7 +83,7 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
 | Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 
-**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
+**21 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
 The entry counts without percentages are as of 2026-10-25; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
 Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
 
@@ -90,6 +91,7 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Bosnian (`bs`, Latin, Ijekavian) offered: `LANGUAGES` row, `bs-*` locales, Bosnian date names, one/few/other plurals; the catalog is craft-i18n's (#141) |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
