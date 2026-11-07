@@ -369,7 +369,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut report = Report::default();
         let mode = if write { Mode::Apply } else { Mode::Verify };
-        let mut scope = Scope::new(&[], mode, &mut report, budget);
+        let mut images = pdfcraft_cos::ImageBudget::new(doc);
+        let mut scope = Scope::new(&[], mode, &mut report, budget, &mut images);
         if text {
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
@@ -673,16 +674,21 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }
-    doc.require_full_save();
+    // The rewrite drops the revisions that held the removed content, so it is a different file from
+    // its source: it gets a new identifier, whoever asked for the removal (the remove-hidden edit
+    // and the optimizer's discard option call this function directly, not through [`sanitize`]).
+    doc.require_full_save_with_new_id();
     Ok(done)
 }
 
 /// Sanitize Document: remove every category of hidden information.
 pub fn sanitize(doc: &mut Document) -> Result<Vec<(Hidden, usize)>, RedactError> {
     match remove_hidden(doc, &HIDDEN) {
-        // Nothing hidden is fine for Sanitize: the full rewrite still drops old revisions.
+        // Nothing hidden is fine for Sanitize: the full rewrite still drops old revisions. The
+        // rewrite is a new file either way, so it asks for a new identifier itself (when something
+        // was removed, `remove_hidden` has already asked).
         Err(RedactError::NothingToApply) => {
-            doc.require_full_save();
+            doc.require_full_save_with_new_id();
             Ok(Vec::new())
         }
         r => r,

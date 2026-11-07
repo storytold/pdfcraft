@@ -421,36 +421,9 @@ fn saved_first_page_lists_font(doc: &Document, name: &[u8]) -> bool {
     res.get(b"Font").and_then(|f| saved.resolve(f).as_dict().map(|fonts| fonts.contains(name))).unwrap_or(false)
 }
 
-/// A tiling pattern without /Resources shows glyph B of a second Type 3 font, which the page lists
-/// but its content never selects. The cell draws through the page's resources, so the rewritten
-/// page still lists that font and B's program stays.
-#[test]
-fn a_type3_font_only_a_pattern_without_resources_selects_stays_on_the_page() {
-    let mut doc = pdf(vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
-        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET /Pattern cs /P1 scn 200 200 50 50 re f"),
-        b"<< /Font << /T3 6 0 R /T4 7 0 R >> /Pattern << /P1 8 0 R >> >>".to_vec(),
-        type3_abc(9),
-        type3_abc(12),
-        stream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20", b"BT /T4 10 Tf 2 5 Td (B) Tj ET"),
-        stream("", b"% REDACTED_GLYPH_A"),
-        stream("", b"% UNUSED_GLYPH_B"),
-        stream("", b"% PAGE_GLYPH_C"),
-        stream("", b"% UNUSED_T4_GLYPH_A"),
-        stream("", b"% PATTERN_GLYPH_B"),
-        stream("", b"% UNUSED_T4_GLYPH_C"),
-    ]);
-    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
-    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
-    assert!(full_save_holds(&doc, b"PATTERN_GLYPH_B"), "the glyph the pattern shows was unlinked");
-    assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the pattern selects");
-}
-
-/// The same with the group of a soft mask without /Resources: the page still lists the second
-/// font, and the glyph the mask shows stays.
+/// The group of a soft mask without /Resources shows glyph B of a second Type 3 font, which the
+/// page lists but its content never selects. The group draws through the page's resources, so the
+/// rewritten page still lists that font and B's program stays.
 #[test]
 fn a_type3_font_only_a_soft_mask_without_resources_selects_stays_on_the_page() {
     let mut doc = pdf(vec![
@@ -480,18 +453,22 @@ fn a_type3_font_only_a_soft_mask_without_resources_selects_stays_on_the_page() {
     assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the soft mask selects");
 }
 
-/// The cell of a tiling pattern the page fills with shows glyph B: its program is kept.
+/// The cell of a tiling pattern another page fills with shows glyph B: its program is kept. (On
+/// the redacted page itself, a pattern that shows text refuses the redaction: `pattern_guard`.)
 #[test]
-fn a_type3_glyph_a_tiling_pattern_shows_is_kept() {
+fn a_type3_glyph_a_tiling_pattern_on_another_page_shows_is_kept() {
     let mut doc = pdf(vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
-        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET /Pattern cs /P1 scn 200 200 50 50 re f"),
-        b"<< /Font << /T3 6 0 R >> /Pattern << /P1 7 0 R >> >>".to_vec(),
-        type3_abc(8),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 9 0 R >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 7 0 R /Resources 8 0 R >>".to_vec(),
+        stream("", b"/Pattern cs /P1 scn 200 200 50 50 re f"),
+        b"<< /Pattern << /P1 10 0 R >> >>".to_vec(),
+        type3_abc(11),
         stream(
-            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << /Font << /T3 6 0 R >> >>",
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << /Font << /T3 9 0 R >> >>",
             b"BT /T3 10 Tf 2 5 Td (B) Tj ET",
         ),
         stream("", b"% REDACTED_GLYPH_A"),
