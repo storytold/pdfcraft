@@ -333,6 +333,8 @@ pub(crate) fn body(
                         ui.add(egui::DragValue::new(&mut d.poster_scale).range(10.0..=1000.0).suffix(" %")).labelled_by(scale_label.id);
                         let overlap_label = ui.label(tl!("Overlap:"));
                         ui.add(egui::DragValue::new(&mut d.overlap).range(0.0..=144.0).suffix(" pt")).labelled_by(overlap_label.id);
+                    });
+                    ui.horizontal(|ui| {
                         ui.label(tl!("Cut marks:"));
                         combo(
                             ui,
