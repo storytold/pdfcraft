@@ -1,6 +1,6 @@
 use super::error::PrintError;
 use super::imposition::decoded_contents;
-use super::settings::{Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, Settings, SizeMode};
+use super::settings::{Binding, BookletSubset, CutMarks, Layout, Orientation, PAPERS, PageOrder, Settings, SizeMode};
 use super::{DecodeBudget, Dict, Document, Matrix, Object};
 
 /// Whether most of page `index`'s text runs bottom-to-top as the page displays (a label laid
@@ -306,13 +306,26 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                         let matrix = Matrix([s, 0.0, 0.0, s, MARGIN - wx0, size.1 - MARGIN - wy1]);
                         let clip = [wx0 / s, (wy1 - th) / s, (wx0 + tw) / s, wy1 / s];
                         let mut sheet = Sheet { size, placed: vec![Placement { page: p, matrix, clip }], ..Sheet::default() };
-                        if cut_marks {
-                            let (x0, y0, x1, y1) = (MARGIN, MARGIN, size.0 - MARGIN, size.1 - MARGIN);
-                            for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
-                                let dx = if x == x0 { -1.0 } else { 1.0 };
-                                let dy = if y == y0 { -1.0 } else { 1.0 };
-                                sheet.lines.push([x + dx * 2.0, y, x + dx * (MARGIN - 2.0), y]);
-                                sheet.lines.push([x, y + dy * 2.0, x, y + dy * (MARGIN - 2.0)]);
+                        match cut_marks {
+                            CutMarks::Off => {}
+                            CutMarks::Corners => {
+                                let (x0, y0, x1, y1) = (MARGIN, MARGIN, size.0 - MARGIN, size.1 - MARGIN);
+                                for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+                                    let dx = if x == x0 { -1.0 } else { 1.0 };
+                                    let dy = if y == y0 { -1.0 } else { 1.0 };
+                                    sheet.lines.push([x + dx * 2.0, y, x + dx * (MARGIN - 2.0), y]);
+                                    sheet.lines.push([x, y + dy * 2.0, x, y + dy * (MARGIN - 2.0)]);
+                                }
+                            }
+                            // A line across the whole sheet at each side of the printed area, so a
+                            // straight blade cuts it in one pass instead of joining four ticks.
+                            CutMarks::Full => {
+                                let (x0, x1) = (MARGIN, size.0 - MARGIN);
+                                let (y0, y1) = (MARGIN, size.1 - MARGIN);
+                                sheet.lines.push([0.0, y0, size.0, y0]);
+                                sheet.lines.push([0.0, y1, size.0, y1]);
+                                sheet.lines.push([x0, 0.0, x0, size.1]);
+                                sheet.lines.push([x1, 0.0, x1, size.1]);
                             }
                         }
                         sheets.push(sheet);
