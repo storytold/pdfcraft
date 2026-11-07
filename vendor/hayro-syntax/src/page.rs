@@ -411,14 +411,20 @@ impl<'a> Page<'a> {
         // A page's own box without area gives way to one it inherits that has some. Each box
         // set aside is logged, as other repairs of this reader are.
         let own_media = dict.get::<Rect>(MEDIA_BOX);
-        let media_box = own_media.filter(has_area).or(ctx.media_box.filter(has_area)).unwrap_or(A4);
+        let media_box = own_media
+            .filter(has_area)
+            .or(ctx.media_box.filter(has_area))
+            .unwrap_or(A4);
         if own_media.or(ctx.media_box).is_some_and(|m| !has_area(&m)) {
             warn!("a /MediaBox without area was read as missing");
         }
 
         let shows = |c: &Rect| has_area(&c.intersect(media_box));
         let own_crop = dict.get::<Rect>(CROP_BOX);
-        let crop_box = own_crop.filter(shows).or(ctx.crop_box.filter(shows)).unwrap_or(media_box);
+        let crop_box = own_crop
+            .filter(shows)
+            .or(ctx.crop_box.filter(shows))
+            .unwrap_or(media_box);
         if own_crop.or(ctx.crop_box).is_some_and(|c| !shows(&c)) {
             warn!("a /CropBox with no area in the media box was read as missing");
         }
@@ -815,7 +821,12 @@ const POINTS_PER_MM: f64 = 1.0 / (10.0 * 2.54) * POINTS_PER_INCH;
 /// nothing.
 fn has_area(r: &Rect) -> bool {
     let (w, h) = (r.width() as f32, r.height() as f32);
-    w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && !w.is_nearly_zero() && !h.is_nearly_zero()
+    w.is_finite()
+        && h.is_finite()
+        && w > 0.0
+        && h > 0.0
+        && !w.is_nearly_zero()
+        && !h.is_nearly_zero()
 }
 
 /// The dimension of an A4 page.
