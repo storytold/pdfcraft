@@ -3554,6 +3554,21 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
 }
 
+/// #6548: resting on the hotbar's gear showed two stacked tooltips, "Hotbar settings" and
+/// "Hotbar settings / add tools". It shows the longer one only and keeps its short name.
+#[test]
+fn hotbar_settings_button_shows_one_tooltip() {
+    let mut h = harness(|_| {});
+    h.run_steps(2);
+    h.get_by_label("Hotbar settings").hover();
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
+    assert_eq!(h.query_all_by_label("Hotbar settings").count(), 1, "the button's name, and no second tooltip");
+}
+
 #[test]
 fn hotbar_picker_searches_translated_tool_labels() {
     if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
