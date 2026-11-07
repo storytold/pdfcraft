@@ -913,3 +913,33 @@ fn a_booklet_decides_two_sided_itself() {
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
+
+/// A two-sided booklet on a printer reporting no two-sided support must be refused, not left
+/// to the printer's default: the booklet's duplex choice is dropped for such a printer, so
+/// the user must be told to change the printer setting or print front-and-back manually.
+#[test]
+fn booklet_with_printer_without_two_sided_support_is_refused() {
+    use pdfcraft_engine::print::BookletSubset;
+    use pdfcraft_engine::print::spool::Printer;
+    let mut h = harness();
+    h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
+        vec![Printer { name: "Office PS".into(), default: true, two_sided: Some(false), description: String::new() }]
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers.is_empty() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office PS"));
+    h.get_by_label("Booklet").click();
+    h.run_steps(2);
+    h.state_mut().print_draft.booklet_subset = BookletSubset::BothSides;
+    h.run_steps(2);
+    assert!(
+        h.state().print_draft.settings(1, &[]).is_err(),
+        "a two-sided booklet on a printer without two-sided support must be refused, not left to the printer default"
+    );
+    assert!(!h.state_mut().print_now());
+}

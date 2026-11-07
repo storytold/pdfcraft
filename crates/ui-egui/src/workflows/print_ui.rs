@@ -172,10 +172,17 @@ mod draft {
         }
 
         /// The engine settings for this draft (page count and labels from the document).
-        pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
-            if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
-                return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
-            }
+    pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
+        if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
+            return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
+        }
+        // A two-sided booklet needs the printer to flip sheets itself; a printer reported as
+        // not two-sided is sent no duplex ticket, so its default would decide instead. Refuse
+        // and tell the user to change the printer setting or print front-and-back manually.
+        let no_two_sided = self.printer.as_deref().and_then(|name| self.printers.iter().find(|p| p.name == name)).and_then(|p| p.two_sided) == Some(false);
+        if self.handling == Handling::Booklet && self.booklet_subset == BookletSubset::BothSides && no_two_sided {
+            return Err("This printer doesn't support two-sided printing. Change the printer setting to two-sided, or print the front and back separately.".into());
+        }
             let range = match self.which {
                 Which::All | Which::Selected | Which::Current => None,
                 Which::Range => Some(self.range.clone()),
