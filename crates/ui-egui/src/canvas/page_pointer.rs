@@ -11,7 +11,7 @@
 //! Dialogs are drawn after the pages, so on the frame one opens egui has not met its layer yet:
 //! the reading also takes whether one is open.
 
-use egui::{Event, PointerButton, Pos2, Rect};
+use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
 /// A primary-button press or release, and where it happened.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +51,10 @@ pub(crate) struct PagePointer {
     /// this is not retained into later frames, so hover or a past ruler click cannot suppress an
     /// editor's ordinary focus-loss handling.
     pub blocked_interaction: Option<Pos2>,
+    /// The modifier keys held at this frame's first primary press, or else now.
+    pub(crate) modifiers: Modifiers,
+    /// Whether the document response began a primary drag this frame.
+    pub(crate) drag_started: bool,
 }
 
 impl PagePointer {
@@ -66,33 +70,42 @@ impl PagePointer {
     /// The page pointer with gestures that begin in `blocked` retained as blocked through every
     /// egui pass of their release frame. A new frame clears the retained block.
     pub(crate) fn read_excluding(ui: &egui::Ui, resp: &egui::Response, modal: bool, blocked: &[Rect]) -> Self {
-        let (at, origin, edges, released, mut primary_down, mut any_down, raw_press_blocked, raw_primary_press_blocked, blocked_interaction) = ui
-            .input(|i| {
-                (
-                    i.pointer.interact_pos(),
-                    i.pointer.press_origin(),
-                    edges(&i.events),
-                    last_release(&i.events),
-                    i.pointer.primary_down(),
-                    i.pointer.any_down(),
-                    i.events.iter().any(|event| match event {
-                        Event::PointerButton { pos, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
-                        _ => false,
-                    }),
-                    i.events.iter().any(|event| match event {
-                        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => {
-                            blocked.iter().any(|rect| rect.contains(*pos))
-                        }
-                        _ => false,
-                    }),
-                    i.events.iter().find_map(|event| match event {
-                        Event::PointerButton { pos, pressed: true, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => {
-                            Some(*pos)
-                        }
-                        _ => None,
-                    }),
-                )
-            });
+        let (
+            at,
+            origin,
+            edges,
+            released,
+            mut primary_down,
+            mut any_down,
+            modifiers,
+            raw_press_blocked,
+            raw_primary_press_blocked,
+            blocked_interaction,
+        ) = ui.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.press_origin(),
+                edges(&i.events),
+                last_release(&i.events),
+                i.pointer.primary_down(),
+                i.pointer.any_down(),
+                press_modifiers(&i.events).unwrap_or(i.modifiers),
+                i.events.iter().any(|event| match event {
+                    Event::PointerButton { pos, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
+                    _ => false,
+                }),
+                i.events.iter().any(|event| match event {
+                    Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
+                    _ => false,
+                }),
+                i.events.iter().find_map(|event| match event {
+                    Event::PointerButton { pos, pressed: true, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => {
+                        Some(*pos)
+                    }
+                    _ => None,
+                }),
+            )
+        });
         let layer = ui.layer_id();
         let blocked_interaction = blocked_interaction.filter(|p| !modal && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer));
         let blocked_press_key = resp.id.with("blocked-press");
@@ -161,9 +174,21 @@ impl PagePointer {
             ui.data_mut(|data| data.insert_temp(clear_blocked_press_key, true));
         }
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, blocked_press, blocked_interaction };
+            return Self {
+                pos,
+                origin: None,
+                edges: Vec::new(),
+                released: None,
+                primary_down,
+                any_down,
+                blocked_press,
+                blocked_interaction,
+                modifiers,
+                drag_started: false,
+            };
         }
-        Self { pos, origin: press_origin, edges, released, primary_down, any_down, blocked_press, blocked_interaction }
+        let drag_started = resp.drag_started_by(PointerButton::Primary);
+        Self { pos, origin: press_origin, edges, released, primary_down, any_down, blocked_press, blocked_interaction, modifiers, drag_started }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -194,7 +219,15 @@ fn first_press(edges: &[Edge]) -> Option<Pos2> {
     })
 }
 
-/// Where the last primary release among `events` was.
+/// The modifier keys held at the first primary press among `events`.
+fn press_modifiers(events: &[Event]) -> Option<Modifiers> {
+    events.iter().find_map(|e| match e {
+        Event::PointerButton { button: PointerButton::Primary, pressed: true, modifiers, .. } => Some(*modifiers),
+        _ => None,
+    })
+}
+
+/// Where the last primary release among `events` was, however many came before it.
 fn last_release(events: &[Event]) -> Option<Pos2> {
     events.iter().rev().find_map(|e| match e {
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if pos.is_finite() => Some(*pos),
