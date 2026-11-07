@@ -63,8 +63,8 @@ pub mod printer_marks;
 pub use printer_marks::{PrinterMarks, add_printer_marks};
 pub mod added;
 pub use added::{
-    Added, AddedImage, AddedText, Align, Content, Family, MarkerScan, add_content, delete_content, first_undrawable, isolate_content, list_added,
-    scan_markers, update_content,
+    Added, AddedImage, AddedText, Align, Content, Family, Ink, MarkerScan, add_content, delete_content, first_undrawable, isolate_content,
+    list_added, scan_markers, update_content,
 };
 
 mod apply;

@@ -6,8 +6,20 @@ thread_local! {
     static LOADING: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Indirect `/Length` values resolved during the current outermost load: a damaged file
     /// retries a parse several ways, and each retry would resolve the same lengths again
-    /// (exponential in the chain of streams whose lengths point at further streams).
-    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    /// (exponential in the chain of streams whose lengths point at further streams). Each is
+    /// kept with whether resolving it read unsaved edits.
+    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, (Option<i64>, bool)>> = std::cell::RefCell::new(HashMap::new());
+    /// Unsaved edits read on this thread (`Document::try_get`, and a `/Length` in `Document::load`).
+    static OVERLAY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Unsaved edits read so far on this thread: a load during which this changes depended on one.
+pub(super) fn overlay_reads() -> u64 {
+    OVERLAY_READS.with(std::cell::Cell::get)
+}
+
+pub(super) fn note_overlay_read() {
+    OVERLAY_READS.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
@@ -28,6 +40,14 @@ impl LoadGuard {
             Some(LoadGuard)
         })
     }
+}
+
+/// What loading a file object gave, kept in the document's cache either way.
+pub(super) type Loaded = Result<Arc<Object>, CosError>;
+
+/// The bytes a load result holds of its own ([`held_bytes`]); a failure holds none.
+pub(super) fn loaded_bytes(loaded: &Loaded, data: &Arc<Vec<u8>>) -> usize {
+    loaded.as_ref().map_or(0, |o| held_bytes(o, data, 0))
 }
 
 impl Drop for LoadGuard {
@@ -182,7 +202,7 @@ thread_local! {
     pub(super) static SECTION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Parsed objects by number, each with what it holds ([`held_bytes`]) measured once, when it goes
+/// What loading each object gave (a failure as well), by number, each with what it holds ([`held_bytes`]) measured once, when it goes
 /// in, and their sum kept beside them.
 ///
 /// Both caches are bounded by those bytes. Summing them on every read walked every cached object
@@ -191,12 +211,12 @@ thread_local! {
 /// (#5873).
 #[derive(Default)]
 pub(crate) struct ObjectCache {
-    entries: HashMap<u32, (Arc<Object>, usize)>,
+    entries: HashMap<u32, (Loaded, usize)>,
     owned: usize,
 }
 
 impl ObjectCache {
-    pub(crate) fn get(&self, num: &u32) -> Option<&Arc<Object>> {
+    pub(crate) fn get(&self, num: &u32) -> Option<&Loaded> {
         self.entries.get(num).map(|(object, _)| object)
     }
 
@@ -205,8 +225,8 @@ impl ObjectCache {
         self.entries.contains_key(num)
     }
 
-    /// Keep `object` as `num`, which holds `owned` bytes (what [`held_bytes`] says of it).
-    pub(crate) fn insert(&mut self, num: u32, object: Arc<Object>, owned: usize) {
+    /// Keep what loading `num` gave, which holds `owned` bytes ([`loaded_bytes`]).
+    pub(crate) fn insert(&mut self, num: u32, object: Loaded, owned: usize) {
         if let Some((_, before)) = self.entries.insert(num, (object, owned)) {
             self.owned = self.owned.saturating_sub(before);
         }
@@ -232,6 +252,11 @@ impl ObjectCache {
         self.owned = 0;
     }
 
+    /// Drop the cached failures `stale` picks. A failure holds no bytes, so the total stands.
+    pub(crate) fn forget_failures(&mut self, mut stale: impl FnMut(&u32) -> bool) {
+        self.entries.retain(|num, (loaded, _)| loaded.is_ok() || !stale(num));
+    }
+
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&u32) -> bool) {
         self.entries.retain(|num, _| keep(num));
         self.owned = self.entries.values().fold(0usize, |n, (_, owned)| n.saturating_add(*owned));
@@ -239,7 +264,7 @@ impl ObjectCache {
 
     #[cfg(test)]
     pub(crate) fn values(&self) -> impl Iterator<Item = &Arc<Object>> {
-        self.entries.values().map(|(object, _)| object)
+        self.entries.values().filter_map(|(object, _)| object.as_ref().ok())
     }
 }
 
