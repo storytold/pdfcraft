@@ -1232,6 +1232,7 @@ struct PageOut {
     field_props: bool,
     hover_text: Option<(Pos2, String)>,
     image_action: Option<crate::edit_text_ui::ImageAction>,
+    finish_image_crop: Option<Edit>,
     open_boxes: bool,
     open_initials: bool,
     open_signature: bool,
@@ -1732,6 +1733,8 @@ fn draw_pages(
                                 .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
                     }) {
                         over_image = true;
+                        // Anchor the Edit-image menu for the lifetime of this popup (#5835).
+                        ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), true));
                         break;
                     }
                     for (idx, img) in images.iter().enumerate().rev() {
@@ -1806,6 +1809,7 @@ fn draw_pages(
         field_props,
         hover_text: _,
         mut image_action,
+        mut finish_image_crop,
         open_boxes,
         open_initials,
         open_signature,
@@ -1871,22 +1875,6 @@ fn draw_pages(
     let row_on_screen =
         shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     resp.context_menu(|ui| {
-        let is_crop_over_image = tool == QuickTool::EditText
-            && view.image_selection.clone().is_some_and(|sel| {
-                let Some(ref crop) = sel.crop else { return false };
-                let pointer_pos = ptr.pos;
-                let Some(p) = pointer_pos else { return false };
-                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
-                let images = cached_edit_images(view, doc, sel.page).to_vec();
-                let Some(img) = images.get(sel.index) else { return false };
-                crop_contains_point(img, crop, &xf, info, sel.page, p)
-            });
-        if is_crop_over_image {
-            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
-            egui::Popup::close_all(ui.ctx());
-            ui.close();
-            return;
-        }
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
@@ -1974,7 +1962,18 @@ fn draw_pages(
             // first page takes the right-click, and its point means nothing on the second.
             let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
             let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
-            crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
+            crate::edit_text_ui::image_context_menu(
+                ui,
+                view,
+                &images,
+                sel.page,
+                sel.index,
+                can_paste_image,
+                &mut image_action,
+                &mut finish_image_crop,
+                at,
+                rotation,
+            );
             return;
         }
         // A selected comment, or connected lines being drawn (Complete, Undo last point): the
@@ -2055,6 +2054,7 @@ fn draw_pages(
         field_props,
         hover_text,
         image_action,
+        finish_image_crop,
         open_boxes,
         open_initials,
         open_signature,
@@ -3184,6 +3184,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         mut field_props,
         hover_text,
         mut image_action,
+        finish_image_crop,
         open_boxes,
         open_initials,
         open_signature,
@@ -3291,6 +3292,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         field_props,
         field_menu,
         image_action,
+        finish_image_crop,
         page_action,
         refused,
         open_signature,
@@ -3317,6 +3319,7 @@ struct FrameRequests {
     field_props: Option<(String, usize)>,
     field_menu: Option<FieldMenu>,
     image_action: Option<crate::edit_text_ui::ImageAction>,
+    finish_image_crop: Option<Edit>,
     page_action: Option<PageMenuAction>,
     refused: Option<String>,
     open_signature: bool,
@@ -3346,6 +3349,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         field_props,
         field_menu,
         image_action,
+        finish_image_crop,
         page_action,
         refused,
         open_signature,
@@ -3409,7 +3413,13 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             app.redact_prefs.mark(page, quads, &author)
         });
     }
-    match image_action {
+    // Finish first, as pressing Done would; the chosen edit remains a separate undo step.
+    // This also puts the committed crop in the document before Copy/Save/Replace dispatch.
+    let finished = finish_image_crop.is_none_or(|edit| app.apply_edit(edit));
+    if !finished && let Some(view) = app.views.get_mut(index) {
+        view.pending_edit = None;
+    }
+    match image_action.filter(|_| finished) {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),
         Some(crate::edit_text_ui::ImageAction::Save(page, index)) => app.save_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Copy(page, index)) => {

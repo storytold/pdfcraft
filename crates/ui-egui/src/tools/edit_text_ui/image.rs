@@ -1014,17 +1014,29 @@ pub(crate) fn image_context_menu(
     hit: usize,
     can_paste: bool,
     action: &mut Option<ImageAction>,
+    finish_crop: &mut Option<Edit>,
     at: Option<[f64; 2]>,
     rotation: u16,
 ) {
     let Some(img) = images.get(hit) else { return };
     use pdfcraft_engine::ImageEdit as E;
     let raster = !img.is_form;
+    // Done/Enter runs before this menu and may already have queued the crop this frame.
+    // Preserve it before Rotate/Flip (or another image edit) replaces pending_edit.
+    if matches!(
+        &view.pending_edit,
+        Some(Edit::EditPageImage { page: p, index, change: E::Crop(_) | E::RemoveCrop }) if (*p, *index) == (page, hit)
+    ) {
+        *finish_crop = view.pending_edit.take();
+    }
+    let cropping = view.image_selection.as_ref().filter(|s| (s.page, s.index) == (page, hit)).and_then(|s| s.crop.clone());
+    let chose_action = std::cell::Cell::new(false);
 
     // Whether `entry` was clicked; a click closes the menu.
     let picked = |ui: &mut egui::Ui, entry: egui::Response| {
         let clicked = entry.clicked();
         if clicked {
+            chose_action.set(true);
             ui.ctx().data_mut(|d| d.insert_temp(image_menu_id(), false));
             egui::Popup::close_all(ui.ctx());
             ui.close();
@@ -1129,6 +1141,20 @@ pub(crate) fn image_context_menu(
     if item(ui, true, tl!("Delete")) {
         view.image_selection = None;
         view.pending_edit = edit(E::Delete);
+    }
+    if chose_action.get()
+        && let Some(mode) = cropping
+    {
+        if let Some(s) = view.image_selection.as_mut().filter(|s| (s.page, s.index) == (page, hit)) {
+            s.crop = None;
+        }
+        // Match Done, including its no-op cases, without changing the crop-input paths
+        // independently handled by #6425 and #6428.
+        *finish_crop = if same_rect(mode.keep, img.rect) {
+            img.has_editor_crop().then_some(Edit::EditPageImage { page, index: hit, change: E::RemoveCrop })
+        } else {
+            (img.visible_rect != Some(mode.keep)).then_some(Edit::EditPageImage { page, index: hit, change: E::Crop(mode.keep) })
+        };
     }
 }
 
