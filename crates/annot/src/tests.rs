@@ -1550,6 +1550,49 @@ fn new_width_keeps_an_indirect_border_style() {
     assert_eq!(shared.as_dict().and_then(|b| b.get(b"W")).and_then(Object::as_f64), Some(6.0), "the shared object is unchanged");
 }
 
+/// A colour given by reference (`/C 6 0 R`, §7.3.10) is read by the properties and the edits as
+/// the display draws it: the properties show it, the appearance can be restyled and filled.
+#[test]
+fn an_indirect_colour_reads_and_restyles_as_drawn() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /C 5 0 R /IC 6 0 R >>",
+        b"[0 0 1]",
+        b"[1 1 0]",
+    ]);
+    let p = props(&doc, 0, 0).expect("props");
+    assert_eq!((p.color, p.fill, p.restylable), (Some([0.0, 0.0, 1.0]), Some([1.0, 1.0, 0.0]), true));
+    set_style(&mut doc, 0, 0, StyleChange::new(None, None, Some(3.0), None), &meta("")).expect("restylable");
+    set_fill(&mut doc, 0, 0, Some([0.0, 1.0, 0.0]), &meta("")).expect("fillable");
+    let d = list(&doc, 0).remove(0);
+    let content = ap_content(&doc, &d);
+    assert!(content.contains("0 0 1 RG") && content.contains("0 1 0 rg") && content.contains("3 w"), "{content}");
+}
+
+/// References are followed into everything they point at, and all of it is counted: a referenced
+/// array of two arrays of 40,000 numbers is over the per-annotation budget. One display pass
+/// copies at most [`crate::draw::PASS_BUDGET`] values in all, so an array many annotations point
+/// at is not copied again for each of them.
+#[test]
+fn following_references_is_bounded_per_value_and_per_pass() {
+    let mut doc = fixture();
+    let inner = Object::Array(vec![Object::Int(0); 40_000]);
+    let nested = doc.add(Object::Array(vec![inner.clone(), inner]));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Junk".to_vec(), Object::Ref(nested));
+    let direct = crate::draw::with_direct_values(&doc, &d);
+    assert!(direct.get(b"Junk") == Some(&Object::Ref(nested)), "80,003 values: left as a reference");
+
+    let shared = doc.add(Object::Array(vec![Object::Int(0); 60_000]));
+    d.set(b"Junk".to_vec(), Object::Ref(shared));
+    let mut pass = crate::draw::PASS_BUDGET;
+    let copies = (0..100).filter(|_| matches!(crate::draw::with_direct_values_within(&doc, &d, &mut pass), std::borrow::Cow::Owned(_))).count();
+    assert_eq!(copies, crate::draw::PASS_BUDGET / 60_001, "copies stop when the pass budget is spent");
+}
+
 /// `/RD` is optional (ISO 32000-2 Table 177): a callout without it has its text box at `/Rect`
 /// and is drawn, box, text and leader line. A callout line and `/RD` given by reference are read too.
 #[test]
