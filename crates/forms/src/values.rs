@@ -89,7 +89,19 @@ impl NamedFields {
 /// Write `value` into the field `name`, without recalculating: `named` are the positions in
 /// `all` (the form as read before this write) of the fields with that name, in field order.
 fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    let f = named.first().and_then(|&i| all.get(i)).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let mut same = named.iter().filter_map(|&i| all.get(i));
+    let first = same.clone().next().ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    // Fields with the same fully qualified name are one field (ISO 32000-2 §12.7.4.2), so a radio
+    // option any of them draws is an option of the name: it is written through the first one
+    // that draws it, and the others turn off below.
+    let choice = match value {
+        FieldValue::Radio(Some(c)) | FieldValue::Text(c) => Some(c.as_str()),
+        _ => None,
+    };
+    let f = match choice {
+        Some(c) if first.kind == FieldKind::Radio => same.find(|t| t.kind == FieldKind::Radio && t.state_for(c).is_some()).unwrap_or(first),
+        _ => first,
+    };
     if f.read_only() {
         return Err(FormError::ReadOnly(name.into()));
     }

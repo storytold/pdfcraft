@@ -486,7 +486,17 @@ fn walk(
     let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
     if !field_kids.is_empty() {
         for k in field_kids {
-            walk(doc, k, &inh, page_of, seen, out, depth + 1);
+            // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+            // §12.7.4.2). A kid that doesn't name this field as its `/Parent` is named from its
+            // own chain, as other readers name it; it still inherits this field's attributes.
+            let parent = doc.get(k).as_dict().and_then(|kd| kd.reference(b"Parent"));
+            if parent == Some(r) {
+                walk(doc, k, &inh, page_of, seen, out, depth + 1);
+            } else {
+                let mut own = inh.clone();
+                own.name = parent.and_then(|p| qualified_name(doc, p)).unwrap_or_default();
+                walk(doc, k, &own, page_of, seen, out, depth + 1);
+            }
         }
         return;
     }

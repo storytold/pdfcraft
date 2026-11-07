@@ -1912,3 +1912,26 @@ fn inspection_keeps_no_private_page_data() {
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
 }
+
+/// A kid with `/T` that a field's `/Kids` lists but whose `/Parent` doesn't name that field is
+/// named up its own `/Parent` chain (ISO 32000-2 §12.7.4.2), as the form reader names it.
+#[test]
+fn a_named_kid_without_a_parent_keeps_its_own_name() {
+    let pdf = |parent: &str| {
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /FT /Btn /Ff 49152 /T (Group1) /Kids [6 0 R 5 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /T (Group1){parent} /Rect [10 100 30 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /T (Group1){parent} /Rect [40 100 60 120] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    let names = |bytes: Vec<u8>| inspect(Arc::new(bytes), None).expect("opens").fields.iter().map(|f| (f.name.clone(), f.kind)).collect::<Vec<_>>();
+    assert_eq!(names(pdf("")), [("Group1".into(), FieldKind::Radio), ("Group1".into(), FieldKind::Radio)]);
+    assert_eq!(names(pdf(" /Parent 4 0 R")), [("Group1.Group1".into(), FieldKind::Radio), ("Group1.Group1".into(), FieldKind::Radio)]);
+}

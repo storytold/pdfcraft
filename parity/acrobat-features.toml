@@ -4590,8 +4590,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect/tests.rs::fields_listed_only_on_the_pages_are_listed", "crates/ui-egui/tests/it/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/it/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
-notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties; fields a file lists only as page widgets (empty /Fields) are adopted too"
+evidence = ["crates/ui-egui/tests/it/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect/tests.rs::fields_listed_only_on_the_pages_are_listed", "crates/ui-egui/tests/it/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/it/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties", "crates/render/src/inspect/tests.rs::a_named_kid_without_a_parent_keeps_its_own_name", "crates/forms/src/tests.rs::a_named_kid_without_a_parent_keeps_its_own_name", "crates/forms/src/tests.rs::a_radio_option_of_any_field_sharing_the_name_can_be_chosen"]
+notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties; fields a file lists only as page widgets (empty /Fields) are adopted too; a named kid whose /Parent does not name the field listing it is named up its own /Parent chain; fields sharing a name are listed apart, and a radio option any of them draws is chosen by the name"
 
 [[feature]]
 id = "form.highlight-fields"

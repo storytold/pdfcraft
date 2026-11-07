@@ -366,8 +366,24 @@ impl<'a> Inspector<'a> {
         };
         let field_kids: Vec<_> = kids.iter().filter(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok())).collect();
         if !field_kids.is_empty() {
+            let here = match o {
+                Object::Reference(id) => Some(*id),
+                _ => None,
+            };
             for k in field_kids {
-                self.field(k, Some((&full, ft.clone(), ff)), out, seen, depth + 1);
+                // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+                // §12.7.4.2): a kid that doesn't name this field as its `/Parent` is named from its
+                // own chain, as the form reader names it.
+                let parent = match self.dict(k).map(|kd| kd.get(b"Parent")) {
+                    Some(Ok(Object::Reference(p))) => Some(*p),
+                    _ => None,
+                };
+                if here.is_none() || parent == here {
+                    self.field(k, Some((&full, ft.clone(), ff)), out, seen, depth + 1);
+                } else {
+                    let own = parent.map(|p| self.qualified_name(p)).unwrap_or_default();
+                    self.field(k, Some((&own, ft.clone(), ff)), out, seen, depth + 1);
+                }
             }
             return;
         }
@@ -424,6 +440,29 @@ impl<'a> Inspector<'a> {
             }
         }
         pages
+    }
+
+    /// The fully qualified name of the field `id`: the partial names (`/T`) up its `/Parent`
+    /// chain, joined with periods; empty when none has one or the chain reaches an object that
+    /// isn't a dictionary, as the form reader has it. A `/Parent` loop ends the walk.
+    fn qualified_name(&self, id: ObjectId) -> String {
+        let mut parts = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if visited.len() > 64 || !visited.insert(c) {
+                break;
+            }
+            let o = Object::Reference(c);
+            let Some(d) = self.dict(&o) else { return String::new() };
+            parts.extend(self.text(d, b"T"));
+            cur = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) => Some(*p),
+                _ => None,
+            };
+        }
+        parts.reverse();
+        parts.join(".")
     }
 
     /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an

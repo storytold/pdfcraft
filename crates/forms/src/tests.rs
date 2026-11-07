@@ -2275,6 +2275,61 @@ fn fields_sharing_a_name_take_the_same_value() {
     }
 }
 
+/// A radio group `Group1` whose two kids are fields of their own: each has `/T` (`kid_t`) and,
+/// with `parent`, a `/Parent` naming the group.
+fn radio_kids_with_names(kid_t: [&str; 2], parent: bool) -> Document {
+    let parent = if parent { " /Parent 4 0 R" } else { "" };
+    let kid = |t: &str, state: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T ({t}){parent} /V /Off /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /Off 7 0 R /{state} 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),             // 3
+        "<< /FT /Btn /Ff 49152 /T (Group1) /V /Choice2 /Kids [6 0 R 5 0 R] >>".into(), // 4
+        kid(kid_t[0], "Choice1", 50),                                               // 5
+        kid(kid_t[1], "Choice2", 100),                                              // 6
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 7
+    ];
+    document(&objs)
+}
+
+/// A field's fully qualified name is built from its own `/Parent` chain (ISO 32000-2 §12.7.4.2,
+/// Table 226): a kid with `/T` that a field's `/Kids` lists but that has no `/Parent` naming
+/// that field is named on its own, not under the field that lists it.
+#[test]
+fn a_named_kid_without_a_parent_keeps_its_own_name() {
+    let names = |doc: &Document| fields(doc).iter().map(|f| (f.name.clone(), f.obj.num)).collect::<Vec<_>>();
+    let same = radio_kids_with_names(["Group1", "Group1"], false);
+    assert_eq!(names(&same), [("Group1".to_string(), 6), ("Group1".to_string(), 5)]);
+    let other = radio_kids_with_names(["A", "B"], false);
+    assert_eq!(names(&other), [("B".to_string(), 6), ("A".to_string(), 5)]);
+    // With /Parent the kids are the group's children, as before.
+    let nested = radio_kids_with_names(["A", "B"], true);
+    assert_eq!(names(&nested), [("Group1.B".to_string(), 6), ("Group1.A".to_string(), 5)]);
+}
+
+/// Fields with the same fully qualified name are one field (ISO 32000-2 §12.7.4.2): a radio
+/// option that only a later one of them draws can be chosen by the name, and the others turn off.
+#[test]
+fn a_radio_option_of_any_field_sharing_the_name_can_be_chosen() {
+    for parent in [false, true] {
+        let name = if parent { "Group1.Group1" } else { "Group1" };
+        let mut doc = radio_kids_with_names(["Group1", "Group1"], parent);
+        for (choice, on, off) in [("Choice1", 5, 6), ("Choice2", 6, 5), ("Choice1", 5, 6)] {
+            set_value(&mut doc, name, &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("{name} = {choice}: {e}"));
+            doc = reopen(&doc);
+            let st = |n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+            assert_eq!((st(on), st(off)), (Some(choice.as_bytes().to_vec()), Some(b"Off".to_vec())), "{name} = {choice}");
+        }
+        let err = set_value(&mut doc, name, &FieldValue::Radio(Some("Choice3".into()))).unwrap_err();
+        assert!(err.to_string().contains("Choice3"), "{err}");
+    }
+}
+
 #[test]
 fn locked_fields_only_take_unlocking() {
     let mut doc = one_page();
