@@ -10,13 +10,13 @@
 //!
 //! This module decodes the descriptor's data directly, with no Objective-C, so the
 //! decoding is unit-testable on every platform; the four tests that create real
-//! files are Unix-only. Delivery is best-effort and never silent for each item of
-//! the event's direct object (the contract asked for by the review on #6334):
-//! bytes that name an existing file are preferred, the NSURL chain of the
-//! published crate comes next, and an item nothing could verify is still
-//! delivered — its decoded string, unverified — so a failed open reaches the app
-//! and its own open error reports it, instead of the launch showing nothing. An
-//! item is dropped only when NSURL has nothing either and its bytes decode to no
+//! files are Unix-only. Delivery is best-effort and never drops an item of the
+//! event's direct object that yields a path (asked for by the review on #6334):
+//! bytes that name an existing file are preferred, the NSURL chain of the published
+//! crate comes next, and an item nothing could verify is still delivered — its
+//! decoded string, unverified — so a failed open reaches the app and its own open
+//! error reports it, instead of the launch showing nothing. An item is dropped,
+//! without a word, only when NSURL has nothing either and its bytes decode to no
 //! path: a bookmark in which no chain joins (`join_components`: two or more
 //! component records, each non-empty and NUL-free), a `'furl'` that is not a
 //! `file://` URL or has no `/` after the prefix, or a descriptor of any other
@@ -64,8 +64,8 @@ pub(crate) fn event_paths<D>(
     items.iter().filter_map(decode).collect()
 }
 
-/// The path of one odoc item, best-effort and never silent. A `'bmrk'` or
-/// `'furl'` item has a raw decode of its own, tried in three steps:
+/// The path of one odoc item, best-effort; `None` only when nothing yields a path.
+/// A `'bmrk'` or `'furl'` item has a raw decode of its own, tried in three steps:
 ///
 /// 1. the raw decode, verified — a `'bmrk'` chain of byte-exact components that
 ///    names an existing file, or a `'furl'` percent-decode (the URL's path, from
