@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+aho-corasick = "1"
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
@@ -20,6 +21,10 @@ pdfcraft-xfa = { workspace = true }
 # CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
 pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
+sha2 = "0.11"
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
+# The redacted page is rendered in `tests::a_page_whose_pruned_pattern_is_still_selected_renders`:
+# layer 3 from layer 4, a dev dependency only.
+pdfcraft-render = { workspace = true }
