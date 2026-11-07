@@ -65,6 +65,15 @@ resume after it would be a guess. A Redact annotation with neither a usable `/Qu
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
 skipping that mark. The count covers the marks on the pages being applied.
 
+Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
+surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may
+contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
+`RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
+by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
+bounded check is conservative: an unrelated retained pattern on a selected page can also cause
+refusal when its content cannot be proven safe. If a selected page had a pattern resource, the
+check covers all pages after rewriting so another page cannot keep the same cell in the saved PDF.
+
 ## Metadata redaction (#2448)
 
 What the marks removed must not survive in metadata either. The interpreter decodes every glyph

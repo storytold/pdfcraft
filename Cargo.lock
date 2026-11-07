@@ -4629,6 +4629,7 @@ dependencies = [
  "pdfcraft-forms",
  "pdfcraft-model",
  "pdfcraft-organize",
+ "pdfcraft-render",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "roxmltree 0.20.0",
