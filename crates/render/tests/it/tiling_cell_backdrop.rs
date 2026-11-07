@@ -23,6 +23,27 @@ const BACKDROP: &str = "0.2 g 0 0 100 200 re f 0.6 g 100 0 100 200 re f";
 /// `/GM << /BM /Multiply >>` among its graphics states. The page has `/PM`, the same state, and
 /// `/CP`, an uncoloured pattern space over `DeviceRGB`.
 fn page_pdf(content: &str, paint_type: u8, cell: u32, cell_content: &str) -> Vec<u8> {
+    page_pdf_with(content, paint_type, cell, cell_content, "", "")
+}
+
+/// [`page_pdf`] with `pattern_keys` added to the pattern's dictionary and, unless `form` is
+/// empty, `/G1` among its resources: an isolated transparency group 200 points square whose
+/// content is `form` (with `/GM` among its graphics states).
+fn page_pdf_with(content: &str, paint_type: u8, cell: u32, cell_content: &str, pattern_keys: &str, form: &str) -> Vec<u8> {
+    let (form_resource, form_object) = if form.is_empty() {
+        (String::new(), String::new())
+    } else {
+        (
+            "/XObject << /G1 6 0 R >>".to_string(),
+            format!(
+                "6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Group << /S /Transparency /I true >> /Resources << /ExtGState << /GM << /BM /Multiply >> >> >> /Length {} >> stream
+{form}
+endstream endobj
+",
+                form.len()
+            ),
+        )
+    };
     format!(
         "%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -31,10 +52,10 @@ fn page_pdf(content: &str, paint_type: u8, cell: u32, cell_content: &str) -> Vec
 4 0 obj << /Length {} >> stream
 {content}
 endstream endobj
-5 0 obj << /Type /Pattern /PatternType 1 /PaintType {paint_type} /TilingType 1 /BBox [0 0 {cell} {cell}] /XStep {cell} /YStep {cell} /Resources << /ExtGState << /GM << /BM /Multiply >> >> >> /Length {} >> stream
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType {paint_type} /TilingType 1 /BBox [0 0 {cell} {cell}] /XStep {cell} /YStep {cell} {pattern_keys} /Resources << /ExtGState << /GM << /BM /Multiply >> >> {form_resource} >> /Length {} >> stream
 {cell_content}
 endstream endobj
-trailer << /Root 1 0 R >>
+{form_object}trailer << /Root 1 0 R >>
 %%EOF",
         content.len(),
         cell_content.len()
@@ -130,13 +151,65 @@ fn a_normal_cell_covers_the_page() {
     let page = render(page_pdf(&format!("{BACKDROP} /Pattern cs /P1 scn 0 0 200 200 re f"), 1, 20, cell));
     assert_eq!(page.at(45, 85), [255, 0, 0]);
     assert_eq!(page.at(145, 105), [255, 0, 0]);
+    assert_eq!(page.at(15, 15), [51, 51, 51], "between the squares the backdrop shows");
+    assert_eq!(page.at(115, 15), [153, 153, 153], "between the squares the backdrop shows");
 }
 
-/// A blending cell repeated more often than the renderer draws cells one by one is still drawn
-/// (from the cell pixmap).
+/// A blending cell repeated more often than the renderer draws cells one by one is still drawn,
+/// from the cell pixmap: plain red, which only the pixmap gives (a cell drawn over the backdrop
+/// would give `LIGHT`), with the backdrop between the squares.
 #[test]
 fn a_fill_over_very_many_blending_cells_still_paints() {
     let cell = "/GM gs 1 0 0 rg 0 0 1 1 re f";
     let page = render(page_pdf(&format!("{BACKDROP} /Pattern cs /P1 scn 0 0 200 200 re f"), 1, 2, cell));
-    assert_ne!(page.at(150, 100), [153, 153, 153], "the cells are painted");
+    assert_eq!(page.at(150, 100), [255, 0, 0], "the cells are painted from the pixmap");
+    assert_eq!(page.at(151, 101), [153, 153, 153], "between the squares the backdrop shows");
+}
+
+/// One page draws at most 4096 tiles over the backdrop in all. Each fill here reaches 144 tiles
+/// (12 × 12: the lattice from -1 to 10 each way touches the page), so of twenty-nine fills the
+/// last, past the allowance, paints the cell pixmap (plain red) over the others. Red multiplied
+/// over red on grey changes nothing, so without the allowance the squares would stay `DARK` and
+/// `LIGHT`, as they do after twenty-eight fills.
+#[test]
+fn a_page_draws_a_bounded_number_of_tiles_over_the_backdrop() {
+    let cell = "/GM gs 1 0 0 rg 0 0 10 10 re f";
+    let fills = |n: usize| "/Pattern cs /P1 scn 0 0 200 200 re f\n".repeat(n);
+    let page = render(page_pdf(&format!("{BACKDROP} {}", fills(29)), 1, 20, cell));
+    assert_eq!(page.at(45, 85), [255, 0, 0], "the last fill takes the cell pixmap");
+    assert_eq!(page.at(145, 105), [255, 0, 0], "the last fill takes the cell pixmap");
+    let page = render(page_pdf(&format!("{BACKDROP} {}", fills(28)), 1, 20, cell));
+    assert!(near(page.at(45, 85), DARK), "left square: {:?}", page.at(45, 85));
+    assert!(near(page.at(145, 105), LIGHT), "right square: {:?}", page.at(145, 105));
+}
+
+/// A pattern whose `/Matrix` moves it so far that its tile indices pass what `f64` holds exactly
+/// still paints its cell (from the cell pixmap) instead of drawing it off the page.
+#[test]
+fn a_cell_translated_very_far_still_paints() {
+    let cell = "/GM gs 1 0 0 rg 0 0 200 200 re f";
+    let far = "/Matrix [1 0 0 1 -10000000000000000000000 0]";
+    let page = render(page_pdf_with(&format!("{BACKDROP} /Pattern cs /P1 scn 20 20 160 160 re f"), 1, 200, cell, far, ""));
+    assert_ne!(page.at(50, 100), [51, 51, 51], "the fill is painted");
+    assert_ne!(page.at(150, 100), [153, 153, 153], "the fill is painted");
+}
+
+/// In an uncoloured cell, an isolated group whose shapes paint under `/BM /Multiply` blends them
+/// only with each other: the group, composited with Normal, covers the page in the pattern's red.
+#[test]
+fn an_uncoloured_cells_isolated_group_keeps_its_blend_modes_inside() {
+    let content = format!("{BACKDROP} /CP cs 1 0 0 /P1 scn 20 20 160 160 re f");
+    let page = render(page_pdf_with(&content, 2, 200, "/G1 Do", "", "/GM gs 0 0 200 200 re f"));
+    assert!(near(page.at(50, 100), [255, 0, 0]), "left half: {:?}", page.at(50, 100));
+    assert!(near(page.at(150, 100), [255, 0, 0]), "right half: {:?}", page.at(150, 100));
+}
+
+/// In an uncoloured cell, a group composited under `/BM /Multiply` multiplies its shapes, in the
+/// pattern's red, with the page.
+#[test]
+fn an_uncoloured_cells_group_blends_with_the_page() {
+    let content = format!("{BACKDROP} /CP cs 1 0 0 /P1 scn 20 20 160 160 re f");
+    let page = render(page_pdf_with(&content, 2, 200, "/GM gs /G1 Do", "", "0 0 200 200 re f"));
+    assert!(near(page.at(50, 100), DARK), "left half: {:?}", page.at(50, 100));
+    assert!(near(page.at(150, 100), LIGHT), "right half: {:?}", page.at(150, 100));
 }

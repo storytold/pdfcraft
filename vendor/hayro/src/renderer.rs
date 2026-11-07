@@ -1781,6 +1781,15 @@ impl Renderer {
         if !tiles.is_finite() || tiles > f64::from(MAX_BACKDROP_TILES) {
             return false;
         }
+        // An index past what `f64` holds exactly (a pattern matrix translated far away) would
+        // place the tiles wrongly, or saturate in the cast below and draw them off the canvas.
+        if [i0, i1, j0, j1].iter().any(|index| index.abs() > MAX_TILE_INDEX) {
+            return false;
+        }
+        // At most `MAX_BACKDROP_TILES` (checked above), so the cast is exact.
+        if !take_backdrop_tiles(tiles as u32) {
+            return false;
+        }
 
         let outer = self.ctx.save_current_state();
         let outer_mask = self.cur_mask.clone();
@@ -1799,7 +1808,8 @@ impl Renderer {
         self.inside_pattern = true;
         // A pattern cell is painted as one artwork (see the cell pixmap's renderer).
         self.color_replacement = None;
-        // Finite whole numbers, at most `MAX_BACKDROP_TILES` apart each way (checked above).
+        // Finite whole numbers within `MAX_TILE_INDEX`, at most `MAX_BACKDROP_TILES` apart each
+        // way (checked above).
         let (i0, i1, j0, j1) = (i0 as i64, i1 as i64, j0 as i64, j1 as i64);
         for j in j0..=j1 {
             for i in i0..=i1 {
@@ -2815,6 +2825,40 @@ impl<'a> Device<'a> for Renderer {
 /// the cell's content again. A shape reaching more tiles takes the cell pixmap, as if the cell
 /// were an isolated group.
 const MAX_BACKDROP_TILES: u32 = 256;
+
+/// PdfCraft patch (32): the most tiles one page draws over the backdrop, counted across every
+/// fill and stroke and every nesting level (a blending cell drawn inside another one's tile, or
+/// inside a cell pixmap, draws from the same allowance). Each tile interprets its cell again,
+/// rasterizing any pattern inside it, so the per-shape [`MAX_BACKDROP_TILES`] alone doesn't bound
+/// the page. Once it is spent, shapes take the cell pixmap.
+const MAX_PAGE_BACKDROP_TILES: u32 = 4096;
+
+/// PdfCraft patch (32): the largest tile index drawn over the backdrop: integers up to here are
+/// exact in `f64`, and well inside `i64`.
+const MAX_TILE_INDEX: f64 = 4_503_599_627_370_496.0; // 2^52
+
+thread_local! {
+    /// PdfCraft patch (32): what is left of [`MAX_PAGE_BACKDROP_TILES`] on this thread (a page
+    /// renders on one thread; [`reset_backdrop_tiles`] refills it for each one).
+    static BACKDROP_TILES_LEFT: std::cell::Cell<u32> = const { std::cell::Cell::new(MAX_PAGE_BACKDROP_TILES) };
+}
+
+/// PdfCraft patch (32): refill the page's allowance of tiles drawn over the backdrop.
+pub(crate) fn reset_backdrop_tiles() {
+    BACKDROP_TILES_LEFT.with(|left| left.set(MAX_PAGE_BACKDROP_TILES));
+}
+
+/// PdfCraft patch (32): take `tiles` from the page's allowance; `false`, taking nothing, when
+/// fewer are left.
+fn take_backdrop_tiles(tiles: u32) -> bool {
+    BACKDROP_TILES_LEFT.with(|left| match left.get().checked_sub(tiles) {
+        Some(rest) => {
+            left.set(rest);
+            true
+        }
+        None => false,
+    })
+}
 
 /// PdfCraft patch (backport of hayro 0.8): largest per-channel error allowed when approximating
 /// a shading function by gradient stops.
