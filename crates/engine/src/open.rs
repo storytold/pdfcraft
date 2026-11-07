@@ -8,7 +8,8 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
     AppearanceCache, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard, info_fields, js,
-    note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
+    note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
+    xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -268,7 +269,7 @@ impl Session {
     /// The last step of opening: build the document record and register it.
     fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
         let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
-        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
+        let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
@@ -303,6 +304,8 @@ impl Session {
                 }
             }
         }
+        // The print preview draws the layers as they print.
+        config.print_layers = print_preview_layers(editor.as_ref().map(|e| &e.cos), &info.layers);
         let display = display_bytes(editor.as_mut(), &bytes);
         let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
         let (form, adopted) = editor

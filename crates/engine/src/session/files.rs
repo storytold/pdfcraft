@@ -1,7 +1,7 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state,
-    source_kind, writable, write_full,
+    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_layer_states, print_raster,
+    set_default_layer_state, source_kind, writable, write_full,
 };
 
 impl Session {
@@ -167,7 +167,11 @@ impl Session {
         // #3046: the layers print as they are shown. Once the Layers panel (or a set-layer
         // action) has changed one, the print copy's default configuration says which are on, so a
         // hidden layer stays off on paper too; untouched, the document's own configuration prints.
-        if !doc.config.layers.is_empty() {
+        // On top of either, the configuration's auto state for the Print event sets the layers it
+        // names (`print_layer_states`), as printing does in a viewer (ISO 32000-2 §8.11.4.4).
+        if let Some(printed) = print_layer_states(&cos, &doc.info.layers) {
+            set_default_layer_state(&mut cos, &printed);
+        } else if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
         }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))

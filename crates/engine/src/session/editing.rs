@@ -6,7 +6,7 @@ use super::{
     note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices,
     uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
-use crate::{EditNotice, MarkKind};
+use crate::{EditNotice, MarkKind, print_preview_layers};
 
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
@@ -518,6 +518,7 @@ impl Session {
             }
         }
         doc.info = info;
+        doc.config.print_layers = print_preview_layers(Some(&editor.cos), &doc.info.layers);
         doc.fonts_stale = false;
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
