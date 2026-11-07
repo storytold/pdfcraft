@@ -78,12 +78,14 @@ fn wordings_are_complete() {
     let source = include_str!("lib.rs");
     let mut said = Vec::new();
     let mut rest = source;
-    while let Some(at) = rest.find("issue(\"") {
-        rest = &rest[at + 7..];
+    // `issue(` and `located_issue(`, written on one line or, when rustfmt breaks it, on several.
+    while let Some(at) = rest.find("issue(") {
+        rest = &rest[at + 6..];
+        let Some(clause) = rest.trim_start().strip_prefix('"') else { continue };
         // Step over the clause, then take the wording that follows it.
-        let Some(end) = rest.find('"') else { break };
-        rest = &rest[end + 1..];
-        let Some(text) = rest.strip_prefix(", \"") else { continue };
+        let Some(end) = clause.find('"') else { break };
+        rest = &clause[end + 1..];
+        let Some(text) = rest.strip_prefix(',').map(str::trim_start).and_then(|r| r.strip_prefix('"')) else { continue };
         let Some(end) = text.find('"') else { break };
         said.push(&text[..end]);
         rest = text;
@@ -487,4 +489,428 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         doc.set(pdfcraft_cos::ObjRef::new(2, 0), Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &profile)));
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
+}
+
+const XMP_NS: &str = concat!(
+    r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
+    r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
+    r#"xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/" "#,
+    r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" "#,
+    r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" "#,
+    r#"xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/""#
+);
+
+/// The mistyped predefined properties of a packet whose one description holds `body` (its
+/// attributes, then `>` and its elements).
+fn mistyped(body: &str) -> Vec<String> {
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let parsed = xmp::parse(&xmp).expect("parses");
+    xmp_types::mistyped(&parsed).into_keys().map(|(name, _)| name).collect()
+}
+
+/// [`mistyped`] for the property `p` written as an element holding `v`.
+fn element(p: &str, v: &str) -> Vec<String> {
+    mistyped(&format!("><{p}>{v}</{p}>"))
+}
+
+/// PDF/A-2 6.6.2.3.1, simple values: their lexical forms (ISO 16684-1 8.2.1), as elements and attributes.
+#[test]
+fn xmp_simple_values_have_their_lexical_forms() {
+    // Simple types, as elements and as attributes.
+    assert!(element("crs:Contrast", "-25").is_empty());
+    assert_eq!(element("crs:Contrast", "25.0"), ["crs:Contrast"]);
+    assert_eq!(element("crs:Contrast", "4/1"), ["crs:Contrast"]);
+    assert!(element("crs:Exposure", "+.5").is_empty() && element("crs:Exposure", "5").is_empty());
+    assert_eq!(element("crs:Exposure", "5."), ["crs:Exposure"]);
+    assert_eq!(element("crs:Exposure", "1e3"), ["crs:Exposure"]);
+    assert!(element("pdf:Trapped", "True").is_empty());
+    assert_eq!(element("pdf:Trapped", "true"), ["pdf:Trapped"]);
+    assert_eq!(mistyped(r#"crs:AutoContrast="Yes">"#), ["crs:AutoContrast"]);
+    assert!(mistyped(r#"crs:AutoContrast="False">"#).is_empty());
+    for good in
+        ["2016", "2016-02", "2016-02-01", "2016-02-01T13:19Z", "2016-02-01T13:19:21+01:00", "2016-02-01T13:19:21.5-08:00", "2016-02-01T13:19:21"]
+    {
+        assert!(element("xmp:CreateDate", good).is_empty(), "{good}");
+    }
+    for bad in [
+        "16-02-01",
+        "2016-13-01",
+        "2016-02-32",
+        "2016-02T13:19",
+        "2016-02-01T25:00",
+        "2016-02-01T13:19:21+1:00",
+        "Feb 1 2016",
+        "2016-02-01T13:19Z01:00",
+    ] {
+        assert_eq!(element("xmp:CreateDate", bad), ["xmp:CreateDate"], "{bad}");
+    }
+    assert!(element("xmpDM:videoPixelAspectRatio", "1001/30000").is_empty());
+    assert_eq!(element("xmpDM:videoPixelAspectRatio", "1.5"), ["xmpDM:videoPixelAspectRatio"]);
+    // The whole text of a value counts, however a comment splits it.
+    assert_eq!(element("crs:Contrast", "5<!-- c -->.0"), ["crs:Contrast"]);
+    assert!(element("pdf:Trapped", "Tr<!-- c -->ue").is_empty());
+    // rdf:resource makes a URI, which only a text type takes.
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:resource="5"/>"#), ["crs:Contrast"]);
+    // A GUID is a simple value but not a URI (ISO 16684-1 8.2.2.3).
+    assert!(element("xmpMM:DocumentID", "uuid:1234").is_empty());
+    assert_eq!(mistyped(r#"><xmpMM:DocumentID rdf:resource="uuid:1234"/>"#), ["xmpMM:DocumentID"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:instanceID rdf:resource="uuid:1"/></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1, arrays: the kind, every item, and the languages of a language alternative.
+#[test]
+fn xmp_arrays_have_their_kind_and_item_types() {
+    // Text can't be an array or a structure; a simple value can be given as rdf:resource.
+    assert_eq!(element("crs:RawFileName", "<rdf:Seq><rdf:li>a</rdf:li></rdf:Seq>"), ["crs:RawFileName"]);
+    assert_eq!(mistyped(r#"><crs:RawFileName rdf:parseType="Resource"><crs:Exposure>1</crs:Exposure></crs:RawFileName>"#), ["crs:RawFileName"]);
+    assert!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"/>"#).is_empty());
+    // Arrays: the kind and every item.
+    assert!(element("dc:creator", "<rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq>").is_empty());
+    assert_eq!(element("dc:creator", "<rdf:Bag><rdf:li>A</rdf:li></rdf:Bag>"), ["dc:creator"]);
+    assert_eq!(element("dc:creator", "A"), ["dc:creator"]);
+    assert_eq!(element("dc:date", "<rdf:Seq><rdf:li>2016-02-01</rdf:li><rdf:li>yesterday</rdf:li></rdf:Seq>"), ["dc:date"]);
+    assert_eq!(element("dc:date", "<rdf:Seq><rdf:_1>yesterday</rdf:_1></rdf:Seq>"), ["dc:date"]);
+    // Only white space around an array's items.
+    assert_eq!(element("dc:creator", "stray<rdf:Seq><rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    assert_eq!(element("dc:creator", "<rdf:Seq>stray<rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    // rdf:parseType or rdf:resource on the property makes its value something other than the array.
+    assert_eq!(mistyped(r#"><dc:creator rdf:parseType="Resource"><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>"#), ["dc:creator"]);
+    assert_eq!(mistyped(r#"><dc:creator rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>"#), ["dc:creator"]);
+    assert!(element("dc:creator", "\n  <rdf:Seq>\n    <rdf:li>A</rdf:li>\n  </rdf:Seq>\n").is_empty());
+    // An rdf:resource element is empty.
+    assert_eq!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></dc:source>"#), ["dc:source"]);
+    // Language alternatives: an rdf:Alt whose items all carry xml:lang.
+    assert!(element("dc:title", r#"<rdf:Alt><rdf:li xml:lang="x-default">T</rdf:li></rdf:Alt>"#).is_empty());
+    assert_eq!(element("dc:title", "<rdf:Alt><rdf:li>T</rdf:li></rdf:Alt>"), ["dc:title"]);
+    assert_eq!(element("dc:title", "T"), ["dc:title"]);
+}
+
+/// PDF/A-2 6.6.2.3.1, structures in their three RDF/XML forms, nested, and qualified values.
+#[test]
+fn xmp_structures_have_their_field_types() {
+    // Structures in their three forms, with each known field checked.
+    assert!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:documentID>d</stRef:documentID><stRef:lastModifyDate>2016</stRef:lastModifyDate></xmpMM:DerivedFrom>"#).is_empty());
+    assert!(mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#).is_empty());
+    assert!(mistyped(r#"><xmpMM:DerivedFrom stRef:documentID="d"/>"#).is_empty());
+    assert_eq!(element("xmpMM:DerivedFrom", "uuid:1234"), ["xmpMM:DerivedFrom"]);
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource">letter</xmpMM:DerivedFrom>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d">letter</rdf:Description></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom>letter<rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#), ["xmpMM:DerivedFrom"]);
+    // Predefined properties inside a Pantry item keep their types.
+    let pantry = |v: &str| {
+        mistyped(&format!(
+            r#"><xmpMM:Pantry><rdf:Bag><rdf:li rdf:parseType="Resource"><crs:Contrast>{v}</crs:Contrast></rdf:li></rdf:Bag></xmpMM:Pantry>"#
+        ))
+    };
+    assert!(pantry("5").is_empty());
+    assert_eq!(pantry("high"), ["xmpMM:Pantry"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:lastModifyDate>soon</stRef:lastModifyDate></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom stRef:lastModifyDate="soon"/>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(mistyped(r#"><xmpTPg:MaxPageSize rdf:parseType="Resource"><stDim:w>8.5 in</stDim:w></xmpTPg:MaxPageSize>"#), ["xmpTPg:MaxPageSize"]);
+    // Nested: an array of structures holding a structure.
+    let marker = |start: &str| format!(r#"><xmpDM:markers><rdf:Seq><rdf:li rdf:parseType="Resource">{start}</rdf:li></rdf:Seq></xmpDM:markers>"#);
+    assert!(
+        mistyped(&marker(
+            r#"<xmpDM:startTime rdf:parseType="Resource"><xmpDM:value>50</xmpDM:value><xmpDM:scale>1/25</xmpDM:scale></xmpDM:startTime>"#
+        ))
+        .is_empty()
+    );
+    assert!(mistyped(&marker("<xmpDM:startTime>50f</xmpDM:startTime>")).is_empty());
+    assert_eq!(mistyped(&marker(r#"<xmpDM:startTime rdf:parseType="Resource"><xmpDM:value>5.5</xmpDM:value></xmpDM:startTime>"#)), ["xmpDM:markers"]);
+    // A qualified value is checked by its rdf:value.
+    assert!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><xmp:Label>q</xmp:Label></crs:Contrast>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>five</rdf:value></crs:Contrast>"#), ["crs:Contrast"]);
+    // rdf:value as an attribute of the description.
+    assert!(mistyped(r#"><crs:Contrast><rdf:Description rdf:value="5" xmp:Label="q"/></crs:Contrast>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast><rdf:Description rdf:value="five" xmp:Label="q"/></crs:Contrast>"#), ["crs:Contrast"]);
+    // rdf:value as an attribute of an empty property element.
+    assert!(mistyped(r#"><crs:Contrast rdf:value="5" xmp:Label="q"/>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:value="five" xmp:Label="q"/>"#), ["crs:Contrast"]);
+    // Qualifiers that are predefined properties keep their types.
+    assert_eq!(
+        mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><crs:Exposure>high</crs:Exposure></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:value="5" crs:Exposure="high"/>"#), ["crs:Contrast"]);
+    assert!(mistyped(r#"><crs:Contrast rdf:value="5" crs:Exposure="1.5"/>"#).is_empty());
+    // Nesting past any type's depth doesn't have the type.
+    let nested = |levels: usize| {
+        let open = r#"<rdf:value rdf:parseType="Resource">"#.repeat(levels);
+        let close = "</rdf:value>".repeat(levels);
+        mistyped(&format!(r#"><crs:Contrast rdf:parseType="Resource">{open}<rdf:value>5</rdf:value>{close}</crs:Contrast>"#))
+    };
+    assert!(nested(3).is_empty());
+    assert_eq!(nested(40), ["crs:Contrast"]);
+}
+
+/// PDF/A-2 6.6.2.3.1 through verify: one issue per mistyped property, not fixable.
+#[test]
+fn xmp_value_types_are_reported_by_verify() {
+    let metadata = |body: &str| {
+        let xmp = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}/></rdf:RDF></x:xmpmeta>"#);
+        format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len())
+    };
+    let issues = |doc: &Document| -> Vec<Issue> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").collect() };
+    // Every mistyped property, once per metadata stream, by stream and then by name; not fixable.
+    let catalog = metadata(r#"crs:Contrast="high" crs:Exposure="bright""#);
+    let page = metadata(r#"crs:Contrast="higher""#);
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>",
+            "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &catalog,
+            "<< /Type /Page /Parent 2 0 R /Metadata 5 0 R >>",
+            &page,
+        ],
+        "",
+    );
+    let found = issues(&doc);
+    let messages: Vec<&str> = found.iter().map(|i| i.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP property crs:Contrast in metadata stream 3 0 R should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+            "The XMP property crs:Contrast in metadata stream 5 0 R should have the value type Integer"
+        ]
+    );
+    let objects: Vec<Option<ObjRef>> = found.iter().map(|i| i.object).collect();
+    assert_eq!(objects, [Some(ObjRef::new(3, 0)), Some(ObjRef::new(3, 0)), Some(ObjRef::new(5, 0))]);
+    assert!(found.iter().all(|i| !i.fixable && i.page.is_none()));
+    // Said in another language, the property and the stream go where that language puts them, and
+    // what the document wrote goes in as it stands.
+    let reordered = |w: &str| w.replace("The XMP property {property} in metadata stream {object}", "In {object}, {property}");
+    assert_eq!(found[0].said(&in_english), found[0].message);
+    assert_eq!(found[0].said(&reordered), "In 3 0 R, crs:Contrast should have the value type Integer");
+    // A UTF-16 packet, either byte order, is read.
+    for big in [true, false] {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" crs:Contrast="high"/></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut data = if big { vec![0xFE, 0xFF] } else { vec![0xFF, 0xFE] };
+        data.extend(xmp.encode_utf16().flat_map(|u| if big { u.to_be_bytes() } else { u.to_le_bytes() }));
+        let hex: String = data.iter().map(|b| format!("{b:02X}")).collect();
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}>\nendstream", hex.len() + 1);
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        assert_eq!(issues(&doc).len(), 1, "big-endian: {big}");
+    }
+    // A metadata stream of a page counts as well as the catalog's.
+    let good = metadata(r#"crs:Contrast="5""#);
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>",
+            "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &good,
+            "<< /Type /Page /Parent 2 0 R /Metadata 5 0 R >>",
+            &page,
+        ],
+        "",
+    );
+    let found = issues(&doc);
+    assert_eq!(found.iter().map(|i| i.object).collect::<Vec<_>>(), [Some(ObjRef::new(5, 0))]);
+}
+
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas of the September 2005 XMP
+/// Specification (pages 58–70), with the EXIF value types of pages 83–87.
+#[test]
+fn xmp_exif_schemas_have_their_value_types() {
+    // TIFF: integers, closed choices of integer, rationals, sequences, language alternatives.
+    assert!(element("tiff:ImageWidth", "256").is_empty());
+    assert_eq!(element("tiff:ImageWidth", "256 mm"), ["tiff:ImageWidth"]);
+    assert_eq!(element("tiff:Orientation", "4/1"), ["tiff:Orientation"]);
+    assert!(element("tiff:XResolution", "72/1").is_empty());
+    assert_eq!(element("tiff:XResolution", "<rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq>"), ["tiff:XResolution"]);
+    assert!(element("tiff:BitsPerSample", "<rdf:Seq><rdf:li>8</rdf:li><rdf:li>8</rdf:li></rdf:Seq>").is_empty());
+    assert_eq!(element("tiff:BitsPerSample", "<rdf:Seq><rdf:li>8</rdf:li><rdf:li>8.0</rdf:li></rdf:Seq>"), ["tiff:BitsPerSample"]);
+    assert_eq!(element("tiff:TransferFunction", "<rdf:Bag><rdf:li>0</rdf:li></rdf:Bag>"), ["tiff:TransferFunction"]);
+    assert_eq!(element("tiff:ImageDescription", "A picture"), ["tiff:ImageDescription"]);
+    // EXIF: GPS coordinates (page 85).
+    for good in ["51,30,26N", "0,5.25W", "120,5,0E", "8,0.000001S"] {
+        assert!(element("exif:GPSLatitude", good).is_empty(), "{good}");
+    }
+    for bad in ["51.5N", "51,30,26", "51,30.N", "51,30,26X", "N", "51,30,2.6N", "a,30,26N", "51,30N", "51.5,30,26N"] {
+        assert_eq!(element("exif:GPSLatitude", bad), ["exif:GPSLatitude"], "{bad}");
+    }
+    assert!(element("exif:GPSTimeStamp", "2016-02-01T13:19:21").is_empty());
+    assert_eq!(element("exif:ISOSpeedRatings", "100"), ["exif:ISOSpeedRatings"]);
+    // EXIF structures: Flash, OECF/SFR, CFAPattern, DeviceSettings (pages 85–87).
+    assert!(mistyped(r#"><exif:Flash rdf:parseType="Resource"><exif:Fired>True</exif:Fired><exif:Mode>3</exif:Mode></exif:Flash>"#).is_empty());
+    assert_eq!(mistyped(r#"><exif:Flash rdf:parseType="Resource"><exif:Fired>yes</exif:Fired></exif:Flash>"#), ["exif:Flash"]);
+    assert_eq!(mistyped(r#"><exif:Flash exif:Return="2.0"/>"#), ["exif:Flash"]);
+    assert_eq!(element("exif:Flash", "fired"), ["exif:Flash"]);
+    assert!(
+        mistyped(r#"><exif:OECF rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq></exif:Values></exif:OECF>"#).is_empty()
+    );
+    assert_eq!(
+        mistyped(r#"><exif:OECF rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>0.5</rdf:li></rdf:Seq></exif:Values></exif:OECF>"#),
+        ["exif:OECF"]
+    );
+    assert_eq!(
+        mistyped(
+            r#"><exif:CFAPattern rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq></exif:Values></exif:CFAPattern>"#
+        ),
+        ["exif:CFAPattern"]
+    );
+    assert_eq!(
+        mistyped(r#"><exif:DeviceSettingDescription rdf:parseType="Resource"><exif:Columns>2.0</exif:Columns></exif:DeviceSettingDescription>"#),
+        ["exif:DeviceSettingDescription"]
+    );
+    assert_eq!(
+        mistyped(r#"><exif:DeviceSettingDescription rdf:parseType="Resource"><exif:Settings>a</exif:Settings></exif:DeviceSettingDescription>"#),
+        ["exif:DeviceSettingDescription"]
+    );
+    // Additional EXIF properties (page 69).
+    assert!(element("aux:Lens", "50mm").is_empty());
+    assert_eq!(element("aux:Lens", "<rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq>"), ["aux:Lens"]);
+    assert_eq!(element("aux:SerialNumber", "<rdf:Bag><rdf:li>1</rdf:li></rdf:Bag>"), ["aux:SerialNumber"]);
+}
+
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas: a property is known by its
+/// namespace URI, whatever prefix the packet binds to it, and is named by the namespace's
+/// preferred prefix.
+#[test]
+fn xmp_exif_properties_are_known_by_namespace_uri() {
+    let tiff = r#"xmlns:foo="http://ns.adobe.com/tiff/1.0/""#;
+    assert_eq!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256 mm</foo:ImageWidth>"#)), ["tiff:ImageWidth"]);
+    assert!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256</foo:ImageWidth>"#)).is_empty());
+    assert_eq!(mistyped(r#"xmlns:bar="http://ns.adobe.com/exif/1.0/" bar:GPSLatitude="51.5N">"#), ["exif:GPSLatitude"]);
+    assert_eq!(
+        mistyped(r#"><baz:Lens xmlns:baz="http://ns.adobe.com/exif/1.0/aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></baz:Lens>"#),
+        ["aux:Lens"]
+    );
+    // The same local names in another namespace, even under the preferred prefixes, are not these
+    // properties.
+    let other = r#"xmlns:tiff="http://example.com/not-tiff/""#;
+    assert!(mistyped(&format!(r#"><tiff:ImageWidth {other}>256 mm</tiff:ImageWidth>"#)).is_empty());
+    assert!(mistyped(r#"xmlns:exif="http://example.com/not-exif/" exif:GPSLatitude="51.5N">"#).is_empty());
+    assert!(mistyped(r#"><aux:Lens xmlns:aux="http://example.com/not-aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></aux:Lens>"#).is_empty());
+}
+
+/// Holes are filled in one pass: the first `{}` from `value`, named holes from `values`, and what
+/// has nothing for it, a value's own braces and a brace left open stay as they are.
+#[test]
+fn wordings_fill_their_holes_once() {
+    let values = [("{a}", "{b}".to_owned()), ("{b}", "B".to_owned())];
+    assert_eq!(fill("x {a} {b} {c} {} {}", Some("{a}"), &values), "x {b} B {c} {a} {}");
+    assert_eq!(fill("{}", None, &[]), "{}");
+    assert_eq!(fill("open { and é {a", Some("v"), &values), "open { and é {a");
+    assert_eq!(fill("é{}ü", Some("v"), &[]), "évü");
+}
+
+/// PDF/A-2 6.6.2.3.1: a mistyped property is reported with the type the XMP Specification gives it,
+/// as the specification writes it.
+#[test]
+fn xmp_mistyped_properties_name_their_type() {
+    let types = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_iter().map(|((name, _), ty)| (name, ty)).collect()
+    };
+    let t = |name: &str, ty: &str| (name.to_owned(), ty.to_owned());
+    assert_eq!(
+        types(r#"crs:Contrast="high" crs:Exposure="bright" xmp:CreateDate="never">"#),
+        [t("crs:Contrast", "Integer"), t("crs:Exposure", "Real"), t("xmp:CreateDate", "Date")]
+    );
+    assert_eq!(
+        types("><xmpTPg:PlateNames>Cyan</xmpTPg:PlateNames><dc:title>T</dc:title>"),
+        [t("dc:title", "Lang Alt"), t("xmpTPg:PlateNames", "seq Text")]
+    );
+    assert_eq!(
+        types("><xmpTPg:MaxPageSize>A4</xmpTPg:MaxPageSize><xmpMM:History>h</xmpMM:History>"),
+        [t("xmpMM:History", "seq ResourceEvent"), t("xmpTPg:MaxPageSize", "Dimensions")]
+    );
+    assert_eq!(types("><xmpMM:Pantry>p</xmpMM:Pantry>"), [t("xmpMM:Pantry", "bag struct")]);
+    // The TIFF and EXIF types, as the 2005 edition writes them.
+    assert_eq!(types(r#"tiff:XResolution="0.5" exif:GPSLatitude="N">"#), [t("exif:GPSLatitude", "GPSCoordinate"), t("tiff:XResolution", "Rational")]);
+    assert_eq!(
+        types("><tiff:BitsPerSample>8</tiff:BitsPerSample><exif:Flash>fired</exif:Flash><exif:OECF>o</exif:OECF>"),
+        [t("exif:Flash", "Flash"), t("exif:OECF", "OECF/SFR"), t("tiff:BitsPerSample", "seq Integer")]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1: a property is known by its namespace URI, whatever prefix the packet binds
+/// to it, and is named by the namespace's preferred prefix and as the packet writes it. A property
+/// a predefined namespace doesn't define, and a namespace that isn't predefined, are left to the
+/// clauses about them.
+#[test]
+fn xmp_properties_are_known_by_namespace_uri_and_named_as_written() {
+    let crs = "http://ns.adobe.com/camera-raw-settings/1.0/";
+    let found = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_keys().collect()
+    };
+    let n = |name: &str, written: &str| (name.to_owned(), written.to_owned());
+    // Another prefix for the namespace, as an attribute and as an element, and no prefix at all.
+    assert_eq!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="high">"#)), [n("crs:Contrast", "c:Contrast")]);
+    assert_eq!(found(&format!(r#"><c:Exposure xmlns:c="{crs}">bright</c:Exposure>"#)), [n("crs:Exposure", "c:Exposure")]);
+    assert_eq!(found(&format!(r#"><Exposure xmlns="{crs}">bright</Exposure>"#)), [n("crs:Exposure", "Exposure")]);
+    assert!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="5">"#)).is_empty());
+    // The preferred prefix is written as it is.
+    assert_eq!(found(r#"crs:Contrast="high">"#), [n("crs:Contrast", "crs:Contrast")]);
+    // A long prefix is repeated only so far.
+    let long = "p".repeat(100);
+    let said = found(&format!(r#"xmlns:{long}="{crs}" {long}:Contrast="high">"#));
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].1, format!("{}…:Contrast", "p".repeat(64)));
+    // The preferred prefix bound to another namespace is not that namespace.
+    assert!(found(r#"><crs:Contrast xmlns:crs="http://example.com/not-crs/">high</crs:Contrast>"#).is_empty());
+    assert!(found(r#"xmlns:dc="http://example.com/not-dc/" dc:title="T">"#).is_empty());
+    // A property a predefined namespace doesn't define, with any value.
+    assert!(found(r#"crs:NotAProperty="high" dc:notAProperty="T">"#).is_empty());
+    assert!(found("><xmp:NotAProperty><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></xmp:NotAProperty>").is_empty());
+    // A namespace that isn't predefined, with a predefined property's local name.
+    assert!(found(r#"xmlns:ex="http://example.com/ns/" ex:Contrast="high">"#).is_empty());
+    assert!(found(r#"><ex:title xmlns:ex="http://example.com/ns/">T</ex:title>"#).is_empty());
+
+    // Through verify, the written name is said when it differs.
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" xmlns:c="{crs}" c:Contrast="high" crs:Exposure="bright"/></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").map(|i| i.message).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP property crs:Contrast in metadata stream 3 0 R, written c:Contrast, should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+        ]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1, the RDF/XML value forms XMP allows (ISO 16684-1 7.9.2.5): one `rdf:value`
+/// in a qualified value, no parse type but `Resource`, and an `rdf:resource` element left empty.
+#[test]
+fn xmp_value_forms_are_those_xmp_allows() {
+    // A qualified value has exactly one rdf:value.
+    assert_eq!(
+        mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><rdf:value>five</rdf:value></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert_eq!(
+        mistyped(r#"><crs:Contrast><rdf:Description rdf:value="five"><rdf:value>5</rdf:value></rdf:Description></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert!(mistyped(r#"><crs:Contrast><rdf:Description><rdf:value>5</rdf:value></rdf:Description></crs:Contrast>"#).is_empty());
+    // Only parseType="Resource" has a place in XMP; an rdf:resource element holds no element.
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Literal">5</crs:Contrast>"#), ["crs:Contrast"]);
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Literal" stRef:documentID="d"/>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:resource="urn:example"><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
 }
