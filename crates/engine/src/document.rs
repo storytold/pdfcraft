@@ -28,6 +28,8 @@ pub struct Document {
     pub password: Option<String>,
     /// `true` when there are edits that have not been saved.
     pub dirty: bool,
+    /// Converted from an EPUB book this session; its repair log holds the conversion's notes.
+    pub from_book: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     pub(crate) generation: u64,
     /// The generation last handed out by `autosave_snapshots`.

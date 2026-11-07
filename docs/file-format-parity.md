@@ -66,6 +66,7 @@ features total).
 | JPEG, PNG, TIFF (multipage, and BigTIFF), GIF, BMP, JPEG 2000 | yes | yes (ICC profiles kept; DPI choices) | good | `create.from-images`, `create.from-multipage-tiff`, `bigtiff_images_become_pages` |
 | PCX | yes | no | none | in Acrobat's document types |
 | Plain text | yes | yes | good | `create.from-text` |
+| EPUB 2 and 3 books | no | yes: reflowable books laid out on the region's paper in their own fonts, fixed-layout books a page each; contents as bookmarks; DRM-protected books refused | basic | `create.from-epub` (not an Acrobat feature) |
 | Clipboard (image or text) | yes | yes | good | `create.from-clipboard` |
 | Screenshot | yes | no | none | `create.from-screenshot` planned |
 | Word, Excel, PowerPoint (and Visio, Publisher on Windows) | yes | no | none | `create.from-office` planned (LibreOffice sidecar) |

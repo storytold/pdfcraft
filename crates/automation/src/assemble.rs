@@ -5,6 +5,7 @@ use super::{Arc, Automation, CombineSource, Edit, Path, PathBuf, Value, json};
 
 impl Automation {
     pub(crate) fn doc_create(&mut self, a: &Args) -> Result<Value> {
+        let mut book_notes = Vec::new();
         let (name, bytes) = match a.str("from")? {
             "blank" => {
                 let n = a.opt_int("pages")?.unwrap_or(1).clamp(1, 10_000) as usize;
@@ -44,11 +45,34 @@ impl Automation {
                 })?;
                 (format!("{title}.pdf"), bytes)
             }
+            "epub" => {
+                let path = self.resolve(a.str("path")?, false)?;
+                let book = read_input(&path)?;
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let paper = match a.opt_str("paper")? {
+                    None => self.session.book_paper(),
+                    Some("letter") => pdfcraft_engine::paper_for_region("US"),
+                    Some("a4") => pdfcraft_engine::paper_for_region("DE"),
+                    Some(other) => return Err(ToolError::InvalidArgs(format!("unknown paper {other:?} (letter or a4)"))),
+                };
+                let (pdf, notes) = self.session.create_from_epub_on(&file, &book, paper).map_err(failed)?;
+                book_notes = notes;
+                (format!("{}.pdf", file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s)), pdf)
+            }
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
         };
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or(name);
         let id = self.session.open_new(name, bytes).map_err(failed)?;
-        Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
+        let epub = a.str("from")? == "epub";
+        if epub {
+            // What the conversion chose and left out goes in the repair log (doc_info's `repairs`).
+            self.session.note_book(id, &book_notes);
+        }
+        let mut out = summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?);
+        if epub {
+            out["notes"] = json!(book_notes);
+        }
+        Ok(out)
     }
 
     pub(crate) fn page_transition_set(&mut self, a: &Args) -> Result<Value> {
