@@ -6156,6 +6156,94 @@ trailer << /Root 1 0 R >>
     assert!(p != [255, 255, 255, 255] && p[3] == 255, "the triangles are drawn: {p:?}");
 }
 
+/// A rainbow of tensor-product patches (two quarter rings per band) painted as a pattern
+/// through a rectangle that is just the rainbow's box. Every patch is 722 triangles, and
+/// across a narrow curved band they are thin and lie at every angle, so their boxes hold
+/// many times their area: walking those boxes spent the visit budget (eight per pixel of the
+/// rectangle, four per triangle) before the last patches, and the inner bands were left white
+/// (through the page-sized rectangle, or with `sh`, the same mesh drew whole). The sampler
+/// now walks only the columns of each row a triangle can reach. Vendored hayro-interpret
+/// patch 99.
+#[test]
+fn thin_patches_of_a_mesh_in_a_tight_path_are_all_painted() {
+    const K: f64 = 0.5523; // a quarter circle's Bézier handles, as a fraction of the radius
+    const BANDS: [[u8; 3]; 6] = [[255, 0, 0], [255, 128, 0], [255, 255, 0], [0, 200, 0], [0, 0, 255], [128, 0, 255]];
+    // The stream order of a tensor patch's points (column i, row j), ISO 32000-2 8.7.4.5.8.
+    const ORDER: [(usize, usize); 16] =
+        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 3), (2, 3), (3, 3), (3, 2), (3, 1), (3, 0), (2, 0), (1, 0), (1, 1), (1, 2), (2, 2), (2, 1)];
+    // Bands 20/6 pt wide from radius 50 inwards, centred on (100, 100) by the pattern matrix;
+    // 16-bit coordinates decoded onto -64..64.
+    let width = 20.0 / BANDS.len() as f64;
+    let mut data = Vec::new();
+    for (band, colour) in BANDS.iter().enumerate() {
+        let (outer, inner) = (50.0 - band as f64 * width, 50.0 - (band + 1) as f64 * width);
+        for side in [1.0, -1.0] {
+            data.push(0u8);
+            for (i, j) in ORDER {
+                let rho = inner + (outer - inner) * j as f64 / 3.0;
+                let (x, y) = [(side * rho, 0.0), (side * rho, K * rho), (side * K * rho, rho), (0.0, rho)][i];
+                for v in [x, y] {
+                    data.extend_from_slice(&(((v + 64.0) / 128.0 * 65535.0).round() as u16).to_be_bytes());
+                }
+            }
+            for _ in 0..4 {
+                data.extend_from_slice(colour);
+            }
+        }
+    }
+    let render = |rect: &str| {
+        let content = format!("/Pattern cs /P0 scn {rect} re f");
+        let mut pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Pattern << /P0 6 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 2 /Shading 5 0 R /Matrix [1 0 0 1 100 100] >> endobj
+5 0 obj << /ShadingType 7 /ColorSpace /DeviceRGB /BitsPerCoordinate 16 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [-64 64 -64 64 0 1 0 1 0 1] /Length {} >> stream
+",
+            content.len(),
+            data.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(&data);
+        pdf.extend_from_slice(
+            b"
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF
+",
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (300, 300));
+        page
+    };
+    // At 45° on either side, the middle of the outer and of the inner band, in device pixels
+    // (scale 1.5, y down).
+    let at = |rho: f64, side: f64| {
+        let d = rho * std::f64::consts::FRAC_1_SQRT_2;
+        (((100.0 + side * d) * 1.5) as usize, ((100.0 - d) * 1.5) as usize)
+    };
+    for (what, rect) in [("the rainbow's box", "50 100 100 50"), ("the page", "0 0 200 200")] {
+        let page = render(rect);
+        for (band, rho) in [(0, 50.0 - width / 2.0), (BANDS.len() - 1, 30.0 + width / 2.0)] {
+            for side in [1.0, -1.0] {
+                let (x, y) = at(rho, side);
+                let got = rgb_at(&page.rgba, 300, x, y);
+                let want = BANDS[band];
+                assert!(
+                    got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 8),
+                    "through {what}, band {band} at ({x}, {y}): got {got:?}, want {want:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Two triangles of a mesh that share an edge cover it together. The sampler tested each
 /// pixel's corner, and only strictly inside a triangle, so the diagonal two triangles share
 /// was left white wherever it ran through the samples, and so was a pixel row or column
