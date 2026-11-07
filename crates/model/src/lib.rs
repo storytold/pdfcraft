@@ -182,13 +182,23 @@ impl Iterator for PageTree<'_> {
                     *owner = Some((obj.clone(), weight(value, 0)));
                 }
             }
-            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+            // The node's /Kids array, direct or indirect; anything else (absent, null, which is
+            // the same as absent per ISO 32000-2 §7.3.9, or not an array) gives no children.
+            let kids = match d.get(b"Kids") {
+                Some(Object::Ref(r)) => Some(self.doc.get(*r)).filter(|k| k.as_array().is_some()),
+                Some(Object::Array(_)) => Some(obj.clone()),
+                _ => None,
+            };
+            // A node is /Type /Pages, or has a /Kids array and is not /Type /Page; anything else
+            // is a page, whatever its /Type says. The renderer (hayro-syntax `is_page_tree_node`)
+            // and its inspector walk the tree by the same rule, so page numbers agree.
+            let is_pages = match d.name(b"Type") {
+                Some(b"Pages") => true,
+                Some(b"Page") => false,
+                _ => kids.is_some(),
+            };
             if is_pages {
-                let owner = match d.get(b"Kids") {
-                    Some(Object::Ref(r)) => self.doc.get(*r),
-                    Some(Object::Array(_)) => obj.clone(),
-                    _ => continue,
-                };
+                let Some(owner) = kids else { continue };
                 self.pending.push(Children { owner, next: 0, inherited });
             } else {
                 let mut dict = d.clone();
@@ -313,6 +323,36 @@ mod tests {
         assert_eq!(pages[0].rotation(&d), 90, "first depth-first occurrence supplies inheritance");
         assert_eq!(pages[1].rotation(&d), 180, "a leaf's own attribute wins");
         assert!(pages.iter().all(|p| p.dict.contains(b"Resources")));
+    }
+
+    /// Without /Type, a dictionary is a node only when its /Kids is an array, direct or indirect:
+    /// one whose /Kids is null (the same as absent, ISO 32000-2 §7.3.9), an integer, or a reference
+    /// to something other than an array is a page and keeps its place in the page order.
+    #[test]
+    fn untyped_dictionaries_are_nodes_only_with_a_kids_array() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let untyped = |d: &mut Document, kids: Option<Object>| {
+            let mut dict = Dict::new();
+            dict.set(b"Parent".to_vec(), Object::Ref(root));
+            if let Some(kids) = kids {
+                dict.set(b"Kids".to_vec(), kids);
+            }
+            d.add(dict)
+        };
+        let first = untyped(&mut d, None);
+        let node = untyped(&mut d, Some(Object::Array(vec![Object::Ref(first)])));
+        let null_kids = untyped(&mut d, Some(Object::Null));
+        let int_kids = untyped(&mut d, Some(Object::Int(7)));
+        let not_array = d.add(Object::Int(7));
+        let ref_kids = untyped(&mut d, Some(Object::Ref(not_array)));
+        let last = untyped(&mut d, None);
+        let kids = d.add(Object::Array(vec![Object::Ref(last)]));
+        let indirect = untyped(&mut d, Some(Object::Ref(kids)));
+        let order = [node, null_kids, int_kids, ref_kids, indirect].map(Object::Ref).to_vec();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(order.clone()))).unwrap();
+        let found: Vec<ObjRef> = pages(&d).iter().map(|p| p.obj).collect();
+        assert_eq!(found, vec![first, null_kids, int_kids, ref_kids, last]);
     }
 
     #[test]

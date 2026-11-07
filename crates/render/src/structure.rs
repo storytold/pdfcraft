@@ -47,16 +47,19 @@ pub(crate) trait Structure {
                 continue;
             }
             let Ok(dict) = self.get_dictionary(id) else { continue };
-            // A node is /Type /Pages, or has /Kids and is not /Type /Page; anything else is a
-            // page, whatever its /Type says. The renderer (hayro-syntax `is_page_tree_node`) and
-            // pdfcraft-model walk the tree by the same rule, so page numbers agree.
+            // A node is /Type /Pages, or has a /Kids array (direct or indirect) and is not
+            // /Type /Page; anything else is a page, whatever its /Type says, including one whose
+            // /Kids is null (the same as absent, ISO 32000-2 §7.3.9) or not an array. The
+            // renderer (hayro-syntax `is_page_tree_node`) and pdfcraft-model walk the tree by the
+            // same rule, so page numbers agree.
+            let kids = dict.get(b"Kids").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_array()).ok();
             let is_node = match dict.get_type() {
                 Ok(b"Pages") => true,
                 Ok(b"Page") => false,
-                _ => dict.has(b"Kids"),
+                _ => kids.is_some(),
             };
             if is_node {
-                if let Ok(kids) = dict.get(b"Kids").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_array()) {
+                if let Some(kids) = kids {
                     pending.extend(kids.iter().rev().filter_map(|k| k.as_reference().ok()).map(|id| (id, depth + 1)));
                 }
             } else {
