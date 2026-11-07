@@ -669,7 +669,7 @@ pub(crate) fn glyph_name_to_unicode(name: &str) -> Option<char> {
         return unicode_str.chars().next();
     }
 
-    unicode_from_name(name).or_else(|| {
+    agl_unicode_from_name(name).or_else(|| {
         warn!("failed to map glyph name {} to unicode", name);
 
         None
@@ -719,6 +719,29 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
     }
 }
 
+/// PdfCraft patch (92): the character a `uniXXXX` or `uXXXX` to `uXXXXXX` glyph name stands
+/// for, by the Adobe Glyph List Specification: `uni` and exactly four uppercase hex digits, or
+/// `u` and four to six; a value in the surrogate range or past U+10FFFF is no character. The
+/// text of a glyph goes by this rule, so `uni65`, `uni20ac` and `u41` read as nothing, as they
+/// do in [`glyph_name_to_text`].
+pub(crate) fn agl_unicode_from_name(name: &str) -> Option<char> {
+    let upper_hex = |d: &str| d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
+    let digits = name
+        .strip_prefix("uni")
+        .filter(|d| d.len() == 4)
+        .or_else(|| {
+            name.strip_prefix('u')
+                .filter(|d| (4..=6).contains(&d.len()))
+        })
+        .filter(|d| upper_hex(d))?;
+    u32::from_str_radix(digits, 16)
+        .ok()
+        .and_then(char::from_u32)
+}
+
+/// Upstream's lenient reading of a `uni…` or `u…` name (any number of hex digits, either case),
+/// kept for finding a glyph in a font: PdfCraft patch (92) reads text by
+/// [`agl_unicode_from_name`] instead.
 pub(crate) fn unicode_from_name(name: &str) -> Option<char> {
     let convert = |input: &str| u32::from_str_radix(input, 16).ok().and_then(char::from_u32);
 

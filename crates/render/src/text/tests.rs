@@ -497,8 +497,8 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex
 /// digits only, and map a name with lowercase ones to nothing ("uni20ac" in its examples).
 /// Names upstream's own lookup can't read (several groups, a suffix) show it: lowercase reads
-/// as nothing, uppercase as its characters. A bare `uni20ac` or `u1040c` is still read by
-/// upstream's lenient `unicode_from_name`, outside this mapping.
+/// as nothing, uppercase as its characters. A bare `uni20ac` or `u1040c` reads as nothing too
+/// (`agl_unicode_from_name_rule_reads_text`).
 #[test]
 fn glyph_names_with_lowercase_hex_read_as_nothing() {
     use lopdf::{Object, dictionary};
@@ -516,6 +516,34 @@ fn glyph_names_with_lowercase_hex_read_as_nothing() {
     let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     assert_eq!(lines, ["\u{20ac}\u{308}", "\u{1040c}", "f", "f\u{20ac}"], "{text:?}");
+}
+
+/// The glyph list specification's `uni` form is `uni` and groups of exactly four uppercase hex
+/// digits, its `u` form `u` and four to six, outside the surrogate range: `uni65`, `u65`,
+/// `uni20ac`, `u1f600`, `uni+065` and `uniD800` name no character, and their glyphs read as
+/// nothing rather than as `e`, `€` or an emoji. The well-formed names read as before.
+#[test]
+fn agl_unicode_from_name_rule_reads_text() {
+    use lopdf::{Object, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let names = ["uni65", "u65", "uni20ac", "u1f600", "uni+065", "uniD800", "u10FFFF0", "uni0065", "u0066", "u1F600", "uni20AC"];
+    let differences = Object::Dictionary(dictionary! {
+        "Type" => "Encoding",
+        "Differences" => std::iter::once(Object::Integer(65)).chain(names.iter().map(|n| name(n))).collect::<Vec<_>>(),
+    });
+    // One glyph per line, so each name's text stays its own (and a name read as nothing
+    // leaves no line).
+    let mut content = b"BT /F1 20 Tf 20 290 Td".to_vec();
+    for code in (b'A'..).take(names.len()) {
+        content.extend_from_slice(b" (");
+        content.push(code);
+        content.extend_from_slice(b") Tj 0 -25 Td");
+    }
+    content.extend_from_slice(b" ET");
+    let pdf = encoded_pages(&[(differences, &content[..])]);
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines, ["e", "f", "\u{1f600}", "\u{20ac}"], "{text:?}");
 }
 
 #[test]
