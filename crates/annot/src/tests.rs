@@ -2790,13 +2790,14 @@ fn text_markup_whose_quads_reach_past_its_rect_is_drawn_over_them() {
     let doc = document_of(&[
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
-        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>",
         b"<< /Type /Annot /Subtype /Highlight /Rect [335.1 370.83 324.6 471.78] /C [1 1 0] /QuadPoints [370 287 471 287 370 277 471 277] >>",
         b"<< /Type /Annot /Subtype /Underline /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [100 120 200 120 100 100 200 100] >>",
         b"<< /Type /Annot /Subtype /Highlight /Rect [50 50 150 70] /C [1 1 0] /QuadPoints [60 68 140 68 60 52 140 52] >>",
         b"<< /Type /Annot /Subtype /StrikeOut /Rect [10 10 20 20] /C [1 0 0] /QuadPoints [100 220 200 220 100 200 200 200] >>",
         b"<< /Type /Annot /Subtype /Squiggly /Rect [10 10 20 20] /C [0 1 0] /QuadPoints [100 320 200 320 100 300 200 300] >>",
         b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [-1e308 20 1e308 20 -1e308 10 1e308 10] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [-1e308 10 1e308 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 200 100] >>",
     ]);
     let display = with_missing_appearances(&doc).expect("the markups need an appearance");
     let shown = list(&display, 0);
@@ -2818,6 +2819,9 @@ fn text_markup_whose_quads_reach_past_its_rect_is_drawn_over_them() {
     assert_eq!(rect(&shown[4]), [10.0, 10.0, 200.0, 320.0], "a squiggly's too");
     assert_eq!(bbox(&shown[4]), rect(&shown[4]));
     assert_eq!(rect(&shown[5]), [0.0, 10.0, 612.0, 20.0], "quads far past the page reach only as far as it shows");
+    // A /Rect too wide for its width to be a number keeps its size: the on-page quad above it
+    // doesn't make it taller.
+    assert_eq!(rect(&shown[6]), [-1e308, 10.0, 1e308, 20.0], "an overflowing /Rect is not widened");
     assert_eq!(rect(&list(&doc, 0)[0]), [335.1, 370.83, 324.6, 471.78], "the source document is unchanged");
 }
 
