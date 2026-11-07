@@ -115,7 +115,20 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(mut bytes) = budget.decode_within(&doc.with_direct_parms(stream), MAX_SFNT) else { continue };
+        // As in `Reads::decode`: once the allowance is spent the decode refuses a program with
+        // data, so it is passed over before its parameters are resolved, work the allowance doesn't
+        // count; an empty one is no program either way.
+        if budget.remaining() == 0 {
+            continue;
+        }
+        let stream = doc.with_direct_parms(stream);
+        // As in `Reads::decode`: the stages share the limit once for each of them, which any one
+        // may use, and the program itself must be within it.
+        let stages = stream.filters().len().max(1);
+        let Ok(mut bytes) = budget.decode_within(&stream, MAX_SFNT.saturating_mul(stages)) else { continue };
+        if bytes.len() > MAX_SFNT {
+            continue;
+        }
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -328,6 +341,12 @@ impl<'a> Reads<'a> {
     /// round. A stream past `max` is unread, not refused, when what is left can pay for its stages;
     /// when it can't, the stream spends it and counts as refused.
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        // Once the allowance is spent the decode refuses the stream; refused here, before the
+        // parameters are resolved, which is work the allowance doesn't count.
+        if self.budget.remaining() == 0 && !stream.raw.is_empty() {
+            self.refused = true;
+            return None;
+        }
         let stream = self.doc.with_direct_parms(stream);
         let stages = stream.filters().len().max(1);
         match self.budget.decode_within(&stream, max.saturating_mul(stages)) {

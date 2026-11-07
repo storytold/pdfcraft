@@ -282,6 +282,20 @@ fn a_fonts_streams_are_paid_for_from_its_allowance() {
     assert_eq!(cost - budget.remaining(), sizes[0] + sizes[3]);
 }
 
+/// With nothing left, an empty stream still reads, as the allowance reads one, and is no reason to
+/// call the font read past it; a stream with data is left unread, and is.
+#[test]
+fn an_empty_stream_reads_with_nothing_left() {
+    let past = |data: &[u8]| {
+        let mut doc = Document::new_empty();
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), data.to_vec()))));
+        let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("ToUnicode", unicode)]);
+        Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(0, 0)).past_allowance
+    };
+    assert!(!past(b""));
+    assert!(past(b"1 beginbfchar <41> <0058> endbfchar"));
+}
+
 /// A stream behind one filter past its own limit, with more left than its limit, is left unread as
 /// it always was, paying for the limit, and is no reason to call the font read past the allowance.
 #[test]
@@ -331,6 +345,50 @@ fn a_full_cid_map_reads_behind_one_or_two_filters() {
     assert_eq!(read(1 << 16, 2), full);
     for filters in 0..=2 {
         assert!(read((1 << 16) + 1, filters).is_empty(), "{filters} filters");
+    }
+}
+
+/// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program
+/// whose Flate data is about 8 MiB reads behind ASCIIHex and Flate as behind Flate alone, though
+/// the two stages make about 20 MiB together. A program of the limit reads behind either, and one a
+/// byte past it is unread behind either.
+#[test]
+fn an_editors_program_reads_behind_ascii_hex_and_flate_within_its_limit() {
+    let program = |len: usize, noise: usize| {
+        let mut program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
+        // Bytes Flate can't shrink, then zeros.
+        let mut x = 1u32;
+        program.extend((0..noise).map(|_| {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            x.to_be_bytes()[0]
+        }));
+        program.resize(len, 0);
+        program
+    };
+    let read = |program: &[u8], hex: bool| {
+        let mut doc = Document::new_empty();
+        let flate = Stream::flate(Dict::new(), program);
+        let stream = if hex {
+            let digits = b"0123456789ABCDEF";
+            let mut data: Vec<u8> = flate.raw.iter().flat_map(|b| [digits[usize::from(b >> 4)], digits[usize::from(b & 15)]]).collect();
+            data.push(b'>');
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+            Stream::from_raw(dict, data)
+        } else {
+            flate
+        };
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(doc.add(Object::Stream(stream))));
+        let simple = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor))]);
+        embedded_sfnt(&doc, &simple)
+    };
+    let near = program(12 << 20, 8 << 20);
+    let full = program(MAX_SFNT, 0);
+    for hex in [false, true] {
+        assert_eq!(read(&near, hex).as_deref(), Some(near.as_slice()), "behind ASCIIHex too: {hex}");
+        assert_eq!(read(&full, hex).as_deref(), Some(full.as_slice()), "behind ASCIIHex too: {hex}");
+        assert!(read(&program(MAX_SFNT + 1, 0), hex).is_none(), "behind ASCIIHex too: {hex}");
     }
 }
 
