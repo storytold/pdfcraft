@@ -15,7 +15,8 @@ use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{
-    ConfidenceBand, LANGUAGES, MergeStrategy, Models, Ocr, OcrError, PlacedWord, Recognizer, band_for, is_suspect, low_confidence,
+    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
+    StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
 };
 
 use crate::{DocId, Edit, EditError, Session};
@@ -257,6 +258,23 @@ struct EngineCache {
     ocrs: Option<Arc<dyn Recognizer>>,
 }
 
+/// The engines built so far (see [`recognizers`] and [`install`]).
+static ENGINES: Mutex<Option<EngineCache>> = Mutex::new(None);
+
+/// Share an ocrs recogniser loaded some other way than from the model files [`Models::find`]
+/// looks for: the web build downloads the models and loads them with [`Ocr::from_bytes`]. From
+/// then on [`recognizers`] hands it out and the engine counts as available.
+pub fn install(ocr: Ocr) -> Arc<dyn Recognizer> {
+    let ocrs: Arc<dyn Recognizer> = Arc::new(pdfcraft_ocr::OcrsRecognizer::from_ocr(ocr));
+    ENGINES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(|| EngineCache { ocrs: None }).ocrs = Some(ocrs.clone());
+    ocrs
+}
+
+/// Whether an ocrs recogniser has been loaded (from the model files, or by [`install`]).
+fn ocrs_loaded() -> bool {
+    ENGINES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| c.ocrs.is_some())
+}
+
 /// How long a negative engine probe (no program there) is remembered. A short TTL, not
 /// forever: a tesseract installed while the app runs is found by the next job, without a
 /// restart. An engine that was found is remembered for the session.
@@ -408,10 +426,11 @@ fn models_installed_cached() -> bool {
     found
 }
 
-/// The web build has no disk search worth caching.
+/// The web build has no model files: the models count as installed once [`install`] has
+/// loaded the ones it downloaded.
 #[cfg(target_arch = "wasm32")]
 fn models_installed_cached() -> bool {
-    Models::find().is_some()
+    ocrs_loaded()
 }
 
 /// The program's `--version` line, remembered per program path for the session (`ocr_status`
@@ -473,7 +492,7 @@ pub fn engines_status() -> Vec<EngineStatus> {
 /// takes a location, because an agent must not choose which program runs; the tools report the
 /// default settings.)
 pub fn engines_status_for(settings: &OcrSettings) -> Vec<EngineStatus> {
-    let ocrs = Models::find().is_some();
+    let ocrs = ocrs_loaded() || Models::find().is_some();
     let mut out = vec![EngineStatus { id: "ocrs", available: ocrs, why_not: (!ocrs).then(models_missing), program: None, version: None }];
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -524,7 +543,6 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     let configured = configured_tesseract(settings);
     let tesseract =
         if matches!(settings.engine, EngineChoice::Tesseract | EngineChoice::Auto) { tesseract_engine(configured.as_deref()) } else { None };
-    static ENGINES: Mutex<Option<EngineCache>> = Mutex::new(None);
     let mut slot = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
     let cache = slot.get_or_insert_with(|| EngineCache { ocrs: None });
     if cache.ocrs.is_none() {
@@ -567,7 +585,7 @@ fn models_missing() -> String {
 /// never waits.
 pub fn available() -> bool {
     let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
-    Models::find().is_some() || tesseract_engine(configured.as_deref()).is_some()
+    ocrs_loaded() || Models::find().is_some() || tesseract_engine(configured.as_deref()).is_some()
 }
 
 /// Why `engine` cannot run right now, named for the UI's tooltips (the Engine dropdown
@@ -703,137 +721,225 @@ impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
     pub fn run(self, recognizers: &Recognizers, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
-        let config =
-            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
-        let mut r = PageRenderer::new(self.bytes.clone(), config);
-        let mut out = Vec::new();
         let total = self.pages.len();
-        let options = pdfcraft_ocr::RecognizeOptions { language: self.settings.language.clone() };
-        for (done, &page) in self.pages.iter().enumerate() {
-            if !progress(done, total) {
-                break;
+        let mut steps = self.steps();
+        let mut out = Vec::new();
+        while progress(steps.done(), total) {
+            match steps.next_page() {
+                None => break,
+                Some(Err(skipped)) => out.push(skipped),
+                Some(Ok(shot)) => out.push(shot.read(recognizers)),
             }
-            let Some(info) = self.infos.get(page) else { continue };
-            let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
-            // The boxes of all text on the page, in view space: an earlier OCR layer's, and words
-            // only /ActualText names, so neither is read again.
-            let existing: Vec<[f32; 4]> = r
-                .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
-                .text
-                .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
-                .unwrap_or_default();
-            if self.settings.skip_text_pages && !self.settings.force_ocr && !existing.is_empty() && has_own_text(&mut r, page) {
-                out.push(skip("the page already contains text"));
-                continue;
-            }
-            // A scan is read at its own resolution (enlarging it only blurs the letters), at
-            // most the chosen one.
-            let scale = self.render_scale(page);
-            let shot = r.render(RenderRequest { page, scale, ..Default::default() });
-            if let Some(e) = shot.error {
-                out.push(skip(&e));
-                continue;
-            }
-            let full = match pdfcraft_ocr::OcrImage::new(shot.width, shot.height, shot.rgba.to_vec()) {
-                Ok(img) => img,
-                Err(e) => {
-                    out.push(skip(&e.to_string()));
-                    continue;
-                }
-            };
-            // The optional region: crop the rendered page, clamped; an empty region skips the
-            // page with a named reason (nothing was asked of it).
-            let (image, offset) = match self.settings.region {
-                None => (full, [0.0f32; 2]),
-                Some(region) => match clamp_region(region, shot.width, shot.height) {
-                    Some([x0, y0, x1, y1]) => match crop(&full, x0, y0, x1, y1) {
-                        Some(c) => (c, [x0 as f32, y0 as f32]),
-                        None => {
-                            out.push(skip("the selected region is empty"));
-                            continue;
-                        }
-                    },
-                    None => {
-                        out.push(skip("the selected region is outside the page"));
-                        continue;
-                    }
-                },
-            };
-            // Preprocessing sits between the page raster and recognition; its word boxes come
-            // back in processed coordinates and are mapped to the ORIGINAL raster's before
-            // placement. The render dpi is the real one (pixels per point × 72), never a
-            // fixed value.
-            let pre = pdfcraft_ocr::preprocess::preprocess(
-                image,
-                scale * 72.0,
-                &pdfcraft_ocr::preprocess::PreprocessOptions {
-                    auto_rotate: self.settings.auto_rotate,
-                    deskew: self.settings.deskew,
-                    denoise: self.settings.denoise,
-                    binarize: self.settings.binarize,
-                },
-            );
-            let (image, inverse) = match pre {
-                Ok(p) => (p.image, p.inverse_transform),
-                Err(e) => {
-                    out.push(skip(&e.to_string()));
-                    continue;
-                }
-            };
-            let outcome = match pdfcraft_ocr::recognize_with_strategy(
-                recognizers.primary.as_ref(),
-                recognizers.secondary.as_deref(),
-                self.settings.strategy,
-                &image,
-                &options,
-            ) {
-                Ok(o) => o,
-                Err(e) => {
-                    out.push(skip(&e.to_string()));
-                    continue;
-                }
-            };
-            let scale = shot.width as f32 / info.width.max(1e-3);
-            let to_user = |x: f32, y: f32| {
-                // processed pixels → original raster pixels (the exact inverse) → past the
-                // region crop → page view space.
-                let (ox, oy) = inverse.apply(f64::from(x), f64::from(y));
-                let [u, v] = info.view_to_user((ox as f32 + offset[0]) / scale, (oy as f32 + offset[1]) / scale);
-                [u as f64, v as f64]
-            };
-            // Validate recognition geometry and compare against existing text in view space,
-            // undoing preprocessing and region offsets before testing overlap.
-            let (fresh, already): (Vec<_>, Vec<_>) = outcome.lines.iter().flat_map(|l| &l.words).filter(|w| box_writable(w)).partition(|w| {
-                let [l, t, r, b] = w.rect;
-                let bounds = [(l, t), (r, t), (r, b), (l, b)].into_iter().fold(
-                    [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
-                    |mut bounds, (x, y)| {
-                        let (x, y) = inverse.apply(f64::from(x), f64::from(y));
-                        let x = (x as f32 + offset[0]) / scale;
-                        let y = (y as f32 + offset[1]) / scale;
-                        bounds[0] = bounds[0].min(x);
-                        bounds[1] = bounds[1].min(y);
-                        bounds[2] = bounds[2].max(x);
-                        bounds[3] = bounds[3].max(y);
-                        bounds
-                    },
-                );
-                covered(bounds, &existing) < ALREADY_ON_PAGE
-            });
-            let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect::<Vec<_>>();
-            let mut notes = outcome.notes;
-            // Only visible editable output needs display glyphs. Searchable output preserves
-            // every Unicode character with empty Type3 programs and ToUnicode maps.
-            if self.settings.output_mode == OutputMode::EditableText && !words.is_empty() {
-                let missing = pdfcraft_fonts::TextPlan::for_words(words.iter().map(|w| w.text.as_str())).missing();
-                if missing > 0 {
-                    notes.push(format!("{missing} characters had no font that could show them and appear as ? in the output"));
-                }
-            }
-            out.push(OcrPage { page, words, already_on_page: already.len(), skipped: None, notes });
         }
         progress(total, total);
         out
+    }
+
+    /// Read the pages one at a time, preparing each page's image and recognising it separately:
+    /// the web build prepares pages on the page and recognises them in Web Workers.
+    pub fn steps(self) -> OcrSteps {
+        let config =
+            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
+        let renderer = PageRenderer::new(self.bytes.clone(), config);
+        OcrSteps { job: self, renderer, next: 0 }
+    }
+}
+
+/// [`OcrJob`] a page at a time: [`OcrSteps::next_page`] renders the next page, crops it to the
+/// region and preprocesses it; an engine reads [`OcrShot::image`], and [`OcrShot::place`] puts
+/// the words found on the page ([`OcrShot::read`] does both with the job's engines).
+pub struct OcrSteps {
+    job: OcrJob,
+    renderer: PageRenderer,
+    next: usize,
+}
+
+impl OcrSteps {
+    /// The number of pages to read.
+    pub fn total(&self) -> usize {
+        self.job.pages.len()
+    }
+
+    /// The number of pages prepared (or skipped) so far.
+    pub fn done(&self) -> usize {
+        self.next
+    }
+
+    /// The settings the job reads with.
+    pub fn settings(&self) -> &OcrSettings {
+        &self.job.settings
+    }
+
+    /// Prepare the next page for recognition. `Err` is a page that isn't read (it already has
+    /// text, or couldn't be rendered or prepared), with the reason; `None` once every page is
+    /// done.
+    pub fn next_page(&mut self) -> Option<Result<OcrShot, OcrPage>> {
+        loop {
+            let page = *self.job.pages.get(self.next)?;
+            self.next += 1;
+            let Some(info) = self.job.infos.get(page).cloned() else { continue };
+            return Some(self.prepare(page, info));
+        }
+    }
+
+    fn prepare(&mut self, page: usize, info: PageInfo) -> Result<OcrShot, OcrPage> {
+        let settings = &self.job.settings;
+        let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
+        let r = &mut self.renderer;
+        // The boxes of all text on the page, in view space: an earlier OCR layer's, and words
+        // only /ActualText names, so neither is read again.
+        let existing: Vec<[f32; 4]> = r
+            .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
+            .text
+            .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
+            .unwrap_or_default();
+        if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page) {
+            return Err(skip("the page already contains text"));
+        }
+        // A scan is read at its own resolution (enlarging it only blurs the letters), at
+        // most the chosen one.
+        let scale = self.job.render_scale(page);
+        let shot = r.render(RenderRequest { page, scale, ..Default::default() });
+        if let Some(e) = shot.error {
+            return Err(skip(&e));
+        }
+        let full = pdfcraft_ocr::OcrImage::new(shot.width, shot.height, shot.rgba.to_vec()).map_err(|e| skip(&e.to_string()))?;
+        // The optional region: crop the rendered page, clamped; an empty region skips the
+        // page with a named reason (nothing was asked of it).
+        let (image, offset) = match settings.region {
+            None => (full, [0.0f32; 2]),
+            Some(region) => match clamp_region(region, shot.width, shot.height) {
+                Some([x0, y0, x1, y1]) => match crop(&full, x0, y0, x1, y1) {
+                    Some(c) => (c, [x0 as f32, y0 as f32]),
+                    None => return Err(skip("the selected region is empty")),
+                },
+                None => return Err(skip("the selected region is outside the page")),
+            },
+        };
+        // Preprocessing sits between the page raster and recognition; its word boxes come
+        // back in processed coordinates and are mapped to the ORIGINAL raster's before
+        // placement. The render dpi is the real one (pixels per point × 72), never a
+        // fixed value.
+        let pre = pdfcraft_ocr::preprocess::preprocess(
+            image,
+            scale * 72.0,
+            &pdfcraft_ocr::preprocess::PreprocessOptions {
+                auto_rotate: settings.auto_rotate,
+                deskew: settings.deskew,
+                denoise: settings.denoise,
+                binarize: settings.binarize,
+            },
+        )
+        .map_err(|e| skip(&e.to_string()))?;
+        Ok(OcrShot {
+            page,
+            image: Some(pre.image),
+            inverse: pre.inverse_transform,
+            offset,
+            pixels_per_point: shot.width as f32 / info.width.max(1e-3),
+            info,
+            existing,
+            strategy: settings.strategy,
+            options: pdfcraft_ocr::RecognizeOptions { language: settings.language.clone() },
+            output_mode: settings.output_mode,
+        })
+    }
+}
+
+/// A page prepared for recognition: the image an engine reads, and what placing the words
+/// found in it needs.
+pub struct OcrShot {
+    pub page: usize,
+    /// The page's pixels as the engines read them: rendered, cropped to the region and
+    /// preprocessed (`None` once [`OcrShot::take_image`] has handed them on).
+    image: Option<OcrImage>,
+    /// Processed pixels → the rendered raster's (the exact inverse of preprocessing).
+    inverse: pdfcraft_ocr::preprocess::InverseTransform,
+    /// Where the region crop starts in the rendered raster.
+    offset: [f32; 2],
+    /// The rendered raster's pixels per point of page view space.
+    pixels_per_point: f32,
+    info: PageInfo,
+    /// The boxes of the page's own text, in view space.
+    existing: Vec<[f32; 4]>,
+    strategy: MergeStrategy,
+    options: pdfcraft_ocr::RecognizeOptions,
+    output_mode: OutputMode,
+}
+
+impl OcrShot {
+    /// What the engines read (`None` once taken).
+    pub fn image(&self) -> Option<&OcrImage> {
+        self.image.as_ref()
+    }
+
+    /// Hand the image on (the web build sends it to a worker), keeping what placing the words
+    /// needs: the page's pixels need not stay in memory while the worker reads them.
+    pub fn take_image(&mut self) -> Option<OcrImage> {
+        self.image.take()
+    }
+
+    /// Recognise the image with `recognizers` (per the job's strategy) and place the words.
+    pub fn read(&self, recognizers: &Recognizers) -> OcrPage {
+        let Some(image) = &self.image else { return self.place(Err("the page's image was handed to another reader".into())) };
+        let outcome = pdfcraft_ocr::recognize_with_strategy(
+            recognizers.primary.as_ref(),
+            recognizers.secondary.as_deref(),
+            self.strategy,
+            image,
+            &self.options,
+        );
+        self.place(outcome.map_err(|e| e.to_string()))
+    }
+
+    /// Put the lines recognised in [`Self::image`] on the page (or skip the page with the
+    /// error). A single engine's reading, which is all the web build's workers run, is
+    /// `StrategyOutcome { lines, ..Default::default() }`: every strategy reads that way when
+    /// there is no second engine.
+    pub fn place(&self, outcome: Result<StrategyOutcome, String>) -> OcrPage {
+        let page = self.page;
+        let outcome = match outcome {
+            Ok(o) => o,
+            Err(e) => return OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(e), notes: Vec::new() },
+        };
+        let (info, inverse, offset, scale) = (&self.info, self.inverse, self.offset, self.pixels_per_point);
+        let to_user = |x: f32, y: f32| {
+            // processed pixels → original raster pixels (the exact inverse) → past the
+            // region crop → page view space.
+            let (ox, oy) = inverse.apply(f64::from(x), f64::from(y));
+            let [u, v] = info.view_to_user((ox as f32 + offset[0]) / scale, (oy as f32 + offset[1]) / scale);
+            [u as f64, v as f64]
+        };
+        // Validate recognition geometry and compare against existing text in view space,
+        // undoing preprocessing and region offsets before testing overlap.
+        let (fresh, already): (Vec<_>, Vec<_>) = outcome.lines.iter().flat_map(|l| &l.words).filter(|w| box_writable(w)).partition(|w| {
+            let [l, t, r, b] = w.rect;
+            let bounds = [(l, t), (r, t), (r, b), (l, b)].into_iter().fold(
+                [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
+                |mut bounds, (x, y)| {
+                    let (x, y) = inverse.apply(f64::from(x), f64::from(y));
+                    let x = (x as f32 + offset[0]) / scale;
+                    let y = (y as f32 + offset[1]) / scale;
+                    bounds[0] = bounds[0].min(x);
+                    bounds[1] = bounds[1].min(y);
+                    bounds[2] = bounds[2].max(x);
+                    bounds[3] = bounds[3].max(y);
+                    bounds
+                },
+            );
+            covered(bounds, &self.existing) < ALREADY_ON_PAGE
+        });
+        let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect::<Vec<_>>();
+        let mut notes = outcome.notes;
+        // Only visible editable output needs display glyphs. Searchable output preserves
+        // every Unicode character with empty Type3 programs and ToUnicode maps.
+        if self.output_mode == OutputMode::EditableText && !words.is_empty() {
+            let missing = pdfcraft_fonts::TextPlan::for_words(words.iter().map(|w| w.text.as_str())).missing();
+            if missing > 0 {
+                notes.push(format!("{missing} characters had no font that could show them and appear as ? in the output"));
+            }
+        }
+        OcrPage { page, words, already_on_page: already.len(), skipped: None, notes }
     }
 }
 
@@ -1095,36 +1201,70 @@ pub fn recognize_file(
     recognizers: &Recognizers,
     progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<FileResult, String> {
-    let mut s = Session::new();
-    let id = s.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
-    if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
-        return Err(why);
+    match FileJob::open(name, bytes, password, settings)? {
+        Opened::Skipped(result) => Ok(result),
+        Opened::Read(mut file) => {
+            let job = file.job.take().ok_or("the document could not be read")?;
+            let pages = job.run(recognizers, progress);
+            file.finish(pages)
+        }
     }
-    let job = s.ocr_job(id, &[], settings.clone()).ok_or("the document could not be read")?;
-    // The skip-files probe runs before any engine work: a file with text needs no engine at
-    // all, and the original bytes come back unchanged.
-    if settings.skip_text_files && !settings.force_ocr && job.has_text() {
-        let pages = job
-            .pages
-            .iter()
-            .map(|&page| OcrPage {
-                already_on_page: 0,
-                page,
-                words: Vec::new(),
-                skipped: Some("the file already contains text".into()),
-                notes: Vec::new(),
-            })
-            .collect();
-        return Ok(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()) });
+}
+
+/// [`recognize_file`] in two halves, for callers that read the pages themselves (the web build
+/// reads them in Web Workers): [`FileJob::open`], read `job`, then [`FileJob::finish`].
+pub struct FileJob {
+    session: Session,
+    id: DocId,
+    bytes: Arc<Vec<u8>>,
+    /// The pages to read (taken by the caller).
+    pub job: Option<OcrJob>,
+}
+
+/// What [`FileJob::open`] found: a file to read, or one the skip-files option passes over
+/// (its result is final, and no engine is needed).
+pub enum Opened {
+    Read(Box<FileJob>),
+    Skipped(FileResult),
+}
+
+impl FileJob {
+    pub fn open(name: &str, bytes: Arc<Vec<u8>>, password: Option<&str>, settings: OcrSettings) -> Result<Opened, String> {
+        let mut session = Session::new();
+        let id = session.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
+        if let Some(why) = session.get(id).and_then(|d| d.read_only_reason.clone()) {
+            return Err(why);
+        }
+        let job = session.ocr_job(id, &[], settings.clone()).ok_or("the document could not be read")?;
+        // The skip-files probe runs before any engine work: a file with text needs no engine at
+        // all, and the original bytes come back unchanged.
+        if settings.skip_text_files && !settings.force_ocr && job.has_text() {
+            let pages = job
+                .pages
+                .iter()
+                .map(|&page| OcrPage {
+                    already_on_page: 0,
+                    page,
+                    words: Vec::new(),
+                    skipped: Some("the file already contains text".into()),
+                    notes: Vec::new(),
+                })
+                .collect();
+            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()) }));
+        }
+        Ok(Opened::Read(Box::new(FileJob { session, id, bytes, job: Some(job) })))
     }
-    let pages = job.run(recognizers, progress);
-    if s.apply_ocr(id, &pages).map_err(|e| e.to_string())? == 0 {
-        return Ok(FileResult { bytes, pages, file_skipped: None });
+
+    /// Add the words found and save: the searchable file, or the original when nothing was found.
+    pub fn finish(mut self, pages: Vec<OcrPage>) -> Result<FileResult, String> {
+        if self.session.apply_ocr(self.id, &pages).map_err(|e| e.to_string())? == 0 {
+            return Ok(FileResult { bytes: self.bytes, pages, file_skipped: None });
+        }
+        // Checked like a save before the caller writes it (#2166).
+        let bytes = self.session.save_bytes(self.id).map_err(|e| e.to_string())?;
+        self.session.check_save(self.id, &bytes).map_err(|e| e.to_string())?;
+        Ok(FileResult { bytes, pages, file_skipped: None })
     }
-    // Checked like a save before the caller writes it (#2166).
-    let bytes = s.save_bytes(id).map_err(|e| e.to_string())?;
-    s.check_save(id, &bytes).map_err(|e| e.to_string())?;
-    Ok(FileResult { bytes, pages, file_skipped: None })
 }
 
 #[cfg(test)]
@@ -1637,6 +1777,87 @@ mod tests {
         let again = recognize_file("t.pdf", out.bytes, None, OcrSettings::default(), &r, |_, _| true).unwrap();
         assert_eq!(fake.calls(), 0);
         assert_eq!(again.pages[0].skipped.as_deref(), Some("the page already contains text"));
+    }
+
+    /// The web build prepares pages with [`OcrJob::steps`] and has a worker read each image,
+    /// its lines coming back as JSON: the pages it ends with are the ones [`OcrJob::run`] gives,
+    /// with a region crop and preprocessing between the render and the engine.
+    #[test]
+    fn reading_page_by_page_matches_a_run() {
+        let mut s = Session::new();
+        let bytes = s.create_from_text("t", "One page\nanother page").unwrap();
+        let id = s.open("t.pdf", None, bytes, None).unwrap();
+        let settings = OcrSettings { force_ocr: true, deskew: true, binarize: true, region: Some([40.0, 30.0, 900.0, 700.0]), ..Default::default() };
+        let (r, fake) = fake_recognizers();
+        let run = s.ocr_job(id, &[], settings.clone()).unwrap().run(&r, |_, _| true);
+        assert!(run.iter().all(|p| p.skipped.is_none() && p.words.len() == 1), "{run:?}");
+        let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+        assert_eq!((steps.done(), steps.total()), (0, run.len()));
+        let mut stepped = Vec::new();
+        while let Some(next) = steps.next_page() {
+            let shot = next.unwrap();
+            let json = pdfcraft_ocr::lines_to_json(&fake.recognize(shot.image().unwrap(), &pdfcraft_ocr::RecognizeOptions::default()).unwrap());
+            let lines = lines_from_json(&json, "fake").map_err(|e| e.to_string());
+            stepped.push(shot.place(lines.map(|lines| StrategyOutcome { lines, ..Default::default() })));
+        }
+        assert_eq!(steps.done(), run.len());
+        assert_eq!(stepped, run);
+        // An engine's failure skips the page with the reason, as in a run.
+        let mut steps = s.ocr_job(id, &[0], OcrSettings { force_ocr: true, ..Default::default() }).unwrap().steps();
+        let mut shot = steps.next_page().unwrap().unwrap();
+        let page = shot.place(Err("worker gone".into()));
+        assert_eq!(page.skipped.as_deref(), Some("worker gone"));
+        // Once the image is handed on, it can't be read here as well.
+        assert!(shot.take_image().is_some() && shot.image().is_none());
+        assert!(shot.read(&r).skipped.is_some());
+        assert!(steps.next_page().is_none());
+    }
+
+    /// A page the job doesn't read comes out of [`OcrSteps::next_page`] as skipped, with its
+    /// reason, before any engine is involved.
+    #[test]
+    fn page_by_page_skips_text_pages_without_an_engine() {
+        let mut s = Session::new();
+        let bytes = s.create_from_text("t", "A page with text").unwrap();
+        let id = s.open("t.pdf", None, bytes, None).unwrap();
+        let mut steps = s.ocr_job(id, &[], OcrSettings::default()).unwrap().steps();
+        let Some(Err(page)) = steps.next_page() else { panic!("the text page should be skipped") };
+        assert_eq!(page.skipped.as_deref(), Some("the page already contains text"));
+    }
+
+    /// The web build has no model files: a recogniser loaded from downloaded bytes is installed
+    /// and from then on is the engine every job reads with.
+    #[test]
+    fn an_installed_recognizer_is_available_and_handed_out() {
+        let Some(models) = Models::find().filter(|m| m.detection.ends_with(DETECTION_MODEL)) else {
+            eprintln!("skipped: ONNX OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::from_bytes(std::fs::read(&models.detection).unwrap(), std::fs::read(&models.recognition).unwrap()).unwrap();
+        let installed = install(ocr);
+        assert!(installed.available());
+        assert!(available());
+        let r = recognizers(&OcrSettings::default()).unwrap();
+        assert!(Arc::ptr_eq(&r.primary, &installed), "the installed recogniser is the one handed out");
+        assert!(engines_status().iter().any(|e| e.id == "ocrs" && e.available));
+    }
+
+    /// The batch's halves: a file to read opens with its job, and [`FileJob::finish`] saves
+    /// the searchable copy; a file the skip-files option passes over is final on opening.
+    #[test]
+    fn a_file_job_reads_in_two_halves() {
+        let s = Session::new();
+        let bytes = s.create_from_text("t", "Already typed here").unwrap();
+        let (r, fake) = fake_recognizers();
+        let skip = OcrSettings { skip_text_files: true, ..Default::default() };
+        let Ok(Opened::Skipped(out)) = FileJob::open("t.pdf", bytes.clone(), None, skip) else { panic!("the file should be skipped") };
+        assert_eq!(out.file_skipped.as_deref(), Some("the file already contains text"));
+        let force = OcrSettings { force_ocr: true, ..Default::default() };
+        let Ok(Opened::Read(mut file)) = FileJob::open("t.pdf", bytes.clone(), None, force.clone()) else { panic!("the file should be read") };
+        let pages = file.job.take().unwrap().run(&r, |_, _| true);
+        let out = file.finish(pages).unwrap();
+        assert_eq!((fake.calls(), out.words(), out.file_skipped.clone()), (1, 1, None));
+        assert_eq!(out, recognize_file("t.pdf", bytes, None, force, &r, |_, _| true).unwrap(), "the same as reading it in one call");
     }
 
     /// Two inputs of one name (from different folders, or differing only in case) would
