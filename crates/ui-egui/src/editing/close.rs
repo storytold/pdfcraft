@@ -14,8 +14,12 @@ pub enum CloseRequest {
 }
 
 impl PdfCraftApp {
-    /// Close a tab, asking first if it has unsaved changes.
+    /// Close a tab, asking first if it has unsaved changes. A document under OCR review stays
+    /// open until the review is accepted or rejected.
     pub fn request_close_tab(&mut self, index: usize) {
+        if self.hold_close_for_ocr_review(index) {
+            return;
+        }
         // Text typed into a field counts as an unsaved change.
         if self.has_unsaved_work(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
@@ -27,7 +31,13 @@ impl PdfCraftApp {
     }
 
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
+    /// While a document is under OCR review, nothing closes: the review comes forward first.
     pub fn close_all(&mut self) {
+        if let Some(i) = self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id))
+            && self.hold_close_for_ocr_review(i)
+        {
+            return;
+        }
         for i in (0..self.views.len()).rev() {
             if !self.has_unsaved_work(i) {
                 self.close_tab(i);
@@ -36,6 +46,21 @@ impl PdfCraftApp {
         if self.first_dirty().is_some() {
             self.close_request = Some(CloseRequest::All);
         }
+    }
+
+    /// A document whose OCR review is still open (a run, or a reading not yet accepted or
+    /// rejected) does not close under it: closing would leave the review with nothing to apply
+    /// to (#6485). The document comes to the front with its review, and a notice says what to
+    /// do. Whether the close was held.
+    pub(crate) fn hold_close_for_ocr_review(&mut self, index: usize) -> bool {
+        let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        if !self.ocr_verify.holds_reading_of(id) {
+            return false;
+        }
+        self.active = Some(index);
+        self.ocr_verify.open = true;
+        self.notify_tr("Accept or reject the OCR review before closing this document");
+        true
     }
 
     /// File ▸ Revert (after the confirmation).

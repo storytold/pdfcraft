@@ -318,10 +318,45 @@ impl OcrVerify {
         self.load_dictionary_pref();
     }
 
-    /// Keep showing the current page if the reading has it, else show the first page read.
+    /// Show a page the reading has words for: the current page if it was read, else the first
+    /// page read. When every page was skipped, the current page if the reading has it, else its
+    /// first page; a reading with no pages (a run cancelled before its first page) keeps the
+    /// page the run was started on.
     fn show_a_read_page(&mut self) {
-        if self.page(self.current).is_none() {
-            self.current = self.pages.first().map_or(0, |p| p.page);
+        if self.page(self.current).is_some_and(|p| p.skipped.is_none()) {
+            return;
+        }
+        if let Some(p) = self.pages.iter().find(|p| p.skipped.is_none()) {
+            self.current = p.page;
+        } else if self.page(self.current).is_none()
+            && let Some(p) = self.pages.first()
+        {
+            self.current = p.page;
+        }
+    }
+
+    /// Whether the screen holds a run or a reading not yet accepted or rejected (a failed run
+    /// that read nothing holds none).
+    fn has_reading(&self) -> bool {
+        !(self.phase == Phase::Idle || (self.phase == Phase::RecoverableError && self.pages.is_empty()))
+    }
+
+    /// Whether the screen holds a run or a reading of `doc`: closing that document would leave
+    /// the review with nothing to apply to.
+    pub(crate) fn holds_reading_of(&self, doc: DocId) -> bool {
+        self.doc == Some(doc) && self.has_reading()
+    }
+
+    /// The info strip's PAGE cell: the shown page's number in the document over the document's
+    /// page count (`page_count`), the numbering the page list uses; "—" before a reading.
+    fn page_indicator(&self, page_count: Option<usize>) -> String {
+        if self.pages.is_empty() {
+            return "—".into();
+        }
+        let shown = self.current.saturating_add(1);
+        match page_count {
+            Some(total) if total > 0 => format!("{shown} / {total}"),
+            _ => shown.to_string(),
         }
     }
 
@@ -1271,8 +1306,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// source pane shows the document in front at the page it is on, so the screen never opens on
 /// a blank pane (#6485). A run or a review keeps the document and page it was made for.
 fn follow_active_document(app: &mut PdfCraftApp) {
-    let v = &app.ocr_verify;
-    if !(v.phase == Phase::Idle || (v.phase == Phase::RecoverableError && v.pages.is_empty())) {
+    if app.ocr_verify.has_reading() {
         return;
     }
     let active = app.active_ids();
@@ -1486,7 +1520,7 @@ fn info_strip(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let read = v.pages.iter().filter(|p| p.skipped.is_none()).count();
     let avg = v.page(v.current).and_then(pdfcraft_engine::ocr::OcrPage::mean_confidence);
     let cells = [
-        (tl!("PAGE"), if v.pages.is_empty() { "—".into() } else { format!("{} / {}", v.current + 1, v.pages.len()) }),
+        (tl!("PAGE"), v.page_indicator(v.doc.and_then(|d| app.session.get(d)).map(|d| d.info.pages.len()))),
         (tl!("AVG CONFIDENCE"), avg.map_or_else(|| "—".into(), |c| format!("{c:.0}%"))),
         (tl!("LOW-CONFIDENCE WORDS"), v.suspect_count().to_string()),
         (tl!("VERIFIED %"), format!("{}%", (v.verified_fraction() * 100.0).round() as i64)),
@@ -1720,8 +1754,14 @@ pub fn legend_rows() -> [(ConfidenceBand, String); 3] {
 /// Render (or re-render) the source pane's page preview when the shown page changed. One
 /// synchronous render per page; the texture is cached until then.
 fn ensure_preview(app: &mut PdfCraftApp, page: usize) {
-    let Some(doc) = app.ocr_verify.doc else { return };
-    if app.ocr_verify.preview.as_ref().is_some_and(|p| p.doc == doc && p.page == page && p.texture.is_some()) {
+    let doc = app.ocr_verify.doc;
+    // A preview of another document or page never stands in for this one, even when this
+    // page cannot be rendered.
+    if !app.ocr_verify.preview.as_ref().is_some_and(|p| Some(p.doc) == doc && p.page == page) {
+        app.ocr_verify.preview = None;
+    }
+    let Some(doc) = doc else { return };
+    if app.ocr_verify.preview.as_ref().is_some_and(|p| p.texture.is_some()) {
         return;
     }
     let Some(d) = app.session.get(doc) else { return };
@@ -1732,7 +1772,7 @@ fn ensure_preview(app: &mut PdfCraftApp, page: usize) {
     let mut r = pdfcraft_render::PageRenderer::new(d.bytes.clone(), config);
     let shot = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Pixels, scale, ..Default::default() });
     if shot.error.is_some() || shot.width == 0 || shot.height == 0 {
-        return; // keep any earlier preview; a render failure names itself elsewhere
+        return; // a render failure names itself elsewhere
     }
     let scale = shot.width as f32 / info.width.max(1.0);
     let texture = app.ctx.as_ref().map(|ctx| {
@@ -2879,9 +2919,115 @@ mod tests {
         let preview = v.preview.as_ref().expect("the source page is rendered");
         assert_eq!((preview.doc, preview.page), (id, 0));
         assert!(preview.texture.is_some(), "and drawn");
+        // A review with a correction in it, put away by another mode, comes back as it was.
+        let job = h.state_mut().session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        h.state_mut().ocr_verify.load(id, job.guard.clone(), vec![page]);
+        assert!(h.state_mut().ocr_verify.correct((0, 0), "Edited"));
+        h.run_steps(2);
         h.get_by_label("E-Sign").click();
         h.run_steps(3);
         assert!(!h.state().ocr_verify.open, "another mode puts the screen away");
+        assert!(h.state_mut().execute("ocr.correct"));
+        h.run_steps(3);
+        let v = &h.state().ocr_verify;
+        assert!(v.open, "Correct recognized text brings the screen back");
+        assert_eq!((v.phase, v.doc), (Phase::ReviewReady, Some(id)), "with its review");
+        assert_eq!(v.text_of((0, 0)), Some("Edited"), "and the correction in it");
+    }
+
+    /// After a run, the source pane shows a page with recognized words: a page skipped because
+    /// it already has text is passed over, unless every page was skipped.
+    #[test]
+    fn a_finished_run_shows_a_read_page_over_a_skipped_one() {
+        let skipped = |page| OcrPage { already_on_page: 0, page, words: Vec::new(), skipped: Some("has text".into()), notes: Vec::new() };
+        let read = |page| OcrPage { already_on_page: 0, page, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        let mut v = OcrVerify { current: 0, ..Default::default() };
+        v.finished(vec![skipped(0), read(1), read(2)], false);
+        assert_eq!(v.current, 1, "the first page read");
+        let mut v = OcrVerify { current: 2, ..Default::default() };
+        v.finished(vec![skipped(0), read(1), read(2)], false);
+        assert_eq!(v.current, 2, "the current page, when it was read");
+        let mut v = OcrVerify { current: 1, ..Default::default() };
+        v.finished(vec![skipped(0), skipped(1)], false);
+        assert_eq!(v.current, 1, "every page skipped: the current page stays");
+        let mut v = OcrVerify { current: 5, ..Default::default() };
+        v.finished(vec![skipped(0), skipped(1)], false);
+        assert_eq!(v.current, 0, "or the reading's first page, when it lacks the current one");
+    }
+
+    /// A current-page run cancelled before its page was read keeps showing that page.
+    #[test]
+    fn a_run_that_read_no_pages_keeps_its_page() {
+        let mut v = OcrVerify { current: 2, ..Default::default() };
+        v.finished(Vec::new(), true);
+        assert_eq!(v.current, 2);
+        assert_eq!(v.phase, Phase::ReviewReady);
+    }
+
+    /// PAGE pairs the shown page's number in the document with the document's page count, the
+    /// numbering the page list uses: a reading of page 3 alone is "3 / 5", never "3 / 1".
+    #[test]
+    fn page_indicator_numbers_pages_in_the_document() {
+        let mut v = OcrVerify::default();
+        assert_eq!(v.page_indicator(Some(5)), "—", "no reading yet");
+        v.finished(vec![OcrPage { already_on_page: 0, page: 2, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() }], false);
+        assert_eq!(v.page_indicator(Some(5)), "3 / 5");
+        assert_eq!(v.page_indicator(None), "3", "no count when the document is gone");
+        assert_eq!(v.page_indicator(Some(0)), "3");
+    }
+
+    /// The cached preview is dropped once the source moves to a page it is not of, even when
+    /// the new page cannot be rendered: the pane never shows another page's image.
+    #[test]
+    fn a_preview_of_another_page_is_dropped() {
+        let mut app = PdfCraftApp::new();
+        let text = app.session.create_from_text("t", "Recognize these scanned words").expect("fixture");
+        let id = app.session.open("t.pdf", None, text, None).expect("fixture");
+        app.ocr_verify.doc = Some(id);
+        ensure_preview(&mut app, 0);
+        assert!(app.ocr_verify.preview.as_ref().is_some_and(|p| (p.doc, p.page) == (id, 0)), "page 1 is rendered");
+        ensure_preview(&mut app, 99);
+        assert!(app.ocr_verify.preview.is_none(), "a page that cannot render shows no image, not page 1's");
+        ensure_preview(&mut app, 0);
+        app.ocr_verify.doc = None;
+        ensure_preview(&mut app, 0);
+        assert!(app.ocr_verify.preview.is_none(), "nor does a pane with no document");
+    }
+
+    /// Closing a document under OCR review, from another tab, Close all or its own tab, keeps it
+    /// open and brings its review forward; other documents close as usual, and once the review
+    /// is rejected the document closes.
+    #[test]
+    fn closing_the_reviewed_document_brings_its_review_forward() {
+        let mut app = PdfCraftApp::new();
+        let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+        }
+        let a = app.views.first().expect("a is open").id;
+        let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        app.ocr_verify.load(a, job.guard.clone(), vec![page]);
+        assert!(app.ocr_verify.correct((0, 0), "Edited"));
+        app.active = Some(2);
+        app.request_close_tab(0);
+        assert_eq!(app.views.len(), 3, "the reviewed document stays open");
+        assert_eq!(app.active, Some(0), "and comes to the front");
+        assert!(app.ocr_verify.open, "with its review");
+        assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "as it was");
+        assert!(app.toast.is_some(), "a notice says to accept or reject it first");
+        app.ocr_verify.open = false;
+        app.request_close_tab(2);
+        assert_eq!(app.views.len(), 2, "another document closes as usual");
+        app.active = Some(1);
+        app.close_all();
+        assert_eq!(app.views.len(), 2, "Close all closes nothing while the review is open");
+        assert_eq!(app.active, Some(0));
+        assert!(app.ocr_verify.reject());
+        app.request_close_tab(0);
+        assert_eq!(app.views.len(), 1, "after Reject the document closes");
+        assert!(app.views.iter().all(|v| v.id != a));
     }
 
     /// A run of one page shows that page when its reading lands, not page 1.
