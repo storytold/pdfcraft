@@ -67,9 +67,15 @@ impl CffFontBlob {
         let font = CffFontRef::new(data.as_ref().as_ref(), 0, None).ok()?;
         let cff = Cff::read(ReadFontData::new(data.as_ref().as_ref())).ok()?;
         let charset = font.charset();
+        // PdfCraft patch (93): a font dict that cannot be read (a CID font's FDArray entry
+        // emptied by a subsetter, with no Private DICT) leaves only the glyphs it selects
+        // missing. The font is dropped only when no font dict is usable.
         let subfonts = (0..font.num_subfonts())
             .map(|index| font.subfont(index, &[]).ok())
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Vec<_>>();
+        if !subfonts.iter().any(Option::is_some) {
+            return None;
+        }
 
         let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), |data| {
             let bytes = data.as_ref();
@@ -77,7 +83,7 @@ impl CffFontBlob {
             let cff = Cff::read(ReadFontData::new(bytes)).unwrap();
             let charset = font.charset();
             let subfonts = (0..font.num_subfonts())
-                .map(|index| font.subfont(index, &[]).unwrap())
+                .map(|index| font.subfont(index, &[]).ok())
                 .collect();
             CFFYoke {
                 font,
@@ -105,7 +111,7 @@ impl CffFontBlob {
 
     fn subfont(&self, glyph: GlyphId) -> Option<&Subfont> {
         let index = self.font().subfont_index(glyph)? as usize;
-        self.0.as_ref().get().subfonts.get(index)
+        self.0.as_ref().get().subfonts.get(index)?.as_ref()
     }
 
     pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
@@ -377,7 +383,8 @@ struct CFFYoke<'a> {
     font: CffFontRef<'a>,
     cff: Cff<'a>,
     charset: Option<Charset<'a>>,
-    subfonts: Vec<Subfont>,
+    /// PdfCraft patch (93): `None` for a font dict that could not be read.
+    subfonts: Vec<Option<Subfont>>,
 }
 
 #[cfg(test)]
