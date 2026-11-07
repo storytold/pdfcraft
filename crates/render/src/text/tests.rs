@@ -576,6 +576,19 @@ fn vertical_ligatures_stay_in_their_column() {
 /// letter's line allowance smaller than the tracking, and the column broke into lines.
 #[test]
 fn tracked_vertical_latin_stays_one_line() {
+    tracked_vertical_latin(-40.0, 100.0);
+}
+
+#[test]
+fn horizontally_scaled_vertical_latin_box_is_scaled_across_the_column() {
+    // Horizontal scaling Th = Tz / 100 scales the glyph's width w0 across the column (ISO 32000-2
+    // §9.4.4, the text rendering matrix), and not the advance down it. The tracking is 20 pt here:
+    // the line's gap allowance is three times the narrower box across it, 3 × 8 pt at 50 Tz.
+    tracked_vertical_latin(-20.0, 50.0);
+}
+
+/// `ABCDE` down one Identity-V column at 24 pt with `tc Tc` and `tz Tz`.
+fn tracked_vertical_latin(tc: f32, tz: f32) {
     use lopdf::{Document, Object, Stream, dictionary};
     let mut doc = Document::with_version("1.7");
     let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 5 beginbfchar <0024> <0041> <0025> <0042> <0026> <0043> <0027> <0044> <0028> <0045> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
@@ -590,7 +603,10 @@ fn tracked_vertical_latin_stays_one_line() {
         "DW" => 1000, "W" => widths, "DW2" => vec![Object::Integer(880), Object::Integer(-1000)], "CIDToGIDMap" => "Identity"
     });
     let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestVerticalLatin", "Encoding" => "Identity-V", "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
-    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 24 Tf -40 Tc 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET".to_vec()));
+    let content = doc.add_object(Stream::new(
+        dictionary! {},
+        format!("BT /F1 24 Tf {tc} Tc {tz} Tz 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET").into_bytes(),
+    ));
     let pages = doc.new_object_id();
     let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(500)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
     doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
@@ -602,10 +618,11 @@ fn tracked_vertical_latin_stays_one_line() {
     let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
     assert_eq!(text.plain_text(), "ABCDE");
     assert_eq!(text.find("ABCDE"), vec![0..5]);
-    // Each box spans w0 (here 24 pt × 0.667 or 0.722) centred on the column at x = 100.
+    // Each box spans w0 (here 24 pt × 0.667 or 0.722, times Th) centred on the column at x = 100.
+    assert_eq!(text.glyphs.len(), 5);
     for (g, w0) in text.glyphs.iter().zip([667.0, 667.0, 722.0, 722.0, 667.0]) {
         let [x0, _, x1, _] = g.rect;
-        assert!((x1 - x0 - 24.0 * w0 / 1000.0).abs() < 0.01, "{:?} is w0 wide: {:?}", g.text, g.rect);
+        assert!((x1 - x0 - 24.0 * w0 / 1000.0 * tz / 100.0).abs() < 0.01, "{:?} is w0 wide: {:?}", g.text, g.rect);
         assert!(((x0 + x1) / 2.0 - 100.0).abs() < 0.01, "{:?} is centred on the column: {:?}", g.text, g.rect);
     }
 }
