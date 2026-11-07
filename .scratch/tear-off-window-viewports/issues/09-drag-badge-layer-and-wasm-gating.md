@@ -6,8 +6,8 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] In `crates/ui-egui/src/chrome.rs`, paint the tear-off drag badge using `ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("tear_off_badge")))`.
-- [ ] In `crates/ui-egui/src/control/host.rs`, update `"enabled"` for `ui.detach` to `!cfg!(target_arch = "wasm32") && self.views.len() > 1` and `ui.attach` to `!cfg!(target_arch = "wasm32") && self.views.iter().any(|v| v.detached)`.
-- [ ] Add tests verifying unclipped layer badge rendering and WASM command discovery gating.
+- [x] In `crates/ui-egui/src/chrome.rs`, paint the tear-off drag badge using `ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("tear_off_badge")))`.
+- [x] In `crates/ui-egui/src/control/host.rs`, update `"enabled"` for `ui.detach` to `!cfg!(target_arch = "wasm32") && self.views.len() > 1` and `ui.attach` to `!cfg!(target_arch = "wasm32") && self.views.iter().any(|v| v.detached)`.
+- [x] Add tests verifying unclipped layer badge rendering and WASM command discovery gating.

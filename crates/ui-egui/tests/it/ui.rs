@@ -1728,6 +1728,26 @@ fn dragging_a_tab_to_open_space_detaches_it_into_its_own_window() {
 }
 
 #[test]
+fn dragging_tab_outside_strip_renders_tear_off_badge_on_tooltip_layer() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+
+    // Drag "middle.pdf" downwards 60px into open space without releasing
+    let from = tab(&h, "middle.pdf").center();
+    let to = from + egui::vec2(0.0, 60.0);
+    drag_named_tab(&mut h, "middle.pdf", to, false);
+
+    // Grabbing cursor is reported while dragging outside tab strip
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+
+    // Release to drop and detach
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "middle.pdf tab should be detached");
+}
+
+#[test]
 fn tab_context_menu_can_detach_tab_to_new_window() {
     use egui::accesskit::Role;
     let mut h = three_tab_harness();

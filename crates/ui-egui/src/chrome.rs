@@ -225,9 +225,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                             if let Some(name) = crate::canvas::tab_label(app, from) {
                                                 let badge_rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 12.0), egui::vec2(130.0, 26.0));
-                                                ui.painter().rect_filled(badge_rect, 4.0, t.panel);
-                                                ui.painter().rect_stroke(badge_rect, 4.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-                                                ui.painter().text(
+                                                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("tear_off_badge")));
+                                                painter.rect_filled(badge_rect, 4.0, t.panel);
+                                                painter.rect_stroke(badge_rect, 4.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                                                painter.text(
                                                     badge_rect.center(),
                                                     egui::Align2::CENTER_CENTER,
                                                     name,
