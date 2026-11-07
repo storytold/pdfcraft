@@ -95,7 +95,8 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
 
 /// Link tool input on one page: `free` when nobody holds the press and it began on this page,
 /// `owner` the link that holds it (by its `/Annots` index), and `context` the link a right-click is
-/// on. A drag from either draws a new link. Returns `true` when the gesture belongs to the tool.
+/// on. A drag nobody holds draws a new link: a link lets its drag go. Returns `true` when the
+/// gesture belongs to the tool.
 pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usize>, context: Option<usize>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
@@ -114,11 +115,11 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usiz
         }
         return true;
     }
-    // A drag that nobody holds, or from a link (whose hit lets the drag go), draws a new link from
-    // where its press began on this page. egui may see the drag only once the pointer is past the
-    // page's edge.
-    if resp.drag_started()
-        && (free || owner.is_some())
+    // A drag that nobody holds (a link's hit lets its drag go, `PageRouter::drag_began`) draws a
+    // new link from where its press began on this page. egui may see the drag only once the pointer
+    // is past the page's edge.
+    if ptr.drag_started
+        && free
         && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {
         lv.drag = Some((page, origin));

@@ -717,14 +717,22 @@ fn form_widget_keeps_priority_over_highlighted_link() {
     assert_eq!(h.state().last_opened_url, None);
 }
 
+/// A comment's gesture keeps the page's input until its button is up: a press held through it and
+/// released on a highlighted link follows no link. (A gesture left over once the button is up
+/// ends: `a_comment_move_whose_release_the_pages_missed_ends_once_the_button_is_up`.)
 #[test]
 fn active_comment_gesture_keeps_highlighted_link_click() {
     let _gpu = gpu();
     let mut h = overlapping_annotation_harness(overlapping_annotation_fixture("Highlight", false));
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     let at = egui::pos2(r.min.x + r.width() * 0.5, r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at);
+    h.run_steps(1);
     h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 1, from: at });
-    click_at(&mut h, at);
+    h.drop_at(at);
+    h.run_steps(4);
     assert_eq!(h.state().pending_link, None);
     assert_eq!(h.state().last_opened_url, None);
 }
