@@ -783,3 +783,94 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     let aliases: Vec<(String, String)> = [("hit", "corner_under"), ("picture_hit", "under")].map(|(a, b)| (a.to_owned(), b.to_owned())).to_vec();
     assert_eq!(aliased_hit_tests(source), aliases);
 }
+
+/// egui's raw key state: a key pressed, held, let go or taken, and the key events themselves.
+const RAW_KEY_READS: [&str; 9] = [
+    "key_pressed(",
+    "key_released(",
+    "key_down(",
+    "keys_down",
+    "num_presses(",
+    "consume_key(",
+    "consume_shortcut(",
+    "count_and_consume_key(",
+    "Event::Key",
+];
+
+/// Functions under `canvas/` and `tools/`, and in `app/keys.rs`, that read egui's keys themselves
+/// because the keys are not the pages': (file, function, why).
+const NOT_PAGE_KEYS: [(&str, &str, &str); 16] = [
+    ("app/keys.rs", "shortcuts", "the app's own keys before the pages': Select all, and Escape leaving full screen"),
+    ("canvas/area.rs", "glide_interrupted", "any key stops the touchpad's glide"),
+    ("canvas/autoscroll.rs", "update_latched", "Escape ends the middle-button scroll, which holds the whole view"),
+    ("canvas/autoscroll.rs", "escape", "Escape ends the middle-button scroll, which holds the whole view"),
+    ("canvas/find.rs", "find_bar", "the Find field's own keys, while it has the focus"),
+    ("canvas/navigation.rs", "view_chords", "the view's chords: a command's chord closes a menu as it runs, as the registry's do"),
+    ("canvas/page_input.rs", "cancel_on_escape", "Escape cancels a press the pages hold, which goes on under a dialog opened during it"),
+    ("tools/calc_order_ui.rs", "panel", "the Calculation order panel's own Alt+arrows"),
+    ("tools/comments/composer.rs", "submit_key", "the comment field's own Enter, while it has the focus (the Comments panel's too)"),
+    ("tools/field_table_ui.rs", "show", "the Text field table window's own Escape"),
+    ("tools/field_table_ui.rs", "column_dividers", "the Text field table window's own arrows"),
+    ("tools/fill_sign.rs", "signature_pad", "the signature dialog's own ⌘Z"),
+    ("tools/forms_ui.rs", "combo_editor", "the combo box's own Enter, while its field has the focus"),
+    ("tools/prepare/properties.rs", "body", "the field properties' own Enter, while one of their fields has the focus"),
+    ("tools/redact_ui.rs", "search_body", "the redaction search field's own Enter, while it has the focus"),
+    ("tools/sign_ui/dialog.rs", "sign_as", "the signing dialog's own Enter"),
+];
+
+/// The files whose key reads the key guard checks, relative to `src`: every file under `canvas/`
+/// and `tools/` and the canvas's root, whether or not it is a page module yet, and the app's own
+/// keys; not their tests, and not `PageKeys` itself.
+fn key_files() -> Vec<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec!["canvas.rs".to_owned(), "app/keys.rs".to_owned()];
+    let mut dirs = vec![src.join("canvas"), src.join("tools")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).expect("source directory") {
+            let path = entry.expect("source entry").path();
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            if stem == "tests" || stem.ends_with("_tests") {
+                continue;
+            }
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let file =
+                    path.strip_prefix(&src).expect("under src").components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                if file != "canvas/page_keys.rs" {
+                    files.push(file);
+                }
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Page code reads keys only through `PageKeys`. The pages are drawn before the dialogs and the
+/// palette and read egui's keys first, so a raw read acts on what is selected or typed behind
+/// whatever is over them: Delete under a dialog deleted the comment selected behind it, and the
+/// Escape that closed one threw away the paragraph being typed.
+#[test]
+fn page_modules_read_keys_only_through_page_keys() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let files = key_files();
+    let mut found = Vec::new();
+    for file in &files {
+        let source = std::fs::read_to_string(src.join(file)).expect("source file").replace("\r\n", "\n");
+        for (n, function, text) in code_lines(&source) {
+            for name in RAW_KEY_READS.iter().filter(|name| uses(&text, name)) {
+                found.push((file.as_str(), function.map(str::to_owned), n, (*name).to_owned()));
+            }
+        }
+    }
+    let problems = misuses_in(
+        found,
+        &NOT_PAGE_KEYS,
+        "reads egui's keys in page code. Read them through `PageKeys` (src/canvas/page_keys.rs) instead: it has none \
+         while a dialog, the palette or a menu is over the pages, which read keys before those are drawn. Not the \
+         pages' keys? Add the function to NOT_PAGE_KEYS in src/canvas/page_pointer/tests.rs, with why.",
+        "reads no keys of its own any more: remove it from NOT_PAGE_KEYS.",
+    );
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
