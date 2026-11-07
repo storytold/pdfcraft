@@ -7,10 +7,46 @@
 use pdfcraft_engine::Edit;
 use pdfcraft_engine::commands::{self, COMMANDS, CommandSpec, Shortcut};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
+
 use crate::{
     Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, SaveTarget,
     theme::{ThemeKind, ThemePreference},
 };
+
+thread_local! {
+    /// An image picked for Edit ▸ Image, waiting for its alternate-text or decorative
+    /// choice before it is placed.
+    static PENDING_ALT_TEXT_IMAGE: std::cell::RefCell<Option<(pdfcraft_engine::DocId, String, Vec<u8>)>> =
+        std::cell::RefCell::new(None);
+}
+
+fn hold_alt_text_image(app: &mut PdfCraftApp, name: String, bytes: Vec<u8>) {
+    if let Some((_, id)) = app.active_ids() {
+        PENDING_ALT_TEXT_IMAGE.with(|p| *p.borrow_mut() = Some((id, name, bytes)));
+        app.dialog = Some(Dialog::AltText);
+    }
+}
+
+fn pending_alt_text_image() -> Option<(pdfcraft_engine::DocId, String, Vec<u8>)> {
+    PENDING_ALT_TEXT_IMAGE.with(|p| p.borrow_mut().take())
+}
+
+/// Places an image held for its alternate-text or decorative choice, if any.
+pub(crate) fn place_pending_alt_text_image(app: &mut PdfCraftApp) -> bool {
+    let Some((id, name, bytes)) = pending_alt_text_image() else { return false };
+    match app.views.iter().position(|v| v.id == id) {
+        Some(i) if app.active != Some(i) => app.active = Some(i),
+        Some(_) => {}
+        None => {
+            app.notify_tr("The document changed while confirming the image, so nothing was placed.");
+            return false;
+        }
+    }
+    app.add_image(name, bytes);
+    true
+}
 
 /// Keys the document view handles itself (`canvas::shortcuts`), for the View menu, tooltips and
 /// Help ▸ Keyboard shortcuts. Keep them in step with the bindings there.
@@ -548,7 +584,51 @@ impl PdfCraftApp {
                 self.left = crate::LeftPanel::Tool("edit");
                 self.reveal_tools();
             }
-            "edit.image" => self.add_image_dialog(),
+            "edit.image" => {
+                // When a file is already chosen (tests and automation), hold it for the
+                // alternate-text or decorative choice instead of placing it straight away.
+                if let Some(path) = self.save_override.clone().filter(|p| p.ends_with(".png") || p.ends_with(".jpg")) {
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            hold_alt_text_image(self, name, bytes);
+                        }
+                        Err(e) => {
+                            self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path), ("e", &e.to_string())]);
+                        }
+                    }
+                } else {
+                    // The normal path: the file the dialog picks is held for the same
+                    // choice, never placed straight away.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let target = self.active_ids().map(|(_, id)| id);
+                        self.ask_one(
+                            crate::pickers::Ask::File(
+                                rfd::AsyncFileDialog::new()
+                                    .add_filter_any_case(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                                    .set_title(tl!("Choose an image")),
+                            ),
+                            target,
+                            move |app, path| match std::fs::read(&path) {
+                                Ok(bytes) => {
+                                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    hold_alt_text_image(app, name, bytes);
+                                }
+                                Err(e) => {
+                                    app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())])
+                                }
+                            },
+                        );
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    // The alternate-text prompt is gated to non-wasm: the web build has no
+                    // image picker yet, so nothing is picked and nothing can be placed
+                    // here. Show the existing notice only; do not route through
+                    // add_image_dialog, whose native picker path places immediately.
+                    self.notify_tr("Adding images arrives on the web with file pickers for images");
+                }
+            }
             "edit.link" => {
                 self.quick_tool = crate::QuickTool::Link;
                 self.notify_tr("Drag a rectangle to create a link; double-click a link to edit it");
@@ -930,5 +1010,24 @@ mod tests {
         assert_eq!(tab_after(Some(7), 3, true), Some(0), "a stale index starts over");
         assert_eq!(tab_after(None, 0, true), None);
         assert_eq!(tab_after(Some(0), 0, false), None);
+    }
+
+    /// Edit ▸ Image pauses for an alternate-text or decorative choice before the picture
+    /// is placed; it does not put the image on the page straight away.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn add_image_command_prompts_for_alt_text_before_placing() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).expect("test image");
+        let path = std::env::temp_dir().join("pdfcraft-alt-text-prompt.png");
+        std::fs::write(&path, png).expect("write test image");
+        app.save_override = Some(path.to_string_lossy().into_owned());
+        let active = app.active;
+        let done = app.run_edit_command("edit.image", active);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(done, Some(true), "the image command runs");
+        let id = app.active_ids().expect("open document").1;
+        assert!(app.session.get(id).expect("open").page_images(0).is_empty(), "placement waits for the alternate-text or decorative choice");
     }
 }
