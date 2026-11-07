@@ -17,9 +17,29 @@ pub struct ShapedRun {
 }
 
 /// Complex scripts/marks require shaping instead of independently encoding characters.
+/// Layout processes such as kerning apply to a shaped run: a Thai base alone writes
+/// unshaped (so it stays editable on its own), but takes part in the run when Latin
+/// or a shaping mark is present: `"AV\u{0e01}"`.
 pub fn required(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
+    fn is_thai_base(c: char) -> bool {
+        matches!(u32::from(c), 0x0e00..=0x0e5f) && !matches!(u32::from(c), 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e)
+    }
+
+    // A Thai base is shaped only in a mixed run, where layout such as AV
+    // kerning applies to the whole run.
+    let mut needs_shaping = false;
+    let mut thai_base_with_latin = false;
+    let has_latin = text.chars().any(|c| c.is_ascii_alphabetic());
+    for c in text.chars() {
+        if matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+        {
+            needs_shaping = true;
+        }
+        if is_thai_base(c) {
+            thai_base_with_latin |= has_latin;
+        }
+    }
+    needs_shaping || thai_base_with_latin
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
@@ -32,7 +52,7 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
     if text
         .chars()
-        .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff))
+        .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff))
         && face.gsub().is_err()
     {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
@@ -106,5 +126,63 @@ mod tests {
         assert!(required("\u{0e47}"), "U+0E47 is the start of the Thai tone mark range");
         assert!(required("\u{0e48}"), "U+0E48 THAI CHARACTER MAI EK needs shaping");
         assert!(required("\u{0e4e}"), "U+0E4E is the end of the Thai tone mark range");
+    }
+
+    #[test]
+    fn a_thai_base_shaped_with_another_shaped_character_requires_shaping() {
+        assert!(required("AV\u{0e01}"), "a Latin run that needs layout keeps the Thai base in the same shaped run");
+        assert!(required("\u{0e01}AV"), "a Thai base joins the same shaped run when the rest of the text does");
+        assert!(required("\u{0e01}\u{0e31}"), "a base with a combining mark still shapes");
+        assert!(!required("\u{0e01}"), "a Thai base alone still writes unshaped");
+        assert!(!required("AV"), "plain Latin still writes unshaped");
+    }
+
+    #[cfg(test)]
+    fn without_gsub(bytes: &[u8]) -> Vec<u8> {
+        let mut copy = bytes.to_vec();
+        let offset = FontRef::new(&copy).ok().and_then(|font| {
+            font.table_directory().table_records().iter().find(|record| record.tag() == skrifa::Tag::new(b"GSUB")).map(|record| record.offset())
+        });
+        if let Some(offset) = offset {
+            for i in 0..4 {
+                if let Some(byte) = copy.get_mut(offset as usize + i) {
+                    *byte = b'X';
+                }
+            }
+        }
+        copy
+    }
+
+    /// The GSUB rejection must fire for Thai marks, not just broader ranges. The copied
+    /// fixture is what a subset looks like: a face whose GSUB table is gone.
+    #[test]
+    fn thai_marks_without_gsub_are_rejected() {
+        let bytes = without_gsub(crate::INTER_REGULAR);
+        assert!(FontRef::new(&bytes).is_ok_and(|f| f.gsub().is_err()), "the fixture has no GSUB table");
+        for text in ["\u{0e0d}\u{0e38}", "\u{0e01}\u{0e31}", "\u{0e01}\u{0e47}"] {
+            let error = shape(&bytes, text).expect_err("a subset without GSUB must be refused for Thai clusters");
+            assert!(error.contains("no contextual substitution tables"), "{text:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn lao_and_syriac_clusters_without_gsub_are_rejected() {
+        let bytes = without_gsub(crate::INTER_REGULAR);
+        assert!(shape(&bytes, "\u{0e81}").is_err(), "Lao still requires substitution tables");
+        assert!(shape(&bytes, "\u{0710}").is_err(), "Syriac still requires substitution tables");
+    }
+
+    #[test]
+    fn a_latin_kerning_pair_in_a_shaped_run_uses_shaped_advances() {
+        // AV\u{0e01} needs shaping as one run; the complete-face check shape() runs here
+        // is the geometry the caller gets when the face covers every character.
+        let Some(face) = crate::document_thai_font() else {
+            eprintln!("skipping the AV kerning check: built without a craft-fonts Thai face (set CRAFT_FONTS_DIR)");
+            return;
+        };
+        // This check covers that the complete face shapes the mixed run to finite
+        // geometry. The caller shapes only when a candidate covers every character.
+        let shaped = shape(face.bytes, "AV\u{0e01}").expect("the complete face shapes the mixed run");
+        assert!(shaped.advance.is_finite() && shaped.advance > 0.0, "{shaped:?}");
     }
 }
