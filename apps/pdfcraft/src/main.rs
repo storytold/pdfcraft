@@ -415,7 +415,7 @@ fn app_creator<'a>(
         {
             app.motion.source = Some(motion::source());
         }
-        app.set_startup_update_check(true);
+        app.set_startup_update_check(option_env!("PDFCRAFT_NO_STARTUP_UPDATE_CHECK").is_none());
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]

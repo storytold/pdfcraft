@@ -434,6 +434,50 @@ echo 'app-text/pdfcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/pdfc
 emerge --ask app-text/pdfcraft-bin
 ```
 
+### Nix and NixOS
+
+The repository is a flake (x86_64-linux). It builds the desktop app and `pdfcraft-cli` from source,
+with the OCR models and interface translations, and installs the desktop entry, MIME type and icons:
+
+```sh
+nix run github:storytold/pdfcraft -- some.pdf   # try it without installing
+nix build github:storytold/pdfcraft             # ./result/bin/pdfcraft and ./result/bin/pdfcraft-cli
+nix develop                                     # Rust toolchain and system libraries; x-craft runs the checkout
+```
+
+With Home Manager, add the flake as an input, import its module and turn it on:
+
+```nix
+# flake.nix
+inputs.pdfcraft.url = "github:storytold/pdfcraft";
+
+# a Home Manager module
+imports = [ inputs.pdfcraft.homeModules.default ];
+
+programs.pdfcraft = {
+  enable = true;
+  defaultPdfHandler = true;   # PDFs open in PdfCraft (xdg.mimeApps)
+};
+```
+
+`inputs` stands for however your configuration passes flake inputs to Home Manager modules
+(`extraSpecialArgs`, or put `inputs.pdfcraft.homeModules.default` straight into the module list).
+`programs.pdfcraft.package` picks another build. Without Home Manager, install the package
+directly, or apply `overlays.default` and use `pkgs.pdfcraft`:
+
+```nix
+environment.systemPackages = [ inputs.pdfcraft.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+```
+
+Notes on the Nix build:
+
+- It never checks for updates at start (it is built with `PDFCRAFT_NO_STARTUP_UPDATE_CHECK`);
+  updates come with `nix flake update pdfcraft`. **Help → Check for updates** still asks GitHub when
+  chosen, but can't replace a binary in the Nix store.
+- It compiles with the official Rust toolchain from [rust-overlay](https://github.com/oxalica/rust-overlay):
+  nixpkgs' `rustc` links a newer system LLVM that rejects the AVX-512 code in the OCR engine.
+- The Japanese fonts from craft-fonts are not included.
+
 Logs, environment variables and other development notes are in [docs/development.md](docs/development.md).
 
 ## What's next
