@@ -1,4 +1,4 @@
-//! pdfcraft-export — Export a PDF ▸ Word, HTML, RTF (L4).
+//! pdfcraft-export — Export a PDF ▸ Word, HTML, RTF, Markdown (L4).
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing
@@ -10,8 +10,6 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::collections::HashMap;
-
 mod pptx;
 mod zip;
 
@@ -20,7 +18,9 @@ pub use zip::Zip;
 
 mod as_docx;
 mod as_html;
+mod as_markdown;
 mod as_rtf;
+mod clip;
 mod layout;
 
 pub use as_docx::docx;
@@ -28,10 +28,14 @@ pub(crate) use as_docx::hex;
 #[cfg(test)]
 use as_docx::{MAX_MEDIA, docx_table};
 pub(crate) use as_html::esc;
-pub use as_html::html;
 #[cfg(test)]
 use as_html::{allowed, base64};
+pub use as_html::{html, html_simple};
+pub use as_markdown::markdown;
+#[cfg(test)]
+use as_markdown::{emphasis, paragraph};
 pub use as_rtf::rtf;
+pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family};
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};

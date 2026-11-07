@@ -7,10 +7,15 @@
 //! - **Images:** each image's effective resolution is measured where pages draw it (the
 //!   smallest over its uses, through form XObjects); colour and grayscale images above a
 //!   threshold are resampled (bicubic) to a target resolution and recompressed as JPEG or Flate.
-//!   A new image replaces the old one only if it is smaller. Images PdfCraft can't decode
-//!   faithfully (CMYK and other colour spaces, masks, decode arrays other than the default,
-//!   JPEG 2000, JBIG2, CCITT, other than 8 bits, JPEGs whose Adobe marker and `/ColorTransform`
-//!   disagree) are left alone.
+//!   A new image replaces the old one only if it is smaller. The colour and grey settings leave
+//!   alone images they can't decode faithfully (CMYK and other colour spaces, masks, decode arrays
+//!   other than the default, JPEG 2000, JBIG2, CCITT, other than 8 bits, JPEGs whose Adobe marker
+//!   and `/ColorTransform` disagree). Black-and-white images (1-bit, image masks, CCITT fax and JBIG2,
+//!   Group 3 among them; and eight-bit grey and RGB of only black and white, and indexed images
+//!   that use only palette entries 0 and 1, packed to one bit) above a threshold are averaged down to a
+//!   target resolution when grey, image masks or indexed, halftones and dithers aside (see the README), and
+//!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
+//!   Flate once resampled or packed, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
@@ -27,14 +32,16 @@ mod audit;
 pub mod fragments;
 mod images;
 mod links;
+mod samples;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
 
-use pdfcraft_cos::{Dict, Document, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
+use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::effective_resolutions;
+pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
@@ -118,6 +125,37 @@ pub enum Compression {
     Retain,
 }
 
+/// How black-and-white (1-bit) images are stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MonoCompression {
+    /// CCITT Group 4 (lossless), when smaller than the image as it is.
+    CcittG4,
+    /// JBIG2, lossless (a generic region, or symbols when the image's marks repeat), when smaller
+    /// than the image as it is. JBIG2Decode is PDF 1.4: an older document gets `/Version /1.4` in
+    /// its catalog.
+    Jbig2,
+    /// Keep each image's own compression.
+    Retain,
+}
+
+/// How black-and-white images (1-bit, CCITT fax among them; and eight-bit grey and RGB of only black
+/// and white, and indexed images that use only palette entries 0 and 1, packed to one bit), and
+/// image masks, are resampled and stored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MonoSettings {
+    /// Average images whose effective resolution is above `above_ppi` down to `target_ppi`.
+    pub downsample: bool,
+    pub target_ppi: f64,
+    pub above_ppi: f64,
+    pub compression: MonoCompression,
+}
+
+impl MonoSettings {
+    /// Reduce File Size and the presets: to 300 ppi above 450 ppi, CCITT Group 4. Text in a scan
+    /// stays sharp at 300 ppi.
+    pub const REDUCE: MonoSettings = MonoSettings { downsample: true, target_ppi: 300.0, above_ppi: 450.0, compression: MonoCompression::CcittG4 };
+}
+
 /// Acrobat's JPEG quality steps.
 pub const QUALITIES: [(&str, u8); 5] = [("Minimum", 25), ("Low", 45), ("Medium", 60), ("High", 80), ("Maximum", 95)];
 
@@ -147,6 +185,8 @@ pub struct Settings {
     pub merge_fragments: bool,
     pub color: ImageSettings,
     pub gray: ImageSettings,
+    /// Black-and-white images, and image masks.
+    pub mono: MonoSettings,
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
@@ -181,6 +221,7 @@ impl Default for Settings {
             merge_fragments: true,
             color: ImageSettings::REDUCE,
             gray: ImageSettings::REDUCE,
+            mono: MonoSettings::REDUCE,
             discard_thumbnails: true,
             discard_alternate_images: true,
             discard_tags: false,
@@ -240,6 +281,8 @@ pub struct Report {
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,
+    /// Images left as they are: decoding them all would take more than one run may spend.
+    pub images_refused: usize,
     /// Encoded image bytes before and after (images that changed).
     pub image_bytes_before: usize,
     pub image_bytes_after: usize,
@@ -290,10 +333,12 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     }
     let mut report = Report::default();
     let pages = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
+    // Merging fragments, the image pass and the LZW pass read the same images, so they share it.
+    let mut budget = ImageBudget::new(doc);
     if settings.merge_fragments {
-        fragments::run(doc, &pages, &mut report, progress)?;
+        fragments::run(doc, &pages, &mut report, progress, &mut budget)?;
     }
-    images::run(doc, &pages, settings, &mut report, progress)?;
+    images::run(doc, &pages, settings, &mut report, progress, &mut budget)?;
     if !progress(Stage::CleanUp) {
         return Err(OptimizeError::Cancelled);
     }
@@ -389,7 +434,11 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let r = ObjRef { num, generation: doc.generation(num) };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            if let Some(replacement) = lzw_to_flate(s, MAX_LZW_DECODED) {
+            // Each can take a second or more, of a pass that has no other way to stop.
+            if s.filters().iter().any(|(f, _)| *f == Filter::Lzw) && !progress(Stage::CleanUp) {
+                return Err(OptimizeError::Cancelled);
+            }
+            if let Some(replacement) = lzw_to_flate(s, MAX_LZW_DECODED, &mut budget) {
                 doc.set(r, Object::Stream(replacement));
                 report.lzw_streams += 1;
             }
@@ -424,14 +473,17 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
 /// Largest decoded LZW stream converted, as for a page's content: the data and its check are
 /// held together, so a few hundred kilobytes of hostile LZW can't ask for gigabytes.
 const MAX_LZW_DECODED: usize = MAX_PAGE_DECODED;
+/// The steps of a run's allowance a decoded byte costs to store with Flate and read back: up to
+/// 78 ns a byte to encode and 4 to check, at the 6 to 16 ns of a step.
+const LZW_REWRITE_WORK: u64 = 8;
 
 /// `s` with its LZW compression replaced by Flate (Acrobat's "In streams that use LZW encoding,
 /// use Flate instead"). The filters up to the last LZW one are decoded, strictly and with its
 /// predictor; the result is Flate-encoded under the same predictor, without `EarlyChange`, and
 /// the filters after it keep their encoded bytes. A stream that doesn't decode cleanly, or
-/// whose filters or parameters can't be read for certain, or that decodes past `max` bytes, is
-/// left as it is.
-fn lzw_to_flate(s: &Stream, max: usize) -> Option<Stream> {
+/// whose filters or parameters can't be read for certain, or that decodes past `max` bytes or
+/// what `budget` has left, is left as it is.
+fn lzw_to_flate(s: &Stream, max: usize, budget: &mut ImageBudget) -> Option<Stream> {
     // An external file's data isn't in `raw`; cross-reference and object streams are rewritten
     // on save, so converting them would change nothing in the file.
     if s.dict.contains(b"F") || matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) {
@@ -474,7 +526,10 @@ fn lzw_to_flate(s: &Stream, max: usize) -> Option<Stream> {
     if !parms.get(..=lzw)?.iter().all(direct) {
         return None;
     }
-    let data = pdfcraft_filters::decode(stages, &s.raw, max).ok()?;
+    let data = budget.decode_chain(stages, &s.raw, max).ok()?;
+    if !budget.spend((data.len() as u64).saturating_mul(LZW_REWRITE_WORK)) {
+        return None;
+    }
     let flate = Params { early_change: 1, ..params.clone() };
     let raw = pdfcraft_filters::encode(&Filter::Flate, &flate, &data).ok()?;
     // The predictor's encoder must give back exactly what its decoder read (a short last row,
@@ -539,7 +594,7 @@ fn strip_ascii_wrapper(s: &Stream) -> Option<Stream> {
 
 /// Bytes the stream object takes in the file: its dictionary with `/Length` set as the writer
 /// sets it, then its data.
-fn stored_len(s: &Stream) -> Option<usize> {
+pub(crate) fn stored_len(s: &Stream) -> Option<usize> {
     let mut dict = s.dict.clone();
     dict.set(b"Length".to_vec(), Object::Int(i64::try_from(s.raw.len()).ok()?));
     let mut out = Vec::new();
@@ -558,8 +613,31 @@ mod tests {
         let mut dict = Dict::new();
         dict.set(b"Filter".to_vec(), Object::name("LZWDecode"));
         let s = Stream::from_raw(dict, raw);
-        assert!(lzw_to_flate(&s, data.len() - 1).is_none());
-        let converted = lzw_to_flate(&s, data.len()).unwrap();
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(lzw_to_flate(&s, data.len() - 1, &mut budget).is_none());
+        let converted = lzw_to_flate(&s, data.len(), &mut budget).unwrap();
         assert_eq!(converted.decoded_strict().unwrap(), data);
+    }
+
+    /// Rewriting a stream spends the run's allowance: reading it, decoding it, and storing and
+    /// checking what it decoded. One the allowance can't pay for stays LZW, and ends the rewriting.
+    #[test]
+    fn lzw_streams_spend_the_runs_allowance() {
+        let data = b"0 0 m 612 792 l S\n".repeat(64);
+        let raw = pdfcraft_filters::encode(&Filter::Lzw, &Params::default(), &data).unwrap();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        let s = Stream::from_raw(dict, raw);
+        let cost = (s.raw.len() + data.len()) as u64 + data.len() as u64 * LZW_REWRITE_WORK;
+        let mut budget = ImageBudget::with_work(cost + 7);
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_some());
+        assert_eq!(budget.work_left(), 7);
+        let mut budget = ImageBudget::with_work(cost);
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_some(), "exactly enough");
+        assert_eq!(budget.work_left(), 0);
+        let mut budget = ImageBudget::with_work(cost - 1);
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_none(), "a step short");
+        assert_eq!(budget.work_left(), 0, "and the next stream isn't read");
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_none());
     }
 }
