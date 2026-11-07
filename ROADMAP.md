@@ -268,6 +268,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (M7, #4786: clipping-mask paragraph eligibility before inline editing; extraction and estimates unchanged)
+
+- **2026-10-26 (M7, #4786):** Clipping-mask paragraphs remain extractable with stable numbering, but disclose why they cannot be edited before the inline tool offers an editor. Modes 4–7, mixed/coincident masks, no-op refusal, and ordinary editing have synthetic regressions. Editing clipping masks remains unsupported; estimates unchanged.
+
+
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
 
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.

@@ -255,7 +255,8 @@ impl Document {
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
     }
 
-    /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
+    /// Edit a PDF ▸ Edit text: all paragraphs on `page` (0-based), retaining their indexes.
+    /// `non_editable_reason` explains a known refusal before a frontend offers editing.
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
         self.editor.as_ref().and_then(|e| e.text_blocks(page).ok()).map(|b| b.as_ref().clone()).unwrap_or_default()
     }
