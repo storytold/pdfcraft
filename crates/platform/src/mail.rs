@@ -440,9 +440,22 @@ fn reg_value(out: &str) -> Option<String> {
     })
 }
 
-/// `name` in one of `path`'s folders (`PATH`'s form), if it is a file there.
+/// `name` in one of `path`'s folders (`PATH`'s form), if it is a file there that can be run.
 fn find_program(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
-    std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(name)).find(|p| p.is_file())
+    std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(name)).find(|p| p.is_file() && runnable(p))
+}
+
+/// Whether anyone may run the file (on Unix its execute bits; elsewhere a file is enough).
+fn runnable(file: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        file.metadata().is_ok_and(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        true
+    }
 }
 
 /// A program in Windows' System32 folder, by full path, so one beside PdfCraft can't stand in.
@@ -1227,6 +1240,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pdfcraft-mail-path-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("xdg-email"), b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(dir.join("xdg-email"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let path = std::env::join_paths([PathBuf::from("/definitely/not/here"), dir.clone()]).unwrap();
         assert_eq!(find_program(&path, "xdg-email"), Some(dir.join("xdg-email")));
         assert_eq!(find_program(&path, "missing-tool"), None);
@@ -1378,6 +1393,23 @@ mod tests {
     }
 
     /// Each send's message gets a folder and a file of its own; nothing already there is touched.
+    #[test]
+    #[cfg(unix)]
+    fn a_file_that_cannot_be_run_is_not_the_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("pdfcraft-mail-runnable-{}", std::process::id()));
+        let (first, second) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("xdg-email"), "#!/bin/sh\n").unwrap();
+        std::fs::write(second.join("xdg-email"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(first.join("xdg-email"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(second.join("xdg-email"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert_eq!(find_program(&path, "xdg-email"), Some(second.join("xdg-email")), "the one that can't run is skipped");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn unsent_messages_never_share_or_overwrite_a_path() {
         let root = std::env::temp_dir().join(format!("pdfcraft-mail-test-{}", std::process::id()));
