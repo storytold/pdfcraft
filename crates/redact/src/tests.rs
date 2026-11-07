@@ -4208,6 +4208,32 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
 
+/// Layer lists that name one array many times, through arrays that do the same, are cleaned once
+/// where each array is, not copied once per path: the file stays as small as it was.
+#[test]
+fn a_shared_layer_list_is_cleaned_once() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [9 0 R 9 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
+        FONT.replace("95 0 R", "8 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (SECRETLAYERNAME) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown layer) >>".to_vec(),
+        widths(),
+    ];
+    // Objects 9 to 22 each name the next one twice; 23 names both layers.
+    objs.extend((10..24).map(|n| format!("[{n} 0 R {n} 0 R]").into_bytes()));
+    objs.push(b"[6 0 R 7 0 R]".to_vec());
+    let mut doc = pdf(objs);
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Shown layer)") && !has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+    assert!(bytes.len() < 32 * 1024, "the shared lists were copied once per path: {} bytes", bytes.len());
+}
+
 /// A removed off layer leaves every list that names it, or its dictionary, name included, stays in
 /// the file: a sub-list of the default `/Order`, a radio-button group, a usage rule, and the
 /// alternate configurations in `/Configs`.

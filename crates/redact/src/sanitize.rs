@@ -342,48 +342,83 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     }
 }
 
+/// The objects a layer cleanup has reached by reference, and whether the lists naming each keep it.
+type Cleaned = std::collections::HashMap<ObjRef, bool>;
+
+/// `o` cleaned by `clean`: in its list when written there, and when written by reference, once and
+/// where it is, however many lists name it (they keep the reference, or drop it when `clean` gives
+/// `None`). A list that names one object many times costs one step per object, not one per path,
+/// and a cycle stops where it began.
+fn once(
+    doc: &mut Document,
+    o: &Object,
+    cleaned: &mut Cleaned,
+    clean: impl FnOnce(&mut Document, &Object, &mut Cleaned) -> Result<Option<Object>, RedactError>,
+) -> Result<Option<Object>, RedactError> {
+    let Object::Ref(r) = o else { return clean(doc, o, cleaned) };
+    if let Some(&kept) = cleaned.get(r) {
+        return Ok(kept.then(|| o.clone()));
+    }
+    cleaned.insert(*r, true);
+    let held: &Object = &doc.resolve(o);
+    let Some(new) = clean(doc, held, cleaned)? else {
+        cleaned.insert(*r, false);
+        return Ok(None);
+    };
+    if new != *held {
+        doc.set_existing(*r, new)?;
+    }
+    Ok(Some(o.clone()))
+}
+
 /// `o` without the entries `keep` refuses, through nested arrays (an `/Order` holds sub-lists, and
-/// `/RBGroups` holds groups); arrays written by reference are copied in place.
-fn filtered(doc: &Document, o: &Object, keep: &impl Fn(&Object) -> bool, depth: usize) -> Result<Object, RedactError> {
+/// `/RBGroups` holds groups), each array written by reference cleaned [`once`].
+fn filtered(doc: &mut Document, o: &Object, keep: &impl Fn(&Object) -> bool, depth: usize, cleaned: &mut Cleaned) -> Result<Object, RedactError> {
     if depth > MAX_DIRECT_DEPTH {
         return Err(RedactError::TooDeep);
     }
-    match &*doc.resolve(o) {
-        Object::Array(a) => {
-            let mut out = Vec::with_capacity(a.len());
-            for x in a.iter().filter(|x| keep(x)) {
-                out.push(filtered(doc, x, keep, depth + 1)?);
-            }
-            Ok(Object::Array(out))
+    let out = once(doc, o, cleaned, |doc, o, cleaned| {
+        let Object::Array(a) = o else { return Ok(Some(o.clone())) };
+        let mut out = Vec::new();
+        for x in a.iter().filter(|x| keep(x)) {
+            out.push(filtered(doc, x, keep, depth + 1, cleaned)?);
         }
-        _ => Ok(o.clone()),
-    }
+        Ok(Some(Object::Array(out)))
+    })?;
+    Ok(out.unwrap_or_else(|| Object::Array(Vec::new())))
 }
 
 /// An optional-content configuration without the layers `keep` refuses, in every list that names
 /// them: on, off, order, locked, radio-button groups and usage rules (a rule left with no layer
 /// goes). A removed layer still named in any of them would stay in the file, its name included.
-fn config_without(doc: &Document, mut d: Dict, keep: &impl Fn(&Object) -> bool) -> Result<Dict, RedactError> {
+fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bool, cleaned: &mut Cleaned) -> Result<Dict, RedactError> {
     for k in [&b"ON"[..], b"OFF", b"Order", b"Locked", b"RBGroups"] {
         if let Some(v) = d.get(k).cloned() {
-            let v = filtered(doc, &v, keep, 0)?;
+            let v = filtered(doc, &v, keep, 0, cleaned)?;
             d.set(k.to_vec(), v);
         }
     }
-    if let Some(Object::Array(rules)) = d.get(b"AS").map(|a| (*doc.resolve(a)).clone()) {
-        let mut kept = Vec::with_capacity(rules.len());
+    let Some(rules) = d.get(b"AS").cloned() else { return Ok(d) };
+    let rules = once(doc, &rules, cleaned, |doc, rules, cleaned| {
+        let Object::Array(rules) = rules else { return Ok(Some(rules.clone())) };
+        let mut kept = Vec::new();
         for rule in rules {
-            let Some(mut rule) = doc.resolve(&rule).as_dict().cloned() else { continue };
-            if let Some(layers) = rule.get(b"OCGs").cloned() {
-                let layers = filtered(doc, &layers, keep, 0)?;
-                if layers.as_array().is_some_and(Vec::is_empty) {
-                    continue;
+            kept.extend(once(doc, rule, cleaned, |doc, rule, cleaned| {
+                let Some(mut rule) = rule.as_dict().cloned() else { return Ok(None) };
+                if let Some(layers) = rule.get(b"OCGs").cloned() {
+                    let layers = filtered(doc, &layers, keep, 0, cleaned)?;
+                    if doc.resolve(&layers).as_array().is_some_and(Vec::is_empty) {
+                        return Ok(None);
+                    }
+                    rule.set(b"OCGs".to_vec(), layers);
                 }
-                rule.set(b"OCGs".to_vec(), layers);
-            }
-            kept.push(Object::Dict(rule));
+                Ok(Some(Object::Dict(rule)))
+            })?);
         }
-        d.set(b"AS".to_vec(), Object::Array(kept));
+        Ok(Some(Object::Array(kept)))
+    })?;
+    if let Some(rules) = rules {
+        d.set(b"AS".to_vec(), rules);
     }
     Ok(d)
 }
@@ -682,15 +717,17 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     if let Some(Object::Array(a)) = oc.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
                         oc.set(b"OCGs".to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
                     }
+                    let mut cleaned = Cleaned::new();
                     if let Some(d) = sub(doc, &oc, b"D") {
-                        oc.set(b"D".to_vec(), Object::Dict(config_without(doc, d, &keep)?));
+                        oc.set(b"D".to_vec(), Object::Dict(config_without(doc, d, &keep, &mut cleaned)?));
                     }
                     if let Some(Object::Array(configs)) = oc.get(b"Configs").map(|c| (*doc.resolve(c)).clone()) {
                         let mut kept = Vec::with_capacity(configs.len());
                         for config in configs {
-                            if let Some(config) = doc.resolve(&config).as_dict().cloned() {
-                                kept.push(Object::Dict(config_without(doc, config, &keep)?));
-                            }
+                            kept.extend(once(doc, &config, &mut cleaned, |doc, config, cleaned| match config.as_dict() {
+                                Some(c) => Ok(Some(Object::Dict(config_without(doc, c.clone(), &keep, cleaned)?))),
+                                None => Ok(None),
+                            })?);
                         }
                         oc.set(b"Configs".to_vec(), Object::Array(kept));
                     }
