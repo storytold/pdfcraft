@@ -9,14 +9,22 @@ use std::sync::Arc;
 
 /// A page showing "abmp" at 40 pt in a non-embedded font `font` (the inside of its dictionary).
 fn page(font: &str) -> Vec<u8> {
+    page_with(font, None)
+}
+
+/// [`page`] with `program` as object 6, a `/FontFile2` stream the font descriptor can point at.
+fn page_with(font: &str, program: Option<&[u8]>) -> Vec<u8> {
     let body = "BT /F1 40 Tf 10 30 Td (abmp) Tj ET";
-    let objects: Vec<Vec<u8>> = vec![
+    let mut objects: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
         format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
         format!("<< /Type /Font {font} >>").into_bytes(),
     ];
+    if let Some(program) = program {
+        objects.push([format!("<< /Length {} >>\nstream\n", program.len()).into_bytes(), program.to_vec(), b"\nendstream".to_vec()].concat());
+    }
 
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -62,12 +70,44 @@ fn symbol_mt_draws_symbols_through_the_built_in_encoding() {
     assert!(pixels(page(type1)) == symbol, "a Type1 SymbolMT did not draw as Symbol");
 }
 
-/// Only the Symbol name itself counts: a font whose name merely starts with it keeps its
-/// declared encoding and stand-in.
+/// The number of dark pixels on a page.
+fn inked(rgba: &[u8]) -> usize {
+    rgba.chunks(4).filter(|p| p.first().is_some_and(|r| *r < 128)).count()
+}
+
+/// Only the Symbol name itself, alone or with a style, counts: a font whose name merely starts
+/// with it, or names another font after the separator, keeps its declared encoding and its
+/// Latin stand-in, drawing the same letters as Helvetica.
 #[test]
 fn a_name_that_only_starts_with_symbol_is_not_symbol() {
-    let symbol = pixels(page("/Subtype /Type1 /BaseFont /Symbol"));
-    for name in ["Symbolic", "SymbolPS"] {
-        assert!(pixels(page(&win_ansi_true_type(name))) != symbol, "{name} drew as Symbol");
+    let latin = pixels(page("/Subtype /Type1 /BaseFont /Helvetica"));
+    assert!(inked(&latin) > 100, "the Latin reference drew no text");
+    for name in ["Symbolic", "SymbolPS", "Symbol-Helvetica", "SymbolMT,Helvetica"] {
+        assert!(pixels(page(&win_ansi_true_type(name))) == latin, "{name} did not draw the Latin letters");
     }
+}
+
+/// A `/Differences` array still applies to a SymbolMT: code 0x6D named `alpha` draws alpha, as
+/// for `/Symbol` with the same differences, not the built-in encoding's `mu`.
+#[test]
+fn symbol_mt_applies_its_differences() {
+    let symbol = pixels(page("/Subtype /Type1 /BaseFont /Symbol"));
+    let alpha = pixels(page("/Subtype /Type1 /BaseFont /Symbol /Encoding << /Differences [109 /alpha] >>"));
+    assert!(alpha != symbol, "the differences changed nothing");
+    let font = win_ansi_true_type("SymbolMT")
+        .replace("/Encoding /WinAnsiEncoding", "/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [109 /alpha] >>");
+    assert!(pixels(page(&font)) == alpha, "SymbolMT did not draw the alpha its differences name");
+}
+
+/// An embedded font named SymbolMT draws its own program, not the Symbol stand-in.
+#[test]
+fn an_embedded_symbol_mt_draws_its_own_program() {
+    let program = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+    let embedded = |name: &str| {
+        let font = win_ansi_true_type(name).replace(" >>", " /FontFile2 6 0 R >>");
+        pixels(page_with(&font, Some(program)))
+    };
+    let own = embedded("ABCDEF+JetBrainsMono");
+    assert!(inked(&own) > 100, "the embedded program drew no text");
+    assert!(embedded("ABCDEF+SymbolMT") == own, "an embedded SymbolMT did not draw its own glyphs");
 }
