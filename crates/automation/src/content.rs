@@ -2,7 +2,7 @@
 //! move/resize/retype/restyle it, delete it. Geometry is in points from the top-left of the
 //! displayed page (y down), like every other tool.
 
-use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign, TextInk};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;
@@ -30,6 +30,27 @@ fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
         .transpose()
 }
 
+const INK_ARGS: &str = "give one of color (#RRGGBB or a name), gray (0 black to 1 white) and cmyk ([c, m, y, k], each 0 to 1)";
+
+/// `gray` or `cmyk`: the text painted in DeviceGray or DeviceCMYK rather than RGB. At most one of
+/// them and `color`.
+fn ink_arg(a: &Args) -> Result<Option<TextInk>> {
+    if ["color", "gray", "cmyk"].iter().filter(|k| a.get(k).is_some()).count() > 1 {
+        return Err(bad(INK_ARGS));
+    }
+    let unit = |v: Option<f64>, key: &str| v.filter(|v| (0.0..=1.0).contains(v)).ok_or_else(|| bad(format!("{key} takes numbers from 0 to 1")));
+    if let Some(g) = a.get("gray") {
+        return Ok(Some(TextInk::Gray(unit(g.as_f64(), "gray")?)));
+    }
+    let Some(c) = a.get("cmyk") else { return Ok(None) };
+    let parts = c.as_array().filter(|p| p.len() == 4).ok_or_else(|| bad("cmyk must be [c, m, y, k]"))?;
+    let mut cmyk = [0.0; 4];
+    for (out, v) in cmyk.iter_mut().zip(parts) {
+        *out = unit(v.as_f64(), "cmyk")?;
+    }
+    Ok(Some(TextInk::Cmyk(cmyk)))
+}
+
 /// Apply the style arguments to `t`.
 fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(s) = a.opt_num("size")? {
@@ -49,17 +70,21 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(i) = a.opt_bool("italic")? {
         t.italic = i;
     }
-    if let Some(c) = a.opt_str("color")? {
-        t.color = parse_color(c)?;
+    if let Some(ink) = ink_arg(a)? {
+        t.set_ink(Some(ink));
+    } else if let Some(c) = a.opt_str("color")? {
+        // An RGB colour paints in RGB, even one that is the ink's look.
+        t.set_ink(None);
+        t.set_color(parse_color(c)?);
     }
     if let Some(al) = a.opt_str("align")? {
-        t.align = match al {
-            "left" => TextAlign::Left,
-            "center" | "centre" => TextAlign::Center,
-            "right" => TextAlign::Right,
-            "justify" => TextAlign::Justify,
-            other => return Err(bad(format!("unknown align {other:?}"))),
-        };
+        t.align = parse_align(al)?;
+        // The whole box: no paragraph keeps an alignment of its own unless `aligns` gives it one.
+        t.aligns.clear();
+    }
+    if let Some(aligns) = opt_aligns(a)? {
+        let count = pdfcraft_engine::paragraph_align::count(&t.text);
+        t.aligns = pdfcraft_engine::paragraph_align::tidy(aligns.into_iter().take(count).collect(), t.align);
     }
     if let Some(c) = a.opt_num("char_spacing")? {
         if !(-ADDED_CHAR_SPACING_LIMIT..=ADDED_CHAR_SPACING_LIMIT).contains(&c) {
@@ -68,6 +93,38 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
         t.char_spacing = c;
     }
     Ok(())
+}
+
+pub(crate) fn parse_align(al: &str) -> Result<TextAlign> {
+    Ok(match al {
+        "left" => TextAlign::Left,
+        "center" | "centre" => TextAlign::Center,
+        "right" => TextAlign::Right,
+        "justify" => TextAlign::Justify,
+        other => return Err(bad(format!("unknown align {other:?}"))),
+    })
+}
+
+/// Most entries `aligns` takes: one per paragraph, and no text has this many.
+const MAX_ALIGNS: usize = 4096;
+
+/// `aligns`: each paragraph's (line's) own alignment, or inherit/null where it follows `align`.
+pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
+    let Some(v) = a.get("aligns") else { return Ok(None) };
+    let items = v.as_array().ok_or_else(|| bad("aligns must be an array of left, center, right, justify, inherit or null"))?;
+    if items.len() > MAX_ALIGNS {
+        return Err(bad(format!("aligns takes at most {MAX_ALIGNS} entries")));
+    }
+    items
+        .iter()
+        .map(|v| match v {
+            Value::Null => Ok(None),
+            Value::String(s) if s == "inherit" => Ok(None),
+            Value::String(s) => parse_align(s).map(Some),
+            _ => Err(bad("each entry of aligns is left, center, right, justify, inherit or null")),
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
 impl Automation {
@@ -92,6 +149,12 @@ impl Automation {
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
                         v["char_spacing"] = json!(t.char_spacing);
+                        // Text painted in a print colour space says so; RGB text has neither.
+                        match t.painted_ink() {
+                            Some(TextInk::Gray(g)) => v["gray"] = json!(g),
+                            Some(TextInk::Cmyk(c)) => v["cmyk"] = json!(c),
+                            None => {}
+                        }
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -160,6 +223,8 @@ impl Automation {
         match &mut content {
             AddedContent::Text(t) => {
                 if let Some(s) = a.opt_str("text")? {
+                    // Each paragraph keeps its own alignment through the retyping.
+                    t.aligns = pdfcraft_engine::paragraph_align::remap(&t.text, s, &t.aligns);
                     t.text = s.to_string();
                 }
                 style(a, t)?;
@@ -171,8 +236,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "color", "gray", "cmyk", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, gray, cmyk, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

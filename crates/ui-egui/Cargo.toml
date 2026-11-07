@@ -14,12 +14,16 @@ craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
 craft-keymap = { workspace = true }
+# Interface translations over the embedded craft-i18n catalogs (`build.rs`, `src/i18n.rs`).
+craft-i18n = { workspace = true }
 # Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
 # close also quits through `terminate:` (the Touch Bar crash, #1136).
 craft-quit = { workspace = true, features = ["egui"] }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-ocr = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
@@ -96,6 +100,7 @@ egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
+proptest = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

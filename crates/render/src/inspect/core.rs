@@ -311,11 +311,23 @@ impl<'a> Inspector<'a> {
     }
 
     pub(super) fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
-        let s = trimmed_text(self.resolve(d.get(key).ok()?))?;
-        (!s.is_empty()).then_some(s)
+        // Typewriter outer whitespace belongs to the text (keep in step with annot's summaries).
+        let s = if key == b"Contents"
+            && self.name(d, b"Subtype").as_deref() == Some("FreeText")
+            && self.name(d, b"IT").as_deref() == Some("FreeTextTypeWriter")
+        {
+            match self.resolve(d.get(key).ok()?) {
+                Object::String(bytes, _) => text_string(bytes).trim_matches('\0').to_owned(),
+                Object::Name(bytes) => String::from_utf8_lossy(bytes).trim_matches('\0').to_owned(),
+                _ => return None,
+            }
+        } else {
+            trimmed_text(self.resolve(d.get(key).ok()?))?
+        };
+        (!s.trim().is_empty()).then_some(s)
     }
 
-    /// [`Self::text`], converted and spent from `budget` as [`spend`] does, so text that trims
+    /// Whitespace-trimmed metadata, spent from `budget` as [`spend`] does, so text that trims
     /// short or to nothing still spends its raw length.
     pub(super) fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
         let o = self.resolve(d.get(key).ok()?);

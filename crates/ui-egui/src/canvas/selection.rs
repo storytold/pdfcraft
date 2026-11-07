@@ -93,13 +93,33 @@ impl DocView {
         Some(s.text(t)).filter(|x| !x.is_empty())
     }
 
-    /// Select all: every page in Organize, or every word on the current page.
+    /// The selection's page, its text layer and the selected glyphs in copy order, for Copy with
+    /// formatting. `None` after Select All of the document and for a column selection, which
+    /// copy plain text (a column's rows and tab-separated cells are not paragraphs).
+    pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
+        if self.all_text {
+            return None;
+        }
+        let s = self.selection?;
+        let t = self.texts.get(&s.page)?;
+        let glyphs = match s.span {
+            Span::Run { anchor, head } => Selection::range(anchor, head).take(t.glyphs.len()).collect(),
+            Span::Column { .. } => return None,
+        };
+        Some((s.page, t.clone(), glyphs))
+    }
+
+    /// Select every page without navigating; shared by Organize and the Pages sidebar.
+    pub fn select_all_pages(&mut self) -> bool {
+        self.selected = (0..self.page_count).collect();
+        self.select_anchor = (self.page_count > 0).then_some(self.current);
+        !self.selected.is_empty()
+    }
+
+    /// Select all words on the current page, or every page in Organize.
     pub fn select_all(&mut self) -> bool {
         if self.organize {
-            self.selected = (0..self.page_count).collect();
-            // Keep the current page as the anchor for the next Shift-click.
-            self.select_anchor = (self.page_count > 0).then_some(self.current);
-            return !self.selected.is_empty();
+            return self.select_all_pages();
         }
         // Scrolling continuously, Select All takes the whole document's text (#2639); one page at
         // a time, the page shown.
