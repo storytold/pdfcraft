@@ -8961,6 +8961,16 @@ fn noop_arrange_is_not_ok_without_change() {
     assert!(r.is_err() || before != after, "Ok with no change");
 }
 
+/// Bring to front on an at-limit image that shares its only content unit with other
+/// paint is a no-op, so it is refused instead of rebuilding the same placement.
+#[test]
+fn arrange_front_image_in_single_shared_unit_is_refused() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
 /// Cropping a turned image keeps the requested upright box in user space, rather than expanding
 /// to the bounding box of the turned image coordinates.
 #[test]
