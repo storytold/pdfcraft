@@ -174,6 +174,29 @@ pub(crate) fn first_op_after_damage(streams: &[ContentStream], pieces: &Pieces, 
     ops.iter().position(|op| pieces.pieces_of(op).1 > damaged).unwrap_or(ops.len())
 }
 
+/// Whether `new` changes a text object still open at the first stream not read whole. The text
+/// object goes on in it, and the text it shows there starts where this text ends: a change of this
+/// text moves it. A change before the text object doesn't.
+fn changes_text_open_into_damage(streams: &[ContentStream], new: &[Vec<u8>]) -> bool {
+    let upto = first_damaged(streams).saturating_add(1);
+    if upto > streams.len() {
+        return false;
+    }
+    let before = Pieces::join(&streams.iter().take(upto).map(|s| s.data.as_slice()).collect::<Vec<_>>());
+    let mut open = None;
+    for op in before.parse().ops {
+        match op.op.as_slice() {
+            b"BT" => open = Some(op.span.start),
+            b"ET" => open = None,
+            _ => {}
+        }
+    }
+    let Some(at) = open else { return false };
+    let after = Pieces::join(&new.iter().take(upto).map(Vec::as_slice).collect::<Vec<_>>());
+    // Unchanged from the text object's start to the stream not read whole: it ends the same.
+    !before.data().get(at..).is_some_and(|text| after.data().ends_with(text))
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
 /// (keeping their dictionaries), the others stay as they were. An error, before anything is
 /// added, when a piece that changed is a stream that didn't decode whole, or comes after one.
@@ -186,6 +209,12 @@ pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[ContentStream], 
     // The last stream that changed: when it is drawn before the damage, so are the others.
     if let Some(i) = streams.iter().zip(&new).rposition(|(s, data)| s.data != *data) {
         drawn_before_damage(streams, i)?;
+    }
+    if changes_text_open_into_damage(streams, &new) {
+        return Err(EditError::Invalid(
+            "this change is in a text object that goes on in a content stream that is damaged or can't be decoded, whose text starts where this text ends"
+                .into(),
+        ));
     }
     for (s, data) in streams.iter().zip(&new) {
         if s.data == *data {

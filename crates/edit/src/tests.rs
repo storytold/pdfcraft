@@ -5294,6 +5294,43 @@ fn content_after_a_stream_that_does_not_decode_is_not_edited() {
     assert_eq!(contents(&doc), listed);
 }
 
+/// A text object still open at a stream not read whole goes on in it: the text that stream shows
+/// starts where the text before it ends, so editing that text would move it. The edit is refused.
+/// A change before the text object, in the same stream, goes on. The same holds when the hidden
+/// stream is the page's last.
+#[test]
+fn text_a_stream_not_read_whole_goes_on_from_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    // The hidden stream between the text and a stream closing it, or the page's last.
+    for (damaged, last) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("damaged: {damaged}, last: {last}");
+        let shown: &[u8] = if last { b"(World) Tj ET" } else { b"(World) Tj" };
+        let mut doc = split_page("BT /F1 12 Tf 72 700 Td (Before) Tj ET BT /F1 12 Tf 72 600 Td (Hello) Tj", "ET");
+        let hidden = if damaged {
+            damaged_flate(b"", shown)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), shown);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = Object::Ref(doc.add(hidden));
+        let mut listed = vec![Object::Ref(ObjRef::new(4, 0)), hidden];
+        if !last {
+            listed.push(Object::Ref(ObjRef::new(5, 0)));
+        }
+        let listed = Object::Array(listed);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed.clone())).unwrap();
+        let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["Before", "Hello"], "{what}");
+        let refused = text::replace_line(&mut doc, 0, 1, "Hi").unwrap_err();
+        assert!(refused.to_string().contains("goes on in a content stream"), "{what}: {refused}");
+        assert_eq!(contents(&doc), Some(listed), "{what}");
+        text::replace_line(&mut doc, 0, 0, "Earlier").unwrap();
+    }
+}
+
 /// An image's `q cm … Q` that closes past a stream not read whole, one that doesn't decode or one
 /// damaged partway, may hold what that stream draws (here a square, in the image's `cm`), also when
 /// the square's operands end the stream before it and only its keyword is hidden. Moving the image
