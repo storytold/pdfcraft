@@ -1176,6 +1176,60 @@ endbfchar
         assert!(cmap.lookup_bf_string(0x41).is_some());
     }
 
+    // PdfCraft patch (3): a token the scanner can't read (a stray `>` after a CMap name, a name
+    // with spaces in it) is stepped over, so the mappings after it are still read; at most
+    // `MAX_SKIPPED` of them per CMap.
+
+    #[test]
+    fn mappings_after_an_unreadable_token_are_read() {
+        for header in [
+            &b"/CMapName /Adobe-Identity-UC> def"[..],
+            b"/CMapName /-usr-share-fonts-Panton Family - Panton.otf,000-UTF16 def",
+        ] {
+            let mut data = header.to_vec();
+            data.extend_from_slice(
+                b"\n1 beginbfchar <41> <0058> endbfchar\n1 beginbfrange <50> <52> <0061> endbfrange",
+            );
+            let cmap = parse_with_preamble(&data);
+            assert_eq!(cmap.lookup_bf_string(0x41), Some(BfString::Char('X')));
+            assert_eq!(cmap.lookup_bf_string(0x51), Some(BfString::Char('b')));
+        }
+    }
+
+    #[test]
+    fn a_number_run_into_an_operator_does_not_start_its_mappings() {
+        // `1beginbfchar` is one token, not `1` and `beginbfchar`: the pairs after it are not
+        // mappings, and the well-formed block after them still reads.
+        let cmap = parse_with_preamble(
+            b"1beginbfchar <41> <0058> endbfchar\n1 beginbfchar <42> <0059> endbfchar",
+        );
+        assert_eq!(cmap.lookup_bf_string(0x41), None);
+        assert_eq!(cmap.lookup_bf_string(0x42), Some(BfString::Char('Y')));
+    }
+
+    /// A CMap with `count` unreadable tokens, each after a space, before one `bfchar` mapping.
+    fn mapping_after_unreadable_tokens(count: usize) -> Option<CMap> {
+        let mut data = PREAMBLE.to_vec();
+        data.extend_from_slice(&b" >".repeat(count));
+        data.extend_from_slice(b"\n1 beginbfchar <41> <0058> endbfchar");
+        CMap::parse(&data, |_| None)
+    }
+
+    #[test]
+    fn the_scan_steps_over_at_most_max_skipped_unreadable_tokens() {
+        let limit = parse::MAX_SKIPPED;
+        let cmap = mapping_after_unreadable_tokens(limit).expect("read up to the limit");
+        assert_eq!(cmap.lookup_bf_string(0x41), Some(BfString::Char('X')));
+        // One more ends the scan before the mapping, and a CMap with no mappings fails.
+        assert!(mapping_after_unreadable_tokens(limit + 1).is_none());
+    }
+
+    #[test]
+    fn a_cmap_of_unreadable_tokens_only_reports_failure() {
+        assert!(CMap::parse(b"> ) >", |_| None).is_none());
+        assert!(CMap::parse(&b" >".repeat(4 * parse::MAX_SKIPPED), |_| None).is_none());
+    }
+
     #[test]
     fn bad_bfchar_code_keeps_later_entries_aligned() {
         // The malformed 5-byte code still has a destination object; both
