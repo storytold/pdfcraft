@@ -6,10 +6,13 @@
 //! press point decide who captures it ([`PageRouter::press`]), by the same table: the highest layer
 //! the active tool reaches. Until the button is up only the owner acts on the press, its drag and
 //! its release, so what the cursor promised is what the press does, and nothing takes a gesture
-//! back halfway. Each page is told what it has to do with the press ([`PagePress`]): its owner's,
-//! the active tool's, or none of its business.
+//! back halfway; an owner that declines the drag (text markup, a link with the Link tool) lets it
+//! go as it starts, and the drag is nobody's. Each page is told what it has to do with the press
+//! ([`PagePress`]): its owner's, the active tool's, or none of its business. Only the page view
+//! reads the router: its methods are `canvas`'s alone.
 
 use egui::CursorIcon;
+use pdfcraft_engine::ObjectTarget;
 
 use crate::QuickTool;
 use crate::page_cursor::Layer;
@@ -45,10 +48,31 @@ pub(crate) enum Owner {
 pub(crate) enum PicturePart {
     /// The picture: a click selects it, a drag moves the selected one.
     Body,
+    /// A picture lying over the selected one, within the selected one's frame: a click selects the
+    /// one on top, a drag moves the selected one.
+    OverSelected,
     /// A resize grip in `ImageObb::handles` order (four corners and four edge midpoints).
     Corner(usize),
     /// The selected picture's rotate knob: a drag turns it.
     Knob,
+    /// The picture being cropped, which holds every press on its page.
+    Crop(CropPart),
+}
+
+/// What of a picture being cropped a hit is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CropPart {
+    /// A grip of the box kept, in `crop_handles` order (four corners, then the top, right, bottom
+    /// and left edge midpoints): a drag moves that side or corner.
+    Grip(usize),
+    /// The box kept: a drag moves it over the picture.
+    Keep,
+    /// The picture outside the box kept, shown or cut away: a press there moves nothing, and a
+    /// right-click is the crop's, as on the box and its grips (#5835).
+    Cut,
+    /// The rest of the page, its Done and Cancel controls among it: a press there is crop mode's,
+    /// and moves nothing.
+    Page,
 }
 
 /// What of the objects a hit is on.
@@ -58,6 +82,15 @@ pub(crate) enum ObjectsPart {
     Selection,
     /// The frame drawn around the paragraph open for typing: a click selects the box, a drag moves it.
     Frame,
+    /// A press with Shift or ⌘ (Ctrl): it adds the object under it to the objects selected
+    /// together, or takes it out of them, or on none starts an area selection that adds to them.
+    Toggle(Option<ObjectTarget>),
+    /// A press with Shift or ⌘ while text being typed is open (a new box, or a paragraph with
+    /// changes), which must be finished or discarded first: it is held until the button is up, and
+    /// selects nothing.
+    Held,
+    /// A press with Shift or ⌘ on a page whose objects can't be selected together: it says so.
+    Refused,
 }
 
 /// The part of a paragraph a hit is on.
@@ -102,7 +135,7 @@ impl Hit {
 
 /// The hit that wins among `hits` with `tool`: the highest layer the tool reaches, the last of
 /// equals (modules are asked bottom up, in paint order).
-pub(crate) fn top(hits: impl IntoIterator<Item = Hit>, tool: QuickTool) -> Option<Hit> {
+pub(in crate::canvas) fn top(hits: impl IntoIterator<Item = Hit>, tool: QuickTool) -> Option<Hit> {
     hits.into_iter().filter(|h| h.layer.reached_by(tool)).fold(None, |best: Option<Hit>, h| match best {
         Some(b) if b.layer > h.layer => Some(b),
         _ => Some(h),
@@ -115,13 +148,15 @@ pub(crate) enum PagePress {
     /// The press began on this page, and the owner's hit won it: its module acts on it. Others
     /// only let go of their own state (a click on anything but the selected comment unselects it).
     Mine(Owner),
-    /// No button is down, or the press began on this page and nobody's hit won it: the active
-    /// tool's. Also every page's while a press the page view does not hold is down (one that began
+    /// No button is down, or the press began on this page and nobody's hit won it, or its owner let
+    /// its drag go ([`PageRouter::drag_began`]): the active tool's. Also every page's while a
+    /// press the page view does not hold is down (one that began
     /// over a panel), and after the press was dropped ([`PageRouter::cancel`]) until the button is
     /// up (`Elsewhere` instead when Escape came in the press's own frame; page input skips a
     /// cancelled press either way).
     Free,
-    /// The press began on another page, or off the pages (between them, or beside one).
+    /// The press began on another page, or off the pages (between them, or beside one) where no
+    /// page has anything under it.
     Elsewhere,
 }
 
@@ -137,9 +172,12 @@ impl PagePress {
 
 /// A press the pages hold, and who it belongs to.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Capture {
+struct Capture {
     pub owner: Owner,
     pub declines_drag: bool,
+    /// What lay on top at the press with the objects selected together aside: a double-click on
+    /// them reaches it.
+    under_objects: Option<Owner>,
 }
 
 /// The press the pages hold, from its frame until the button is up.
@@ -153,25 +191,28 @@ pub(crate) struct PageRouter {
 impl PageRouter {
     /// A new press on the pages: the last one's owner goes, and until a page claims it the press is
     /// between the pages.
-    pub(crate) fn begin(&mut self) {
+    pub(in crate::canvas) fn begin(&mut self) {
         self.capture = None;
         self.began = Some(None);
     }
 
-    /// A press on `page`: `hits` at the press point decide who it belongs to. A press nobody's
-    /// hit claims is held by nobody (the page's text, or a tool that acts anywhere on the page).
+    /// A press on `page`, or past its edge where `hits` are under it (the selected picture's rotate
+    /// knob): `hits` at the press point decide who it belongs to. A press nobody's hit claims is held
+    /// by nobody (the page's text, or a tool that acts anywhere on the page).
     /// Only a press just begun ([`Self::begin`]) is claimed, by the first page that does: pages
     /// that touch (the gaps hidden) can share a row of pixels, and a press there is one page's.
-    pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
+    pub(in crate::canvas) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
         if self.began != Some(None) {
             return;
         }
-        self.capture = top(hits, tool).map(|h| Capture { owner: h.owner, declines_drag: h.declines_drag });
+        let hits: Vec<Hit> = hits.into_iter().collect();
+        let under_objects = top(hits.iter().filter(|h| !matches!(h.owner, Owner::Objects { .. })).cloned(), tool).map(|h| h.owner);
+        self.capture = top(hits, tool).map(|h| Capture { owner: h.owner, declines_drag: h.declines_drag, under_objects });
         self.began = Some(Some(page));
     }
 
     /// What `page` has to do with the press the pages hold.
-    pub(crate) fn press_for(&self, page: usize) -> PagePress {
+    pub(in crate::canvas) fn press_for(&self, page: usize) -> PagePress {
         match (self.began, &self.capture) {
             (None, _) => PagePress::Free,
             (Some(Some(p)), Some(capture)) if p == page => PagePress::Mine(capture.owner),
@@ -180,26 +221,35 @@ impl PageRouter {
         }
     }
 
-    /// Who holds the press on `page`.
-    pub(crate) fn owner(&self, page: usize) -> Option<Owner> {
-        self.press_for(page).owner()
+    /// What lay on top at the press with the objects selected together aside.
+    pub(in crate::canvas) fn under_objects(&self) -> Option<Owner> {
+        self.capture.as_ref().and_then(|c| c.under_objects)
     }
 
     /// Whether the press is held by someone who keeps its drag: then the page's text is not
     /// selected by it.
-    pub(crate) fn keeps_drag(&self) -> bool {
+    pub(in crate::canvas) fn keeps_drag(&self) -> bool {
         self.capture.as_ref().is_some_and(|c| !c.declines_drag)
     }
 
     /// Whether a drag of the press moves nothing on the page: nobody holds it, its holder lets the
     /// drag go (a highlight's, to the text), or it is a link's, which follows a click and does
     /// nothing with a drag. A finger's drag then pans the page in the Select tool (#5667).
-    pub(crate) fn drag_moves_nothing(&self) -> bool {
+    pub(in crate::canvas) fn drag_moves_nothing(&self) -> bool {
         self.capture.as_ref().is_none_or(|c| c.declines_drag || matches!(c.owner, Owner::Link { .. }))
     }
 
+    /// The press turned into a drag: an owner that declines its drag lets it go, and from then on
+    /// the press is nobody's (a drag across a highlight selects the text under it; with the Link
+    /// tool, a drag from a link draws a new one). Its click stayed the owner's.
+    pub(in crate::canvas) fn drag_began(&mut self) {
+        if self.capture.as_ref().is_some_and(|c| c.declines_drag) {
+            self.capture = None;
+        }
+    }
+
     /// The press is over once the button is up and its release has been seen.
-    pub(crate) fn settle(&mut self, any_down: bool, edges: bool) {
+    pub(in crate::canvas) fn settle(&mut self, any_down: bool, edges: bool) {
         if !any_down && !edges {
             self.capture = None;
             self.began = None;
@@ -208,7 +258,7 @@ impl PageRouter {
 
     /// Drops the press (Escape, automation's cancel): every page is the active tool's again
     /// ([`PagePress::Free`]). Page input skips a press Escape cancelled until the button is up.
-    pub(crate) fn cancel(&mut self) {
+    pub(in crate::canvas) fn cancel(&mut self) {
         self.capture = None;
         self.began = None;
     }
@@ -237,16 +287,16 @@ mod tests {
         let mut r = PageRouter::default();
         r.begin();
         r.press(2, [hit(Layer::Comment, 7)], QuickTool::Select);
-        assert_eq!(r.owner(2), Some(hit(Layer::Comment, 7).owner));
-        assert_eq!(r.owner(1), None, "only on its page");
+        assert_eq!(r.press_for(2).owner(), Some(hit(Layer::Comment, 7).owner));
+        assert_eq!(r.press_for(1).owner(), None, "only on its page");
         assert!(r.keeps_drag());
         r.settle(false, true);
-        assert!(r.owner(2).is_some(), "the release frame still belongs to the press");
+        assert!(r.press_for(2).owner().is_some(), "the release frame still belongs to the press");
         r.settle(false, false);
-        assert_eq!(r.owner(2), None);
+        assert_eq!(r.press_for(2).owner(), None);
         r.begin();
         r.press(0, [], QuickTool::Select);
-        assert_eq!(r.owner(0), None, "a press nobody claims is held by nobody");
+        assert_eq!(r.press_for(0).owner(), None, "a press nobody claims is held by nobody");
         assert!(!r.keeps_drag());
     }
 
@@ -288,9 +338,24 @@ mod tests {
         let mut r = PageRouter::default();
         r.begin();
         r.press(0, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
-        assert!(r.owner(0).is_some() && !r.keeps_drag());
+        assert!(r.press_for(0).owner().is_some() && !r.keeps_drag());
         r.cancel();
-        assert_eq!(r.owner(0), None);
+        assert_eq!(r.press_for(0).owner(), None);
+    }
+
+    /// A drag the owner declines is nobody's once it starts, on the page it began on; a drag the
+    /// owner keeps stays its own.
+    #[test]
+    fn a_declined_drag_is_nobodys_once_it_starts() {
+        let mut r = PageRouter::default();
+        r.begin();
+        r.press(1, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
+        r.drag_began();
+        assert_eq!((r.press_for(1), r.press_for(0)), (PagePress::Free, PagePress::Elsewhere));
+        r.begin();
+        r.press(1, [hit(Layer::Comment, 2)], QuickTool::Select);
+        r.drag_began();
+        assert_eq!(r.press_for(1), PagePress::Mine(hit(Layer::Comment, 2).owner));
     }
 
     /// What a finger's drag in the Select tool pans past (#5667): everything but a press that
