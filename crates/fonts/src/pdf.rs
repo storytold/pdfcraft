@@ -1373,6 +1373,9 @@ mod encoding_tests {
         assert_eq!(glyph_text("u65"), None, "`u` takes four to six digits");
         assert_eq!(glyph_text("u0010FFFF"), None);
         assert_eq!(glyph_text("uni0065").as_deref(), Some("e"));
+        assert_eq!(glyph_text("u0065").as_deref(), Some("e"), "`u` and four digits");
+        assert_eq!(glyph_text("u1F600").as_deref(), Some("\u{1f600}"), "`u` and five");
+        assert_eq!(glyph_text("u10FFFF").as_deref(), Some("\u{10ffff}"), "`u` and six, the last code point");
     }
 
     #[test]
