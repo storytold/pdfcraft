@@ -5796,6 +5796,92 @@ fn page_contents_and_nested_forms_share_one_budget() {
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
 }
 
+/// A form XObject that draws itself (PDFBOX-5782, a fuzzed file whose form names a `/Pages`
+/// dictionary as `/X0`, found the form again in the page's resources and spent 38 s drawing
+/// itself until the page's nested-paint budget ran out) is drawn once: the drawing inside
+/// itself is skipped and reported, as other readers draw it. Vendored patch: hayro-interpret
+/// `Context::enter_form` (89).
+#[test]
+fn a_form_that_draws_itself_is_drawn_once() {
+    // Each form paints a 10 x 10 square and draws `/X0` 20 units to its right.
+    let draw = "0 0 1 rg 0 0 10 10 re f q 1 0 0 1 20 0 cm /X0 Do Q";
+    // Two forms that draw each other: blue, then red, then blue again would follow.
+    let other = "1 0 0 rg 0 0 10 10 re f q 1 0 0 1 20 0 cm /X0 Do Q";
+    let other = format!(
+        "6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] /Resources << /XObject << /X0 5 0 R >> >> /Length {} >> stream\n{other}\nendstream endobj\n",
+        other.len()
+    );
+    let cases = [
+        ("its own resources name it", "/Resources << /XObject << /X0 5 0 R >> >>", ""),
+        ("it names a /Pages dictionary and the page's resources name it", "/Resources << /XObject << /X0 2 0 R >> >>", ""),
+        ("it has no resources and the page's name it", "", ""),
+        ("two forms draw each other", "/Resources << /XObject << /X0 6 0 R >> >>", other.as_str()),
+    ];
+    for (what, resources, extra) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n4 0 obj << /Length 7 >> stream\n/X0 Do\nendstream endobj\n".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] {resources} /Length {} >> stream\n{draw}\nendstream endobj\n",
+                draw.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(extra.as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(page.width, 200, "{what}");
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
+        let second = if extra.is_empty() { [255, 255, 255] } else { [255, 0, 0] };
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), second, "{what}: the form one level in");
+        assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
+    }
+}
+
+/// A form that reaches itself through a tiling pattern it fills with, or a Type 3 glyph it
+/// shows, is not drawn inside itself either: the pattern cell or the glyph procedure is
+/// interpreted in a context of its own, which still knows the form is being drawn. The form
+/// paints a blue square, then fills a square 20 units to its right with the pattern, or shows
+/// the glyph there, whose content draws the form. Vendored patch: hayro-interpret
+/// `Context::enter_form` (89).
+#[test]
+fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
+    let cell = "q 1 0 0 1 20 0 cm /X0 Do Q";
+    let pattern = format!(
+        "7 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 200 40] /XStep 200 /YStep 40 /Resources << /XObject << /X0 5 0 R >> >> /Length {} >> stream\n{cell}\nendstream endobj\n",
+        cell.len()
+    );
+    let glyph = "0 0 d0 /X0 Do";
+    let glyph = format!(
+        "7 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 200 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n8 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n",
+        glyph.len()
+    );
+    let cases = [
+        ("a tiling pattern", "/Resources << /Pattern << /P0 7 0 R >> >>", "0 0 1 rg 0 0 10 10 re f /Pattern cs /P0 scn 20 0 10 10 re f", pattern),
+        ("a Type 3 glyph", "/Resources << /Font << /T3 7 0 R >> >>", "0 0 1 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (a) Tj ET", glyph),
+    ];
+    for (what, resources, draw, extra) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n4 0 obj << /Length 7 >> stream\n/X0 Do\nendstream endobj\n".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] {resources} /Length {} >> stream\n{draw}\nendstream endobj\n",
+                draw.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(extra.as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
+    }
+}
+
 /// The page content budget counts what is held at once, not everything decoded: a form
 /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
 #[test]
