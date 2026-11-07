@@ -226,6 +226,8 @@ pub struct Props {
     pub fill_opacity: Option<f64>,
     /// How opaque a text box's, typewriter text's or callout's text is drawn.
     pub text_opacity: Option<f64>,
+    /// Highlights: whether the corners are drawn rounded like paper (`/PCRoundCorners`).
+    pub round_corners: Option<bool>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -261,6 +263,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
         text_opacity: (subtype == "FreeText").then(|| appearance::part_opacity(d).text),
+        round_corners: (subtype == "Highlight").then(|| matches!(d.get(b"PCRoundCorners"), Some(Object::Bool(true)))),
         subtype,
         endings: line_endings_of(d),
     })

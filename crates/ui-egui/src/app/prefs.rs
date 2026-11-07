@@ -125,6 +125,7 @@ impl PdfCraftApp {
                     "fill": s.fill,
                     "border_color": s.border_color,
                     "border_shape": s.border_shape.name(),
+                    "round_corners": s.round_corners,
                 }))
                 .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
@@ -417,6 +418,9 @@ impl PdfCraftApp {
                 }
                 if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
                     self.comment_prefs.set_border_shape(tool, shape);
+                }
+                if let Some(r) = e["round_corners"].as_bool() {
+                    self.comment_prefs.set_round_corners(tool, r);
                 }
             }
         }

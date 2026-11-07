@@ -560,6 +560,90 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
     Some(form(context.rect, &out, drawing.resources))
 }
 
+/// Draw a filled rounded quad using cubic Bézier curves (§12.5.5).
+///
+/// Returns false for degenerate dimensions or non-finite coordinates so callers fall back to a
+/// straight quadrilateral.
+fn draw_rounded_quad(c: &mut String, p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
+    let (v_top, v_bot) = ((p2.0 - p1.0, p2.1 - p1.1), (p3.0 - p4.0, p3.1 - p4.1));
+    let (v_right, v_left) = ((p4.0 - p2.0, p4.1 - p2.1), (p1.0 - p3.0, p1.1 - p3.1));
+    let (w_top, w_bot) = (v_top.0.hypot(v_top.1), v_bot.0.hypot(v_bot.1));
+    let (h_right, h_left) = (v_right.0.hypot(v_right.1), v_left.0.hypot(v_left.1));
+    if !w_top.is_finite() || !w_bot.is_finite() || !h_right.is_finite() || !h_left.is_finite() {
+        return false;
+    }
+    if w_top <= 1e-4 || w_bot <= 1e-4 || h_right <= 1e-4 || h_left <= 1e-4 {
+        return false;
+    }
+    let u_top = (v_top.0 / w_top, v_top.1 / w_top);
+    let u_bot = (v_bot.0 / w_bot, v_bot.1 / w_bot);
+    let u_right = (v_right.0 / h_right, v_right.1 / h_right);
+    let u_left = (v_left.0 / h_left, v_left.1 / h_left);
+    let h = (h_left + h_right) / 2.0;
+    let max_r = (w_top / 2.0).min(w_bot / 2.0).min(h_left / 2.0).min(h_right / 2.0);
+    let r = (h / 2.0).min(max_r);
+    if !r.is_finite() || r <= 1e-4 {
+        return false;
+    }
+    const KAPPA: f64 = 0.552_284_749_830_793_5;
+    let k = (1.0 - KAPPA) * r;
+    let s = (p1.0 + r * u_top.0, p1.1 + r * u_top.1);
+    let top_end = (p2.0 - r * u_top.0, p2.1 - r * u_top.1);
+    let tr_cp1 = (p2.0 - k * u_top.0, p2.1 - k * u_top.1);
+    let tr_cp2 = (p2.0 + k * u_right.0, p2.1 + k * u_right.1);
+    let tr_end = (p2.0 + r * u_right.0, p2.1 + r * u_right.1);
+    let right_end = (p4.0 - r * u_right.0, p4.1 - r * u_right.1);
+    let br_cp1 = (p4.0 - k * u_right.0, p4.1 - k * u_right.1);
+    let br_cp2 = (p4.0 + k * u_bot.0, p4.1 + k * u_bot.1);
+    let br_end = (p4.0 + r * u_bot.0, p4.1 + r * u_bot.1);
+    let bot_end = (p3.0 - r * u_bot.0, p3.1 - r * u_bot.1);
+    let bl_cp1 = (p3.0 - k * u_bot.0, p3.1 - k * u_bot.1);
+    let bl_cp2 = (p3.0 + k * u_left.0, p3.1 + k * u_left.1);
+    let bl_end = (p3.0 + r * u_left.0, p3.1 + r * u_left.1);
+    let left_end = (p1.0 - r * u_left.0, p1.1 - r * u_left.1);
+    let tl_cp1 = (p1.0 - k * u_left.0, p1.1 - k * u_left.1);
+    let tl_cp2 = (p1.0 + k * u_top.0, p1.1 + k * u_top.1);
+
+    c.push_str(&format!(
+        "{} {} m {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c h f\n",
+        n(s.0),
+        n(s.1),
+        n(top_end.0),
+        n(top_end.1),
+        n(tr_cp1.0),
+        n(tr_cp1.1),
+        n(tr_cp2.0),
+        n(tr_cp2.1),
+        n(tr_end.0),
+        n(tr_end.1),
+        n(right_end.0),
+        n(right_end.1),
+        n(br_cp1.0),
+        n(br_cp1.1),
+        n(br_cp2.0),
+        n(br_cp2.1),
+        n(br_end.0),
+        n(br_end.1),
+        n(bot_end.0),
+        n(bot_end.1),
+        n(bl_cp1.0),
+        n(bl_cp1.1),
+        n(bl_cp2.0),
+        n(bl_cp2.1),
+        n(bl_end.0),
+        n(bl_end.1),
+        n(left_end.0),
+        n(left_end.1),
+        n(tl_cp1.0),
+        n(tl_cp1.1),
+        n(tl_cp2.0),
+        n(tl_cp2.1),
+        n(s.0),
+        n(s.1),
+    ));
+    true
+}
+
 fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
     let d = context.dict;
     let subtype = context.subtype;
@@ -576,7 +660,20 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
         match subtype {
             b"Highlight" => {
                 c.push_str(&rg(col));
-                c.push_str(&format!("{} {} m {} {} l {} {} l {} {} l h f\n", n(p1.0), n(p1.1), n(p2.0), n(p2.1), n(p4.0), n(p4.1), n(p3.0), n(p3.1)));
+                let rounded = matches!(d.get(b"PCRoundCorners"), Some(Object::Bool(true)));
+                if !rounded || !draw_rounded_quad(c, p1, p2, p3, p4) {
+                    c.push_str(&format!(
+                        "{} {} m {} {} l {} {} l {} {} l h f\n",
+                        n(p1.0),
+                        n(p1.1),
+                        n(p2.0),
+                        n(p2.1),
+                        n(p4.0),
+                        n(p4.1),
+                        n(p3.0),
+                        n(p3.1)
+                    ));
+                }
             }
             b"Underline" | b"StrikeOut" => {
                 let lw = (h * 0.07).clamp(0.5, 3.0);

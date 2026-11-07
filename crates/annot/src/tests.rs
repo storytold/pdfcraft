@@ -2779,3 +2779,49 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+#[test]
+fn highlight_round_corners_appearance_and_persistence() {
+    let mut doc = fixture();
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let mut item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] });
+    // Default is square corners (round_corners = false)
+    let square_idx = add_annotation(&mut doc, &item, &meta("h1")).unwrap();
+
+    // With round_corners = true
+    item.style.round_corners = true;
+    let round_idx = add_annotation(&mut doc, &item, &meta("h2")).unwrap();
+
+    let doc2 = reopen(&doc);
+    let all = list(&doc2, 0);
+
+    let square_dict = &all[square_idx];
+    assert!(!square_dict.contains(b"PCRoundCorners"));
+    let square_ap = ap_content(&doc2, square_dict);
+    // Square highlight uses lines: m ... l ... l ... l h f
+    assert!(square_ap.contains(" m ") && square_ap.contains(" l ") && !square_ap.contains(" c "));
+    assert_eq!(props(&doc2, 0, square_idx).unwrap().round_corners, Some(false));
+
+    let round_dict = &all[round_idx];
+    assert_eq!(round_dict.get(b"PCRoundCorners"), Some(&Object::Bool(true)));
+    let round_ap = ap_content(&doc2, round_dict);
+    // Rounded highlight uses Bézier curves: contains " c " operator
+    assert!(round_ap.contains(" c ") && round_ap.contains(" h f"));
+    assert_eq!(props(&doc2, 0, round_idx).unwrap().round_corners, Some(true));
+
+    // Test modifying via set_style
+    let mut doc3 = doc2;
+    // Turn off round corners on round_idx
+    let mut change = StyleChange::default();
+    change.round_corners = Some(false);
+    set_style(&mut doc3, 0, round_idx, change, &meta("")).unwrap();
+    let p_after = props(&doc3, 0, round_idx).unwrap();
+    assert_eq!(p_after.round_corners, Some(false));
+
+    // Turn on round corners on square_idx
+    let mut change2 = StyleChange::default();
+    change2.round_corners = Some(true);
+    set_style(&mut doc3, 0, square_idx, change2, &meta("")).unwrap();
+    let p2_after = props(&doc3, 0, square_idx).unwrap();
+    assert_eq!(p2_after.round_corners, Some(true));
+}
