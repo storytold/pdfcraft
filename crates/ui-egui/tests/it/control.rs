@@ -2160,10 +2160,20 @@ fn headless_control_channel_tab_detach_and_reattach() {
     assert_eq!(initial_state["documents"][2]["detached"], false);
     assert_eq!(initial_state["detached_viewports"], json!([]));
 
+    let cmd_enabled = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, id: &str| {
+        let cmds = ok(h, c, "ui.commands", json!({}));
+        cmds["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap()
+    };
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.detach"), !cfg!(target_arch = "wasm32"));
+    assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
+
     // Detach second tab by index via ui.detach.
     let res = ok(&mut h, &c, "ui.detach", json!({"tab": 1}));
     assert_eq!(res["detached"], second_doc_id.0);
     settle(&mut h);
+
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.detach"), !cfg!(target_arch = "wasm32"));
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.attach"), !cfg!(target_arch = "wasm32"));
 
     // Verify state updates: second tab is detached, detached_viewports reflects it.
     let state_after_detach = ok(&mut h, &c, "ui.state", json!({}));
@@ -2190,6 +2200,9 @@ fn headless_control_channel_tab_detach_and_reattach() {
     assert_eq!(state_after_attach["documents"][1]["detached"], false);
     assert_eq!(state_after_attach["detached_viewports"], json!([]));
     assert_eq!(state_after_attach["active"]["doc"], second_doc_id.0);
+
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.detach"), !cfg!(target_arch = "wasm32"));
+    assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
 }
 
 #[test]
@@ -2198,6 +2211,13 @@ fn headless_control_channel_tab_detach_errors_and_trait() {
 
     let (mut h, c) = harness();
     let first_doc_id = h.state().views[0].id;
+
+    let cmd_enabled = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, id: &str| {
+        let cmds = ok(h, c, "ui.commands", json!({}));
+        cmds["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap()
+    };
+    assert!(!cmd_enabled(&mut h, &c, "ui.detach"));
+    assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
 
     // 1. With only one document open, detaching must fail with a clear error.
     let err = call(&mut h, &c, "ui.detach", json!({"tab": 0})).unwrap_err();

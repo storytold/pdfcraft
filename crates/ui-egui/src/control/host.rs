@@ -204,8 +204,8 @@ impl Host for crate::PdfCraftApp {
             .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))) }))
             .collect();
         list.push(json!({"id": "ui.panel", "label": "Side panel", "enabled": true, "params": "panel: tools or side; open: boolean; width: number (clamped to the panel's limits)"}));
-        list.push(json!({"id": "ui.detach", "label": "Detach tab to new window", "enabled": self.views.len() > 1, "params": "doc: document id, or tab: tab index"}));
-        list.push(json!({"id": "ui.attach", "label": "Re-attach tab to main window", "enabled": self.views.iter().any(|v| v.detached), "params": "doc: document id, or tab: tab index"}));
+        list.push(json!({"id": "ui.detach", "label": "Detach tab to new window", "enabled": !cfg!(target_arch = "wasm32") && self.views.len() > 1, "params": "doc: document id, or tab: tab index"}));
+        list.push(json!({"id": "ui.attach", "label": "Re-attach tab to main window", "enabled": !cfg!(target_arch = "wasm32") && self.views.iter().any(|v| v.detached), "params": "doc: document id, or tab: tab index"}));
         json!({ "commands": list })
     }
 
@@ -248,11 +248,19 @@ impl Host for crate::PdfCraftApp {
     }
 
     fn attach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
-        if !self.views.iter().any(|v| v.id == id) {
-            return Err(format!("document with id {} not found", id.0));
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = id;
+            return Err("ui.attach needs native window viewports".into());
         }
-        PdfCraftControl::attach_tab(self, id);
-        Ok(json!({ "attached": id.0 }))
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.views.iter().any(|v| v.id == id) {
+                return Err(format!("document with id {} not found", id.0));
+            }
+            PdfCraftControl::attach_tab(self, id);
+            Ok(json!({ "attached": id.0 }))
+        }
     }
 
     fn doc_id_from_tab(&self, tab: usize) -> Option<pdfcraft_engine::DocId> {
