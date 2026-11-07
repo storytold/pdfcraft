@@ -67,6 +67,10 @@ pub(crate) struct Refusal {
     /// page so far is: its translucency or matrix, the resources it would merge into (which grow
     /// as other groups are prepared), or the decode budget left.
     pub(crate) intrinsic: bool,
+    /// The form's resources need renaming where it is drawn, and it draws something that would
+    /// look them up by their old names. Names merged in for other forms can make the renaming
+    /// unnecessary, which [`merges_without_renaming`] checks without reading the content.
+    pub(crate) renaming: bool,
 }
 
 /// Ungroup form `name` from the page's `resources`. `translucent` says whether the graphics state
@@ -83,7 +87,11 @@ pub(crate) fn ungroup_ops(
     placement: Matrix,
     budget: &mut DecodeBudget,
 ) -> Result<Ungrouped, Refusal> {
-    let refusal = |why: &str, intrinsic: bool| Refusal { error: EditError::Invalid(format!("this artwork can't be ungrouped: {why}")), intrinsic };
+    let refusal = |why: &str, intrinsic: bool| Refusal {
+        error: EditError::Invalid(format!("this artwork can't be ungrouped: {why}")),
+        intrinsic,
+        renaming: false,
+    };
     // Something about this placement or the page so far is the reason.
     let refuse = |why: &str| refusal(why, false);
     // The form itself is the reason: every placement of it is refused the same way.
@@ -215,7 +223,7 @@ pub(crate) fn ungroup_ops(
     // would find the page's, which differ wherever a name was renamed (every form resource that
     // isn't already the page's, the nested item's own entry included).
     if !renames.is_empty() && ops.iter().any(|op| inherits_resources(doc, &form_res, op)) {
-        return Err(refuse("it draws a nested form, Type 3 font or pattern that uses its resources"));
+        return Err(Refusal { renaming: true, ..refuse("it draws a nested form, Type 3 font or pattern that uses its resources") });
     }
     let mut depth = 0usize;
     // Marked content and text objects must balance within the form's own stream: an extra EMC
@@ -381,6 +389,22 @@ pub(crate) fn ungroup_ops(
         out.push(Op::new("EMC", Vec::new()));
     }
     Ok(Ungrouped { ops: out, resources: merged, patterns, shows_text })
+}
+
+/// Whether form `name` in `resources` would merge into them without a rename: it has resources
+/// of its own, and each of their entries is already in `resources` under the same name, as
+/// [`ungroup_ops`] compares them. Only dictionaries are read, never the form's content.
+pub(crate) fn merges_without_renaming(doc: &Document, resources: &Dict, name: &[u8]) -> bool {
+    let category = |d: &Dict, cat: &[u8]| d.get(cat).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned());
+    let Some(form) = category(resources, b"XObject").and_then(|x| x.get(name).cloned()) else { return false };
+    let Object::Stream(s) = &*doc.resolve(&form) else { return false };
+    let Some(own) = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()) else { return false };
+    CATEGORIES.into_iter().all(|cat| {
+        let Some(theirs) = category(&own, cat) else { return true };
+        let mine = category(resources, cat).unwrap_or_default();
+        // Past these sizes `ungroup_ops` refuses the form anyway.
+        theirs.len() <= 4096 && mine.len() <= 4096 && theirs.iter().all(|(key, value)| mine.get(key) == Some(value))
+    })
 }
 
 /// A copy of pattern `entry` whose `/Matrix` maps its space to the page's default space instead

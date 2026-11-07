@@ -24,6 +24,17 @@ pub struct Preparation {
 /// grouped and is reported in [`Preparation::refused`].
 const MAX_LEVELS: usize = 8;
 
+/// What one pass of [`prepare`] inlined, as positions in the next pass's parse of the page.
+struct Inlined {
+    /// How many operators that parse has; with any other count the positions are wrong.
+    ops: usize,
+    /// Where each inlined form's operators are: the placements in them are new.
+    ranges: Vec<std::ops::Range<usize>>,
+    /// Earlier placements refused only because their resources needed renaming
+    /// ([`expand::Refusal::renaming`]), each with the reason it was given.
+    waiting: Vec<(usize, String)>,
+}
+
 /// Prepare grouped source text atomically, within eight levels and 64 placements per page.
 /// Shared forms and other pages are untouched. Preparation is a distinct undoable engine edit.
 pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError> {
@@ -33,10 +44,17 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
     let mut visits = 0usize;
     let mut decode = pdfcraft_cos::DecodeBudget::new(16 << 20, 0);
     // Forms found to be artwork, or refused for a reason in the form itself (`Refusal::intrinsic`):
-    // a later pass leaves their placements as they are without reading or counting them again.
-    // Only placements that are read count against the limit, so a page of logos doesn't use it
-    // up pass after pass. A form refused only where it is drawn is read again where it appears.
+    // a placement of one that an expanded group adds is left as it is without being read or
+    // counted, so logos drawn inside many text groups don't use up the limit. A form refused only
+    // where it is drawn is read again where an expanded group draws it.
     let mut settled = std::collections::HashSet::new();
+    // What the previous pass inlined. Only the placements inside it are new. Every other placement
+    // was read and counted on an earlier pass, so a group refused where it is drawn counts once.
+    // Reading one again gives the same answer (an inlined form restores the graphics state it
+    // changes, and the decode budget only shrinks), except for a group refused because its
+    // resources needed renaming: names merged in for other groups since can make that
+    // unnecessary. Such a group is read again, uncounted, once its resource names say so.
+    let mut inlined: Option<Inlined> = None;
     // One pass opens one level of every placement; the last pass only reports what is deeper.
     for pass in 0..=MAX_LEVELS {
         let p = page_dict(&next, page)?;
@@ -47,11 +65,19 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
             return Err(EditError::Invalid("the page has unreadable content; grouped text was left unchanged".into()));
         }
         let ops = parsed.ops;
+        // `None` reads every placement: on the first pass, and if the page didn't parse back to
+        // the operators written, where the positions can't be trusted. Reading one again can only
+        // count it twice; skipping one could leave its text grouped without a reason.
+        let (new, mut waiting) = match inlined.take() {
+            Some(i) if i.ops == ops.len() => (Some(i.ranges), i.waiting),
+            _ => (None, Vec::new()),
+        };
+        let mut still_waiting = Vec::new();
         let resources = p.dict.get(b"Resources").map(|r| next.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
         let space = expand::page_blend_space(&next, &p.dict);
         let images: std::collections::BTreeMap<_, _> =
             crate::page_images(&next, page)?.into_iter().filter(|i| i.is_form).map(|i| (i.op, i)).collect();
-        let mut replacements = std::collections::HashMap::new();
+        let mut replacements = std::collections::BTreeMap::new();
         let mut merged = resources;
         let mut pending_path = false;
         let mut in_text = false;
@@ -68,6 +94,25 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
             if image.object.is_some_and(|o| settled.contains(&o)) {
                 continue;
             }
+            // The resource name exactly as the `Do` writes it (its last operand, the one drawn):
+            // a name need not be UTF-8, and `image.name` is only its display form.
+            let name = op.last_name().map_or_else(|| image.name.as_bytes().to_vec(), <[u8]>::to_vec);
+            // An earlier placement is read again only when it was refused for a rename that the
+            // names merged since have made unnecessary. The last pass opens nothing, so there it
+            // keeps its reason.
+            let earlier = new.as_ref().is_some_and(|ranges| !ranges.iter().any(|r| r.contains(&at)));
+            if earlier {
+                let Some(w) = waiting.iter().position(|(i, _)| *i == at) else { continue };
+                let (_, reason) = waiting.swap_remove(w);
+                if pass == MAX_LEVELS || !expand::merges_without_renaming(&next, &merged, &name) {
+                    still_waiting.push((at, reason));
+                    continue;
+                }
+                // What reading it again finds replaces the reason it was given.
+                if let Some(i) = result.refused.iter().position(|r| *r == reason) {
+                    result.refused.remove(i);
+                }
+            }
             if pending_path || in_text {
                 result.refused.push(format!("{}: the group is drawn inside an unfinished path or text object", image.name));
                 continue;
@@ -78,14 +123,13 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                 result.refused.push(format!("{}: the group is drawn with an operand too many", image.name));
                 continue;
             }
-            visits = visits.saturating_add(1);
-            if visits > 64 {
-                return Err(EditError::Invalid("too many grouped text placements on this page (limit 64); the page was left unchanged".into()));
+            if !earlier {
+                visits = visits.saturating_add(1);
+                if visits > 64 {
+                    return Err(EditError::Invalid("too many grouped text placements on this page (limit 64); the page was left unchanged".into()));
+                }
             }
             let translucent = expand::translucent_at(&next, &merged, &ops, at);
-            // The resource name exactly as the `Do` writes it (its only operand): a name need not
-            // be UTF-8, and `image.name` is only its display form.
-            let name = op.last_name().map_or_else(|| image.name.as_bytes().to_vec(), <[u8]>::to_vec);
             match expand::ungroup_ops(&next, &merged, &name, translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
                 Ok(expand::Ungrouped { ops: inline, resources: mut res, patterns, shows_text }) => {
                     // Vector and image artwork needs no preparation. Nested text groups are
@@ -115,10 +159,14 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                     expanded_here.extend(image.object);
                 }
                 Err(refusal) => {
-                    result.refused.push(format!("{}: {}", image.name, refusal.error));
+                    let reason = format!("{}: {}", image.name, refusal.error);
+                    if refusal.renaming {
+                        still_waiting.push((at, reason.clone()));
+                    }
                     if refusal.intrinsic {
                         refused_here.extend(image.object);
                     }
+                    result.refused.push(reason);
                 }
             }
         }
@@ -126,6 +174,14 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
         if replacements.is_empty() {
             break;
         }
+        // Where an operator lands in the next pass: each replaced `Do` before it becomes its
+        // inlined operators.
+        let moved = |i: usize| replacements.range(..i).fold(i, |n, (_, inline)| n.saturating_add(inline.len()).saturating_sub(1));
+        inlined = Some(Inlined {
+            ops: moved(ops.len()),
+            ranges: replacements.iter().map(|(at, inline)| moved(*at)..moved(*at).saturating_add(inline.len())).collect(),
+            waiting: still_waiting.into_iter().map(|(at, reason)| (moved(at), reason)).collect(),
+        });
         let changed = splice(&pieces, &ops, |at| match replacements.remove(&at) {
             Some(ops) => (ops, false),
             None => (Vec::new(), true),

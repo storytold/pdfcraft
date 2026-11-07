@@ -11021,6 +11021,60 @@ fn a_placement_refusal_does_not_settle_the_form_for_later_passes() {
     assert_eq!(text::text_blocks(&doc, 0).unwrap().iter().filter(|b| b.text == "shared").count(), 1, "only the opaque one is the page's own text");
 }
 
+/// A placement refused where it is drawn is read once, not again on every pass, while the same
+/// form drawn anew by an expanded parent is still read in its own place: 33 translucent
+/// placements of a text group and a parent drawing it opaque are 35 reads, within the
+/// 64-placement limit, where reading the 33 again on the second pass would pass it and prepare
+/// nothing.
+#[test]
+fn a_group_refused_where_it_is_drawn_counts_once_against_the_placement_limit() {
+    let resources = "<< /Font << /F1 5 0 R >> /ExtGState << /Alpha << /ca 0.5 >> >> /XObject << /Shared 6 0 R /Parent 7 0 R >> >>";
+    let form = |extra: &str, body: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] {extra} /Resources {resources}"), body);
+    let content = format!("{}/Parent Do", "q /Alpha gs /Shared Do Q\n".repeat(33));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>"),
+        stream("", &content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("/Group << /S /Transparency >>", "BT /F1 14 Tf 40 500 Td (shared) Tj ET"),
+        form("", "/Shared Do"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let result = text::forms::prepare(&mut doc, 0).unwrap_or_else(|e| panic!("each placement is read once ({e})"));
+    assert_eq!(result.expanded, 2, "Parent, then the Shared it draws opaque: {:?}", result.refused);
+    assert!(result.refused.iter().any(|r| r.starts_with("Shared: ") && r.contains("translucent")), "{:?}", result.refused);
+    let drawn = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.iter().filter(|op| op.is("Do")).count();
+    assert_eq!(drawn, 33, "the translucent placements stay grouped");
+}
+
+/// A group refused because its resources would need renaming (it draws a form that looks them
+/// up by name) is prepared on a later pass once another group's merge has given the page those
+/// very names. A lists the child as `/PCUg1`; B lists it as `/Other`, which merging B names
+/// `/PCUg1` on the page. Its first refusal is then no longer reported.
+#[test]
+fn a_group_refused_for_renaming_is_prepared_once_the_page_has_its_names() {
+    let form = |resources: &str, body: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {resources}"), body);
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /A 6 0 R /B 7 0 R >> >> /Contents 4 0 R >>"
+            .to_string(),
+        stream("", "/A Do\n/B Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        form("<< /Font << /F1 5 0 R >> /XObject << /PCUg1 8 0 R >> >>", "BT /F1 14 Tf 40 500 Td (alpha) Tj ET /PCUg1 Do"),
+        form("<< /Font << /F1 5 0 R >> /XObject << /Other 8 0 R >> >>", "BT /F1 14 Tf 40 400 Td (beta) Tj ET"),
+        // The child has no resources of its own: it looks names up in whatever draws it.
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 0 10 10 re f"),
+    ];
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(result.expanded, 2, "B, then A once the page names the child as A does: {:?}", result.refused);
+    assert!(result.refused.is_empty(), "A was prepared after all: {:?}", result.refused);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(["alpha", "beta"].iter().all(|t| blocks.iter().any(|b| b.text == *t)), "{blocks:?}");
+}
+
 /// The `Do` is matched to its resource by the name's bytes as written, which need not be UTF-8.
 #[test]
 fn grouped_text_under_a_non_utf8_resource_name_is_prepared() {
