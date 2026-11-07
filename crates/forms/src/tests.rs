@@ -347,6 +347,43 @@ endstream"
     );
 }
 
+/// A page widget whose `/Parent` names a field is one of that field's widgets even when the
+/// field's `/Kids` leave it out: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226). Here
+/// `radio` lists itself and one of its two widgets, and `pair` and `other` list each other (roots,
+/// so not children) and none of their widgets. Each field gets every widget naming it, once.
+#[test]
+fn widgets_naming_a_field_that_does_not_list_them_join_it() {
+    let w = |parent: u32, state: &str, y: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /Rect [50 {y} 65 {}] /P 3 0 R /AP << /N << /{state} 10 0 R /Off 10 0 R >> >> >>",
+            y + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>".into(),                          // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),          // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R 11 0 R 12 0 R 13 0 R] >>".into(), // 3
+        w(5, "A", 700),                                                                      // 4: not in 5's /Kids
+        "<< /FT /Btn /Ff 49152 /T (radio) /V /Off /Kids [5 0 R 7 0 R] >>".into(),            // 5
+        "<< /Fields [5 0 R 8 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                     // 6
+        w(5, "B", 650),                                                                      // 7: in 5's /Kids
+        "<< /FT /Btn /Ff 49152 /T (pair) /V /Off /Kids [9 0 R 11 0 R] >>".into(),            // 8 lists the root 9
+        "<< /FT /Btn /Ff 49152 /T (other) /V /Off /Kids [8 0 R] >>".into(),                  // 9 lists the root 8
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                       // 10
+        w(8, "C", 600),                                                                      // 11: in 8's /Kids
+        w(8, "D", 550),                                                                      // 12: not in 8's /Kids
+        w(9, "E", 500),                                                                      // 13: not in 9's /Kids
+    ];
+    let doc = document(&objs);
+    let (all, adopted) = enumerate(&doc);
+    let listed: Vec<(&str, Vec<ObjRef>)> = all.iter().map(|f| (f.name.as_str(), f.widgets.iter().map(|w| w.obj).collect())).collect();
+    let r = |num| ObjRef::new(num, 0);
+    assert_eq!(listed, [("radio", vec![r(7), r(4)]), ("pair", vec![r(11), r(12)]), ("other", vec![r(13)])]);
+    assert_eq!(adopted, 0, "no widget is read as a field of its own");
+    let states: Vec<_> = field(&all, "radio").widgets.iter().filter_map(|w| w.on_state.as_deref()).collect();
+    assert_eq!(states, ["B", "A"]);
+}
+
 /// Some writers leave every field out of `/Fields` and put the widgets only in the page
 /// annotations: the tree walk alone finds nothing, and Acrobat and the browsers fill them anyway.
 /// The pages' widgets are adopted as fields, after the listed tree fields.

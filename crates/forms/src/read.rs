@@ -331,13 +331,19 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
+    let mut by_parent: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
     let pages = page_refs(doc);
     for (i, p) in pages.iter().enumerate() {
         if let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) {
             for (k, e) in doc.resolve(&a).as_array().into_iter().flatten().enumerate() {
-                if let Some(r) = e.as_ref() {
-                    page_of.entry(r).or_insert(i);
-                    annot_index.entry(r).or_insert(k);
+                if let Some(r) = e.as_ref()
+                    && let std::collections::hash_map::Entry::Vacant(slot) = page_of.entry(r)
+                {
+                    slot.insert(i);
+                    annot_index.insert(r, k);
+                    if let Some(parent) = widget_parent(doc, r) {
+                        by_parent.entry(parent).or_default().push(r);
+                    }
                 }
             }
         }
@@ -363,6 +369,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         widgets: std::collections::HashSet::new(),
         roots: listed_roots.iter().copied().collect(),
         path: Vec::new(),
+        by_parent,
         scripts: script_budget(),
         values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
     };
@@ -442,8 +449,21 @@ struct Seen {
     roots: std::collections::HashSet<ObjRef>,
     /// The fields being walked, outermost first, whose `/Kids` are being read.
     path: Vec<ObjRef>,
+    /// The page widgets (no `/T`) that name each field as their `/Parent`, in page-annotation order.
+    by_parent: std::collections::HashMap<ObjRef, Vec<ObjRef>>,
     scripts: DecodeBudget,
     values: DecodeBudget,
+}
+
+/// The field a page widget `r` names as its `/Parent`, when `r` is a widget and not a field of its
+/// own (no `/T`).
+fn widget_parent(doc: &Document, r: ObjRef) -> Option<ObjRef> {
+    let obj = doc.get(r);
+    let d = obj.as_dict()?;
+    if d.name(b"Subtype") != Some(b"Widget") || d.contains(b"T") {
+        return None;
+    }
+    d.reference(b"Parent")
 }
 
 /// Whether `k`, listed in the `/Kids` of field `r`, is not a child of `r` after all: `r` itself or
@@ -524,7 +544,10 @@ fn walk(
         Some(b"Sig") => FieldKind::Signature,
         _ => return,
     };
-    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
+    // A child names its parent (ISO 32000-2 §12.7.4.1, Table 226): a page widget naming this field
+    // is one of its widgets even when its `/Kids` leave it out, as MuPDF and PDFium read it.
+    let widget_refs: Vec<ObjRef> =
+        if d.contains(b"Rect") { vec![r] } else { kids.into_iter().chain(seen.by_parent.get(&r).into_iter().flatten().copied()).collect() };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
