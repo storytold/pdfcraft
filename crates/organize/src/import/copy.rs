@@ -176,9 +176,10 @@ impl<'a> Copier<'a> {
     }
 
     /// Whether `o` is a reset or submit action that names only fields left behind (see `kept`).
-    /// Its copy would list none, and an empty list reads as every field, as an omitted one does
-    /// (ISO 32000-2 §12.7.6): it is not copied, nor are the actions after it, as with a link to a
-    /// page left behind. A list of fields to leave out (Include/Exclude flag set) loses nothing.
+    /// Its copy would list none, and readers (ours too) may take an empty list for every field,
+    /// which is what an omitted one means (ISO 32000-2 §12.7.6). So it is not copied, nor are the
+    /// actions after it, as with a link to a page left behind. A list of fields to leave out
+    /// (Include/Exclude flag set) loses nothing.
     fn acts_on_none(&self, o: &Object) -> bool {
         let Some(kept) = &self.kept else { return false };
         let held;
