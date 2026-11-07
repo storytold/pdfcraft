@@ -229,7 +229,7 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     h.get_by_label("Cancel").click();
-    h.run_steps(3);
+    support::wait_until(&mut h, "cancelled recovery password prompt", |app| app.password_prompt.is_none());
     assert!(h.state().password_prompt.is_none());
     assert!(h.state().views.is_empty());
 

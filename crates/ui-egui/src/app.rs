@@ -66,6 +66,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            read_aloud: Default::default(),
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -642,6 +643,7 @@ impl eframe::App for PdfCraftApp {
         self.process_picked();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
+        self.poll_read_aloud(ctx);
         self.sync_native_menu(ctx);
         self.sync_titles(ctx);
     }
@@ -679,6 +681,7 @@ impl eframe::App for PdfCraftApp {
                 }
             });
             dialogs::show(self, &ctx);
+            read_aloud::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
@@ -698,6 +701,7 @@ impl eframe::App for PdfCraftApp {
             // still show above it.
             workflows::ocr_verify::show(self, ui);
             dialogs::show(self, &ctx);
+            read_aloud::show(self, &ctx);
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
             self.finish_render_frame(&ctx);
@@ -732,6 +736,7 @@ impl eframe::App for PdfCraftApp {
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        read_aloud::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);

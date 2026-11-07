@@ -9304,11 +9304,11 @@ title = "Read out loud (platform TTS)"
 area = "M"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["a11y.read_aloud"]
+tools = ["read_aloud_prepare", "read_aloud_start", "read_aloud_control", "read_aloud_status", "read_aloud_voices", "read_aloud_wait"]
+evidence = ["crates/automation/tests/it/automation.rs::read_aloud_prepares_bounded_text_without_changing_or_speaking_the_pdf", "crates/automation/tests/it/automation.rs::read_aloud_playback_tools_stop_on_edits_and_document_close", "crates/ui-egui/tests/it/read_aloud.rs::read_aloud_shell_controls_preserve_the_pdf_and_close_stops_audio", "crates/platform/src/speech/windows.rs::windows_speech_pause_preserves_position_and_stop_releases_stream", "crates/platform/src/speech/unix.rs::parses_english_and_italian_voices_with_spaces_and_regions", "crates/platform/src/speech/unix.rs::real_sink_pauses_at_same_position_resumes_and_stops_without_audio_device", "crates/ui-egui/tests/it/read_aloud.rs::read_aloud_voice_language_is_independent_of_english_or_italian_interface", "crates/ui-egui/tests/it/read_aloud.rs::read_aloud_source_switch_and_edit_stop_hidden_playback", "crates/platform/src/speech.rs::failed_stop_drops_the_backend_and_discards_queued_audio", "crates/platform/src/speech/unix.rs::native_synthesizes_english_to_valid_audio", "crates/platform/src/speech/unix.rs::native_synthesizes_italian_to_valid_audio", "crates/platform/src/speech/unix.rs::native_audio_pause_resume_and_stop_preserve_position"]
+notes = "Windows local installed voices; bounded read-only preparation off the UI thread, real pause/resume, cancellation and CLI/MCP controls. Uses extracted page text rather than semantic structure order; scans need OCR. macOS say and Linux espeak-ng candidates add private WAV synthesis and same-position Rodio pause/resume; physical Linux English/Italian playback and desktop/CLI/MCP controls verified on 2026-10-13, with listener confirmation and poor voice naturalness reported; physical macOS audio validation remains open. FreeBSD/browser playback, sentence highlighting and automatic page navigation remain open. Native Windows audio check is explicit and muted."
 
 [[feature]]
 id = "a11y.read-aloud-options"
@@ -9316,11 +9316,11 @@ title = "Read-aloud voice, pitch and speed"
 area = "M"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["a11y.read_aloud"]
+tools = ["read_aloud_start", "read_aloud_voices"]
+evidence = ["crates/platform/src/speech.rs::bad_input_never_initializes_the_backend", "crates/platform/src/speech/windows.rs::windows_speech_pause_preserves_position_and_stop_releases_stream", "crates/ui-egui/tests/it/read_aloud.rs::read_aloud_shell_controls_preserve_the_pdf_and_close_stops_audio"]
+notes = "Installed Windows voice selection and 0.5–2.0 speaking-rate multiplier in the UI and tools. macOS say and Linux espeak-ng expose installed voices and synthesis-rate controls, independently of interface language; English/Italian parser and UI/tool regressions pass. Physical Linux English/Italian audio playback and desktop/CLI/MCP controls were verified on 2026-10-13; physical macOS audio validation, pitch, persisted preferences and FreeBSD/web remain open."
 
 [[feature]]
 id = "a11y.replace-page-colors"

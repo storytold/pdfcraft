@@ -77,6 +77,7 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
+pub mod read_aloud;
 mod state;
 mod tools;
 mod workflows;
@@ -259,6 +260,7 @@ struct PendingOpen {
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
 
 pub struct PdfCraftApp {
+    pub read_aloud: read_aloud::ReadAloud,
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
     pub session: Session,

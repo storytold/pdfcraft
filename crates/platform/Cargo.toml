@@ -9,6 +9,17 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+serde = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Safe WinRT calls only: local installed voices and in-memory audio playback.
+windows = { version = "0.62.2", features = ["Foundation", "Media_SpeechSynthesis", "Media_Playback", "Media_Core", "Storage_Streams"] }
+windows-future = "0.3.2"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+# Safe audio playback; WAV only, no bundled voices or copyleft library linkage.
+rodio = { version = "0.21.1", default-features = false, features = ["playback", "hound"] }
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.
@@ -22,6 +33,9 @@ async-channel = "2"
 futures-lite = "2"
 
 [dev-dependencies]
+# Exercise the Unix parsers, subprocess lifecycle and actual sink on every host, silently.
+rodio = { version = "0.21.1", default-features = false, features = ["hound"] }
+tempfile = "3"
 # Exercise the actual portal wire decoder and cancellable worker on every native test host.
 zbus = { version = "=5.19.0", default-features = false, features = ["async-io"] }
 async-channel = "2"
