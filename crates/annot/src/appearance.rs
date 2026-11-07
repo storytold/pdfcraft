@@ -485,7 +485,15 @@ impl AppearanceDrawing {
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(d: &Dict) -> Option<Stream> {
-    let context = appearance_context(d)?;
+    build_on_page(d, None)
+}
+
+/// [`build`] for an annotation on a page whose visible region is `page` (`Page::crop` in
+/// pdfcraft-model): a text markup whose `/QuadPoints` reach past its `/Rect` is drawn over them
+/// as far as the page shows ([`markup_reach`]), and its appearance's `/BBox` says how far
+/// ([`widened_rect`]). Without a page it is drawn within `/Rect`.
+pub(crate) fn build_on_page(d: &Dict, page: Option<[f64; 4]>) -> Option<Stream> {
+    let context = appearance_context(d, page)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
@@ -499,15 +507,15 @@ pub fn build(d: &Dict) -> Option<Stream> {
     finish_appearance(&context, drawing)
 }
 
-fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
+fn appearance_context(d: &Dict, page: Option<[f64; 4]>) -> Option<AppearanceContext<'_>> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
         return None;
     }
     let subtype = d.name(b"Subtype")?;
-    let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
-    let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let rect = normalised_rect(d)?;
+    let rect = page.and_then(|page| markup_reach(d, rect, page)).unwrap_or(rect);
     // Cloudy borders (§12.5.4) are drawn for polygons only.
     let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
     if cloudy && subtype != b"Polygon" {
@@ -523,6 +531,67 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         stroke: color(d, b"C")?,
         width: border_width(d),
     })
+}
+
+/// `/Rect` as lower-left and upper-right corners (a rectangle may be written with either pair of
+/// opposite corners, ISO 32000-2 §7.9.5); `None` unless it is four numbers.
+fn normalised_rect(d: &Dict) -> Option<[f64; 4]> {
+    let [x0, y0, x1, y1] = <[f64; 4]>::try_from(nums(d, b"Rect")?).ok()?;
+    Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
+}
+
+/// The text markup subtypes, drawn over their `/QuadPoints` (ISO 32000-2 §12.5.6.10).
+pub(crate) fn is_text_markup(d: &Dict) -> bool {
+    matches!(d.name(b"Subtype"), Some(b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly"))
+}
+
+/// At most this many quadrilaterals widen a text markup's box ([`markup_reach`]). Each takes in a
+/// word or a group of contiguous words (ISO 32000-2 Table 182), usually a line, so even written
+/// word by word a markup over a whole dense page stays well below it; a larger one is drawn
+/// within its `/Rect`, as before the box was widened.
+pub(crate) const MAX_MARKUP_QUADS: usize = 10_000;
+
+/// A text markup annotation's `/Rect` (normalised, `rect`) grown to take in its `/QuadPoints`
+/// where they reach past it, as far as the page's visible region `page` goes; `None` when they
+/// don't, aren't usable or number more than [`MAX_MARKUP_QUADS`], and for every other subtype.
+/// The quadrilaterals are what the markup marks (ISO 32000-2 Table 182), and the appearance is
+/// mapped onto `/Rect` (§12.5.5), so a `/Rect` that leaves them out would cut off what is drawn:
+/// a highlight whose `/Rect` lies beside its text drew nothing. Nothing outside the crop box is
+/// shown or printed (§14.11.2), so the box grows no further than it; it never shrinks `rect`.
+fn markup_reach(d: &Dict, rect: [f64; 4], page: [f64; 4]) -> Option<[f64; 4]> {
+    if !is_text_markup(d) || !rect.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    // Counted before the numbers are read.
+    let count = d.get(b"QuadPoints")?.as_array()?.len();
+    if count == 0 || count % 8 != 0 || count / 8 > MAX_MARKUP_QUADS {
+        return None;
+    }
+    let q = nums(d, b"QuadPoints").filter(|q| q.iter().all(|v| v.is_finite()))?;
+    let mut reach = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for p in q.as_chunks::<2>().0 {
+        reach = [reach[0].min(p[0]), reach[1].min(p[1]), reach[2].max(p[0]), reach[3].max(p[1])];
+    }
+    let reach = [reach[0].max(page[0]), reach[1].max(page[1]), reach[2].min(page[2]), reach[3].min(page[3])];
+    // Quadrilaterals wholly off the page widen nothing.
+    if reach[0] > reach[2] || reach[1] > reach[3] {
+        return None;
+    }
+    let out = [rect[0].min(reach[0]), rect[1].min(reach[1]), rect[2].max(reach[2]), rect[3].max(reach[3])];
+    // A `/Rect` of its own can still be too wide for a width or height (`-1e308` to `1e308`).
+    let usable = (out[2] - out[0]).is_finite() && (out[3] - out[1]).is_finite();
+    (usable && out != rect).then_some(out)
+}
+
+/// The `/Rect` a text markup takes with its built appearance `stream`: the appearance's `/BBox`
+/// where [`markup_reach`] widened it past `/Rect`, as the appearance is mapped onto `/Rect`
+/// (§12.5.5); `None` (keep `/Rect`) otherwise and for every other subtype.
+pub(crate) fn widened_rect(d: &Dict, stream: &Stream) -> Option<[f64; 4]> {
+    if !is_text_markup(d) {
+        return None;
+    }
+    let bbox = <[f64; 4]>::try_from(nums(&stream.dict, b"BBox")?).ok()?;
+    (bbox.iter().all(|v| v.is_finite()) && Some(bbox) != normalised_rect(d)).then_some(bbox)
 }
 
 fn draw_body(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {

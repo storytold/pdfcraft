@@ -33,14 +33,22 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = build_appearance(doc, &d) else { return Err(AnnotError::Unsupported(subtype)) };
+    let page = appearance::is_text_markup(&d).then(|| page_box_listing(doc, r)).flatten();
+    let Some(stream) = build_appearance(doc, &d, page) else { return Err(AnnotError::Unsupported(subtype)) };
     apply_appearance(doc, r, &d, stream)
 }
 
-/// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
-/// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+/// The visible region (`Page::crop`) of the first page that lists `r` among its annotations.
+fn page_box_listing(doc: &Document, r: ObjRef) -> Option<[f64; 4]> {
+    pdfcraft_model::pages(doc).into_iter().find(|p| annots(doc, p.obj).iter().any(|a| a.as_ref() == Some(r))).map(|p| p.crop(doc))
+}
+
+/// Draw the appearance for an annotation dictionary on a page whose visible region is `page`
+/// (used by text markup, [`appearance::build_on_page`]): the expensive half of [`set_appearance`].
+/// Pure from the dictionary, the objects it points at and the page, so [`AppearanceCache`] can
+/// reuse it.
+fn build_appearance(doc: &Document, d: &Dict, page: Option<[f64; 4]>) -> Option<Stream> {
+    let mut stream = appearance::build_on_page(d, page)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -60,6 +68,8 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
+    // Text markup whose /QuadPoints reach past /Rect: its appearance covers them, so /Rect does too.
+    let markup_rect = appearance::widened_rect(d, &stream);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.
@@ -80,7 +90,7 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
         });
     doc.update_dict(r, |d| {
         d.set(b"AP".to_vec(), Object::Dict(apd));
-        if let Some(rect) = icon_rect {
+        if let Some(rect) = icon_rect.or(markup_rect) {
             d.set(b"Rect".to_vec(), num_array(&rect));
         }
         d.remove(b"AS");
@@ -163,6 +173,8 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
     // reads `doc`, which never gets the appearance, so every repeat used to add another stream to
     // the copy, and the display bytes grew with the number of listings.
     let mut seen = std::collections::HashSet::new();
+    // Pages' visible regions, read once and only when a text markup is drawn.
+    let mut crops: Option<std::collections::HashMap<ObjRef, [f64; 4]>> = None;
     for page in page_refs(doc).ok()? {
         for r in annots(doc, page).iter().filter_map(Object::as_ref) {
             if !seen.insert(r) {
@@ -188,7 +200,10 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let Some(stream) = build_appearance(doc, &d).or_else(other_stamp) else { continue };
+            let crop = appearance::is_text_markup(&d)
+                .then(|| crops.get_or_insert_with(|| pdfcraft_model::pages(doc).iter().map(|p| (p.obj, p.crop(doc))).collect()).get(&page).copied())
+                .flatten();
+            let Some(stream) = build_appearance(doc, &d, crop).or_else(other_stamp) else { continue };
             cache.insert(r, &stream);
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
             apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
