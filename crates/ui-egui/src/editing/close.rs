@@ -120,10 +120,7 @@ impl PdfCraftApp {
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
     pub(super) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
-        let detached_id = match req {
-            CloseRequest::Tab(id) if self.views.get(index).is_some_and(|v| v.detached) => Some(id),
-            _ => None,
-        };
+        let detached_id = self.views.get(index).filter(|v| v.detached).map(|v| v.id);
         self.close_tab(index);
         if let Some(id) = detached_id {
             ctx.send_viewport_cmd_to(

@@ -382,16 +382,29 @@ impl PdfCraftApp {
         self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached)
     }
 
-    /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
-    /// on the document underneath it.
-    pub(crate) fn modal_open(&self) -> bool {
-        let close_modal = match self.close_request {
+    /// Whether an active close request acts modally over the main window. Detached save prompts
+    /// remain isolated to their respective child viewports.
+    pub(crate) fn is_close_modal_active(&self) -> bool {
+        match self.close_request {
             Some(crate::CloseRequest::Tab(id)) => self.views.iter().find(|v| v.id == id).is_some_and(|v| !v.detached),
             Some(crate::CloseRequest::Quit | crate::CloseRequest::All) => true,
             None => false,
-        };
+        }
+    }
+
+    /// Whether an active close request represents a save prompt inside a detached child window.
+    pub(crate) fn is_detached_save_prompt_open(&self) -> bool {
+        match self.close_request {
+            Some(crate::CloseRequest::Tab(id)) => self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached),
+            _ => false,
+        }
+    }
+
+    /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
+    /// on the document underneath it.
+    pub(crate) fn modal_open(&self) -> bool {
         self.dialog.is_some()
-            || close_modal
+            || self.is_close_modal_active()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
@@ -655,11 +668,6 @@ impl eframe::App for PdfCraftApp {
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
-        let close_modal = match self.close_request {
-            Some(crate::CloseRequest::Tab(id)) => self.views.iter().find(|v| v.id == id).is_some_and(|v| !v.detached),
-            Some(crate::CloseRequest::Quit | crate::CloseRequest::All) => true,
-            None => false,
-        };
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             let view_blocked = if view.detached {
@@ -675,7 +683,7 @@ impl eframe::App for PdfCraftApp {
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing
         // behind the user's back; so does a save prompt opened since.
-        if self.process_pending_edits() && !close_modal {
+        if self.process_pending_edits() && !self.is_close_modal_active() {
             for (id, doc) in deferred {
                 // Only in the document the shortcut was pressed in.
                 if self.active_ids().map(|(_, active)| active) == doc {
@@ -877,6 +885,24 @@ impl PdfCraftApp {
                 });
 
                 self.process_pending_edits_for(idx);
+
+                if self.close_request != Some(crate::CloseRequest::Tab(doc_id)) {
+                    let redo = child_ui.input_mut(|i| {
+                        i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y))
+                    });
+                    let undo = !redo && child_ui.input_mut(|i| {
+                        i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Z))
+                    });
+                    if redo {
+                        self.redo_in(idx);
+                    } else if undo {
+                        self.undo_in(idx);
+                    }
+                }
 
                 if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
                     if let Some(choice) = crate::dialogs::save_prompt_key(child_ui.ctx(), &mut self.save_prompt_button) {

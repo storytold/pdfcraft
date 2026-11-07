@@ -263,19 +263,29 @@ impl PdfCraftApp {
         self.active.is_some_and(|i| self.apply_edit_to(i, edit))
     }
 
-    /// Undo the last change: to the Combine files list while its tab shows, else the document.
-    pub fn undo(&mut self) {
-        // While a polygon, cloud or run of connected lines is being drawn, Undo takes back its
-        // last point instead of the last finished edit.
-        if let Some((i, _)) = self.active_ids()
-            && self.views[i].comments.undo_point()
-        {
+    /// Undo the last change to the document shown in tab `view_index`.
+    pub fn undo_in(&mut self, view_index: usize) {
+        if self.views.get_mut(view_index).is_some_and(|v| v.comments.undo_point()) {
             return;
         }
+        if !self.undo_in_page_box_for(view_index) {
+            self.history_step_for(view_index, true);
+        }
+    }
+
+    /// Redo the last undone change to the document shown in tab `view_index`.
+    pub fn redo_in(&mut self, view_index: usize) {
+        if !self.redo_in_page_box_for(view_index) {
+            self.history_step_for(view_index, false);
+        }
+    }
+
+    /// Undo the last change: to the Combine files list while its tab shows, else the active document.
+    pub fn undo(&mut self) {
         if self.combine_showing() {
             self.combine_history_step(true);
-        } else if !self.undo_in_page_box() {
-            self.history_step(true);
+        } else if let Some(i) = self.active {
+            self.undo_in(i);
         }
     }
 
@@ -283,9 +293,9 @@ impl PdfCraftApp {
     /// yet: the box takes the step, as it does for the key, one step of its typing at a time.
     /// Applying the typing first was a new edit, which dropped the document's Redo, and then the
     /// typing was taken back all at once. True when the box took the step.
-    fn undo_in_page_box(&mut self) -> bool {
+    fn undo_in_page_box_for(&mut self, view_index: usize) -> bool {
         let Some(ctx) = self.ctx.clone() else { return false };
-        let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
+        let Some(view) = self.views.get_mut(view_index) else { return false };
         let doc = view.id;
         if let Some(ed) = view.line_editor.as_mut().filter(|ed| ed.has_unsaved_text()) {
             ed.claim_typing(&ctx, doc);
@@ -306,11 +316,12 @@ impl PdfCraftApp {
         false
     }
 
+    /// Redo the last change: to the Combine files list while its tab shows, else the active document.
     pub fn redo(&mut self) {
         if self.combine_showing() {
             self.combine_history_step(false);
-        } else if !self.redo_in_page_box() {
-            self.history_step(false);
+        } else if let Some(i) = self.active {
+            self.redo_in(i);
         }
     }
 
@@ -318,9 +329,9 @@ impl PdfCraftApp {
     /// the box's, as the key's is. What Undo took back in the box comes back; typing the page
     /// doesn't have yet stays as it is, since applying it first is a new edit, which drops the
     /// document's Redo. True when the box took the step.
-    fn redo_in_page_box(&mut self) -> bool {
+    fn redo_in_page_box_for(&mut self, view_index: usize) -> bool {
         let Some(ctx) = self.ctx.clone() else { return false };
-        let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
+        let Some(view) = self.views.get_mut(view_index) else { return false };
         let doc = view.id;
         if let Some(ed) = view.line_editor.as_mut() {
             ed.claim_typing(&ctx, doc);
@@ -341,8 +352,8 @@ impl PdfCraftApp {
         false
     }
 
-    fn history_step(&mut self, undo: bool) {
-        let Some((i, id)) = self.active_ids() else { return };
+    fn history_step_for(&mut self, i: usize, undo: bool) {
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         if !self.close_text_editors(i, id) {
             return;
         }
@@ -479,20 +490,44 @@ impl PdfCraftApp {
             self.deferred_commands.clear();
         }
         match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
-            Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
-            Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
-            Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(),
+            Some(crate::canvas::ViewAction::InsertFromFile) => {
+                // Dialogs and file workflows route through the main window and target the
+                // active document. When initiated from a detached window, target this view.
+                self.active = Some(i);
+                self.insert_from_file_dialog();
+            }
+            Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => {
+                self.active = Some(i);
+                self.insert_from_file_at(Some(at));
+            }
+            Some(crate::canvas::ViewAction::ReplacePages) => {
+                self.active = Some(i);
+                self.replace_pages_dialog();
+            }
             Some(crate::canvas::ViewAction::Save) => {
                 self.save_view(i, SaveTarget::InPlace);
             }
-            Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
-            Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
+            Some(crate::canvas::ViewAction::Extract) => {
+                self.active = Some(i);
+                self.open_extract_dialog();
+            }
+            Some(crate::canvas::ViewAction::Split) => {
+                self.active = Some(i);
+                self.dialog = Some(crate::Dialog::Split);
+            }
             Some(crate::canvas::ViewAction::SplitBeforeSelected) => {
+                self.active = Some(i);
                 self.split_draft.mode = crate::SplitMode::Selection;
                 self.dialog = Some(crate::Dialog::Split);
             }
-            Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
-            Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
+            Some(crate::canvas::ViewAction::CopyPages { cut }) => {
+                self.active = Some(i);
+                self.copy_pages(cut);
+            }
+            Some(crate::canvas::ViewAction::PastePages) => {
+                self.active = Some(i);
+                self.paste_pages();
+            }
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
             Some(crate::canvas::ViewAction::CancelCamera) => self.leave_camera(i),
             Some(crate::canvas::ViewAction::CameraRotate { clockwise }) => {
@@ -509,6 +544,7 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::CameraLevel) => self.camera_level(i),
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
+                self.active = Some(i);
                 self.execute(command);
             }
             None => {}
@@ -821,12 +857,6 @@ impl PdfCraftApp {
         added_ok && paragraph_ok
     }
 
-    #[allow(dead_code)]
-    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
-        self.commit_open_text_edits_in(i)
-    }
-
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
     /// the file (and can be flattened) instead of being left on the screen.
     pub fn commit_open_fill_text_in(&mut self, view_index: usize) -> bool {
@@ -852,12 +882,6 @@ impl PdfCraftApp {
         } else {
             false
         }
-    }
-
-    #[allow(dead_code)]
-    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
-        self.commit_open_fill_text_in(i)
     }
 
     /// When the preference is on, bake Fill & Sign marks before the bytes are written.

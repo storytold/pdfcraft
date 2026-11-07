@@ -2540,6 +2540,52 @@ fn main_window_keyboard_shortcuts_execute_during_detached_save_prompt() {
     );
 }
 
+#[test]
+fn detached_window_undo_redo_targets_detached_view_without_affecting_docked_tab() {
+    let mut h = harness(|app| {
+        app.open_bytes("tab_a.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("tab_b.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let tab_a_id = ids[0];
+    let tab_b_id = ids[1];
+
+    // Detach Tab B
+    h.state_mut().detach_tab(tab_b_id);
+    h.run_steps(3);
+
+    assert!(h.state().views[1].detached, "Tab B should be detached");
+    assert_eq!(h.state().active, Some(0), "Tab A should be active docked tab");
+    assert_eq!(h.state().views[0].id, tab_a_id);
+
+    // Rotate page in Tab B
+    h.state_mut().session.apply(tab_b_id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(tab_b_id).unwrap().info.pages[0].rotation, 90);
+    assert_eq!(h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation, 0);
+
+    // Send Cmd+Z to Tab B's detached child viewport
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", tab_b_id));
+    h.input_mut().viewports.entry(child_viewport_id).or_default();
+    h.input_mut().viewport_id = child_viewport_id;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+
+    // Tab B rotation should be undone
+    assert_eq!(
+        h.state().session.get(tab_b_id).unwrap().info.pages[0].rotation,
+        0,
+        "Tab B's rotation must be undone via Cmd+Z in detached viewport"
+    );
+    // Tab A should be completely unaffected
+    assert_eq!(
+        h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation,
+        0,
+        "Docked Tab A must remain completely unaffected"
+    );
+    assert_eq!(h.state().active, Some(0), "Tab A must remain the active docked tab");
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
