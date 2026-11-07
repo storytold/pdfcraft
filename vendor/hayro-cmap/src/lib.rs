@@ -455,9 +455,13 @@ impl CMap {
         // has, so the fallback only applies when the codespace ranges give
         // the code `byte_len` bytes (ISO 32000-2 §9.7.6.2). Otherwise the
         // first byte of `<fe96>` matched a `<00fe>` entry and a two-byte code
-        // drew as two glyphs. A CMap with no codespace ranges keeps the old
-        // fallback.
-        if self.codespace_allows(code, byte_len, 0)
+        // drew as two glyphs. A CMap with no codespace ranges anywhere uses
+        // the length the entry's own source code was written with instead.
+        let length_fits = match self.codespace_allows(code, byte_len, 0) {
+            Some(allowed) => allowed,
+            None => self.bf_code_has_length(code, byte_len),
+        };
+        if length_fits
             && let Some(BfString::Char(lookup)) = self.lookup_bf_string_inner(code, false)
         {
             return Some(lookup as u32);
@@ -469,21 +473,29 @@ impl CMap {
             .and_then(|b| b.lookup_cid_code(code, byte_len))
     }
 
+    /// PdfCraft patch (4): whether this level's bf entry for `code` was written with `byte_len`
+    /// bytes (`<00fe>` is a two-byte code, not the one-byte `<fe>`), or doesn't record its length.
+    /// Used where no codespace range gives the code its length.
+    fn bf_code_has_length(&self, code: u32, byte_len: u8) -> bool {
+        find_in_ranges(&self.bf_entries, code)
+            .is_some_and(|entry| entry.code_len == 0 || entry.code_len == byte_len)
+    }
+
     /// PdfCraft patch (4): whether a code of `byte_len` bytes lies in a codespace range of that
     /// length (each byte within the range's bounds for its position, ISO
     /// 32000-2 §9.7.6.2). A CMap without codespace ranges defers to its base,
-    /// and one with none anywhere allows every code.
-    fn codespace_allows(&self, code: u32, byte_len: u8, depth: u32) -> bool {
+    /// and with none anywhere the answer is `None`.
+    fn codespace_allows(&self, code: u32, byte_len: u8, depth: u32) -> Option<bool> {
         if self._codespace_ranges.is_empty() {
             return match &self.base {
                 Some(base) if depth < MAX_NESTING_DEPTH => {
                     base.codespace_allows(code, byte_len, depth.saturating_add(1))
                 }
-                _ => true,
+                _ => None,
             };
         }
 
-        self._codespace_ranges.iter().any(|range| {
+        Some(self._codespace_ranges.iter().any(|range| {
             range.number_bytes == byte_len
                 && (0..u32::from(byte_len)).all(|i| {
                     // `byte_len` is at most 4 here (the range's own length),
@@ -492,7 +504,7 @@ impl CMap {
                     let byte = |v: u32| v.checked_shr(shift).map_or(0, |b| b & 0xFF);
                     byte(range.low) <= byte(code) && byte(code) <= byte(range.high)
                 })
-        })
+        }))
     }
 
     /// Look up a bf string in the cmap. This is usually
@@ -620,6 +632,9 @@ impl PartitionedRanges {
 pub(crate) struct BfRange {
     pub(crate) range: Range,
     pub(crate) dst_base: Vec<u16>,
+    /// PdfCraft patch (4): how many bytes the entry's source code was written with (1 to 4),
+    /// or 0 where that isn't recorded (a binary CMap).
+    pub(crate) code_len: u8,
 }
 
 impl HasRange for BfRange {
@@ -1226,8 +1241,31 @@ endbfchar
         // byte 0x20 is below 0x40.
         assert_eq!(cmap.lookup_cid_code(0x8220, 2), None);
 
-        let no_codespace = parse_without_codespace(b"1 beginbfchar <0020> <0020> endbfchar\n");
+        let no_codespace = parse_without_codespace(b"1 beginbfchar <20> <0020> endbfchar\n");
         assert_eq!(no_codespace.lookup_cid_code(0x20, 1), Some(0x20));
+    }
+
+    /// PdfCraft patch (4) test: without codespace ranges, a `bfchar` entry used as a CID
+    /// mapping matches only codes of the length its source was written with, so the first
+    /// byte of `<fe96>` is not taken for `<00fe>`.
+    #[test]
+    fn bfchar_cid_fallback_without_codespace_takes_the_source_length() {
+        let cmap = parse_without_codespace(
+            br#"
+2 beginbfchar
+<00fe> <0041>
+<fe96> <0042>
+endbfchar
+1 beginbfrange
+<0100> <0102> <0050>
+endbfrange
+"#,
+        );
+        assert_eq!(cmap.lookup_cid_code(0xfe, 1), None);
+        assert_eq!(cmap.lookup_cid_code(0xfe96, 2), Some(0x42));
+        assert_eq!(cmap.lookup_cid_code(0x00fe, 2), Some(0x41));
+        assert_eq!(cmap.lookup_cid_code(0x0101, 2), Some(0x51));
+        assert_eq!(cmap.lookup_cid_code(0x0101, 3), None);
     }
 
     #[test]
