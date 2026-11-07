@@ -7513,6 +7513,8 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert_eq!(status["languages"][1]["code"], "zh");
+    assert_eq!(status["languages"][1]["available"], pdfcraft_engine::ocr::available_for("zh"));
     assert_eq!(status["engines"][0]["id"], "ocrs", "{status}");
     assert!(status["engines"][1]["id"] == "tesseract" && status["engines"][1]["available"].is_boolean(), "{status}");
     if status["available"] != true {
@@ -7529,6 +7531,12 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    if pdfcraft_engine::ocr::available_for("zh") {
+        ok(&mut a, "edit_undo", json!({ "doc": scan }));
+        let mixed = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "zh" }));
+        assert!(mixed["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{mixed}");
+        assert!(page_text(&mut a, scan)[0].to_lowercase().contains("searchable"));
+    }
     // An engine that cannot run is named up front, before anything is read.
     if status["engines"][1]["available"] != true {
         let why = a.call("ocr_recognize", &json!({ "doc": scan, "engine": "tesseract", "skip_text_pages": false })).unwrap_err();

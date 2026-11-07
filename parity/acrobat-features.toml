@@ -6719,8 +6719,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
-notes = "The choice feeds both engines: ocrs reads only unaccented Latin (its model table holds English); tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover. Recognition quality beyond the tested English set is unproven."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ui-egui/tests/it/ocr.rs::chinese_ocr_language_runs_from_the_dialog", "crates/engine/src/tests.rs::chinese_ocr_makes_mixed_scans_searchable", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
+notes = "The choice feeds both engines: the built-in engine reads unaccented Latin (English) and, with the PP-OCRv4 model and dictionary installed, Simplified Chinese and mixed English text; tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover. Other OCR languages, and recognition quality beyond the tested English and Chinese sets, remain unproven."
 
 [[feature]]
 id = "ocr.searchable-image"

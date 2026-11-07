@@ -5292,6 +5292,70 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// Chinese and mixed English text: PP-OCRv4 reads each detected line, and the invisible
+/// Unicode layer makes it searchable without embedding a display font.
+#[test]
+fn chinese_ocr_makes_mixed_scans_searchable() {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    if !ocr::available_for("zh") {
+        eprintln!("skipped: Chinese OCR models not installed");
+        return;
+    }
+    // Original fixture, rendered only with the permitted craft-fonts build input.
+    let Some(face) = pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular") else {
+        eprintln!("skipped: set CRAFT_FONTS_DIR to generate the Chinese fixture");
+        return;
+    };
+    let font = FontRef::try_from_slice(face.bytes).unwrap();
+    let scaled = font.as_scaled(PxScale::from(64.0));
+    let mut image = image::RgbaImage::from_pixel(1000, 160, image::Rgba([255; 4]));
+    let mut x = 40.0;
+    for ch in "中文文本 2026 Hello".chars() {
+        let glyph_id = scaled.glyph_id(ch);
+        assert_ne!(glyph_id.0, 0, "fixture font must cover {ch}");
+        let glyph = glyph_id.with_scale_and_position(64.0, point(x, 105.0));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bounds = outline.px_bounds();
+            outline.draw(|gx, gy, coverage| {
+                let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                if px >= 0 && py >= 0 && px < 1000 && py < 160 {
+                    let v = (255.0 * (1.0 - coverage)) as u8;
+                    image.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
+                }
+            });
+        }
+        x += scaled.h_advance(glyph_id);
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("original.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let before = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "zh".into(), ..Default::default() }).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].skipped, None);
+    assert_eq!(found[0].text(), "中文文本 2026 Hello");
+    assert_eq!(page_texts(&s, id), ["中文文本 2026 Hello"]);
+    let doc = s.get(id).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+    let text = renderer.render(RenderRequestFor::text(0)).text.unwrap();
+    let hit = text.find("中文文本").into_iter().next().unwrap();
+    let rect = text.line_rects(hit)[0];
+    let word = &found[0].words[0];
+    let page_height = doc.info.pages[0].height as f64;
+    assert!((rect[1] as f64 - (page_height - word.origin[1] - word.up[1])).abs() < 0.1);
+    assert!((rect[3] as f64 - (page_height - word.origin[1])).abs() < 0.1, "search highlight covers the detected line");
+    assert_eq!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap(), before);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("result.pdf", None, saved, None).unwrap();
+    assert_eq!(page_texts(&s, reopened), ["中文文本 2026 Hello"]);
+    let again = s.recognize_text(id, &[], ocr::OcrSettings { language: "zh".into(), ..Default::default() }).unwrap();
+    assert!(again[0].skipped.is_some());
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), [""]);
+}
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]

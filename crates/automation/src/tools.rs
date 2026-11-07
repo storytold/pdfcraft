@@ -1386,7 +1386,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "language": { "type": "string", "enum": language_enum(), "description": "Document language (default en)." },
+                    "language": { "type": "string", "enum": language_enum(), "description": "Document language (default en; zh reads Simplified Chinese and mixed English)." },
                     "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"], "description": "Which engine reads the pages (default ocrs). auto: ocrs first and tesseract as the second engine, combined by strategy (only the engines that can run take part)." },
                     "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"], "description": "How two engines' readings combine: primary = the first engine alone; confidence = the second engine joins when the first reading's mean confidence is under 70 or unknown; rover = both always read, merged. Default: confidence with engine auto, primary otherwise." },
                     "output_mode": { "type": "string", "enum": ["searchable", "editable"], "description": "searchable (default): invisible text over the pages of the open document. editable: a NEW <document>_ocr-style file of visible text written to out; the source is not touched." },
