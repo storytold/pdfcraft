@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -575,6 +575,17 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    // The partial Punjabi catalog has no reviewed date vocabulary. Keep the existing English
+    // fallback for month/weekday names; numeric formatting and user patterns are unchanged.
+    DateLanguage {
+        code: "pa-guru",
+        name: "ਪੰਜਾਬੀ",
+        months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+        months_with_day: None,
+        months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+        days_short: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -778,6 +789,14 @@ mod tests {
 
     fn in_lang(fmt: &str, code: &str) -> String {
         format_day(fmt, DAY, date_language(code).unwrap())
+    }
+
+    /// Punjabi's unreviewed date vocabulary must retain the pre-existing English fallback.
+    #[test]
+    fn punjabi_dates_keep_english_fallback() {
+        for pattern in DATE_FORMATS {
+            assert_eq!(in_lang(pattern, "pa-guru"), in_lang(pattern, "en"));
+        }
     }
 
     #[test]

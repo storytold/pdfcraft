@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -150,6 +150,8 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Norwegian Bokmål; every `nb-*` locale resolves here, and so do general Norwegian (`no-*`) and
     // Nynorsk (`nn-*`), which have no catalog of their own (see `candidates`).
     LangInfo { code: "nb", rtl: false },
+    // Punjabi is offered only with its Gurmukhi catalog; see the script policy in candidates.
+    LangInfo { code: "pa-guru", rtl: false },
 ];
 
 /// Per language of [`LANGUAGES`], the (context, source) keys of PdfCraft's own catalog as written
@@ -277,6 +279,7 @@ impl Lang {
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
+            "pa-guru" => "Punjabi (Gurmukhi)",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
             code => code,
@@ -354,6 +357,15 @@ fn candidates(tag: &str) -> Vec<String> {
     let mut out = Vec::new();
     for n in (1..=parts.len()).rev() {
         out.push(parts.get(..n).unwrap_or_default().join("-"));
+    }
+    if primary == "pa" {
+        // Only explicit Gurmukhi or scriptless India selects this catalog. Bare Punjabi stays
+        // unspecified; Pakistan, Arabic and other explicit scripts must not select Gurmukhi.
+        let script = parts.iter().skip(1).find(|p| p.len() == 4 && p.bytes().all(|b| b.is_ascii_alphabetic()));
+        let region = parts.iter().skip(1).find(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_alphabetic()));
+        if script.is_some_and(|s| *s == "guru") || (script.is_none() && region.is_some_and(|r| *r == "in")) {
+            out.insert(out.len().saturating_sub(1), "pa-guru".to_string());
+        }
     }
     if primary == "zh" && !parts.iter().any(|p| matches!(*p, "hans" | "hant")) {
         // Chinese by region when no script is given.
