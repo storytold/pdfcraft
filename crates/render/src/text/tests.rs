@@ -1978,51 +1978,88 @@ fn text_outside_the_crop_box_is_clipped() {
 /// ISO 32000-2 §14.11.2): a `/MediaBox [0 0 0 0]` as the default page, a `/CropBox [0 0 0 0]`,
 /// or one with nothing in common with the media box, as the media box. The page's visible region
 /// had no area, so its text was all outside it and none was extracted (pdf.js
-/// `boundingBox_invalid`).
+/// `boundingBox_invalid`). Each case is checked on both paths: the text is extracted, and the page
+/// renders at the size of the box that stands in, with the text's ink on it. A page's own box
+/// without area gives way to an inherited one with area; an inherited box without area falls
+/// through to the default as an own one does.
 #[test]
 fn text_on_a_page_whose_box_has_no_area_is_extracted() {
     use lopdf::{Document, Object, Stream, dictionary};
-    let rect = |r: [i64; 4]| r.iter().map(|v| Object::Integer(*v)).collect::<Vec<_>>();
-    let mut doc = Document::with_version("1.7");
-    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-    let pages = doc.new_object_id();
-    let boxes = [([0, 0, 0, 0], None), ([0, 0, 800, 600], Some([0, 0, 0, 0])), ([0, 0, 600, 800], Some([600, 800, 1000, 1000]))];
-    let mut kids = Vec::new();
-    for (media, crop) in boxes {
-        let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 30 Tf 25 500 Td (Boxed) Tj ET".to_vec()));
-        let mut page = dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => rect(media), "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content };
-        if let Some(crop) = crop {
-            page.set("CropBox", rect(crop));
+    type Boxes = &'static [(&'static str, [i64; 4])];
+    /// (case, inherited boxes, the page's own boxes, where the word goes, expected size).
+    type Case = (&'static str, Boxes, Boxes, (i64, i64), (u32, u32));
+    /// A one-page document whose `/Pages` node carries `inherited`, and whose page carries `own`
+    /// and draws "Boxed" at `(x, y)` in Helvetica 30 pt.
+    fn boxed(inherited: Boxes, own: Boxes, (x, y): (i64, i64)) -> Vec<u8> {
+        let rect = |r: &[i64; 4]| r.iter().map(|v| Object::Integer(*v)).collect::<Vec<_>>();
+        let mut doc = Document::with_version("1.7");
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let pages = doc.new_object_id();
+        let ops = format!("BT /F1 30 Tf {x} {y} Td (Boxed) Tj ET");
+        let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+        let mut page = dictionary! { "Type" => "Page", "Parent" => pages, "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content };
+        for (key, r) in own {
+            page.set(*key, rect(r));
         }
-        kids.push(Object::Reference(doc.add_object(page)));
+        let page = doc.add_object(page);
+        let mut node = dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1};
+        for (key, r) in inherited {
+            node.set(*key, rect(r));
+        }
+        doc.objects.insert(pages, node.into());
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
     }
-    let count = kids.len() as i64;
-    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}.into());
-    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
-    doc.trailer.set("Root", catalog);
-    let mut bytes = Vec::new();
-    doc.save_to(&mut bytes).unwrap();
-    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-    for page in 0..3 {
-        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
-        assert_eq!(text.trim(), "Boxed", "page {}", page + 1);
+    // A4 (595.28 × 841.89 pt) covers 596 × 842 device pixels at scale 1.
+    const A4_PX: (u32, u32) = (596, 842);
+    let cases: [Case; 7] = [
+        ("own MediaBox without area", &[], &[("MediaBox", [0, 0, 0, 0])], (25, 500), A4_PX),
+        ("own CropBox without area", &[], &[("MediaBox", [0, 0, 800, 600]), ("CropBox", [0, 0, 0, 0])], (25, 500), (800, 600)),
+        (
+            "CropBox touching the media box at a corner",
+            &[],
+            &[("MediaBox", [0, 0, 600, 800]), ("CropBox", [600, 800, 1000, 1000])],
+            (25, 500),
+            (600, 800),
+        ),
+        // Text past A4 but inside the inherited box is kept.
+        (
+            "own MediaBox without area, inherited one with area",
+            &[("MediaBox", [0, 0, 1200, 1200])],
+            &[("MediaBox", [0, 0, 0, 0])],
+            (700, 900),
+            (1200, 1200),
+        ),
+        (
+            "own CropBox without area, inherited one with area",
+            &[("CropBox", [0, 0, 300, 300])],
+            &[("MediaBox", [0, 0, 600, 800]), ("CropBox", [0, 0, 0, 0])],
+            (25, 100),
+            (300, 300),
+        ),
+        ("inherited MediaBox without area", &[("MediaBox", [0, 0, 0, 0])], &[], (25, 500), A4_PX),
+        ("inherited CropBox outside the media box", &[("CropBox", [600, 600, 900, 900])], &[("MediaBox", [0, 0, 500, 500])], (25, 400), (500, 500)),
+    ];
+    let mut failures = Vec::new();
+    for (case, inherited, own, at, size) in cases {
+        let bytes = boxed(inherited, own, at);
+        let pdf = Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).map(|t| t.plain_text().trim().to_string());
+        if text.as_deref() != Some("Boxed") {
+            failures.push(format!("{case}: text {text:?}"));
+        }
+        let mut renderer = crate::PageRenderer::new(std::sync::Arc::new(bytes), crate::RenderConfig::default());
+        let out = renderer.render(crate::RenderRequest { page: 0, kind: crate::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        let ink = out.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128 && p[1] < 128 && p[2] < 128).count();
+        if out.error.is_some() || (out.width, out.height) != size || ink < 50 {
+            failures.push(format!(
+                "{case}: rendered {}×{} with {ink} dark pixels ({:?}), expected {}×{} with ink",
+                out.width, out.height, out.error, size.0, size.1
+            ));
+        }
     }
-
-    // A page's own `/MediaBox [0 0 0 0]` gives way to the one it inherits: text past A4 but
-    // inside the inherited box is kept.
-    let mut doc = Document::with_version("1.7");
-    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
-    let pages = doc.new_object_id();
-    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 30 Tf 700 900 Td (Inherited) Tj ET".to_vec()));
-    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => rect([0, 0, 0, 0]), "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
-    doc.objects.insert(
-        pages,
-        dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1, "MediaBox" => rect([0, 0, 1200, 1200])}.into(),
-    );
-    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
-    doc.trailer.set("Root", catalog);
-    let mut bytes = Vec::new();
-    doc.save_to(&mut bytes).unwrap();
-    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-    assert_eq!(extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim(), "Inherited");
+    assert!(failures.is_empty(), "{failures:#?}");
 }
