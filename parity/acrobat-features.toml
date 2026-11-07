@@ -806,8 +806,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = "hayro bootstrap"
+evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height"]
+notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows)"
 
 [[feature]]
 id = "view.render-annotation-appearances"
