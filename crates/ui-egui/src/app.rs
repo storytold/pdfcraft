@@ -416,6 +416,29 @@ impl PdfCraftApp {
             || self.updates.open
     }
 
+    fn sync_input_blocking(&mut self, ctx: &egui::Context) {
+        // Scrolling and group-drag previews are transient: never resume after changing tabs,
+        // opening a modal/palette, or returning to a window that lost focus.
+        let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
+        for (index, view) in self.views.iter_mut().enumerate() {
+            let shut = if view.detached {
+                self.close_request == Some(crate::CloseRequest::Tab(view.id))
+                    || matches!(self.close_request, Some(crate::CloseRequest::Quit | crate::CloseRequest::All))
+            } else {
+                blocked || self.active != Some(index)
+            };
+            view.objects.set_input_blocked(shut);
+            if shut {
+                view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
+            }
+        }
+    }
+
     /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting
     /// show after it.
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -670,26 +693,7 @@ impl eframe::App for PdfCraftApp {
             ctx.input_mut(|i| i.events.extend(events));
         }
         self.shortcuts(ctx);
-        // Scrolling and group-drag previews are transient: never resume after changing tabs,
-        // opening a modal/palette, or returning to a window that lost focus.
-        let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
-        for (index, view) in self.views.iter_mut().enumerate() {
-            let shut = if view.detached {
-                self.close_request == Some(crate::CloseRequest::Tab(view.id))
-                    || matches!(self.close_request, Some(crate::CloseRequest::Quit | crate::CloseRequest::All))
-            } else {
-                blocked || self.active != Some(index)
-            };
-            view.objects.set_input_blocked(shut);
-            if shut {
-                view.auto_scroll.cancel();
-                // Edit text and Add text's drags end while their input is blocked rather than wait, to
-                // land wherever the pointer is once it opens again.
-                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-                    view.cancel_edit_text_gestures();
-                }
-            }
-        }
+        self.sync_input_blocking(ctx);
         // A field that refused its value this frame keeps the shortcut from saving or printing
         // behind the user's back; so does a save prompt opened since.
         if self.process_pending_edits() && !self.is_close_modal_active() {
