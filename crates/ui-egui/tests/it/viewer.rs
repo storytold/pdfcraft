@@ -70,6 +70,33 @@ fn revert_after_confirming() {
     assert_eq!((d.info.pages.len(), d.dirty), (2, false));
 }
 
+/// #3632: Alt+← / Alt+→ go back to where a link was followed from and forward again, as in
+/// Acrobat and browsers, while ← / → still turn the page.
+#[test]
+fn alt_arrows_go_back_and_forward_through_the_view_history() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    // A followed link jumps the same way (`go_to_dest` → `go_to_page`).
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 0, "back to where the jump started");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 3, "forward to the jump's target");
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 2, "← still turns the page");
+    h.ctx.set_os(egui::os::OperatingSystem::Nix);
+    assert!(h.state_mut().execute("help.shortcuts"));
+    h.run_steps(3);
+    h.get_by_label("Alt+← / Alt+→");
+    h.get_by_label("Previous view / Next view");
+}
+
 #[test]
 fn view_history_select_all_and_find_options() {
     let mut h = harness();
@@ -974,8 +1001,109 @@ fn tab_and_window_show_the_document_title_when_asked() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "Quarterly report — PdfCraft");
+    // The edits are unsaved, so the title says so (#3640).
+    assert_eq!(h.state().window_title, "Quarterly report • — PdfCraft");
     h.get_by_label_contains("Quarterly report");
+}
+
+#[test]
+fn the_window_title_marks_unsaved_changes_until_saved() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    {
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Subject".into(), value: "Budget".into() }).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf • — PdfCraft", "unsaved changes (#3640)");
+    // Removed on drop, so a failing assert below doesn't leave it behind.
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = Dir(std::env::temp_dir().join(format!("pdfcraft-title-dirty-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    // Saved under its own name, so the title changes only by the mark.
+    h.state_mut().save_override = Some(dir.0.join("b.pdf").to_string_lossy().into_owned());
+    assert!(h.state_mut().execute("file.save"));
+    h.run_steps(2);
+    let s = h.state();
+    assert!(!s.session.get(s.views[s.active.unwrap()].id).unwrap().dirty);
+    assert_eq!(s.window_title, "b.pdf — PdfCraft", "saved");
+}
+
+/// #3640: text typed but not yet applied is unsaved work too, as closing the tab says, so the
+/// title marks it.
+#[test]
+fn the_window_title_marks_a_draft_that_is_not_applied_yet() {
+    use pdfcraft_ui_egui::fill_sign::TypeBox;
+    let mut h = harness();
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    let i = h.state().active.unwrap();
+    h.state_mut().views[i].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
+    h.run_steps(2);
+    let s = h.state();
+    assert!(!s.session.get(s.views[i].id).unwrap().dirty, "nothing applied to the document yet");
+    assert_eq!(s.window_title, "b.pdf • — PdfCraft");
+    assert_eq!(s.page_title, "b.pdf • — PdfCraft");
+}
+
+/// #3640: a document that arrives while the window or browser tab is hidden, when eframe runs
+/// only `App::logic` and no frame is drawn, still gives the titles its name.
+#[test]
+fn a_document_opened_while_hidden_names_the_titles() {
+    let mut h = harness();
+    h.run_steps(2);
+    let before = h.state().views.len();
+    let bytes = pdfcraft_engine::Session::new().create_from_text("Arrived", "Arrived while hidden").unwrap();
+    h.state().inbox.lock().unwrap().push(("arrived.pdf".into(), bytes.to_vec()));
+    let ctx = h.ctx.clone();
+    let mut frame = eframe::Frame::_new_kittest();
+    // The open runs on a worker and is taken in by a later `logic`, as eframe keeps calling it.
+    for _ in 0..500 {
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(h.state_mut(), ctx, &mut frame));
+        if h.state().views.len() > before {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let s = h.state();
+    assert_eq!(s.views.len(), before + 1, "the document opened in logic");
+    assert_eq!(s.page_title, "arrived.pdf — PdfCraft");
+    assert_eq!(s.window_title, "arrived.pdf — PdfCraft");
+}
+
+/// #3640: a document that asks to show its own title shows it in the window, but the web page's
+/// title, which an embedding host reads to tell which file opened, keeps the file's name.
+#[test]
+fn the_web_page_title_names_the_file_when_the_document_shows_its_title() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    {
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Budget 2026".into() }).unwrap();
+        let mut v = s.session.get(id).unwrap().initial_view();
+        v.display_title = true;
+        s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "Budget 2026 • — PdfCraft");
+    assert_eq!(h.state().page_title, "b.pdf • — PdfCraft");
 }
 
 #[test]
@@ -993,7 +1121,7 @@ fn a_placeholder_title_leaves_the_file_name_on_the_tab_and_window() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert_eq!(h.state().window_title, "b.pdf • — PdfCraft");
     assert!(h.query_by_label_contains("about:blank").is_none());
 }
 
@@ -1365,6 +1493,138 @@ fn up_and_down_turn_pages_in_single_page_view() {
 }
 
 #[test]
+fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
+    // A plan zoomed in: → / ← turned the page (#185) and so never showed its other side; the
+    // view moved sideways only by the scroll bar, the wheel or the Hand.
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].set_zoom(12.0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(v.current).map(|r| r.left()))
+    };
+    let start = h.state().views[0].page_screen_rect(0).map(|r| r.left()).expect("on screen");
+    let (page, left) = press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert_eq!(page, 0, "→ scrolls the wide page rather than turning it");
+    assert!(left.is_some_and(|l| l < start - 10.0), "the page moved left: {left:?} from {start}");
+    // At its right edge the next → turns the page.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowRight).0 == 0 {
+        n += 1;
+        assert!(n < 500, "→ never reached the right edge");
+    }
+    assert!(n > 3, "→ scrolled across page 1 before turning ({n} presses)");
+    assert_eq!(h.state().views[0].current, 1);
+    // Page 2 starts at its left edge, as reading on across: → scrolls it rather than turning
+    // again at once.
+    let shown = |h: &Harness<'static, PdfCraftApp>, page: usize| {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(page).expect("on screen"), v.viewport_rect())
+    };
+    let (r, view) = shown(&h, 1);
+    assert!(r.left() >= view.left() && r.right() > view.right(), "page 2 from its left edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 1, "→ scrolls page 2 from its left edge");
+    // ← goes back to that edge and turns back: page 1 comes at its right edge, so the next ← scrolls it.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowLeft).0 == 1 {
+        n += 1;
+        assert!(n < 50, "← never turned back from page 2");
+    }
+    assert_eq!(h.state().views[0].current, 0);
+    let (r, view) = shown(&h, 0);
+    assert!(r.right() <= view.right() && r.left() < view.left(), "page 1 from its right edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowLeft).0, 0, "← scrolls page 1 from its right edge");
+    // ⌘→ turns at once.
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 1, "⌘→ turns the page at once");
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 2);
+    // A page that fits across: → turns pages as before.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(6);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 3);
+}
+
+/// Continuous view with pages of different widths: the content is as wide as the widest page, but
+/// on a narrow page that shows whole → turns the page; on the wide one it scrolls first.
+#[test]
+fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
+    use egui::Key;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("mixed.pdf", None, sized_fixture(&[(200, 1200), (3000, 1200), (200, 1200)])).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().active = Some(0);
+    assert!(h.state().views[0].continuous);
+    // Each page taller than the window, so one is the current page.
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(6);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.key_press(Key::ArrowRight);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(1).map(|r| r.left()))
+    };
+    assert_eq!(h.state().views[0].current, 0);
+    let (page, start) = press(&mut h);
+    assert_eq!(page, 1, "→ on the narrow page shown whole turns it");
+    let (page, left) = press(&mut h);
+    assert_eq!(page, 1, "→ on the wide page scrolls it");
+    assert!(left.zip(start).is_some_and(|(l, s)| l < s - 10.0), "the wide page moved left: {left:?} from {start:?}");
+}
+
+/// A zoomed two-page spread scrolled so its first page ends inside the window and the second is
+/// still wholly to the right of it: → scrolls on to the second page rather than turning the
+/// spread. (Read from the pages on screen alone, the spread seemed to end with its first page.)
+#[test]
+fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
+    use egui::Key;
+    // The page gap (points on screen).
+    const GAP: f32 = 14.0;
+    let build = |zoom: f32| {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
+            app.set_option("layout", "two-page").unwrap();
+            // Before the first layout: zoomed about the content's top left, scrolled to it.
+            app.views[0].set_zoom(zoom);
+            app
+        });
+        crate::support::settle(&mut h);
+        h.state_mut().active = Some(0);
+        h.run_steps(4);
+        h
+    };
+    let shown =
+        |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].viewport_rect(), h.state().views[0].page_screen_rect(0).expect("page 1 on screen"));
+    // Zoom until page 1's right edge sits half a gap inside the window's.
+    let mut zoom = 2.0;
+    let mut h = build(zoom);
+    for _ in 0..3 {
+        let (inner, first) = shown(&h);
+        zoom *= (inner.right() - GAP / 2.0 - first.left()) / first.width();
+        h = build(zoom);
+    }
+    let (inner, first) = shown(&h);
+    assert!(first.right() <= inner.right() && first.right() + GAP > inner.right(), "the spread's gap at the window's edge: {first:?} in {inner:?}");
+    assert!(h.state().views[0].page_screen_rect(1).is_none(), "its second page off screen");
+    assert!(h.state().views[0].layout == pdfcraft_ui_egui::canvas::PageLayout::TwoUp && !h.state().views[0].continuous);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert!(v.current < 2, "→ doesn't turn the spread: page {}", v.current + 1);
+    assert!(v.page_screen_rect(1).is_some(), "it scrolls the second page into view");
+}
+
+#[test]
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
     use egui::{Key, Modifiers};
@@ -1716,6 +1976,22 @@ fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
     let mut again = PdfCraftApp::new();
     again.restore(&app.persist());
     assert_eq!(again.scroll_speed, ScrollSpeed::Fast);
+}
+
+#[test]
+fn the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.invert_middle_drag, "the middle button keeps its direction unless asked");
+    app.set_option("invert_middle_drag", "true").unwrap();
+    assert!(app.set_option("invert_middle_drag", "yes").unwrap_err().contains("true or false"));
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert!(again.invert_middle_drag, "turned on, it survives a restart");
+    again.set_option("invert_middle_drag", "false").unwrap();
+    let mut off = PdfCraftApp::new();
+    off.invert_middle_drag = true;
+    off.restore(&again.persist());
+    assert!(!off.invert_middle_drag, "turned off, that is saved too");
 }
 
 /// A 40 × 30 picture (one red corner) and a harness showing a PDF of it.
@@ -2265,6 +2541,7 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
+    // Unsaved, so it carries the window title's mark too (#3640).
+    assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }

@@ -70,7 +70,7 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
 }
 
-/// A multiline field with the same horizontal inset as [`line`].
+/// A multiline field with the same horizontal inset as [`line()`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
@@ -252,6 +252,23 @@ pub fn radio_value<'a, V: PartialEq>(ui: &mut egui::Ui, current: &mut V, alterna
         response.mark_changed();
     }
     response
+}
+
+/// Keeps the end of a "from … to …" page range at or after its start, but not while `typing` into the
+/// end's `DragValue` ([`typing_into`]): the half-typed "1" of "12" is below `from`, and raising it
+/// then replaced what the user was typing with `from` (#5574). A dialog's OK orders it whatever has
+/// the keyboard (`typing` false), so a range left reversed never reaches the edit.
+pub fn keep_range_ordered(from: usize, to: &mut usize, typing: bool) {
+    if !typing {
+        *to = (*to).max(from);
+    }
+}
+
+/// Whether `field` is being typed into: it has the keyboard focus in egui's memory. Unlike
+/// `Response::has_focus` this stays true while the window is in the background, so switching to
+/// another app mid-number doesn't end the typing.
+pub fn typing_into(field: &Response) -> bool {
+    field.ctx.memory(|m| m.has_focus(field.id))
 }
 
 /// The box of a checkbox or the circle of a radio button. egui draws it with the widgets' visuals
@@ -465,6 +482,9 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Above the progress notice while a job runs.
     let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
     let lift = if card > 0.0 { 28.0 + card + 10.0 } else { 28.0 };
+    // A running batch keeps its toast up (poll_ocr re-notifies), so it can carry the one
+    // control a long job needs: Cancel — the file in flight finishes, the rest are not run.
+    let batch_running = app.ocr_batch.is_some();
     let shown = egui::Area::new(egui::Id::unique("toast"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
@@ -482,7 +502,12 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ui.set_max_width((screen.width() - 64.0).clamp(1.0, 560.0));
                     let ink = if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE };
                     let text = |ui: &mut egui::Ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                            if batch_running && ui.small_button(crate::i18n::t("Cancel")).clicked() {
+                                app.cancel_ocr_batch();
+                            }
+                        });
                     };
                     match script {
                         // A form script's message: its icon, then its title (when it gave one)
@@ -709,6 +734,9 @@ mod tests {
 
     #[test]
     fn search_placeholder_never_overlaps_the_shortcut() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         for (code, expected) in [("en", "Ctrl+K"), ("de", "Strg+K")] {
             crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());

@@ -176,6 +176,12 @@ impl Field {
         self.flags & flag != 0
     }
 
+    /// A comb field: the Comb flag set with a `/MaxLen`, neither multiline nor password (ISO
+    /// 32000-2 Table 228). Each cell holds one character.
+    pub fn is_comb(&self) -> bool {
+        self.has(flags::COMB) && !self.has(flags::MULTILINE) && !self.has(flags::PASSWORD) && self.max_len.is_some_and(|m| m > 0)
+    }
+
     pub fn read_only(&self) -> bool {
         self.has(flags::READ_ONLY)
     }
@@ -212,6 +218,15 @@ impl Field {
     /// field has no `/Opt`.
     pub fn export_for_state<'a>(&'a self, state: &'a str) -> &'a str {
         self.widgets.iter().position(|w| w.on_state.as_deref() == Some(state)).and_then(|i| self.export_of(i)).unwrap_or(state)
+    }
+
+    /// Values for data export, resolving button appearance names through /Opt.
+    pub fn export_values(&self) -> Vec<String> {
+        if matches!(self.kind, FieldKind::CheckBox | FieldKind::Radio) {
+            self.value.iter().map(|v| self.export_for_state(v).to_string()).collect()
+        } else {
+            self.value.clone()
+        }
     }
 
     /// The value as one string: text, the state name, or the selected display texts.
