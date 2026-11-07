@@ -210,6 +210,20 @@ pub struct OfficeExport {
 /// `Err(false)`: it can't be encoded).
 type PreparedImage = Result<(&'static str, Arc<[u8]>), bool>;
 
+/// Displayed points per user-space unit on `info`'s page (`/UserUnit`), 1 when the page has no
+/// usable size.
+pub(crate) fn display_unit(info: &pdfcraft_render::PageInfo) -> f64 {
+    let crop_width = f64::from(info.crop[2] - info.crop[0]);
+    let display_width = f64::from(if info.rotation.is_multiple_of(180) { info.width } else { info.height });
+    if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 }
+}
+
+/// Bold and italic as a font's name says them (`Arial-BoldItalicMT`).
+pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
+    let f = base_font.to_ascii_lowercase();
+    (f.contains("bold") || f.contains("black") || f.contains("heavy"), f.contains("italic") || f.contains("oblique"))
+}
+
 /// A form field's widget as an exported field, its box on the visible page (`visible`).
 fn export_field(
     cos: &pdfcraft_cos::Document,
@@ -459,9 +473,7 @@ impl crate::Document {
                     let b = info.user_to_view(r[2] as f32, r[3] as f32);
                     [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
                 };
-                let crop_width = f64::from(info.crop[2] - info.crop[0]);
-                let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
-                let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
+                let unit = display_unit(info);
                 // Word also places a positioned page's text line by line. A page whose text can't be
                 // read at all (its content is past the decode budget) lost it, and is listed.
                 let unread = || pdfcraft_edit::ReadingBlocks { truncated: true, ..Default::default() };
@@ -472,7 +484,7 @@ impl crate::Document {
                 };
                 let forms_unread = reading.truncated;
                 let to_block = |b: pdfcraft_edit::TextBlock| {
-                    let f = b.base_font.to_ascii_lowercase();
+                    let (bold, italic) = weight_and_slant(&b.base_font);
                     // `text` is trimmed; the editor text keeps the source's own spaces.
                     let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                     pdfcraft_export::Block {
@@ -481,8 +493,8 @@ impl crate::Document {
                         text: b.text,
                         rect: visible_rect(b.rect),
                         size: b.size * unit,
-                        bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                        italic: f.contains("italic") || f.contains("oblique"),
+                        bold,
+                        italic,
                         color: b.color,
                         rotation: b.rotation - f64::from(info.rotation),
                     }
