@@ -645,6 +645,11 @@ impl eframe::App for PdfCraftApp {
         if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
         }
+        // A run or re-read asked for while the web build downloaded the models starts when they land.
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_verify.awaiting_models.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
+        }
         // So may a page or region re-read's worker.
         if self.ocr_verify.reread.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);

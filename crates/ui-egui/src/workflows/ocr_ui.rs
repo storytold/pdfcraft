@@ -779,7 +779,7 @@ impl PdfCraftApp {
     /// The web build downloads the models the first time they're needed: while `engine` can't
     /// run for want of them, start (or retry) the download, say so and return `true`.
     #[cfg(target_arch = "wasm32")]
-    fn web_models_missing(&mut self, engine: EngineChoice) -> bool {
+    pub(crate) fn web_models_missing(&mut self, engine: EngineChoice) -> bool {
         if pdfcraft_engine::ocr::engine_unavailable_reason(engine).is_none() {
             return false;
         }
