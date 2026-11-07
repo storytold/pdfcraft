@@ -566,6 +566,13 @@ mod tests {
         pair.extend("A𝒜".encode_utf16().flat_map(u16::to_le_bytes));
         pair.push(b'x');
         assert_eq!(PdfString::literal(pair).to_text(), "A𝒜");
+        // Accented and astral characters, a doubled BOM, a bare BOM and an unpaired surrogate.
+        let mut edge = vec![0xFF, 0xFE];
+        edge.extend("Other 3 SITUAÇÃO 🗺".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(PdfString::literal(edge).to_text(), "Other 3 SITUAÇÃO 🗺");
+        assert_eq!(PdfString::literal(vec![0xFF, 0xFE, 0xFF, 0xFE, b'A', 0x00]).to_text(), "A");
+        assert_eq!(PdfString::literal(vec![0xFF, 0xFE]).to_text(), "");
+        assert_eq!(PdfString::literal(vec![0xFF, 0xFE, 0x00, 0xD8, b'A', 0x00]).to_text(), "\u{FFFD}A");
         // UTF-8 with BOM (PDF 2.0): the BOM is not part of the text.
         let mut utf8 = vec![0xEF, 0xBB, 0xBF];
         utf8.extend_from_slice("第一章".as_bytes());

@@ -752,6 +752,23 @@ fn radio_button_layer_groups_are_read() {
 }
 
 #[test]
+fn utf16le_layer_names_are_read_in_the_layers_panel() {
+    // GeoPDF layer names under an FF FE BOM (issue #5503): the Layers panel reads them through
+    // the same text-string decoder as every other name.
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name <FFFE4F00740068006500720020003300> >> endobj
+6 0 obj << /Type /OCG /Name <FFFE53004900540055004100C700C3004F00> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let names: Vec<_> = info.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Other 3", "SITUAÇÃO"]);
+}
+
+#[test]
 fn initial_layer_visibility_is_the_default_configuration() {
     // BaseState OFF: Red is listed ON; Green is listed both ON and OFF, and OFF wins; Blue
     // isn't listed, so it takes the base state.
