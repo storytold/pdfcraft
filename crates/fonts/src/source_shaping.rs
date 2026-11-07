@@ -30,7 +30,9 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff))
+    if text
+        .chars()
+        .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff))
         && face.gsub().is_err()
     {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
@@ -96,5 +98,13 @@ mod tests {
     #[test]
     fn thai_sara_am_requires_shaping() {
         assert!(required("\u{0e33}"), "U+0E33 THAI CHARACTER SARA AM needs shaping");
+    }
+
+    #[test]
+    fn thai_remaining_mark_ranges_require_shaping() {
+        assert!(required("\u{0e3a}"), "U+0E3A is the end of the Thai mark range");
+        assert!(required("\u{0e47}"), "U+0E47 is the start of the Thai tone mark range");
+        assert!(required("\u{0e48}"), "U+0E48 THAI CHARACTER MAI EK needs shaping");
+        assert!(required("\u{0e4e}"), "U+0E4E is the end of the Thai tone mark range");
     }
 }
