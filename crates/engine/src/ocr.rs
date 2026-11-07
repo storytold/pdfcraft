@@ -2041,11 +2041,7 @@ mod tests {
         let requested = vec![999usize; 1024];
         let job = s.ocr_job(id, &requested, OcrSettings::default()).unwrap();
         assert!(job.pages.is_empty());
-        assert!(
-            job.pages.capacity() <= 3,
-            "reservation {} exceeds the 3 pages that can survive deduplication",
-            job.pages.capacity()
-        );
+        assert!(job.pages.capacity() <= 3, "reservation {} exceeds the 3 pages that can survive deduplication", job.pages.capacity());
     }
 
     /// #1848: an A4 scan at 300 dpi whose page box is its pixel size (2480 x 3508 pt, one pixel
