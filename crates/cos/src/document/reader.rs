@@ -635,13 +635,7 @@ impl Document {
         // Offsets of objects that may be cross-reference streams: their dictionaries are the
         // trailers of files that have no `trailer` keyword (§7.5.8).
         let mut xref_streams = Vec::new();
-        // Objects whose bytes (the last object of a number wins, as in `entries`) could hold an
-        // `/ObjStm` type; the others are not parsed for the object-stream check below.
-        let mut candidates: HashSet<u32> = HashSet::new();
         let headers = object_headers(&data);
-        // What the dictionary pre-check may read in all, so overlapping unterminated dictionaries
-        // cost no more than one more pass over the file.
-        let mut scan_budget = data.len();
         // Where `/XRef` occurs in the file, found in one pass.
         let mut xref_marks = Vec::new();
         let mut mark_from = 0;
@@ -652,11 +646,6 @@ impl Document {
         for &(num, offset, generation, body) in &headers {
             entries.insert(num, XrefEntry::InFile { offset, generation });
             objstms.push(num);
-            if may_be_object_stream(&data, body, &mut scan_budget) {
-                candidates.insert(num);
-            } else {
-                candidates.remove(&num);
-            }
             // `/XRef` within the 1024 bytes after the header (the first one that is there).
             let first = xref_marks.partition_point(|&p| p < body);
             if xref_marks.get(first).is_some_and(|&p| p + 5 <= body.saturating_add(1024).min(data.len()))
@@ -673,8 +662,7 @@ impl Document {
         *self.unreadable.lock().map_err(|_| CosError::Poisoned)? = Unreadable::default();
         // Objects inside object streams.
         for num in objstms {
-            if candidates.contains(&num)
-                && let Ok(o) = self.try_get(num)
+            if let Ok(o) = self.try_get(num)
                 && let Object::Stream(s) = &*o
                 && s.dict.name(b"Type") == Some(b"ObjStm")
                 && let Ok(stm) = self.objstm(num)
@@ -770,123 +758,6 @@ fn shifted_subsection_end(data: &[u8], at: usize) -> Option<u32> {
     match (offset, lx.token()) {
         (Some(offset), b"n") if offset != 0 => u32::try_from(count).ok().filter(|n| *n > 0),
         _ => None,
-    }
-}
-
-/// Longest dictionary [`may_be_object_stream`] reads before it gives up and says "maybe".
-const DICTIONARY_SCAN_LIMIT: usize = 1 << 20;
-
-/// Where the dictionary that starts at `data[from..]` (after `N G obj`) ends, reading it as the
-/// parser does: strings, hex strings, comments, names and nested dictionaries. `Some(None)`: the
-/// object is not a dictionary, so it is never a stream. `None`: the end is not certain (no end
-/// within the limit, a hex string with a bad digit, a `>>` inside an array); the caller must
-/// then treat the object as a possible object stream. `limit` ends the read; the second value is
-/// how far the read got, for the caller's budget.
-fn dictionary_end(data: &[u8], from: usize, limit: usize) -> (Option<Option<usize>>, usize) {
-    let mut i = from;
-    let result = 'scan: {
-        while i < limit && (is_whitespace(data[i]) || data[i] == b'%') {
-            if data[i] == b'%' {
-                while i < limit && !matches!(data[i], b'\n' | b'\r') {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
-        if data.get(i..i + 2) != Some(b"<<") {
-            break 'scan if i < limit { Some(None) } else { None };
-        }
-        i += 2;
-        let (mut dicts, mut arrays) = (1usize, 0usize);
-        while i < limit {
-            match data[i] {
-                b'(' => {
-                    let mut depth = 1usize;
-                    i += 1;
-                    while i < limit && depth > 0 {
-                        match data[i] {
-                            b'\\' => i += 1,
-                            b'(' => depth += 1,
-                            b')' => depth -= 1,
-                            _ => {}
-                        }
-                        i += 1;
-                    }
-                    if depth > 0 {
-                        break 'scan None;
-                    }
-                }
-                b'<' if data.get(i + 1) == Some(&b'<') => {
-                    dicts += 1;
-                    i += 2;
-                }
-                b'<' => {
-                    i += 1;
-                    while i < limit && data[i] != b'>' {
-                        if !data[i].is_ascii_hexdigit() && !is_whitespace(data[i]) {
-                            break 'scan None;
-                        }
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                b'>' if data.get(i + 1) == Some(&b'>') => {
-                    if arrays > 0 {
-                        break 'scan None;
-                    }
-                    dicts -= 1;
-                    i += 2;
-                    if dicts == 0 {
-                        break 'scan Some(Some(i));
-                    }
-                }
-                b'%' => {
-                    while i < limit && !matches!(data[i], b'\n' | b'\r') {
-                        i += 1;
-                    }
-                }
-                b'[' => {
-                    arrays += 1;
-                    i += 1;
-                }
-                b']' => {
-                    arrays = arrays.saturating_sub(1);
-                    i += 1;
-                }
-                _ => i += 1,
-            }
-        }
-        None
-    };
-    (result, i.min(limit))
-}
-
-/// Whether the object whose body starts at `data[from..]` could be an object stream: its
-/// dictionary holds `ObjStm`, or a `#` (a name may hide its letters as `#xx`, as in
-/// `/Obj#53tm`). Only the dictionary is searched, not the data of a stream. Where the
-/// dictionary ends is read by [`dictionary_end`], so text inside a string (an object header, a
-/// `stream` keyword) is not taken for syntax; when that is not certain the object counts as a
-/// candidate, so a doubtful object is parsed as it always was.
-///
-/// `budget` is the bytes all the calls of one rebuild may still read. A call reads at most
-/// [`DICTIONARY_SCAN_LIMIT`] bytes or what is left, takes what it read off the budget on every
-/// path, and says "maybe" once the budget cannot cover it. Dictionaries that do not overlap
-/// add up to no more than the file, so only unterminated ones can use the budget up.
-pub(super) fn may_be_object_stream(data: &[u8], from: usize, budget: &mut usize) -> bool {
-    let limit = data.len().min(from.saturating_add(DICTIONARY_SCAN_LIMIT.min(*budget)));
-    if *budget == 0 {
-        return true;
-    }
-    let (end, read) = dictionary_end(data, from, limit);
-    *budget = budget.saturating_sub(read.saturating_sub(from).max(1));
-    match end {
-        Some(None) => false,
-        None => true,
-        Some(Some(end)) => {
-            let dict = &data[from..end];
-            dict.contains(&b'#') || find(dict, b"ObjStm", 0, dict.len()).is_some()
-        }
     }
 }
 

@@ -1,4 +1,3 @@
-use super::reader::may_be_object_stream;
 use super::*;
 
 std::thread_local! {
@@ -1920,98 +1919,6 @@ fn a_prev_reference_to_an_object_holding_the_offset_reads_that_offset() {
 /// cross-reference data, as in #2365), is rebuilt from its object headers. The rebuild used
 /// to look only for the `trailer` keyword, so /Info and /ID were lost, and a full save after
 /// editing one Info field dropped every other.
-/// Whether parsing `body` as an object gives a stream whose /Type is /ObjStm.
-fn parses_as_object_stream(file: &[u8]) -> bool {
-    matches!(parse_indirect(file, 0, &|_| None), Ok((_, Object::Stream(s))) if s.dict.name(b"Type") == Some(b"ObjStm"))
-}
-
-/// A scan budget that never runs out.
-fn unlimited() -> usize {
-    usize::MAX
-}
-
-#[test]
-fn the_object_stream_pre_check_never_rejects_what_parses_as_one() {
-    // Two inputs from review: header-shaped text, and `>>` + `stream` + newline, inside a
-    // string that comes before the /Type.
-    for dict in [
-        "<< /Note (9 0 obj\n) /Type /ObjStm /N 0 /First 0 >>",
-        "<< /Note (>>stream\n) /Type /ObjStm /N 0 /First 0 >>",
-        "<< /Note (a (nested\n9 0 obj\nstream) \\) )) /Type /ObjStm >>",
-        "<< /Note <3e3e> /Other << /A (>>\nstream\n) >> /Type /ObjStm >>",
-    ] {
-        let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
-        assert!(parses_as_object_stream(&file), "test input must be an object stream: {dict}");
-        assert!(may_be_object_stream(&file, 7, &mut unlimited()), "{dict}");
-    }
-    // Ordinary streams stay out; their data is never read.
-    let plain = b"1 0 obj\n<< /Length 9 >>\nstream\nObjStm # \nendstream\nendobj\n";
-    assert!(!may_be_object_stream(plain, 7, &mut unlimited()));
-    assert!(!may_be_object_stream(b"1 0 obj\n[ /ObjStm ]\nendobj\n", 7, &mut unlimited()));
-    // Unterminated: not certain, so a candidate.
-    assert!(may_be_object_stream(b"1 0 obj\n<< /Note (open ", 7, &mut unlimited()));
-    // The scan is charged to the shared budget on every path, and a spent budget says "maybe"
-    // without reading.
-    let open = b"1 0 obj\n<< /Note (open ";
-    let mut budget = 1000;
-    assert!(may_be_object_stream(open, 7, &mut budget));
-    assert_eq!(budget, 1000 - (open.len() - 7));
-    let mut budget = 3;
-    assert!(may_be_object_stream(plain, 7, &mut budget), "a budget too small for the dictionary is a candidate");
-    assert_eq!(budget, 0);
-    let mut budget = 0;
-    assert!(may_be_object_stream(plain, 7, &mut budget));
-    assert_eq!(budget, 0);
-    // Random dictionaries built from tricky pieces: whatever parses as an object stream is
-    // a candidate.
-    let pieces: [&str; 22] = [
-        "/Type /ObjStm",
-        "/Type/ObjStm",
-        "/Type /Obj#53tm",
-        "/T#79pe /ObjStm",
-        "(",
-        ")",
-        "\\",
-        "(>>stream\n)",
-        "(9 0 obj\n)",
-        "<3e3e>",
-        "<",
-        ">",
-        ">>",
-        "<<",
-        "[",
-        "]",
-        "% c\n",
-        "% >>\n",
-        "/N 0",
-        " ",
-        "\n",
-        "<zz>",
-    ];
-    let mut seed = 0x2545_F491_4F6C_DD1Du64;
-    let mut next = move || {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        seed
-    };
-    let mut hits = 0;
-    for _ in 0..200_000 {
-        let mut dict = String::from("<<");
-        for _ in 0..(next() % 9) {
-            dict.push_str(pieces[(next() % pieces.len() as u64) as usize]);
-            dict.push(' ');
-        }
-        dict.push_str(if next() % 8 == 0 { "" } else { ">>" });
-        let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
-        if parses_as_object_stream(&file) {
-            hits += 1;
-            assert!(may_be_object_stream(&file, 7, &mut unlimited()), "rejected an object stream: {dict:?}");
-        }
-    }
-    assert!(hits > 1000, "the generator must produce object streams ({hits})");
-}
-
 #[test]
 fn reconstruction_takes_the_trailer_from_a_cross_reference_stream() {
     let table = build(
@@ -2281,4 +2188,30 @@ fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     assert!(cache.len() < count, "the byte budget evicted some, below the count cap: {} kept", cache.len());
     let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
     assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
+}
+
+#[test]
+fn find_agrees_with_a_plain_window_search() {
+    let naive = |hay: &[u8], needle: &[u8], from: usize, to: usize| {
+        if from >= to || needle.is_empty() || to - from < needle.len() {
+            return None;
+        }
+        hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    };
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let alphabet = b"/XRef t\n<>0";
+    for _ in 0..20_000 {
+        let hay: Vec<u8> = (0..next() % 200).map(|_| alphabet[(next() % alphabet.len() as u64) as usize]).collect();
+        let needles: [&[u8]; 5] = [b"/XRef", b"trailer", b"R", b"ff", b"<<"];
+        let needle = needles[(next() % 5) as usize];
+        let from = (next() % (hay.len() as u64 + 1)) as usize;
+        let to = from + (next() % (hay.len() as u64 + 1 - from as u64)) as usize;
+        assert_eq!(find(&hay, needle, from, to), naive(&hay, needle, from, to), "{hay:?} {needle:?} {from} {to}");
+    }
 }

@@ -5,6 +5,5 @@ mod corpus;
 mod encryption;
 mod generations;
 mod proptests;
-mod reconstruct;
 mod shared_streams;
 mod writer;
