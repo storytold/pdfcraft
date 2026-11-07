@@ -100,8 +100,10 @@ fn cid_cff(first_has_private: bool) -> Vec<u8> {
     out
 }
 
-/// A page showing the hex string `codes` at 60 pt in an Identity-H Type0 font over `program`.
+/// A page showing the hex string `codes` at 60 pt in an Identity-H Type0 font over `program`
+/// (no `/FontFile3` when `program` is empty).
 fn page(program: &[u8], codes: &str) -> Vec<u8> {
+    let font_file = if program.is_empty() { "" } else { " /FontFile3 8 0 R" };
     let body = format!("BT /F1 60 Tf 20 30 Td <{codes}> Tj ET");
     let mut stream = format!("<< /Subtype /CIDFontType0C /Length {} >>\nstream\n", program.len()).into_bytes();
     stream.extend_from_slice(program);
@@ -113,7 +115,7 @@ fn page(program: &[u8], codes: &str) -> Vec<u8> {
         format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
         b"<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Synthetic /Encoding /Identity-H /DescendantFonts [6 0 R] >>".to_vec(),
         b"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+Synthetic /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 7 0 R /DW 1000 >>".to_vec(),
-        b"<< /Type /FontDescriptor /FontName /ABCDEF+Synthetic /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 1000 /StemV 80 /FontFile3 8 0 R >>".to_vec(),
+        format!("<< /Type /FontDescriptor /FontName /ABCDEF+Synthetic /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 1000 /StemV 80{font_file} >>").into_bytes(),
         stream,
     ];
 
@@ -160,4 +162,6 @@ fn a_program_with_no_usable_font_dict_draws_no_square() {
     let rgba = pixels(page(&cid_cff(false), "00010002"));
     let square = pixels(page(&cid_cff(true), "0001"));
     assert!(rgba != square, "a font dict without a Private DICT drew its glyph");
+    // The page renders exactly as it does with no embedded program at all.
+    assert!(rgba == pixels(page(&[], "00010002")), "the program was kept although no font dict is usable");
 }

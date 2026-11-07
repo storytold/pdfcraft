@@ -77,14 +77,13 @@ impl CffFontBlob {
             return None;
         }
 
-        let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), |data| {
+        // PdfCraft patch (93): the subfonts read above own their data, so they move into the
+        // yoke instead of being read again.
+        let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), move |data| {
             let bytes = data.as_ref();
             let font = CffFontRef::new(bytes, 0, None).unwrap();
             let cff = Cff::read(ReadFontData::new(bytes)).unwrap();
             let charset = font.charset();
-            let subfonts = (0..font.num_subfonts())
-                .map(|index| font.subfont(index, &[]).ok())
-                .collect();
             CFFYoke {
                 font,
                 cff,
@@ -93,7 +92,7 @@ impl CffFontBlob {
             }
         });
 
-        let _ = (cff, charset, subfonts);
+        let _ = (cff, charset);
         Some(Self(Arc::new(yoke), Arc::new(OnceLock::new())))
     }
 
