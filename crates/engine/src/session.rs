@@ -42,6 +42,9 @@ pub struct Session {
     pub(crate) date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
     pub(crate) date_language: Option<String>,
+    /// Highlight fields, as the viewer shows it: what forms' scripts read as
+    /// `app.runtimeHighlight` (off by default, as in a session without a viewer).
+    pub(crate) field_highlight: bool,
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
