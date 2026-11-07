@@ -1183,8 +1183,9 @@ fn files_and_quit_from_the_operating_system() {
 /// A file the operating system names in one Unicode normalization form but is stored in the
 /// other still opens: an `OsEvent::Open` delivered in NFD for an NFC-stored name opens a tab,
 /// as delivered on a volume that folds the forms (the APFS and HFS+ volumes macOS 13.3 makes
-/// do) and resolved to the stored name on one that tells them apart. A delivered name no form
-/// of matches is opened as sent, so its read failure reaches the user instead of vanishing.
+/// do) and resolved to the stored name on one that tells them apart; the resolution itself is
+/// checked on every volume by the unit tests in `platform/unicode_path.rs`. A delivered name no
+/// form of matches is opened as sent, so its read failure reaches the user instead of vanishing.
 #[test]
 fn an_os_delivered_path_opens_across_normalization_forms() {
     // "Área.pdf" stored precomposed (NFC), as names imported from Windows often are, and
