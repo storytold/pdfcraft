@@ -15,7 +15,10 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     let mut chars: Vec<(char, usize)> = Vec::new();
     for (i, glyph) in page.glyphs.iter().enumerate() {
         let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
-        let gap = page.space_before.get(i).copied().unwrap_or(false) || line_break;
+        // A soft hyphen marks where a word may be divided at a line end (ISO 32000-2 §14.8.2.3), so
+        // a line that ends in one runs on to the next with no word break between them.
+        let soft_break = line_break && i.checked_sub(1).and_then(|previous| page.glyphs.get(previous)).is_some_and(|g| g.text.ends_with('\u{AD}'));
+        let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !soft_break);
         if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
             chars.push((' ', i));
         }

@@ -21,7 +21,9 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
     }
     let mut chars = Vec::new();
     for (i, glyph) in page.glyphs.iter().enumerate() {
-        if i > 0 && (page.space_before[i] || page.line_of[i] != page.line_of[i - 1]) && chars.last().is_some_and(|&(c, _)| c != ' ') {
+        // A line that ends in a soft hyphen runs on to the next.
+        let line_break = i > 0 && page.line_of[i] != page.line_of[i - 1] && !page.glyphs[i - 1].text.ends_with('\u{AD}');
+        if i > 0 && (page.space_before[i] || line_break) && chars.last().is_some_and(|&(c, _)| c != ' ') {
             chars.push((' ', i));
         }
         for c in visible(fold(&glyph.text)).chars() {
@@ -137,4 +139,38 @@ fn find_skips_soft_hyphens_and_zero_width_characters() {
         assert_eq!(page(&["ab", &joiner.to_string(), "cd"]).find("abcd"), vec![0..3], "{joiner:?}");
     }
     assert!(page(&["\u{200B}"]).find("\u{200B}").is_empty());
+}
+
+/// A soft hyphen at a line end is where the word was divided (ISO 32000-2 §14.8.2.3): the break
+/// after it is no word break, so "Mitar\u{AD}" ending one line and "beiterinnen" starting the next
+/// are found as one word, highlighted on both lines. A line break after any other glyph still
+/// separates words.
+#[test]
+fn find_joins_a_word_divided_at_a_line_end_soft_hyphen() {
+    let parts: Vec<String> = "Mitar\u{AD}beiterinnen".chars().map(String::from).collect();
+    let mut text = page(&parts.iter().map(String::as_str).collect::<Vec<_>>());
+    for (i, glyph) in text.glyphs.iter_mut().enumerate() {
+        let x = i as f32 * 10.0;
+        glyph.rect = [x, 0.0, x + 10.0, 10.0];
+    }
+    // "Mitar" and the soft hyphen on the first line, "beiterinnen" on the second.
+    for line in text.line_of.iter_mut().skip(6) {
+        *line = 1;
+    }
+    let hits = text.find("Mitarbeiterinnen");
+    assert_eq!(hits, vec![0..17]);
+    assert_eq!(text.line_rects(hits[0].clone()).len(), 2);
+    assert_eq!(text.find_opts("Mitarbeiterinnen", true, true), vec![0..17]);
+    assert!(text.find("Mitar beiterinnen").is_empty());
+
+    // The soft hyphen as the last character of a longer glyph works the same way.
+    let mut text = page(&["Mitar\u{AD}", "beiterinnen"]);
+    text.line_of = vec![0, 1];
+    assert_eq!(text.find("Mitarbeiterinnen"), vec![0..2]);
+
+    // Without the soft hyphen the line break is a word break.
+    let mut text = page(&["Mitar", "beiterinnen"]);
+    text.line_of = vec![0, 1];
+    assert!(text.find("Mitarbeiterinnen").is_empty());
+    assert_eq!(text.find("Mitar beiterinnen"), vec![0..2]);
 }
