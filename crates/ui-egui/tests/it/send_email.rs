@@ -194,3 +194,165 @@ fn every_failure_is_said_and_close_closes() {
     assert!(REVEALED.with(|r| r.borrow().is_empty()) && h.state().last_opened_url.is_none(), "Close opens nothing");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+/// A document with a typed-in field, on screen whole, opened from its own file.
+fn form_harness(test: &str, pdf: &[u8]) -> (Harness<'static, PdfCraftApp>, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-send-email-test-{}-{test}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{test}.pdf"));
+    std::fs::write(&path, pdf).unwrap();
+    let (p, bytes) = (path.to_string_lossy().into_owned(), pdf.to_vec());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(&format!("{}.pdf", Path::new(&p).file_stem().unwrap().to_string_lossy()), Some(p.clone()), bytes.clone()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app.send_email.sender = stand_in;
+        app.send_email.reveal = reveal;
+        app
+    });
+    crate::support::settle(&mut h);
+    (h, path)
+}
+
+fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+/// What is typed into a field and not yet entered goes with the document, as it does for Save.
+#[test]
+fn text_still_being_typed_into_a_field_is_in_the_attachment() {
+    let (mut h, path) = form_harness("typing", PDF);
+    click_field(&mut h, "name");
+    assert!(h.state().views[0].forms.focus.is_some(), "the field's editor is open");
+    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(2);
+    let asked = sent();
+    assert_eq!(asked.len(), 1);
+    assert_ne!(asked[0].path, path, "a copy: the typing made the document differ from its file");
+    assert!(std::fs::read(&asked[0].path).unwrap().windows(12).any(|w| w == b"Ada Lovelace"), "the typed text is in the copy");
+    assert_eq!(std::fs::read(&path).unwrap(), PDF, "the open file is unchanged");
+    answer(Answer::Opened { program: None });
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(asked[0].path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A value the field's script refuses is not sent: the field stays open and nothing is asked.
+#[test]
+fn a_refused_field_value_sends_nothing() {
+    let (mut h, path) = form_harness("refused", &validated_form());
+    click_field(&mut h, "qty");
+    h.event(egui::Event::Text("500".into()));
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(3);
+    assert!(sent().is_empty(), "the stand-in was never asked");
+    assert!(!h.state().send_email.waiting());
+    let focus = h.state().views[0].forms.focus.clone().expect("the refused field stays open");
+    assert_eq!(focus.name, "qty");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A field with a script that refuses a quantity over 100.
+fn validated_form() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /V (4) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if (event.value > 100) { app.alert('At most 100'); event.rc = false; }) >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A failure that arrives while the "save changes?" question is open waits behind it (the
+/// question is not a dialog, but nothing may cover it), and the "still waiting" notice stays up
+/// meanwhile.
+#[test]
+fn an_answer_waits_behind_the_save_question_and_the_waiting_notice_stays() {
+    let (mut h, path) = harness("save-question");
+    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(2);
+    assert!(h.state().send_email.waiting());
+    let asked = sent();
+
+    // Closing the edited document asks whether to save it.
+    assert!(h.state_mut().execute("file.close"));
+    h.run_steps(3);
+    assert!(h.state().close_request.is_some(), "the save question is open");
+
+    // A second request while waiting says so, and that notice is kept up, not left to fade.
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(2);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Still waiting for your email app…"));
+    if let Some(toast) = h.state_mut().toast.as_mut() {
+        toast.1 = 100.0;
+    }
+    h.run_steps(2);
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.1 < 50.0), "the waiting notice is kept up, not left to fade");
+
+    answer(Answer::NotAttached { program: None, why: Why::NoAnswer, fallback: mail::fallback(&asked[0]) });
+    h.run_steps(3);
+    assert!(h.state().close_request.is_some(), "the question is still there");
+    assert!(h.state().dialog.is_none() && h.state().send_email.problem.is_none(), "the dialog waits");
+    assert!(h.state().send_email.waiting());
+
+    // Once the question is answered the dialog comes.
+    h.state_mut().close_request = None;
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::SendEmail));
+    assert!(h.state().send_email.problem.is_some());
+    let _ = std::fs::remove_dir_all(asked[0].path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A copy made for the email app that was never handed to it (the request itself refused) is
+/// removed; one the app was asked to attach stays.
+#[test]
+fn a_copy_that_was_never_handed_over_is_removed() {
+    fn refuse(compose: Compose, _wake: Box<dyn FnOnce() + Send>) -> Result<Receiver<Answer>, MailError> {
+        SENT.with(|s| s.borrow_mut().push(compose));
+        Err(MailError::CouldNotStart("refused".into()))
+    }
+    let (mut h, path) = harness("refused-copy");
+    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.state_mut().send_email.sender = refuse;
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(2);
+    let asked = sent();
+    assert_eq!(asked.len(), 1);
+    assert!(!asked[0].path.exists(), "the copy is gone");
+    assert!(!asked[0].path.parent().unwrap().exists(), "and its folder");
+    assert!(path.exists(), "the open file is never touched");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}

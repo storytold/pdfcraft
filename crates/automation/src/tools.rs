@@ -684,6 +684,22 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
         t(
+            "doc_email",
+            "Attach to email",
+            "Attach the document as it is now to a new message in the computer's default email program (File ▸ Attach to email…); the person addresses and sends it, nothing is sent from here. An unchanged file goes as it is; one with unsaved edits goes as a copy that has them (the open file and the document stay as they were). Optional to (addresses), subject (default: the document's name) and body fill the message in. Waits for the email program, then returns opened: true (with the program) or opened: false with why (cant_attach: the default can't be handed a file, no_program, no_answer, logon_failed or failed with detail) and the mailto address and file path to offer instead. A document with redaction marks that aren't applied is refused (they hide nothing in the file) unless allow_unapplied_redactions is true. Opens a window on the person's desktop: use it only when they asked.",
+        )
+        .cmd("file.send_email")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "to": { "type": "array", "items": { "type": "string" }, "description": "Recipient addresses." },
+                "subject": { "type": "string" },
+                "body": { "type": "string" },
+                "allow_unapplied_redactions": { "type": "boolean" },
+            }),
+            &["doc"],
+        )),
+        t(
             "doc_print",
             "Print",
             "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, or US #10 Envelope (short names or full preset labels); use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS).",

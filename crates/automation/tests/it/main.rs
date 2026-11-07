@@ -9,6 +9,7 @@ mod batch;
 mod batch_failures;
 mod batch_secrets;
 mod button_caption;
+mod email;
 mod form_bulk;
 mod hostile_args;
 mod model_3d;

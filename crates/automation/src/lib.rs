@@ -20,6 +20,7 @@ mod bates;
 mod comments;
 mod content;
 mod conventions;
+mod email;
 pub mod file_access;
 mod forms;
 mod layers;
@@ -45,6 +46,7 @@ use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
+pub use email::MailSender;
 pub use pdfcraft_render::Pixels;
 pub use tools::{ToolDef, tools};
 
@@ -101,6 +103,8 @@ pub struct Automation {
     /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
     ocr_reviews: HashMap<DocId, OcrReview>,
     next_ocr_review: u64,
+    /// What starts `doc_email`'s request; a test puts a stand-in here.
+    mail_sender: MailSender,
 }
 
 impl Default for Automation {
@@ -121,7 +125,15 @@ impl Automation {
             evicted: HashSet::new(),
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
+            mail_sender: email::real_sender,
         }
+    }
+
+    /// Use `sender` to start `doc_email`'s request instead of asking the computer's email program
+    /// (for tests and embedders).
+    pub fn with_mail_sender(mut self, sender: MailSender) -> Self {
+        self.mail_sender = sender;
+        self
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
