@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+mod transparency;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -116,6 +117,8 @@ pub const WORDINGS: &[&str] = &[
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
+    "Page {} has transparency but no device-independent blending colour space or PDF/A output intent",
+    "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define",
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
     "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile",
@@ -208,6 +211,19 @@ fn dict_of(o: &Object) -> Option<&Dict> {
         Object::Stream(s) => Some(&s.dict),
         _ => None,
     }
+}
+
+/// Whether the document has a PDF/A output intent whose `/DestOutputProfile` is a stream: one with
+/// a null or missing profile describes no colour, so it doesn't stand in for a blending colour
+/// space (6.2.10).
+fn pdfa_intent_has_profile(doc: &Document) -> bool {
+    let cat = catalog(doc);
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    list.iter().any(|oi| {
+        let oi = doc.resolve(oi);
+        let Some(d) = oi.as_dict() else { return false };
+        d.name(b"S") == Some(b"GTS_PDFA1") && d.get(b"DestOutputProfile").is_some_and(|p| matches!(&*doc.resolve(p), Object::Stream(_)))
+    })
 }
 
 fn has_pdfa_intent(doc: &Document) -> bool {
@@ -512,6 +528,21 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     for (i, p) in pages.iter().enumerate() {
         if p.dict.get(b"AA").is_some() {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        }
+    }
+    // 6.2.10: blend modes are those ISO 32000-1 defines, and without a PDF/A output intent (one with
+    // a profile) a page with transparency names a blending colour space.
+    let intent = pdfa_intent_has_profile(doc);
+    // Pages share resources, forms and fonts: what one page found under them, the next takes as is.
+    let mut shared = transparency::Shared::default();
+    for (i, p) in pages.iter().enumerate() {
+        let painting = transparency::page_painting(doc, &p.dict, &mut shared);
+        for name in painting.unknown_blend_modes {
+            issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
+        }
+        if painting.transparency && !intent && !transparency::page_names_blending_space(doc, &p.dict) {
+            let n = Some((i + 1).to_string());
+            issue("6.2.10", "Page {} has transparency but no device-independent blending colour space or PDF/A output intent", n, Some(i), false);
         }
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
