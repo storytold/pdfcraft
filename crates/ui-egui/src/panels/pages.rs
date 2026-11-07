@@ -391,6 +391,7 @@ mod page_moves {
 
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
         let bytes = app.session.create_blank(300.0, 500.0, 2).unwrap();
         app.open_bytes("source.pdf", None, (*bytes).clone()).unwrap();
         app.right = Some(RightPanel::Pages);
@@ -416,5 +417,31 @@ mod page_moves {
         assert_eq!(created.info.pages.len(), 1);
         assert!((created.info.pages[0].width - 300.0).abs() < 0.5);
         assert!((created.info.pages[0].height - 500.0).abs() < 0.5);
+
+        // When newer content arrives on the clipboard after copying pages, Create ▸ Clipboard uses it.
+        h.state_mut().clipboard_override = Some(crate::create_ui::Clip::Text("Newer clipboard text".into()));
+        assert!(h.state_mut().execute("create.clipboard"));
+        assert_eq!(h.state().views.len(), 3);
+        let text_doc = h.state().session.get(h.state().views[2].id).expect("text PDF");
+        assert!((text_doc.info.pages[0].width - 612.0).abs() < 0.5, "newer text clipboard creates US Letter page");
+
+        // Authenticated snapshots preserve credentials and enforce assembly permissions.
+        h.state_mut().clipboard_override = None;
+        let src_id = h.state().views[0].id;
+        h.state_mut()
+            .session
+            .apply(
+                src_id,
+                pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+                    open_password: Some("user".into()),
+                    permissions_password: Some("owner".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let protected = h.state().session.save_bytes(src_id).unwrap();
+        assert!(h.state().session.extract_from_bytes("secret.pdf", &protected, None, &[0]).is_err());
+        assert!(h.state().session.extract_from_bytes("secret.pdf", &protected, Some("user"), &[0]).is_err());
+        assert!(h.state().session.extract_from_bytes("secret.pdf", &protected, Some("owner"), &[0]).is_ok());
     }
 }

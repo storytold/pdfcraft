@@ -213,6 +213,9 @@ impl PdfCraftApp {
         if !self.may_copy(id) {
             return false;
         }
+        if let Some(clip) = &mut self.page_clipboard {
+            clip.superseded_by_clip = Some(crate::create_ui::Clip::Text(text.clone()));
+        }
         // Built only when there is a clipboard to take it.
         let html = if self.takes_html() {
             self.views
@@ -269,6 +272,9 @@ impl PdfCraftApp {
             Ok(text) => {
                 self.document_copy = None;
                 if !text.is_empty() {
+                    if let Some(clip) = &mut self.page_clipboard {
+                        clip.superseded_by_clip = Some(crate::create_ui::Clip::Text(text.clone()));
+                    }
                     ctx.copy_text(text);
                 }
             }

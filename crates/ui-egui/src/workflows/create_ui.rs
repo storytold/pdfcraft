@@ -131,20 +131,40 @@ impl PdfCraftApp {
         Ok(())
     }
 
+    /// Current image or text on the system clipboard (or test override / internal image cache).
+    pub(crate) fn current_system_clip(&self) -> Option<Clip> {
+        if let Some(clip) = self.clipboard_override.clone() {
+            return Some(clip);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.system_clipboard {
+            return read_clipboard();
+        }
+        if let Some((w, h, rgba)) = self.last_copied_image.clone() {
+            return Some(Clip::Image { width: w as usize, height: h as usize, rgba });
+        }
+        None
+    }
+
     /// Create ▸ Clipboard: a new document from copied pages, or from the image (one page, its
     /// size) or the text on the clipboard, as Acrobat does.
     pub(crate) fn create_from_clipboard(&mut self) {
-        if let Some(clip) = self.page_clipboard.clone() {
-            let created = self.session.extract_from_bytes(&clip.name, &clip.bytes, &clip.pages).map_err(|e| e.to_string());
+        let sys_clip = self.current_system_clip();
+        if let Some(clip) = self.page_clipboard.clone()
+            && clip.superseded_by_clip.is_none()
+            && sys_clip == clip.system_clip_at_copy
+        {
+            let created = self.session.extract_from_bytes(&clip.name, &clip.bytes, clip.password.as_deref(), &clip.pages).map_err(|e| e.to_string());
             if let Err(e) = self.open_created_bytes("Clipboard.pdf", created) {
                 self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
             }
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let clip = read_clipboard();
-        #[cfg(target_arch = "wasm32")]
-        let clip: Option<Clip> = None;
+        let clip = if self.page_clipboard.as_ref().is_some_and(|c| sys_clip == c.system_clip_at_copy) {
+            self.page_clipboard.as_ref().and_then(|c| c.superseded_by_clip.clone()).or(sys_clip)
+        } else {
+            sys_clip.or_else(|| self.page_clipboard.as_ref().and_then(|c| c.superseded_by_clip.clone()))
+        };
         match clip {
             Some(c) => {
                 if let Err(e) = self.create_from_clip(c) {

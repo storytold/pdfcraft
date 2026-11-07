@@ -618,7 +618,17 @@ impl PdfCraftApp {
             self.notify_tr("A document needs at least one page: copy instead");
             return;
         }
-        self.page_clipboard = Some(crate::PageClip { from: id, name: doc.name.clone(), bytes: doc.bytes.clone(), pages: pages.clone() });
+        let system_clip_at_copy = self.current_system_clip();
+        let Some(doc) = self.session.get(id) else { return };
+        self.page_clipboard = Some(crate::PageClip {
+            from: id,
+            name: doc.name.clone(),
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            pages: pages.clone(),
+            system_clip_at_copy,
+            superseded_by_clip: None,
+        });
         if cut {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }

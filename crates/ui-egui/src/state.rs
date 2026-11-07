@@ -248,7 +248,13 @@ pub struct PageClip {
     pub from: DocId,
     pub name: String,
     pub bytes: std::sync::Arc<Vec<u8>>,
+    pub password: Option<String>,
     pub pages: Vec<usize>,
+    /// Snapshot of the system clipboard when the pages were copied, so Create ▸ Clipboard can
+    /// detect when newer text or image content was copied afterwards.
+    pub(crate) system_clip_at_copy: Option<crate::create_ui::Clip>,
+    /// Newer text or image copied inside PdfCraft since these pages were copied.
+    pub(crate) superseded_by_clip: Option<crate::create_ui::Clip>,
 }
 
 /// One page of a whole-document copy: its text as read for display, to read, or not to try
