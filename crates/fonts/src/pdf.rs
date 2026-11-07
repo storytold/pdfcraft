@@ -287,6 +287,63 @@ const MAX_CMAP_RANGES: usize = 1 << 16;
 /// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
 /// one is not decoded at all.
 const MAX_CMAP_BYTES: usize = 16 << 20;
+/// Most Type 3 glyph descriptions read for their `d1` box. A simple font shows at most 256 codes.
+const MAX_TYPE3_GLYPHS: usize = 256;
+/// Largest decoded Type 3 glyph description read for its `d1` box; a larger one is skipped.
+const MAX_TYPE3_GLYPH_BYTES: usize = 64 << 10;
+/// Decoded bytes all of one font's glyph descriptions may take together.
+const MAX_TYPE3_FONT_BYTES: usize = 4 << 20;
+/// Farthest a Type 3 glyph box reaches from the baseline, in text space per unit of font size. A
+/// bitmap font drawn in page units at `0.01 Tf` is a few thousand; past this a box is garbage, and
+/// clamping it keeps the run boxes built from it finite.
+const MAX_TYPE3_EXTENT: f64 = 1e6;
+
+/// The union of the boxes a Type 3 font's glyph descriptions declare with `d1` (ISO 32000-2
+/// §9.6.4, Table 111), in glyph space, or `None` when no glyph declares one (`d0` glyphs don't).
+/// Reads at most [`MAX_TYPE3_GLYPHS`] descriptions within [`MAX_TYPE3_FONT_BYTES`].
+fn type3_glyph_box(doc: &Document, font: &Dict) -> Option<[f64; 4]> {
+    let procs = dict(doc, font.get(b"CharProcs"))?;
+    let mut budget = DecodeBudget::new(MAX_TYPE3_FONT_BYTES, 0);
+    let mut union: Option<[f64; 4]> = None;
+    for (_, proc) in procs.iter().take(MAX_TYPE3_GLYPHS) {
+        let Object::Stream(s) = &*doc.resolve(proc) else { continue };
+        let Ok(data) = budget.decode_within(s, MAX_TYPE3_GLYPH_BYTES) else {
+            if budget.remaining() == 0 {
+                break;
+            }
+            continue;
+        };
+        if let Some([llx, lly, urx, ury]) = d1_box(&data) {
+            let r = [llx.min(urx), lly.min(ury), llx.max(urx), lly.max(ury)];
+            union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+        }
+    }
+    union
+}
+
+/// The glyph box `llx lly urx ury` of a glyph description that begins with `wx wy llx lly urx ury
+/// d1`; `None` for `d0` or anything else first.
+fn d1_box(data: &[u8]) -> Option<[f64; 4]> {
+    let mut lexer = pdfcraft_cos::Lexer::new(data, 0);
+    let mut operands = [0.0; 6];
+    for slot in &mut operands {
+        lexer.skip_ws();
+        *slot = std::str::from_utf8(lexer.token()).ok()?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+    }
+    lexer.skip_ws();
+    (lexer.token() == b"d1").then(|| [operands[2], operands[3], operands[4], operands[5]])
+}
+
+/// The lowest and highest text-space y of the glyph-space box `r` under a font matrix whose
+/// y column is `b`, `d`, `f` (§9.2.4): a flipped matrix (`d < 0`) turns the box over. `None`
+/// when the box has no height in text space or the numbers overflow; clamped to
+/// [`MAX_TYPE3_EXTENT`].
+fn text_y_extent(r: [f64; 4], b: f64, d: f64, f: f64) -> Option<(f64, f64)> {
+    let ys = [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])].map(|(x, y)| b * x + d * y + f);
+    let lo = ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (lo.is_finite() && hi.is_finite() && hi > lo).then_some((lo.max(-MAX_TYPE3_EXTENT), hi.min(MAX_TYPE3_EXTENT)))
+}
 
 /// Code → Unicode of a font. Explicit mappings and sequential ranges are kept as declared, so a range
 /// costs one record however many codes it covers; where two overlap, the one declared later wins.
@@ -745,13 +802,17 @@ impl Metrics {
             descriptor = dict(doc, font.get(b"FontDescriptor"));
             m.default = descriptor.as_ref().and_then(|d| d.get(b"MissingWidth")).and_then(|w| doc.resolve(w).as_f64()).unwrap_or(0.0);
             if subtype == b"Type3" {
-                let fm = nums(doc, font.get(b"FontMatrix"));
-                if fm.len() == 6 {
-                    m.scale = fm[0];
-                    let bbox = nums(doc, font.get(b"FontBBox"));
-                    if bbox.len() == 4 && fm[3] != 0.0 {
-                        m.ascent = (bbox[3] * fm[3]).max(0.5);
-                        m.descent = (bbox[1] * fm[3]).min(-0.1);
+                if let [a, b, _, d, _, f] = nums(doc, font.get(b"FontMatrix"))[..] {
+                    m.scale = a;
+                    // The glyphs' own boxes first: a bitmap font's `/FontBBox` is often all zero
+                    // or one unit high, while each `d1` declares the box its glyph fills.
+                    let bbox = type3_glyph_box(doc, font).or_else(|| {
+                        // All zero: no assumption about glyph sizes (Table 110).
+                        <[f64; 4]>::try_from(nums(doc, font.get(b"FontBBox"))).ok().filter(|r| r.iter().any(|&v| v != 0.0))
+                    });
+                    if let Some((lo, hi)) = bbox.and_then(|r| text_y_extent(r, b, d, f)) {
+                        m.ascent = hi.max(0.5);
+                        m.descent = lo.min(-0.1);
                     }
                 }
             } else if m.widths.is_empty() {
