@@ -33,9 +33,7 @@ impl PdfCraftApp {
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     /// While a document is under OCR review, nothing closes: the review comes forward first.
     pub fn close_all(&mut self) {
-        if let Some(i) = self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id))
-            && self.hold_close_for_ocr_review(i)
-        {
+        if self.hold_for_any_ocr_review() {
             return;
         }
         for i in (0..self.views.len()).rev() {
@@ -61,6 +59,14 @@ impl PdfCraftApp {
         self.ocr_verify.open = true;
         self.notify_tr("Accept or reject the OCR review before closing this document");
         true
+    }
+
+    /// Close all and Quit close every document, so a document under OCR review holds them too
+    /// ([`Self::hold_close_for_ocr_review`]), even when it has no unsaved changes. Whether they
+    /// were held.
+    fn hold_for_any_ocr_review(&mut self) -> bool {
+        let reviewed = self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id));
+        reviewed.is_some_and(|i| self.hold_close_for_ocr_review(i))
     }
 
     /// File ▸ Revert (after the confirmation).
@@ -159,9 +165,13 @@ impl PdfCraftApp {
     }
 
     /// Request a normal application exit, preserving every unsaved document until answered.
-    /// Returns false while the existing save/discard/cancel prompt needs a decision.
+    /// Returns false while the existing save/discard/cancel prompt needs a decision, or while an
+    /// OCR review is still to be accepted or rejected.
     pub(crate) fn request_quit(&mut self, ctx: &egui::Context) -> bool {
-        if self.first_dirty().is_some() {
+        if self.hold_for_any_ocr_review() {
+            ctx.request_repaint();
+            false
+        } else if self.first_dirty().is_some() {
             self.close_request = Some(CloseRequest::Quit);
             ctx.request_repaint();
             false
@@ -182,7 +192,7 @@ impl PdfCraftApp {
         self.unsaved_flag.store(self.first_dirty().is_some(), std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Intercept window close while documents have unsaved changes.
+    /// Intercept window close while documents have unsaved changes or an OCR review is open.
     pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
         // egui's default quit shortcut ignores extra Alt/Shift, including Ctrl+Alt+Q for '@'.
         ctx.options_mut(|o| o.quit_shortcuts.clear());
@@ -199,8 +209,10 @@ impl PdfCraftApp {
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        // `first_dirty` counts text typed into a field as an unsaved change.
-        if !self.allow_quit && self.first_dirty().is_some() {
+        if !self.allow_quit && self.hold_for_any_ocr_review() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        } else if !self.allow_quit && self.first_dirty().is_some() {
+            // `first_dirty` counts text typed into a field as an unsaved change.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Quit);
         } else {

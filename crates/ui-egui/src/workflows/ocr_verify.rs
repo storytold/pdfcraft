@@ -9,7 +9,8 @@
 //! The state machine is [`Phase`]: recognition runs on a worker thread ([`Phase::Running`], a
 //! real Cancel keeps the pages already read), results land in [`Phase::ReviewReady`], failures
 //! land in [`Phase::RecoverableError`] with the cause named and Run enabled again, and
-//! Accept/Reject/Re-OCR are ignored outside ReviewReady instead of acting on nothing.
+//! Accept/Reject/Re-OCR are ignored outside ReviewReady instead of acting on nothing (Reject
+//! also throws away a reading whose Accept failed).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -25,7 +26,8 @@ use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
 /// Where the screen stands. Run is enabled in Idle, ReviewReady and RecoverableError; the
-/// review tools (Accept, Reject, navigation, the inspector, re-OCR) only in ReviewReady.
+/// review tools (Accept, Reject, navigation, the inspector, re-OCR) only in ReviewReady, and
+/// Reject also in RecoverableError while a reading is kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Phase {
     #[default]
@@ -199,6 +201,15 @@ pub struct Preview {
     pub(crate) texture: Option<egui::TextureHandle>,
 }
 
+/// A page whose preview render failed. It is tried again once the document's bytes change (an
+/// edit, a revert) or after another page rendered. `bytes` is the rendered copy, held weakly so
+/// it is not kept alive: while it is held, no newer copy can take its address.
+struct FailedPreview {
+    doc: DocId,
+    page: usize,
+    bytes: std::sync::Weak<Vec<u8>>,
+}
+
 /// A page or region re-read in flight ([`OcrVerify::start_reread`]): the page being read
 /// again (and the drawn region, in view-space points, for a region re-read), with the
 /// worker's progress.
@@ -251,6 +262,8 @@ pub struct OcrVerify {
     /// Language of the captured recognition, independent of the interface locale.
     pub dictionary_language: String,
     pub(crate) preview: Option<Preview>,
+    /// The last page whose preview could not be rendered: not rendered again on every frame.
+    preview_failed: Option<FailedPreview>,
     /// The mode the screen was last drawn in (`None` while it is closed): switching to another
     /// puts the screen away.
     pub(crate) shown_in: Option<crate::state::Mode>,
@@ -298,6 +311,7 @@ impl Default for OcrVerify {
             dictionary_dir: None,
             dictionary_language: "en".into(),
             preview: None,
+            preview_failed: None,
             shown_in: None,
         }
     }
@@ -440,6 +454,13 @@ impl OcrVerify {
 
     fn in_review(&self) -> bool {
         self.phase == Phase::ReviewReady
+    }
+
+    /// Whether Reject has a reading to throw away: in review, and after a failed Accept, which
+    /// keeps the reading (a stale document, say). Its document stays open until the reading is
+    /// accepted or rejected, so Reject must not wait for a new run that would replace it.
+    pub fn can_reject(&self) -> bool {
+        self.in_review() || (self.phase == Phase::RecoverableError && !self.pages.is_empty())
     }
 
     /// Commit the correction field for `key`. An empty (after trim) commit removes the word;
@@ -856,9 +877,9 @@ impl OcrVerify {
     }
 
     /// Reject: clear the words, the session, the selection and the flags; back to Idle.
-    /// Ignored outside ReviewReady.
+    /// Ignored outside ReviewReady, except after a failed Accept ([`Self::can_reject`]).
     pub fn reject(&mut self) -> bool {
-        if !self.in_review() {
+        if !self.can_reject() {
             return false;
         }
         *self = OcrVerify { open: self.open, dictionary_dir: self.dictionary_dir.take(), ..Default::default() };
@@ -943,14 +964,12 @@ impl OcrVerify {
                 s.result = Some(result);
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
-        if app.run_inline {
-            work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-reread".into()).spawn(work).ok();
+        // The OS can refuse a new thread: then nothing runs, and the page's words stay as they were.
+        if let Err(e) = launch(app, "pdfcraft-ocr-reread", work) {
+            self.message = format!("the re-read could not start: {e}");
+            app.notify_error(self.message.clone());
+            return;
         }
-        #[cfg(target_arch = "wasm32")]
-        work();
         self.reread = Some(Reread { page, region, progress });
     }
 
@@ -1134,15 +1153,11 @@ impl OcrVerify {
         };
         let settings = d.settings();
         let Some(job) = app.session.ocr_job(id, &pages, settings.clone()) else { return };
-        self.dictionary_language = job.settings.language.clone();
-        let progress = Arc::new(Mutex::new(ocr_ui::OcrProgress { total: job.pages.len(), ..Default::default() }));
-        self.doc = Some(id);
-        self.guard = Some(job.guard.clone());
+        let language = job.settings.language.clone();
+        let guard = job.guard.clone();
         // The source pane shows the first page this run reads (the current page, for that scope).
-        self.current = job.pages.first().copied().unwrap_or(0);
-        self.cancelled = false;
-        self.phase = Phase::Running;
-        self.message = String::new();
+        let first = job.pages.first().copied().unwrap_or(0);
+        let progress = Arc::new(Mutex::new(ocr_ui::OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         let work = move || {
             let result = pdfcraft_engine::ocr::recognizers(&settings).map(|r| {
@@ -1157,14 +1172,24 @@ impl OcrVerify {
                 s.result = Some(result);
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
-        if app.run_inline {
-            work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-verify".into()).spawn(work).ok();
+        // The OS can refuse a new thread. Then nothing runs: a review already on the screen stays
+        // as it was, and an empty screen shows why (Run stays enabled, and nothing holds the
+        // document open).
+        if let Err(e) = launch(app, "pdfcraft-ocr-verify", work) {
+            self.message = format!("the recognition could not start: {e}");
+            if self.phase == Phase::Idle {
+                self.phase = Phase::RecoverableError;
+            }
+            app.notify_error(self.message.clone());
+            return;
         }
-        #[cfg(target_arch = "wasm32")]
-        work();
+        self.dictionary_language = language;
+        self.doc = Some(id);
+        self.guard = Some(guard);
+        self.current = first;
+        self.cancelled = false;
+        self.phase = Phase::Running;
+        self.message = String::new();
         self.progress = Some(progress);
         self.poll(app);
     }
@@ -1195,6 +1220,23 @@ impl OcrVerify {
             Err(why) => self.failed(&why),
         }
     }
+}
+
+/// Run `work` on a worker thread named `name` (inline under `run_inline` and on the web).
+/// Whether it started: the OS can refuse a new thread.
+fn launch(app: &PdfCraftApp, name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    #[cfg(test)]
+    if tests::FAIL_LAUNCH.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("no thread for this test"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if !app.run_inline {
+        return std::thread::Builder::new().name(name.to_string()).spawn(work).map(drop);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (app, name);
+    work();
+    Ok(())
 }
 
 /// What a frame's controls asked for, applied after the drawing (the panes read `app` while
@@ -1381,7 +1423,7 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
         if ui.add_enabled_ui(accept_enabled, |ui| widgets::pill_button(ui, tl!("Accept"), false)).inner.clicked() {
             n.accept = true;
         }
-        if ui.add_enabled_ui(review, |ui| widgets::pill_button(ui, tl!("Reject"), false)).inner.clicked() {
+        if ui.add_enabled_ui(v.can_reject(), |ui| widgets::pill_button(ui, tl!("Reject"), false)).inner.clicked() {
             n.reject = true;
         }
         ui.separator();
@@ -1752,7 +1794,8 @@ pub fn legend_rows() -> [(ConfidenceBand, String); 3] {
 }
 
 /// Render (or re-render) the source pane's page preview when the shown page changed. One
-/// synchronous render per page; the texture is cached until then.
+/// synchronous render per page; the texture is cached until then, and a failed render is not
+/// retried until the document changes ([`FailedPreview`]).
 fn ensure_preview(app: &mut PdfCraftApp, page: usize) {
     let doc = app.ocr_verify.doc;
     // A preview of another document or page never stands in for this one, even when this
@@ -1766,14 +1809,28 @@ fn ensure_preview(app: &mut PdfCraftApp, page: usize) {
     }
     let Some(d) = app.session.get(doc) else { return };
     let Some(info) = d.info.pages.get(page) else { return };
+    // A page that failed to render fails again until its document changes: don't parse and
+    // render it on every frame.
+    let bytes = Arc::as_ptr(&d.bytes);
+    if app.ocr_verify.preview_failed.as_ref().is_some_and(|f| (f.doc, f.page) == (doc, page) && std::ptr::eq(f.bytes.as_ptr(), bytes)) {
+        return;
+    }
+    #[cfg(test)]
+    tests::PREVIEW_RENDERS.with(|n| n.set(n.get().saturating_add(1)));
     // Screen scale (the boxes are drawn on top of it); the recognition dpi is irrelevant here.
     let scale = 2.0_f32.min((900.0 / info.width.max(1.0)).min(1200.0 / info.height.max(1.0))).max(0.2);
     let config = pdfcraft_render::RenderConfig { password: d.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
     let mut r = pdfcraft_render::PageRenderer::new(d.bytes.clone(), config);
     let shot = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Pixels, scale, ..Default::default() });
-    if shot.error.is_some() || shot.width == 0 || shot.height == 0 {
-        return; // a render failure names itself elsewhere
+    let failed = shot.error.is_some() || shot.width == 0 || shot.height == 0;
+    #[cfg(test)]
+    let failed = failed || tests::FAIL_RENDER.with(std::cell::Cell::get);
+    if failed {
+        // A render failure names itself elsewhere.
+        app.ocr_verify.preview_failed = Some(FailedPreview { doc, page, bytes: Arc::downgrade(&d.bytes) });
+        return;
     }
+    app.ocr_verify.preview_failed = None;
     let scale = shot.width as f32 / info.width.max(1.0);
     let texture = app.ctx.as_ref().map(|ctx| {
         ctx.load_texture(
@@ -2155,6 +2212,15 @@ fn refresh_view(app: &mut PdfCraftApp, doc: DocId) {
 mod tests {
     use super::*;
     use pdfcraft_engine::Session;
+
+    thread_local! {
+        /// [`launch`] refuses to start a worker, as the OS can.
+        pub(super) static FAIL_LAUNCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// How many page renders [`ensure_preview`] started.
+        pub(super) static PREVIEW_RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        /// [`ensure_preview`]'s render fails, as a page the renderer refuses does.
+        pub(super) static FAIL_RENDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
 
     /// A word box that sits where a real placed word would (high on the page, reading left
     /// to right).
@@ -3038,5 +3104,130 @@ mod tests {
         v.finished(vec![page], false);
         assert_eq!(v.current, 2);
         assert!(v.page(v.current).is_some());
+    }
+
+    /// A run whose worker thread cannot start leaves nothing running: an empty screen shows why
+    /// and holds no document open, and a review already on the screen stays as it was.
+    #[test]
+    fn a_run_that_cannot_start_keeps_the_review_and_holds_nothing() {
+        let mut app = PdfCraftApp::new();
+        let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
+        for name in ["a.pdf", "b.pdf"] {
+            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+        }
+        let (a, b) = (app.views[0].id, app.views[1].id);
+        FAIL_LAUNCH.with(|f| f.set(true));
+        app.active = Some(1);
+        with_state(&mut app, |v, app| v.start_run(app));
+        assert_eq!(app.ocr_verify.phase, Phase::RecoverableError, "not left running");
+        assert!(app.ocr_verify.message.contains("could not start"), "{}", app.ocr_verify.message);
+        assert!(app.ocr_verify.can_run(), "Run is enabled again");
+        assert!(!app.ocr_verify.holds_reading_of(b));
+        app.request_close_tab(1);
+        assert_eq!(app.views.len(), 1, "the document closes");
+        // A review on the screen: a run that cannot start leaves it as it was.
+        let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        app.ocr_verify.load(a, job.guard.clone(), vec![page]);
+        assert!(app.ocr_verify.correct((0, 0), "Edited"));
+        with_state(&mut app, |v, app| v.start_run(app));
+        FAIL_LAUNCH.with(|f| f.set(false));
+        assert_eq!(app.ocr_verify.phase, Phase::ReviewReady);
+        assert_eq!(app.ocr_verify.doc, Some(a));
+        assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "the correction is kept");
+        assert!(app.ocr_verify.progress.is_none());
+    }
+
+    /// A failed Accept keeps the reading (Run is enabled again), and Reject still throws it
+    /// away without a new run; a failed run that read nothing has nothing to reject.
+    #[test]
+    fn reject_throws_away_a_reading_whose_accept_failed() {
+        let mut s = Session::new();
+        let (id, mut v) = loaded(&mut s, &[Some(95.0)]);
+        assert!(v.correct((0, 0), "Corrected"));
+        s.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("fixture");
+        assert!(v.accept(&mut s).is_err(), "the stale reading is refused");
+        assert_eq!(v.phase, Phase::RecoverableError);
+        assert!(v.holds_reading_of(id), "its document stays open");
+        assert!(v.can_reject());
+        assert!(v.reject());
+        assert_eq!(v.phase, Phase::Idle);
+        assert!(v.pages.is_empty());
+        assert!(!v.holds_reading_of(id), "and can close");
+        let mut failed = OcrVerify::default();
+        failed.failed("no engine");
+        assert!(!failed.can_reject());
+        assert!(!failed.reject(), "a failed run that read nothing has nothing to reject");
+    }
+
+    /// Quitting, from Quit or by closing the window, while a reading is under review keeps the
+    /// application open and brings the review forward, even when no document has unsaved
+    /// changes; once the review is rejected, the application quits.
+    #[test]
+    fn quitting_brings_an_open_review_forward() {
+        let mut app = PdfCraftApp::new();
+        let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
+        for name in ["a.pdf", "b.pdf"] {
+            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+        }
+        let a = app.views[0].id;
+        let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        app.ocr_verify.load(a, job.guard.clone(), vec![page]);
+        assert!(app.first_dirty().is_none(), "nothing is unsaved");
+        app.active = Some(1);
+        let ctx = egui::Context::default();
+        assert!(!app.request_quit(&ctx), "Quit is held");
+        assert!(!app.allow_quit);
+        assert_eq!(app.active, Some(0), "the reviewed document comes to the front");
+        assert!(app.ocr_verify.open, "with its review");
+        assert!(app.toast.is_some(), "a notice says to accept or reject it first");
+        assert!(app.close_request.is_none(), "no save question: nothing is unsaved");
+        // Closing the window, as the operating system does.
+        app.active = Some(1);
+        app.ocr_verify.open = false;
+        let mut raw = egui::RawInput::default();
+        raw.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        ctx.begin_pass(raw);
+        app.guard_quit(&ctx);
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter()).collect();
+        assert!(commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)), "{commands:?}");
+        assert_eq!(app.active, Some(0));
+        assert!(app.ocr_verify.open);
+        assert_eq!(app.views.len(), 2, "nothing closed");
+        assert!(app.ocr_verify.reject());
+        assert!(app.request_quit(&ctx), "after Reject, Quit goes ahead");
+        assert!(app.allow_quit);
+    }
+
+    /// A page that cannot be rendered is not rendered again on every frame, only once its
+    /// document changes; a page that renders clears the failure.
+    #[test]
+    fn a_page_that_cannot_render_is_not_rendered_on_every_frame() {
+        let mut app = PdfCraftApp::new();
+        let text = app.session.create_from_text("t", "Recognize these scanned words").expect("fixture");
+        let id = app.session.open("t.pdf", None, text, None).expect("fixture");
+        app.ocr_verify.doc = Some(id);
+        FAIL_RENDER.with(|f| f.set(true));
+        let renders = || PREVIEW_RENDERS.with(std::cell::Cell::get);
+        let before = renders();
+        ensure_preview(&mut app, 0);
+        assert!(app.ocr_verify.preview.is_none(), "the page cannot render");
+        assert_eq!(renders(), before + 1);
+        for _ in 0..3 {
+            ensure_preview(&mut app, 0);
+        }
+        assert_eq!(renders(), before + 1, "repaints do not render it again");
+        app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("an edit");
+        ensure_preview(&mut app, 0);
+        assert_eq!(renders(), before + 2, "a changed document is tried again");
+        // A page that renders clears the failure.
+        FAIL_RENDER.with(|f| f.set(false));
+        app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("an edit");
+        ensure_preview(&mut app, 0);
+        assert!(app.ocr_verify.preview.is_some());
+        assert!(app.ocr_verify.preview_failed.is_none());
     }
 }
