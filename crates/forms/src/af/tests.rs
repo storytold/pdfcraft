@@ -361,6 +361,18 @@ fn dates_times_and_masks() {
 }
 
 #[test]
+fn a_calculation_over_fields_without_values_is_0_for_every_operation() {
+    // A blank row: neither field has a value, so the form's lookup returns none.
+    let vals = |name: &str| -> Vec<String> { if name == "a" { vec!["2".into()] } else { vec![] } };
+    let simple = |op, f: &[&str]| calculate(&Calculate::Simple { op, fields: f.iter().map(|s| s.to_string()).collect() }, &vals);
+    for op in CalcOp::ALL {
+        assert_eq!(simple(op, &["qty", "price"]), Some("0".into()), "{op:?} of empty fields");
+        assert_eq!(simple(op, &[]), Some("0".into()), "{op:?} of no fields");
+    }
+    assert_eq!(simple(CalcOp::Product, &["a", "qty"]), Some("2".into()), "a field with no value is left out");
+}
+
+#[test]
 fn validation_and_calculation() {
     let r = Validate::Range { min: Some(0.0), max: Some(100.0) };
     assert!(validate(&r, "50").is_ok() && validate(&r, "").is_ok());
