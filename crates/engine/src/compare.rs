@@ -56,18 +56,35 @@ impl Session {
     /// Compare files: the text differences from document `old` to document `new`. The result
     /// carries both documents' text, so both must allow copying it.
     pub fn compare(&self, old: DocId, new: DocId) -> Result<Comparison, EditError> {
+        self.compare_pages(old, new, &[])
+    }
+
+    /// [`Session::compare`], restricted to the 0-based `pages` (every page when empty):
+    /// words on other pages take no part in the diff.
+    pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
-    }
-
-    /// [`Session::compare`], keeping the changes on `pages` of `new` (0-based; empty: every page).
-    pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
-        let mut c = self.compare(old, new)?;
+        let (mut old_words, mut new_words) = (a.words(), b.words());
         if !pages.is_empty() {
-            c.changes.retain(|ch| pages.iter().any(|page| (ch.new.page..=ch.new.last_page).contains(page)));
+            old_words.retain(|w| pages.contains(&w.page));
+            new_words.retain(|w| pages.contains(&w.page));
+        }
+        let mut c = pdfcraft_compare::compare(&old_words, &new_words);
+        for ch in &mut c.changes {
+            if ch.new.rects.is_empty() {
+                ch.new.page = ch.old.page;
+                if ch.new.near.is_none() {
+                    ch.new.near = ch.old.rects.first().copied();
+                }
+            }
+            if ch.old.rects.is_empty() {
+                ch.old.page = ch.new.page;
+                if ch.old.near.is_none() {
+                    ch.old.near = ch.new.rects.first().copied();
+                }
+            }
         }
         Ok(c)
     }
