@@ -4228,27 +4228,52 @@ fn gray_image(data: &[u8]) -> Vec<u8> {
 }
 
 /// An image Delete Image took off the page is still listed in its resources: Remove Hidden
-/// Information unlinks it, so the full rewrite leaves it out. Images a page still draws stay,
-/// directly, through a form without /Resources, or on another page sharing the dictionary.
+/// Information unlinks it, so the full rewrite leaves it out, as it does one only an unused form
+/// draws. Images a page still draws stay, directly, through a form without /Resources, or on
+/// another page sharing the dictionary, its name and `Do` in two content streams.
 #[test]
 fn images_no_page_draws_leave_with_hidden_information() {
     let bytes = hidden_information_removed(vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources 7 0 R >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [6 0 R 15 0 R] /Resources 7 0 R >>".to_vec(),
         stream("", b"q 50 0 0 50 20 20 cm /Shown Do Q /Fm Do"),
-        stream("", b"q 50 0 0 50 20 20 cm /Other Do Q"),
-        b"<< /XObject << /Shown 8 0 R /Deleted 9 0 R /Nested 10 0 R /Other 11 0 R /Fm 12 0 R >> >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Other"),
+        b"<< /XObject << /Shown 8 0 R /Deleted 9 0 R /Nested 10 0 R /Other 11 0 R /Fm 12 0 R /Unused 13 0 R /Orphan 14 0 R >> >>".to_vec(),
         gray_image(b"SHOWNIMAGEBYTES"),
         gray_image(b"DELETEDIMAGEBYTES"),
         gray_image(b"NESTEDIMAGEBYTES"),
         gray_image(b"OTHERPAGEIMAGE"),
         stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"q 10 0 0 10 200 200 cm /Nested Do Q"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/Orphan Do"),
+        gray_image(b"ORPHANIMAGEBYTES"),
+        stream("", b"Do Q"),
     ]);
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
     assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    assert!(!has(b"ORPHANIMAGEBYTES"), "an image only an unused form draws survived the save");
     for kept in [&b"SHOWNIMAGEBYTES"[..], b"NESTEDIMAGEBYTES", b"OTHERPAGEIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// A page listed under two /Pages nodes draws through either one's resources, whichever a reader
+/// comes to it from: neither loses the image it draws.
+#[test]
+fn a_page_listed_twice_keeps_both_parents_images() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 /Resources << /XObject << /Im 7 0 R >> >> >>".to_vec(),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 3 0 R /MediaBox [0 0 300 300] /Contents 6 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q"),
+        gray_image(b"FIRSTPARENTIMAGE"),
+        gray_image(b"SECONDPARENTIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    for kept in [&b"FIRSTPARENTIMAGE"[..], b"SECONDPARENTIMAGE"] {
         assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
     }
 }
@@ -4271,16 +4296,17 @@ fn unlinking_alone_still_applies() {
 
 /// A name a pattern, a form, an appearance or a soft mask doesn't define is looked up in the
 /// page's resources, /Resources of its own or not: an image drawn only that way is still shown,
-/// so it stays. One no content names goes.
+/// so it stays, as one drawn by a form named through an object that holds only a reference. One
+/// no content names goes.
 #[test]
 fn images_drawn_through_the_page_resources_stay() {
     let bytes = hidden_information_removed(vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [6 0 R] >>".to_vec(),
-        stream("", b"q /Pattern cs /Pt scn 0 0 10 10 re f Q /Own Do /Loop Do q /Gs gs 0 0 5 5 re f Q"),
-        b"<< /XObject << /ByPattern 7 0 R /ByOwnForm 8 0 R /ByAppearance 9 0 R /ByMask 10 0 R /Deleted 11 0 R /Own 12 0 R /Loop 16 0 R >> \
-           /Pattern << /Pt 13 0 R >> /ExtGState << /Gs << /SMask << /S /Luminosity /G 14 0 R >> >> >> >>"
+        stream("", b"q /Pattern cs /Pt scn 0 0 10 10 re f Q /Own Do /Loop Do q /Gs gs 0 0 5 5 re f Q /Chained Do"),
+        b"<< /XObject << /ByPattern 7 0 R /ByOwnForm 8 0 R /ByAppearance 9 0 R /ByMask 10 0 R /Deleted 11 0 R /Own 12 0 R /Loop 16 0 R \
+           /Chained 17 0 R /ByChain 19 0 R >> /Pattern << /Pt 13 0 R >> /ExtGState << /Gs << /SMask << /S /Luminosity /G 14 0 R >> >> >> >>"
             .to_vec(),
         b"<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 15 0 R >> >>".to_vec(),
         gray_image(b"BYPATTERNIMAGE"),
@@ -4294,16 +4320,19 @@ fn images_drawn_through_the_page_resources_stay() {
         stream("/Type /XObject /Subtype /Form /BBox [0 0 50 50]", b"/ByAppearance Do"),
         // Draws itself: read once.
         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /Loop 16 0 R >> >>", b"/Loop Do"),
+        b"18 0 R".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/ByChain Do"),
+        gray_image(b"BYCHAINIMAGE"),
     ]);
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
     assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
-    for kept in [&b"BYPATTERNIMAGE"[..], b"BYOWNFORMIMAGE", b"BYAPPEARANCEIMAGE", b"BYMASKIMAGE"] {
+    for kept in [&b"BYPATTERNIMAGE"[..], b"BYOWNFORMIMAGE", b"BYAPPEARANCEIMAGE", b"BYMASKIMAGE", b"BYCHAINIMAGE"] {
         assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
     }
 }
 
-/// A Type 3 glyph draws through the page's resources too: its image stays, and the dictionary
-/// is still cleaned of what nothing draws.
+/// A Type 3 glyph draws through the page's resources too, as does a form in the font's own
+/// resources: their images stay, and the dictionary is still cleaned of what nothing draws.
 #[test]
 fn images_drawn_by_type3_glyphs_stay() {
     let bytes = hidden_information_removed(vec![
@@ -4311,15 +4340,18 @@ fn images_drawn_by_type3_glyphs_stay() {
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
         stream("", b"BT /T3 12 Tf (a) Tj ET"),
-        b"<< /XObject << /ByGlyph 7 0 R /Deleted 8 0 R >> /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /XObject << /ByGlyph 7 0 R /Deleted 8 0 R /ByFontForm 11 0 R >> /Font << /T3 6 0 R >> >>".to_vec(),
         b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 9 0 R >> \
-           /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+           /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /Fx 10 0 R >> >> >>"
             .to_vec(),
         gray_image(b"BYGLYPHIMAGE"),
         gray_image(b"DELETEDIMAGEBYTES"),
-        stream("", b"10 0 d0 /ByGlyph Do"),
+        stream("", b"10 0 d0 /ByGlyph Do /Fx Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/ByFontForm Do"),
+        gray_image(b"BYFONTFORMIMAGE"),
     ]);
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
     assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
     assert!(has(b"BYGLYPHIMAGE"), "the glyph's image is drawn and must stay");
+    assert!(has(b"BYFONTFORMIMAGE"), "the image a form in the font's resources draws must stay");
 }
