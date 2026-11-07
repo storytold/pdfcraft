@@ -61,6 +61,11 @@ struct Outcome {
 }
 
 fn draw_five_times(name: &str) -> Outcome {
+    draw_five_times_at(name, [20; 5])
+}
+
+/// [`draw_five_times`], drawing `/name` the five times at `sizes` (units square).
+fn draw_five_times_at(name: &str, sizes: [u32; 5]) -> Outcome {
     let flate = |data: &[u8]| {
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
         z.write_all(data).unwrap();
@@ -81,7 +86,8 @@ fn draw_five_times(name: &str) -> Outcome {
     let bad_stencil = "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 /ImageMask true /Filter /JBIG2Decode /Length 4 >>";
     let jpx_mask =
         "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length 4 >>";
-    let content = [0, 24, 48, 72, 96].map(|x| format!("q 20 0 0 20 {x} 10 cm /{name} Do Q")).join(" ") + " q 10 0 0 10 118 10 cm /G Do Q";
+    let content = [0, 24, 48, 72, 96].iter().zip(sizes).map(|(x, s)| format!("q {s} 0 0 {s} {x} 10 cm /{name} Do Q")).collect::<Vec<_>>().join(" ")
+        + " q 10 0 0 10 118 10 cm /G Do Q";
     let bytes = image_cache_pdf(
         &content,
         "<< /XObject << /G 5 0 R /J 6 0 R /S 7 0 R /M 8 0 R >> >>",
@@ -120,6 +126,15 @@ fn a_picture_that_does_not_decode_is_decoded_once_however_often_it_is_drawn() {
     assert_eq!(out.draws.rasters, 1, "only the picture after it drew");
     assert_eq!(out.decodes, 2, "decoded again at every draw");
     assert_eq!(out.failures, 5, "every draw reports the failure, as before");
+}
+
+/// A JPEG 2000 picture decodes at a reduced resolution for the size it is drawn at, so its
+/// failure is kept for that size: drawn at two sizes, it is decoded once at each.
+#[test]
+fn a_picture_that_does_not_decode_is_decoded_once_at_each_size() {
+    let out = draw_five_times_at("J", [20, 20, 20, 10, 10]);
+    assert_eq!(out.decodes, 3, "once at each of its two sizes, and the picture after it");
+    assert_eq!(out.failures, 5, "every draw reports the failure");
 }
 
 /// A JBIG2 stencil mask that doesn't decode, drawn five times, is decoded once, and each draw
