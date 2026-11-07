@@ -16,6 +16,11 @@ fn fixture() -> Document {
         b"[6 0 R]",                                                                 // 5
         b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /Name /Approved /Foo (kept) >>", // 6
     ];
+    doc_from(&objs)
+}
+
+/// A document of the objects `objs`, numbered from 1, with object 1 as the catalog.
+fn doc_from(objs: &[&[u8]]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -2056,6 +2061,37 @@ fn typed_signature_uses_nonzero_winding_fill() {
     let ap = ap_content(&doc, &list(&doc, 0)[idx]);
     assert!(ap.ends_with("h\nf\n"), "expected non-zero winding fill (`f`), got: {ap}");
     assert!(!ap.contains("f*"), "must not use even-odd fill (`f*`): {ap}");
+}
+
+/// Kids, `/Kids` arrays and `/Type`s given through chains of references, untyped nodes and an
+/// untyped leaf with `/Kids null`: the annotation walk numbers the same page objects, in the same
+/// order, as `pdfcraft_model::pages`, so an edit on page N lands on the page shown as page N.
+#[test]
+fn page_walk_numbers_the_same_pages_as_the_model() {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",                // 1
+        b"<< /Type /Pages /Kids [3 0 R 10 0 R] /Count 5 >>", // 2
+        b"<< /Parent 2 0 R /Kids 11 0 R /Count 4 >>",        // 3: untyped, /Kids via 11 → 12
+        b"<< /Type /Page /Parent 3 0 R >>",                  // 4: ONE
+        b"<< /Type 13 0 R /Parent 3 0 R /Kids [] >>",        // 5: TWO, an indirect /Type /Page
+        b"<< /Parent 3 0 R /Kids null >>",                   // 6: THREE, untyped, /Kids null
+        b"<< /Type /Page /Parent 3 0 R >>",                  // 7: FOUR, reached via 14 → 15 → 7
+        b"<< /Type /Page /Parent 2 0 R >>",                  // 8: FIVE, reached via 10 → 8
+        b"null",                                             // 9
+        b"8 0 R",                                            // 10
+        b"12 0 R",                                           // 11
+        b"[4 0 R 5 0 R 6 0 R 14 0 R]",                       // 12
+        b"/Page",                                            // 13
+        b"15 0 R",                                           // 14
+        b"7 0 R",                                            // 15
+    ];
+    let doc = doc_from(&objs);
+    let r = |num| ObjRef { num, generation: 0 };
+    let model: Vec<ObjRef> = pdfcraft_model::pages(&doc).iter().map(|p| p.obj).collect();
+    assert_eq!(model, [r(4), r(5), r(6), r(7), r(8)]);
+    assert_eq!(page_refs(&doc).unwrap(), model);
+    assert_eq!(page_ref(&doc, 3).unwrap(), r(7));
+    assert_eq!(page_ref(&doc, 4).unwrap(), r(8));
 }
 
 /// Many page tree nodes sharing one `/Kids` array read it once, not once per node.
