@@ -636,6 +636,10 @@ pub struct DocView {
     /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
     /// they are looked at again only after the document changes (an image added, say).
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
+    /// Scans Edit found while no engine could read them, with the document's edit generation
+    /// then: they wait for one (the web build downloads the models when first needed), and are
+    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`) or the document changes.
+    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// The document owns the full coarse-wheel distance, including its acceleration.
@@ -1047,6 +1051,7 @@ impl DocView {
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
+            auto_ocr_awaiting_models: Default::default(),
             wheel: Default::default(),
             wheel_motion: Default::default(),
             wheel_frame: None,

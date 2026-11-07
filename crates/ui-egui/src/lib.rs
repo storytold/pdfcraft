@@ -181,8 +181,12 @@ use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
+#[cfg(target_arch = "wasm32")]
+use workflows::ocr_route;
 use workflows::ocr_ui;
 use workflows::ocr_verify;
+#[cfg(target_arch = "wasm32")]
+use workflows::ocr_web;
 use workflows::optimize_ui;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
@@ -518,6 +522,13 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// The web build's files being read in Web Workers (progress in `ocr_batch`).
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_batch: Option<ocr_web::Batch>,
+    /// The web build's files chosen before the text recognition models were downloaded, with
+    /// the settings they were chosen with: read once the models are ready.
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_waiting: Option<ocr_ui::WaitingFiles>,
     /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
