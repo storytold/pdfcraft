@@ -153,6 +153,7 @@ pub const WORDINGS: &[&str] = &[
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
     "The XMP property {property} in metadata stream {object} should have the value type {type}",
+    "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
     "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
     "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
     "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
@@ -521,18 +522,29 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     // every metadata stream.
     let (mut mistyped, mut extension) = (Vec::new(), xmp_extension::Findings::default());
     xmp_types::for_each_packet(&objs, |object, packet| {
-        mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|(name, ty)| (object, name, ty)));
+        mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|((name, written), ty)| (object, name, written, ty)));
         extension.add(object, packet);
     });
-    for (object, name, ty) in mistyped {
-        let values = vec![("{property}", name), ("{object}", object.to_string()), ("{type}", ty)];
-        located_issue(
-            "6.6.2.3.1",
-            "The XMP property {property} in metadata stream {object} should have the value type {type}",
-            values,
-            object,
-            false,
-        );
+    for (object, name, written, ty) in mistyped {
+        let mut values = vec![("{property}", name.clone()), ("{object}", object.to_string()), ("{type}", ty)];
+        if written == name {
+            located_issue(
+                "6.6.2.3.1",
+                "The XMP property {property} in metadata stream {object} should have the value type {type}",
+                values,
+                object,
+                false,
+            );
+        } else {
+            values.push(("{written}", written));
+            located_issue(
+                "6.6.2.3.1",
+                "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
+                values,
+                object,
+                false,
+            );
+        }
     }
     for m in extension.missing {
         let mut values = vec![("{schema}", m.schema), ("{object}", m.object.to_string()), ("{entry}", m.entry)];

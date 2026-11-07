@@ -629,17 +629,20 @@ fn unicode(bytes: &[u8]) -> String {
     }
 }
 
-/// The properties of predefined schemas in the packet `doc` whose values don't have their type,
-/// as `prefix:name` in name order, each with the type it should have as [`named`] gives it.
-pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeMap<String, String> {
+/// The properties of predefined schemas in the packet `doc` whose values don't have their type, in
+/// name order: each by its name with the namespace's preferred prefix and by its name as the packet
+/// writes it (see [`written`]), with the type it should have as [`named`] gives it.
+pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeMap<(String, String), String> {
     let mut out = BTreeMap::new();
+    let text = doc.input_text();
     let descriptions = doc.descendants().filter(|n| is(n, RDF, "Description") && n.parent_element().is_some_and(|p| is(&p, RDF, "RDF")));
     for d in descriptions {
         for a in d.attributes() {
             if let Some((schema, ty)) = a.namespace().and_then(|ns| property(ns, a.name()))
                 && !simple(ty, a.value())
             {
-                out.insert(format!("{}:{}", schema.prefix, a.name()), named(ty));
+                let qname = text.get(a.range_qname()).unwrap_or_default();
+                out.insert((format!("{}:{}", schema.prefix, a.name()), written(qname, a.name())), named(ty));
             }
         }
         for p in d.children().filter(Node::is_element) {
@@ -647,11 +650,28 @@ pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeMap<String, String
             if let Some((schema, ty)) = name.namespace().and_then(|ns| property(ns, name.name()))
                 && !fits(ty, &p, 0)
             {
-                out.insert(format!("{}:{}", schema.prefix, name.name()), named(ty));
+                let qname = text.get(p.range()).unwrap_or_default().strip_prefix('<').unwrap_or_default();
+                out.insert((format!("{}:{}", schema.prefix, name.name()), written(qname, name.name())), named(ty));
             }
         }
     }
     out
+}
+
+/// How long a prefix the packet writes is repeated.
+const MAX_PREFIX_CHARS: usize = 64;
+
+/// The property `local` as the packet writes it, from the text its qualified name begins
+/// (`qname`): `prefix:local`, or `local` alone in the default namespace. A prefix past
+/// [`MAX_PREFIX_CHARS`] is cut, with `…`.
+fn written(qname: &str, local: &str) -> String {
+    let qname = qname.split(|c: char| c.is_whitespace() || matches!(c, '>' | '/' | '=')).next().unwrap_or_default();
+    let Some((prefix, _)) = qname.split_once(':') else { return local.to_owned() };
+    let mut out: String = prefix.chars().take(MAX_PREFIX_CHARS).collect();
+    if out.len() < prefix.len() {
+        out.push('…');
+    }
+    format!("{out}:{local}")
 }
 
 /// `ty` as the XMP Specification writes value types: `Integer`, `GPSCoordinate`, `Lang Alt`,

@@ -507,7 +507,7 @@ fn mistyped(body: &str) -> Vec<String> {
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
     );
     let parsed = xmp::parse(&xmp).expect("parses");
-    xmp_types::mistyped(&parsed).into_keys().collect()
+    xmp_types::mistyped(&parsed).into_keys().map(|(name, _)| name).collect()
 }
 
 /// [`mistyped`] for the property `p` written as an element holding `v`.
@@ -1094,32 +1094,6 @@ fn xmp_extension_findings_say_where_they_are() {
     );
 }
 
-/// PDF/A-2 6.6.2.3.1: a mistyped property is reported with the type the XMP Specification gives it,
-/// as the specification writes it.
-#[test]
-fn xmp_mistyped_properties_name_their_type() {
-    let types = |body: &str| -> Vec<(String, String)> {
-        let xmp = format!(
-            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
-        );
-        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_iter().collect()
-    };
-    let t = |name: &str, ty: &str| (name.to_owned(), ty.to_owned());
-    assert_eq!(
-        types(r#"tiff:XResolution="0.5" exif:GPSLatitude="N" xmp:CreateDate="never">"#),
-        [t("exif:GPSLatitude", "GPSCoordinate"), t("tiff:XResolution", "Rational"), t("xmp:CreateDate", "Date"),]
-    );
-    assert_eq!(
-        types("><tiff:BitsPerSample>8</tiff:BitsPerSample><dc:title>T</dc:title>"),
-        [t("dc:title", "Lang Alt"), t("tiff:BitsPerSample", "seq Integer")]
-    );
-    assert_eq!(
-        types("><exif:Flash>fired</exif:Flash><xmpMM:History>h</xmpMM:History>"),
-        [t("exif:Flash", "Flash"), t("xmpMM:History", "seq ResourceEvent")]
-    );
-    assert_eq!(types("><xmpMM:Pantry>p</xmpMM:Pantry>"), [t("xmpMM:Pantry", "bag struct")]);
-}
-
 /// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas: a property is known by its
 /// namespace URI, whatever prefix the packet binds to it, and is named by the namespace's
 /// preferred prefix.
@@ -1150,6 +1124,90 @@ fn wordings_fill_their_holes_once() {
     assert_eq!(fill("{}", None, &[]), "{}");
     assert_eq!(fill("open { and é {a", Some("v"), &values), "open { and é {a");
     assert_eq!(fill("é{}ü", Some("v"), &[]), "évü");
+}
+
+/// PDF/A-2 6.6.2.3.1: a mistyped property is reported with the type the XMP Specification gives it,
+/// as the specification writes it.
+#[test]
+fn xmp_mistyped_properties_name_their_type() {
+    let types = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_iter().map(|((name, _), ty)| (name, ty)).collect()
+    };
+    let t = |name: &str, ty: &str| (name.to_owned(), ty.to_owned());
+    assert_eq!(
+        types(r#"crs:Contrast="high" crs:Exposure="bright" xmp:CreateDate="never">"#),
+        [t("crs:Contrast", "Integer"), t("crs:Exposure", "Real"), t("xmp:CreateDate", "Date")]
+    );
+    assert_eq!(
+        types("><xmpTPg:PlateNames>Cyan</xmpTPg:PlateNames><dc:title>T</dc:title>"),
+        [t("dc:title", "Lang Alt"), t("xmpTPg:PlateNames", "seq Text")]
+    );
+    assert_eq!(
+        types("><xmpTPg:MaxPageSize>A4</xmpTPg:MaxPageSize><xmpMM:History>h</xmpMM:History>"),
+        [t("xmpMM:History", "seq ResourceEvent"), t("xmpTPg:MaxPageSize", "Dimensions")]
+    );
+    assert_eq!(types("><xmpMM:Pantry>p</xmpMM:Pantry>"), [t("xmpMM:Pantry", "bag struct")]);
+    // The TIFF and EXIF types, as the 2005 edition writes them.
+    assert_eq!(types(r#"tiff:XResolution="0.5" exif:GPSLatitude="N">"#), [t("exif:GPSLatitude", "GPSCoordinate"), t("tiff:XResolution", "Rational")]);
+    assert_eq!(
+        types("><tiff:BitsPerSample>8</tiff:BitsPerSample><exif:Flash>fired</exif:Flash><exif:OECF>o</exif:OECF>"),
+        [t("exif:Flash", "Flash"), t("exif:OECF", "OECF/SFR"), t("tiff:BitsPerSample", "seq Integer")]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1: a property is known by its namespace URI, whatever prefix the packet binds
+/// to it, and is named by the namespace's preferred prefix and as the packet writes it. A property
+/// a predefined namespace doesn't define, and a namespace that isn't predefined, are left to the
+/// clauses about them.
+#[test]
+fn xmp_properties_are_known_by_namespace_uri_and_named_as_written() {
+    let crs = "http://ns.adobe.com/camera-raw-settings/1.0/";
+    let found = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_keys().collect()
+    };
+    let n = |name: &str, written: &str| (name.to_owned(), written.to_owned());
+    // Another prefix for the namespace, as an attribute and as an element, and no prefix at all.
+    assert_eq!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="high">"#)), [n("crs:Contrast", "c:Contrast")]);
+    assert_eq!(found(&format!(r#"><c:Exposure xmlns:c="{crs}">bright</c:Exposure>"#)), [n("crs:Exposure", "c:Exposure")]);
+    assert_eq!(found(&format!(r#"><Exposure xmlns="{crs}">bright</Exposure>"#)), [n("crs:Exposure", "Exposure")]);
+    assert!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="5">"#)).is_empty());
+    // The preferred prefix is written as it is.
+    assert_eq!(found(r#"crs:Contrast="high">"#), [n("crs:Contrast", "crs:Contrast")]);
+    // A long prefix is repeated only so far.
+    let long = "p".repeat(100);
+    let said = found(&format!(r#"xmlns:{long}="{crs}" {long}:Contrast="high">"#));
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].1, format!("{}…:Contrast", "p".repeat(64)));
+    // The preferred prefix bound to another namespace is not that namespace.
+    assert!(found(r#"><crs:Contrast xmlns:crs="http://example.com/not-crs/">high</crs:Contrast>"#).is_empty());
+    assert!(found(r#"xmlns:dc="http://example.com/not-dc/" dc:title="T">"#).is_empty());
+    // A property a predefined namespace doesn't define, with any value.
+    assert!(found(r#"crs:NotAProperty="high" dc:notAProperty="T">"#).is_empty());
+    assert!(found("><xmp:NotAProperty><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></xmp:NotAProperty>").is_empty());
+    // A namespace that isn't predefined, with a predefined property's local name.
+    assert!(found(r#"xmlns:ex="http://example.com/ns/" ex:Contrast="high">"#).is_empty());
+    assert!(found(r#"><ex:title xmlns:ex="http://example.com/ns/">T</ex:title>"#).is_empty());
+
+    // Through verify, the written name is said when it differs.
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" xmlns:c="{crs}" c:Contrast="high" crs:Exposure="bright"/></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").map(|i| i.message).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP property crs:Contrast in metadata stream 3 0 R, written c:Contrast, should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+        ]
+    );
 }
 
 /// PDF/A-2 6.6.2.3.1, the RDF/XML value forms XMP allows (ISO 16684-1 7.9.2.5): one `rdf:value`
