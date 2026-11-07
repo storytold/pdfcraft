@@ -351,6 +351,27 @@ fn a_survivor_behind_parameters_given_by_reference_is_found() {
 }
 
 #[test]
+fn a_unicode_map_behind_parameters_given_by_reference_is_read_alike() {
+    // The font's /ToUnicode (object 7) reads codes A..H as "SECRETVA", behind Flate and a PNG
+    // predictor whose `/DecodeParms` is object 8, a reference. The page draws the codes twice,
+    // once under the mark. Redaction takes the removed text from that map, and the proof the page
+    // text it allows for: read by one and not the other, the copy that stays counted as a
+    // survivor of a sound redaction.
+    let cmap = b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /Test def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n8 beginbfchar\n<41> <0053>\n<42> <0045>\n<43> <0043>\n<44> <0052>\n<45> <0045>\n<46> <0054>\n<47> <0056>\n<48> <0041>\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    let mut data = cmap.to_vec();
+    data.resize(data.len().next_multiple_of(4), b' ');
+    let rows: Vec<u8> = data.chunks(4).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let to_unicode = stream("/Filter /FlateDecode /DecodeParms 8 0 R", Stream::flate(Dict::new(), &rows).raw.as_ref());
+    let parms = b"<< /Predictor 12 /Columns 4 >>".to_vec();
+    let content = b"BT /F1 10 Tf 10 200 Td (ABCDEFGH) Tj ET BT /F1 10 Tf 10 100 Td (ABCDEFGH) Tj ET";
+    let mut doc = marked_content(content, Spec { extra: vec![to_unicode, parms], ..Spec::default() });
+    doc.update_dict(ObjRef::new(5, 0), |font| font.set(b"ToUnicode".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let (result, proof) = run(&mut doc);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
 fn a_survivor_in_an_unused_object_is_found() {
     // Object 7 is reachable from nothing: no catalog entry, no page resource. A reader that
     // only walks the document tree misses it; the sweep walks every object the
