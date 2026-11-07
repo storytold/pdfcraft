@@ -4687,4 +4687,26 @@ two"
     .unwrap();
     tree.apply(&DataOp::Value { path: path.clone(), text: "millet\nwheat".into() });
     assert_eq!(tree.value_at(&path).as_deref(), Some("millet\nwheat"));
+    // Emptied in memory, the group still takes picks, not text.
+    tree.apply(&DataOp::Value { path: path.clone(), text: String::new() });
+    assert_eq!((tree.count(&path, "value"), tree.value_at(&path).as_deref()), (0, Some("")));
+    tree.apply(&DataOp::Value { path: path.clone(), text: "rye\nmillet".into() });
+    assert_eq!((tree.count(&path, "value"), tree.text_at(&path)), (2, Some("")), "picks again, not text");
+    assert_eq!(tree.value_at(&path).as_deref(), Some("rye\nmillet"));
+    let tree_of = |data: &str| crate::script::data_of(&Document::open(Arc::new(crate::fixtures::static_shell(data))).unwrap()).unwrap();
+    // A group read emptied, as the packet writer marks it, takes picks the same way.
+    let mut tree = tree_of("<form1><page1><grains xfa:dataNode=\"dataGroup\"/></page1></form1>");
+    tree.apply(&DataOp::Value { path: path.clone(), text: "rye\nmillet".into() });
+    assert_eq!(tree.count(&path, "value"), 2);
+    // A node holding anything but `value` leaves is not a list's picks: it is left as it was,
+    // as the packet writer leaves it (and reports the skip).
+    for structured in [
+        "<form1><page1><grains><value>rye</value><note>x</note></grains></page1></form1>",
+        "<form1><page1><grains><value><b>rye</b></value></grains></page1></form1>",
+    ] {
+        let mut tree = tree_of(structured);
+        let before = tree.clone();
+        tree.apply(&DataOp::Value { path: path.clone(), text: "millet".into() });
+        assert_eq!(tree, before, "{structured}");
+    }
 }
