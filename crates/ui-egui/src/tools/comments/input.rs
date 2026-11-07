@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, point_handle, reaches_points, reshapable, reshaped,
-    resizable, resized, snapped_caret,
+    CARET_SIZE, HANDLE_HIT_RADIUS, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, point_handle, reaches_points, reshapable,
+    reshaped, resizable, resized, snapped_caret,
 };
 use super::paint::{closes_at, drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -97,7 +97,7 @@ pub(crate) fn moving_on(view: &DocView, page: usize) -> bool {
 /// draws. `None` with other tools, off the page, or with comments hidden. `on_link`: a link lies
 /// under `p` ([`crate::link_ui::hit`]).
 pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Option<Hit> {
-    if cx.hidden || !cx.xf.rect.contains(p) {
+    if cx.hidden {
         return None;
     }
     let pick: fn(&Annotation) -> bool = match cx.tool {
@@ -121,7 +121,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
         }
         if resizable(a)
-            && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
+            && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= HANDLE_HIT_RADIUS)
         {
             let icon = match (x, y) {
                 (0, _) => egui::CursorIcon::ResizeVertical,
@@ -131,6 +131,9 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
             };
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
         }
+    }
+    if !cx.xf.rect.contains(p) {
+        return None;
     }
     let a = cx.comment_at(p).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
@@ -282,7 +285,7 @@ fn select_input(
     }
     let cv = &mut view.comments;
     // (egui clears the press origin on release, so clicks are located by the pointer.)
-    let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
+    let on_page = pointer.is_some_and(|p| cx.xf.rect.expand(12.0).contains(p));
     if resp.clicked() && on_page {
         // A click elsewhere (a link beneath text highlighting included: it follows the link; a
         // form field; added text) leaves comments unselected.
