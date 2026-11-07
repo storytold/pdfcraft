@@ -27,6 +27,7 @@
           "rust-src"
           "rust-analyzer"
         ];
+        targets = [ "wasm32-unknown-unknown" ];
       };
       pdfcraftFor =
         p:
@@ -40,15 +41,15 @@
           };
         };
       runtimeLibs = with pkgs; [
-        wayland
-        libxkbcommon
-        vulkan-loader
-        libGL
         dbus
+        libGL
         libx11
         libxcursor
         libxi
+        libxkbcommon
         libxrandr
+        vulkan-loader
+        wayland
       ];
       launcher = pkgs.writeShellApplication {
         name = "x-craft";
@@ -72,11 +73,13 @@
 
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
-          launcher
-          rust
-          pkg-config
           cmake
+          launcher
+          pkg-config
+          rust
           rustPlatform.bindgenHook
+          cargo-deny
+          just
         ];
         buildInputs =
           with pkgs;
