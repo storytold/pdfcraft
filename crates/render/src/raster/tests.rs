@@ -5503,6 +5503,41 @@ fn a_font_whose_post_version_has_swapped_halves_is_still_used() {
     assert_eq!(alternate([0, 0, 0, 2]), alternate([0, 2, 0, 0]), "and also with swapped halves");
 }
 
+/// A page with no `/MediaBox`, its own or inherited, is US Letter (612 × 792 pt), as other
+/// readers draw it and as the page model and inspector already sized it; it was A4 (vendored
+/// hayro-syntax patch 44; ISO 32000-2 Table 31 makes the box required and gives no default;
+/// PDFBOX-4001). A `/MediaBox` without area falls back to the same size.
+#[test]
+fn a_page_without_a_media_box_is_letter() {
+    let page_pdf = |media: &str| {
+        format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R {media} /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let pdf = page_pdf(media);
+        let page = render_first_page(pdf.clone());
+        assert_eq!((page.width, page.height), (612, 792), "rendered size, {media:?}");
+        let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+        assert_eq!((info.pages[0].width, info.pages[0].height), (612.0, 792.0), "inspected size, {media:?}");
+    }
+    // The blue square sits at the bottom left of the Letter page, also when the box has no
+    // area: the page is placed and clipped by the same Letter region it is sized by.
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let page = render_first_page(page_pdf(media));
+        assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 792 - 30), [0, 0, 255], "{media:?}");
+    }
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]
@@ -7252,8 +7287,8 @@ fn raw_crop_unit_floor_preserves_nearly_zero_fallback() {
             let bytes = raw_crop_unit_pdf(unit, 0, [0.0, 0.0, side, side], None);
             let pdf = Pdf::new(Arc::new(bytes)).expect("existing degenerate-page fallback");
             let page = pdf.pages().first().expect("one page");
-            // Existing A4 raw fallback remains raw A4, then scales by the page unit.
-            let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+            // The raw fallback is US Letter (hayro-syntax patch 44), then scales by the page unit.
+            let expected = (612.0, 792.0);
             assert_eq!(page.base_dimensions(), expected, "unit={unit}, raw side={side}");
             assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
         }
