@@ -23,6 +23,8 @@ pub(crate) struct Hotbar {
     search: String,
     #[serde(skip)]
     picker_open: bool,
+    #[serde(skip)]
+    picker_drag_pos: Option<egui::Pos2>,
 }
 
 impl Default for Hotbar {
@@ -38,6 +40,7 @@ impl Default for Hotbar {
             placed: false,
             search: String::new(),
             picker_open: false,
+            picker_drag_pos: None,
         }
     }
 }
@@ -725,7 +728,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     } else {
         bar_rect.top().clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
     };
-    let picker_pos = egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y);
+    // Resizing the bar can move or flip its picker; hold the slider in place until release.
+    let picker_pos =
+        bar.picker_drag_pos.unwrap_or_else(|| egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y));
+    let mut sizing = false;
     let mut close_dialog = false;
     let picker_resp = egui::Window::new(tl!("Hotbar tools"))
         .id(picker_id)
@@ -767,7 +773,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 ui.label(egui::RichText::new(tl!("Toolbar size")).size(12.5).color(t.text));
                 let slider_width = (ui.available_width() - 55.0).clamp(50.0, 140.0);
                 ui.spacing_mut().slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
+                sizing = ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false)).is_pointer_button_down_on();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).size(12.0).color(t.text_muted));
                 });
@@ -860,6 +866,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     if close_dialog {
         picker_open = false;
     }
+    bar.picker_drag_pos = (picker_open && sizing).then_some(picker_pos);
     ctx.data_mut(|data| {
         data.insert_temp(id, shown.response.rect.size());
         data.insert_temp(egui::Id::unique("custom-hotbar"), shown.response.rect.size());
@@ -874,6 +881,76 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn picker_stays_put_while_resizing_hotbar() {
+        for (side, vertical, full_side) in [
+            ("top", false, false),
+            ("bottom", false, false),
+            ("float", false, false),
+            ("top", false, true),
+            ("bottom", false, true),
+            ("left", true, false),
+            ("right", true, false),
+            ("float", true, false),
+        ] {
+            let mut app = PdfCraftApp::new();
+            app.hotbar.place(side).unwrap();
+            app.hotbar.vertical = vertical;
+            app.hotbar.full_side = full_side;
+            app.hotbar.position = [0.5, 0.5];
+            app.hotbar.picker_open = true;
+            let mut fonts = false;
+            let mut h = Harness::builder().with_size(vec2(1000.0, 900.0)).with_accessibility_check(false).build_ui_state(
+                move |ui, app: &mut PdfCraftApp| {
+                    if !fonts {
+                        ui.ctx().set_fonts(theme::font_definitions());
+                        fonts = true;
+                    }
+                    show(app, ui.max_rect(), None, ui);
+                },
+                app,
+            );
+            h.run_steps(5);
+            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            let start = slider.left_center() + vec2(slider.width() * 0.2, 0.0);
+            let end = slider.right_center() - vec2(2.0, 0.0);
+            h.hover_at(start);
+            h.run_steps(1);
+            h.drag_at(start);
+            h.run_steps(1);
+            for step in 1..=8 {
+                h.hover_at(start + (end - start) * (step as f32 / 8.0));
+                h.run_steps(2);
+                assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{side}, strip={full_side}: picker moved during drag");
+            }
+            assert!(h.state().hotbar.button_size > 60.0, "{side}, strip={full_side}: slider did not reach the upper end");
+            h.drop_at(end);
+            h.run_steps(3);
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "release must unpin the picker");
+
+            if !vertical && !full_side {
+                let resized = h.get_by_role(egui::accesskit::Role::Slider).rect();
+                assert!(resized.left() < slider.left(), "{side}: picker should move to the left after release");
+                let start = resized.right_center() - vec2(2.0, 0.0);
+                let end = resized.left_center() + vec2(2.0, 0.0);
+                h.hover_at(start);
+                h.run_steps(1);
+                h.drag_at(start);
+                h.run_steps(1);
+                for step in 1..=8 {
+                    h.hover_at(start + (end - start) * (step as f32 / 8.0));
+                    h.run_steps(2);
+                    assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), resized, "{side}: picker moved during reverse drag");
+                }
+                assert!(h.state().hotbar.button_size < 28.0, "{side}: slider did not reach the lower end");
+                h.drop_at(end);
+                h.run_steps(3);
+                assert!(h.get_by_role(egui::accesskit::Role::Slider).rect().left() > resized.left(), "{side}: picker should return to the right");
+            }
+        }
+    }
 
     #[test]
     fn hotbar_validation_and_placement() {
