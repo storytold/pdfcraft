@@ -33,7 +33,7 @@ impl Default for Updates {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate_update),
             open: false,
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
@@ -53,7 +53,7 @@ impl PdfCraftApp {
     /// Replaces the network with `source` (tests).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_update_source(&mut self, source: UpdateSource) {
-        self.updates.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_source(source);
+        self.updates.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_source(source).with_translator(translate_update);
     }
 
     /// Help ▸ Check for updates: ask for the latest release and show the outcome.
@@ -105,7 +105,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
             app.updates.open = false;
         }
         if app.updates.open {
-            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"));
+            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate_update);
             match dialog.show(ctx, app.updates.updater.status()) {
                 CheckResultResponse::None => {}
                 CheckResultResponse::Close => {
@@ -118,4 +118,80 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (app, ctx);
+}
+
+/// Translates the shared update UI through PdfCraft's active interface catalog.
+///
+/// The update library's new labels have not all reached the shared Hebrew catalog yet. Prefer
+/// catalog entries, and use these Hebrew fallbacks only for missing update-specific entries. Once
+/// the shared catalog gains a row, it takes over without another code change.
+#[cfg(not(target_arch = "wasm32"))]
+fn translate_update(text: &str, args: &[(&str, &str)]) -> String {
+    translate_update_for(crate::i18n::current(), text, args)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn translate_update_for(lang: crate::i18n::Lang, text: &str, args: &[(&str, &str)]) -> String {
+    let catalog_text = crate::i18n::tr(lang, text);
+    let translated = if lang.code() == "he" && catalog_text == text {
+        hebrew_update_fallback(text).unwrap_or(catalog_text)
+    } else {
+        catalog_text
+    };
+    crate::i18n::fmt(translated, args)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hebrew_update_fallback(text: &str) -> Option<&'static str> {
+    Some(match text {
+        "v{from} to {to}" => "מגרסה {from} לגרסה {to}",
+        "by {developer}" => "מבית {developer}",
+        "{app} {version} is available with the latest features and bug fixes." => {
+            "גרסה {version} של {app} זמינה עם תכונות חדשות ותיקוני באגים."
+        }
+        "What's new" => "מה חדש",
+        "Update and Restart" => "עדכון והפעלה מחדש",
+        "Checking for updates…" => "בודק אם קיימים עדכונים…",
+        "{app} {version} is the newest version available." => "גרסה {version} של {app} היא העדכנית ביותר.",
+        "Could not check for updates." => "לא ניתן לבדוק אם קיימים עדכונים.",
+        "All releases are listed at {url}" => "רשימת כל הגרסאות זמינה בכתובת {url}",
+        "Downloading and installing update…" => "מוריד ומתקין את העדכון…",
+        "The update failed unexpectedly." => "העדכון נכשל באופן בלתי צפוי.",
+        "The update stopped unexpectedly." => "תהליך העדכון נעצר באופן בלתי צפוי.",
+        "The update is installed. Close {app} to finish; it restarts by itself." => {
+            "העדכון הותקן. סגור את {app} כדי להשלים את התהליך; התוכנה תופעל מחדש באופן אוטומטי."
+        }
+        "Save or close your open work first; the update restarts the app." => {
+            "יש לשמור את העבודה ולסגור מסמכים פתוחים לפני התקנת העדכון, שתפעיל מחדש את התוכנה."
+        }
+        "Cannot auto-update this installation type. Please download manually." => {
+            "לא ניתן לעדכן אוטומטית את סוג ההתקנה הזה. יש להוריד את העדכון באופן ידני."
+        }
+        "Couldn't start the update ({error})" => "לא ניתן להתחיל את העדכון ({error})",
+        _ => return None,
+    })
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod update_translation_tests {
+    use super::*;
+
+    #[test]
+    fn hebrew_update_fallbacks_translate_templates_and_preserve_values() {
+        let he = crate::i18n::Lang::from_code("he").unwrap_or(crate::i18n::Lang::EN);
+        assert_eq!(he.code(), "he");
+        assert_eq!(
+            translate_update_for(he, "{app} {version} is available with the latest features and bug fixes.", &[("app", "PdfCraft"), ("version", "0.19.0")]),
+            "גרסה 0.19.0 של PdfCraft זמינה עם תכונות חדשות ותיקוני באגים."
+        );
+        assert_eq!(translate_update_for(he, "What's new", &[]), "מה חדש");
+        assert_eq!(translate_update_for(he, "Update and Restart", &[]), "עדכון והפעלה מחדש");
+    }
+
+    #[test]
+    fn existing_catalog_translations_take_precedence_over_fallbacks() {
+        let he = crate::i18n::Lang::from_code("he").unwrap_or(crate::i18n::Lang::EN);
+        assert_eq!(translate_update_for(he, "Update", &[]), "עדכון");
+        assert_eq!(translate_update_for(he, "Later", &[]), "מאוחר יותר");
+    }
 }

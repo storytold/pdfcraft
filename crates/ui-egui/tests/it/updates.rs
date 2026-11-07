@@ -23,9 +23,13 @@ fn source(answer: Result<Option<&str>, &str>) -> UpdateSource {
 }
 
 fn harness(answer: Result<Option<&str>, &str>) -> Harness<'static, PdfCraftApp> {
+    harness_in_language(answer, "en")
+}
+
+fn harness_in_language(answer: Result<Option<&str>, &str>, language: &'static str) -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        app.set_option("language", language).unwrap();
         app.set_update_source(source(answer));
         app
     })
@@ -38,7 +42,9 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         h.run_steps(2);
-        if h.query_by_label_contains("Checking for updates").is_none() {
+        if h.query_by_label_contains("Checking for updates").is_none()
+            && h.query_by_label_contains("בודק אם קיימים עדכונים").is_none()
+        {
             break;
         }
         assert!(std::time::Instant::now() < deadline, "timed out waiting for the update check");
@@ -205,4 +211,33 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
     h.get_by_label("LATER").click();
     h.run_steps(3);
     assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
+}
+
+#[test]
+fn the_update_prompt_and_manual_check_follow_the_hebrew_interface_language() {
+    let mut startup = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "he").unwrap();
+        app.set_update_source(source(Ok(Some("v99.0.0"))));
+        app.set_startup_update_check(true);
+        app
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while startup.query_by_label_contains("גרסה 99.0.0 של PdfCraft זמינה").is_none() {
+        startup.run_steps(2);
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the Hebrew startup update prompt");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    startup.get_by_label("מה חדש");
+    startup.get_by_label("הורדה");
+    startup.get_by_label("מאוחר יותר");
+    startup.get_by_label("מאוחר יותר").click();
+    startup.run_steps(3);
+    assert!(startup.query_by_label_contains("גרסה 99.0.0 של PdfCraft זמינה").is_none());
+
+    let mut manual = harness_in_language(Ok(None), "he");
+    manual.state_mut().execute("help.check_updates");
+    settle(&mut manual);
+    manual.get_by_label_contains("היא העדכנית ביותר");
+    manual.get_by_label("אישור");
 }
