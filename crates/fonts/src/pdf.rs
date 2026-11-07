@@ -806,13 +806,19 @@ impl Metrics {
                     m.scale = a;
                     // The glyphs' own boxes first: a bitmap font's `/FontBBox` is often all zero
                     // or one unit high, while each `d1` declares the box its glyph fills.
-                    let bbox = type3_glyph_box(doc, font).or_else(|| {
+                    // Each `d1` box "shall be correct" (Table 111), so their union is used as
+                    // declared, only widened to reach the baseline: a font of small glyphs gets a
+                    // small box. A `/FontBBox` is often one unit high, so it keeps the 0.5 / 0.1 em
+                    // minimum.
+                    let declared = type3_glyph_box(doc, font).map(|r| (r, 0.0, 0.0)).or_else(|| {
                         // All zero: no assumption about glyph sizes (Table 110).
-                        <[f64; 4]>::try_from(nums(doc, font.get(b"FontBBox"))).ok().filter(|r| r.iter().any(|&v| v != 0.0))
+                        <[f64; 4]>::try_from(nums(doc, font.get(b"FontBBox"))).ok().filter(|r| r.iter().any(|&v| v != 0.0)).map(|r| (r, 0.5, -0.1))
                     });
-                    if let Some((lo, hi)) = bbox.and_then(|r| text_y_extent(r, b, d, f)) {
-                        m.ascent = hi.max(0.5);
-                        m.descent = lo.min(-0.1);
+                    if let Some(((lo, hi), min_ascent, max_descent)) =
+                        declared.and_then(|(r, up, down)| text_y_extent(r, b, d, f).map(|e| (e, up, down)))
+                    {
+                        m.ascent = hi.max(min_ascent);
+                        m.descent = lo.min(max_descent);
                     }
                 }
             } else if m.widths.is_empty() {

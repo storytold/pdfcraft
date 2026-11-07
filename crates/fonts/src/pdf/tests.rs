@@ -267,9 +267,21 @@ fn a_type3_font_is_as_high_as_its_d1_glyph_boxes() {
     let unit = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     let f = type3(&mut doc, unit, [0, 0, 0, 0], &["100 0 0 0 100 100 d1\nq 100 0 0 100 0 0 cm BI /W 1 /H 1 /IM true ID \x00 EI Q"]);
     let m = Metrics::from_dict(&doc, &f);
-    assert_eq!((m.ascent, m.descent), (100.0, -0.1));
+    assert_eq!((m.ascent, m.descent), (100.0, 0.0));
     // Shown at `0.12 Tf`, the glyph is 12 points high.
     assert!((m.ascent * 0.12 - 12.0).abs() < 1e-9);
+
+    // Small glyphs keep their small box: no 0.5 em / 0.1 em minimum, which made a 58-point line
+    // of 0.15 em glyphs 35 points high. The shape of a scanned-text bitmap font: matrix 0.0042,
+    // `/FontBBox` all zero, `d1` boxes from -8 to 28 units.
+    let small = [0.0042, 0.0, 0.0, 0.0042, 0.0, 0.0];
+    let f = type3(&mut doc, small, [0, 0, 0, 0], &["13 0 2 19 9 33 d1", "26 0 2 -8 24 28 d1", "13 0 0 0 1 1 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && (m.descent + 8.0 * 0.0042).abs() < 1e-12, "{} {}", m.ascent, m.descent);
+    // Glyphs that all sit above the baseline still reach down to it.
+    let f = type3(&mut doc, small, [0, 0, 0, 0], &["13 0 2 19 9 33 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && m.descent == 0.0, "{} {}", m.ascent, m.descent);
 
     // The union of every glyph's box, leading comments and white space allowed; `d0` glyphs
     // declare none, and a non-numeric operand isn't a box.
