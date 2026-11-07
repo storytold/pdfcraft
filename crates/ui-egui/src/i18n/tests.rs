@@ -380,7 +380,13 @@ fn signature_appearance_labels_keep_their_separator() {
         for (field, label) in english.fields() {
             let said = tr(lang, label);
             if field != "signed_by" && !lang.rtl() {
-                assert!(said.ends_with(' ') || said.ends_with('：'), "{}: the {field} label runs into its value: {said:?}", lang.code());
+                // A non-breaking space also separates the value; catalogs use it to retain
+                // a trailing separator without a trailing ASCII blank in the TSV file.
+                assert!(
+                    said.ends_with(' ') || said.ends_with('\u{a0}') || said.ends_with('：'),
+                    "{}: the {field} label runs into its value: {said:?}",
+                    lang.code()
+                );
             }
         }
     }

@@ -245,7 +245,19 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
-    let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
+    // Translated actions can need separate rows. Reserve those rows so wrapping the footer
+    // does not push its destructive-action controls below the panel.
+    let footer_height = if footer {
+        let actions_width = [tl!("Redact all"), tl!("Clear all")]
+            .iter()
+            .map(|label| crate::bidi::layout_ui(ui, (*label).to_owned(), theme::medium(12.5), t.text).size().x + 26.0)
+            .sum::<f32>()
+            + ui.spacing().item_spacing.x;
+        redaction_footer_height(actions_width, ui.available_width()) + if marks > 0 { 24.0 } else { 0.0 }
+    } else {
+        0.0
+    };
+    let list_h = if footer { (ui.available_height() - footer_height).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
         clear_of_scrollbar(ui);
         ui.add_space(2.0);
@@ -301,7 +313,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     });
     if footer {
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        ui.vertical(|ui| {
             if marks > 0 {
                 ui.label(
                     egui::RichText::new(if marks == 1 {
@@ -312,17 +324,74 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     .color(t.text_muted),
                 );
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {
-                    run = Some("redact.apply");
-                }
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked() {
-                    run = Some("redact.clear");
-                }
-            });
+            let [apply, clear] = redaction_actions(ui, marks > 0, tl!("Redact all"), tl!("Clear all"));
+            if apply.clicked() {
+                run = Some("redact.apply");
+            }
+            if clear.clicked() {
+                run = Some("redact.clear");
+            }
         });
     }
     if let Some(cmd) = run {
         app.run_command(cmd);
+    }
+}
+
+/// Space for the redaction footer, including a second row when translated actions do not fit.
+fn redaction_footer_height(required_width: f32, available_width: f32) -> f32 {
+    if required_width > available_width { 84.0 } else { 52.0 }
+}
+
+/// Keep both actions inside the panel when their translated labels need another row.
+fn redaction_actions(ui: &mut egui::Ui, enabled: bool, apply: &str, clear: &str) -> [egui::Response; 2] {
+    let width = [apply, clear]
+        .iter()
+        .map(|label| crate::bidi::layout_ui(ui, (*label).to_owned(), theme::medium(12.5), Tokens::get(ui.ctx()).text).size().x + 26.0)
+        .sum::<f32>()
+        + ui.spacing().item_spacing.x;
+    // Child scopes cannot predict their width for automatic wrapping; select rows explicitly.
+    let layout =
+        if width > ui.available_width() { egui::Layout::top_down(egui::Align::Max) } else { egui::Layout::right_to_left(egui::Align::Center) };
+    ui.with_layout(layout, |ui| {
+        [
+            ui.add_enabled_ui(enabled, |ui| widgets::pill_button(ui, apply, true)).inner,
+            ui.add_enabled_ui(enabled, |ui| widgets::pill_button(ui, clear, false)).inner,
+        ]
+    })
+    .inner
+}
+
+#[cfg(test)]
+mod footer_tests {
+    /// Real button rectangles stay within the narrow panel for long translations and a count.
+    #[test]
+    fn translated_redaction_footer_reserves_wrapped_row() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        for count in [false, true] {
+            let mut checked = false;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(244.0);
+                let bounds = ui.max_rect();
+                let start = ui.cursor().top();
+                ui.vertical(|ui| {
+                    if count {
+                        ui.label("12 marks");
+                    }
+                    let buttons = super::redaction_actions(ui, true, "Apply every marked redaction", "Clear all marks");
+                    for button in &buttons {
+                        assert!(button.rect.left() >= bounds.left(), "{:?}", button.rect);
+                        assert!(button.rect.right() <= bounds.right(), "{:?}", button.rect);
+                    }
+                    assert!(buttons[1].rect.top() > buttons[0].rect.top(), "long actions must wrap");
+                    assert!(buttons[1].rect.bottom() - start <= super::redaction_footer_height(350.0, 244.0) + if count { 24.0 } else { 0.0 });
+                    checked = true;
+                });
+            });
+            // No GPU consumes texture uploads in this geometry-only test.
+            output.textures_delta.clear();
+            assert!(checked);
+        }
     }
 }
