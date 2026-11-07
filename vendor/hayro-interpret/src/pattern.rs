@@ -376,5 +376,10 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
 
     fn pop_transparency_group(&mut self) {}
 
-    fn set_blend_mode(&mut self, _: BlendMode) {}
+    /// PdfCraft patch (96): an uncoloured pattern may set transparency parameters (ISO 32000-2
+    /// §11.6.7: its restriction is on colours alone), and its blend modes blend its stencil
+    /// shapes, painted in the pattern's colour, like a coloured pattern's.
+    fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        self.inner.set_blend_mode(blend_mode);
+    }
 }
