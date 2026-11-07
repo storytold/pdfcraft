@@ -1,5 +1,11 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #6236: list the completed Edit highlight/context and draft-selection fixes under Done since rather than Missing; estimates unchanged)
+
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M5 #6236 review: releasing image-only keyboard bookkeeping preserves live text drafts and their text selections, in both comment-context and leave-Edit paths; estimates unchanged)
+
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M5 #6236: Edit right-clicks honor the highlight above an image, exposing its Properties/Delete without moving artwork; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -229,6 +235,12 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-06 (M5, #6236):** Correct the milestone table so the completed Edit context-menu routing and live-draft image-selection cleanup appear under Done since, before the remaining gaps. Existing feature/review log entries are retained; behavior and estimates unchanged.
+
+- **2026-11-05 (M5, #6236 review):** Image selection cleanup checks the selected item's Image type even while a text draft is open. Right-clicking a comment then committing that draft cannot leave a hidden image target for Delete. The shared leave-Edit caller also clears image bookkeeping while preserving the draft, its source text and a draft's own Text-typed selection. Two real-event regressions cover typed content retention and both callers; the comment case verifies the image survives Delete. Estimates unchanged.
+
+- **2026-11-05 (M5, #6236):** In Edit text and images, a right-click on a highlight over artwork follows the page router's highest context Hit. Its Properties and Delete are accessible without moving the image; comments above editable paragraphs also win their context clicks; lower text/image handlers leave the same right-click alone and stale image keyboard selections are released. Real-event kittests cover unselected/selected original images, a selected added image, Properties author editing, menu/keyboard deletion and save/reopen with image boxes retained. Select-tool primary selection and Edit's primary image selection under a highlight are controls; the proposed context precedence revises f0caaf92 / #5803. Crop and active-primary-drag routing remain explicit exceptions. Estimates unchanged.
 
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.

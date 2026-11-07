@@ -568,10 +568,8 @@ pub(crate) fn sync_image_selection(view: &mut DocView, page: usize, images: &[pd
 }
 
 /// Leaving the image controller cannot leave a hidden added image owning keyboard actions.
+/// Only image bookkeeping is cleared: an open text draft and its own text selection are independent.
 pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
-    if view.content.draft.is_some() {
-        return;
-    }
     let image_selected = view.content.selected.is_some_and(|(page, index)| {
         added.iter().filter(|item| item.page == page).nth(index).is_some_and(|item| matches!(item.content, AddedContent::Image(_)))
     });
