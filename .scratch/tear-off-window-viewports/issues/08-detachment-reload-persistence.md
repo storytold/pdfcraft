@@ -5,7 +5,7 @@ When a detached document is reloaded or replaced from disk (for example, after b
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] In `crates/ui-egui/src/canvas.rs::DocView::document_replaced`, copy `fresh.detached = self.detached`.
-- [ ] Add an integration test in `crates/ui-egui/tests/it/ui.rs` verifying that calling `document_replaced` on a detached view keeps `detached == true` and does not disturb `self.active`.
+- [x] In `crates/ui-egui/src/canvas.rs::DocView::document_replaced`, copy `fresh.detached = self.detached`.
+- [x] Add an integration test in `crates/ui-egui/tests/it/ui.rs` verifying that calling `document_replaced` on a detached view keeps `detached == true` and does not disturb `self.active`.

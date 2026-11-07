@@ -2320,6 +2320,43 @@ fn reopening_detached_file_reattaches_tab_and_commit_typing_preserves_active_inv
     assert_eq!(h.state().active, Some(1), "open_path must make re-attached tab active");
 }
 
+#[test]
+fn detached_tab_preserves_detachment_on_document_replacement() {
+    let mut h = harness(|app| {
+        app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let detached_id = ids[1];
+
+    // Detach second tab (index 1)
+    h.state_mut().detach_tab(detached_id);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "second.pdf tab should be detached");
+    let active_before = h.state().active;
+    assert_ne!(active_before, Some(1), "active tab must not be detached tab");
+    assert_eq!(active_before, Some(0), "active tab should be the docked tab (first.pdf)");
+
+    // Retrieve DocInfo for the detached document
+    let info = h.state().session.get(detached_id).unwrap().info.clone();
+
+    // Call document_replaced on the detached view
+    h.state_mut().views[1].document_replaced(&info);
+    h.run_steps(3);
+
+    // Verify detachment is preserved and active tab remains undisturbed
+    assert!(
+        h.state().views[1].detached,
+        "document_replaced must preserve detachment state"
+    );
+    assert_eq!(
+        h.state().active,
+        active_before,
+        "active tab index must remain unchanged"
+    );
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
