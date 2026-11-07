@@ -333,6 +333,24 @@ fn a_survivor_in_an_xfa_packet_is_found() {
 }
 
 #[test]
+fn a_survivor_behind_parameters_given_by_reference_is_found() {
+    // Object 7 holds the text behind Flate and a PNG predictor whose `/DecodeParms` is object 8,
+    // a reference. Read without them, its rows keep their tag bytes, which split the text; the
+    // sweep reads them as redaction does, and reports the copy.
+    let text = format!("note: {SECRET} xx");
+    let rows: Vec<u8> = text.as_bytes().chunks(4).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let packed = stream("/Filter /FlateDecode /DecodeParms 8 0 R", Stream::flate(Dict::new(), &rows).raw.as_ref());
+    let parms = b"<< /Predictor 12 /Columns 4 >>".to_vec();
+    let doc = marked(Spec { extra: vec![packed, parms], ..Spec::default() });
+    let snap = Snapshot::capture(&doc, None).unwrap();
+    let proof = snap.prove_saved(doc.bytes(), None, &ProofOptions::default());
+    let s = surface(&proof, Surface::DecodedStreams);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert!(s.locations.iter().any(|l| l == "object 7 (decoded)"), "{:?}", s.locations);
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
 fn a_survivor_in_an_unused_object_is_found() {
     // Object 7 is reachable from nothing: no catalog entry, no page resource. A reader that
     // only walks the document tree misses it; the sweep walks every object the
