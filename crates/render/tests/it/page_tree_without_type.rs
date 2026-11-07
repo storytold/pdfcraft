@@ -9,8 +9,9 @@ use std::sync::Arc;
 const WORDS: [&str; 5] = ["ONE", "TWO", "THREE", "FOUR", "FIVE"];
 
 /// Root (typed) → [node 3, page FIVE]; node 3 (no `/Type`, `/MediaBox` 300 × 200) → [node 4,
-/// page FOUR (no `/Type` either, and `/Kids null`)]; node 4 (no `/Type`) → [ONE, TWO (`/Type /Page` and an empty
-/// `/Kids`), THREE]. Page FIVE has its own 400 × 400 box and a text annotation.
+/// page FOUR (no `/Type` either, and `/Kids null`)]; node 4 (no `/Type`, its `/Kids` reached
+/// through two references) → [ONE, TWO (an indirect `/Type /Page` and an empty `/Kids`), THREE].
+/// Page FIVE has its own 400 × 400 box and a text annotation.
 fn pdf() -> Arc<Vec<u8>> {
     let font = "<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>";
     let page = |typed: bool, parent: u32, content: u32, extra: &str| {
@@ -21,12 +22,12 @@ fn pdf() -> Arc<Vec<u8>> {
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R 10 0 R] /Count 5 /MediaBox [0 0 612 792] >>".to_vec(),
         b"<< /Parent 2 0 R /Kids [4 0 R 9 0 R] /Count 4 /MediaBox [0 0 300 200] >>".to_vec(),
-        b"<< /Parent 3 0 R /Kids [6 0 R 7 0 R 8 0 R] /Count 3 >>".to_vec(),
+        b"<< /Parent 3 0 R /Kids 16 0 R /Count 3 >>".to_vec(),
         // 5: unused, keeps the numbering below readable.
         b"null".to_vec(),
         page(true, 4, 11, ""),
-        // A `/Type /Page` with a stray `/Kids` is still a page.
-        page(true, 4, 12, "/Kids [] "),
+        // A `/Type /Page`, given by reference, with a stray `/Kids` is still a page.
+        page(false, 4, 12, "/Type 18 0 R /Kids [] "),
         page(true, 4, 13, ""),
         // No /Type and a null /Kids (the same as no /Kids, ISO 32000-2 §7.3.9): still a page.
         page(false, 3, 14, "/Kids null "),
@@ -35,6 +36,8 @@ fn pdf() -> Arc<Vec<u8>> {
     for word in WORDS {
         objects.push(stream(format!("BT /F1 24 Tf 20 100 Td ({word}) Tj ET").as_bytes()));
     }
+    // 16 → 17 → node 4's kids; 18: the name page TWO's /Type refers to.
+    objects.extend([b"17 0 R".to_vec(), b"[6 0 R 7 0 R 8 0 R]".to_vec(), b"/Page".to_vec()]);
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, object) in objects.iter().enumerate() {
