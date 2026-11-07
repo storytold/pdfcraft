@@ -125,23 +125,59 @@ fn fast_rectangles_past_the_coverage_are_left_out() {
 fn layer_clips_past_the_coverage_are_left_out() {
     // hayro pushes no clipped layers (its clips go through `push_clip_path`), so the layer clip
     // is driven through the vello_cpu context directly, with clips as the scene's only coverage.
-    use hayro::vello_cpu::kurbo::{Circle, Shape};
+    use hayro::vello_cpu::color::palette::css::RED;
+    use hayro::vello_cpu::kurbo::{Circle, Rect, Shape};
     use hayro::vello_cpu::{Pixmap, RenderContext, Resources};
 
+    let clip = Circle::new((50.0, 50.0), 40.0).to_path(0.1);
     let mut ctx = RenderContext::new(100, 100);
     // Room while fewer than 30,000 - 2 x 100 x 100 = 10,000 values are stored.
     ctx.set_max_coverage(30_000);
-    let clip = Circle::new((50.0, 50.0), 40.0).to_path(0.1);
+    assert!(!ctx.coverage_full(), "an empty scene has room");
+
+    // Below the limit the clip is kept: a fill inside it shows within the circle only.
+    ctx.push_clip_layer(&clip);
+    assert!(!ctx.coverage_full(), "the first clip fits");
+    ctx.set_paint(RED);
+    ctx.fill_rect(&Rect::new(0.0, 0.0, 100.0, 100.0));
+    ctx.pop_layer();
+    assert!(!ctx.coverage_full(), "the fill inside it fits too");
+    let mut pixmap = Pixmap::new(100, 100);
+    ctx.flush();
+    ctx.render_to_pixmap(&mut Resources::new(), &mut pixmap);
+    let px = |x: usize, y: usize| pixmap.data_as_u8_slice().get((y * 100 + x) * 4..(y * 100 + x) * 4 + 4).map(<[u8]>::to_vec);
+    assert_eq!(px(50, 50), Some(vec![255, 0, 0, 255]), "inside the clip");
+    assert_eq!(px(2, 2), Some(vec![0, 0, 0, 0]), "outside the clip");
+
+    ctx.reset();
     for _ in 0..1_000 {
         ctx.push_clip_layer(&clip);
         ctx.pop_layer();
     }
     assert!(ctx.coverage_full(), "the clips past the limit were left out, and that is said");
     // The scene still rasterizes: the layers left unclipped have nothing drawn into them.
-    let mut pixmap = Pixmap::new(100, 100);
     ctx.flush();
     ctx.render_to_pixmap(&mut Resources::new(), &mut pixmap);
 
     ctx.reset();
     assert!(!ctx.coverage_full(), "a reset scene starts with room");
+}
+
+/// Past the limit the clip itself is refused, not only what is drawn into its layer: with room
+/// for exactly one path, a fill takes it and the clip pushed next is what finds the scene full.
+#[test]
+fn a_layer_clip_past_the_coverage_is_itself_left_out() {
+    use hayro::vello_cpu::RenderContext;
+    use hayro::vello_cpu::color::palette::css::RED;
+    use hayro::vello_cpu::kurbo::{Circle, Rect, Shape};
+
+    let mut ctx = RenderContext::new(100, 100);
+    // Room while fewer than 20,001 - 2 x 100 x 100 = 1 value is stored: for one path.
+    ctx.set_max_coverage(20_001);
+    ctx.set_paint(RED);
+    ctx.fill_path(&Rect::new(10.5, 10.5, 30.5, 30.5).to_path(0.1));
+    assert!(!ctx.coverage_full(), "the fill fits");
+    ctx.push_clip_layer(&Circle::new((50.0, 50.0), 40.0).to_path(0.1));
+    assert!(ctx.coverage_full(), "the clip, past the limit, is left out and that is said");
+    ctx.pop_layer();
 }
