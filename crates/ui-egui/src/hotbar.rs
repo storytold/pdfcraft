@@ -112,7 +112,7 @@ impl Hotbar {
 fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) -> bool {
     let settings = ui
         .push_id("hotbar-settings", |ui| {
-            icons::button(ui, "settings", cell, false, tl!("Hotbar settings")).on_hover_text(tl!("Hotbar settings / add tools"))
+            icons::labeled_button(ui, "settings", cell, false, tl!("Hotbar settings"), tl!("Hotbar settings / add tools"))
         })
         .inner;
     if settings.clicked() {
