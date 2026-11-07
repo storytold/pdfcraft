@@ -9080,6 +9080,126 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
     assert_eq!((page.width, page.height), (200, 100));
 }
 
+/// A one-page file: a 200 x 100 page, its offsets right.
+fn one_page_file() -> Vec<u8> {
+    one_page_file_with(false)
+}
+
+/// The same, and with `stale` a 999 x 999 copy of the page after it that the table does not
+/// name: a file read through its table shows 200 x 100, one rebuilt from object headers 999 x 999.
+fn one_page_file_with(stale: bool) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >>"]
+    {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    if stale {
+        out.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 999 999] >>\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// `base` with an incremental update appended: a new 300 x 150 first page whose content stream is
+/// `padding` bytes long, and the page tree redefined to hold both pages. With `footer` the update
+/// ends in its trailer, `startxref` and `%%EOF`; without, it stops after its cross-reference rows,
+/// as a save cut short does.
+fn with_update(base: &[u8], padding: usize, footer: bool) -> Vec<u8> {
+    let prev = base
+        .windows(9)
+        .rposition(|w| w == b"startxref")
+        .map(|p| String::from_utf8_lossy(&base[p + 9..]).split_whitespace().next().unwrap_or("").to_string())
+        .unwrap();
+    let mut out = base.to_vec();
+    let mut offsets = vec![(4, out.len())];
+    out.extend_from_slice(b"4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Contents 5 0 R >>\nendobj\n");
+    offsets.push((5, out.len()));
+    out.extend_from_slice(format!("5 0 obj\n<< /Length {padding} >>\nstream\n").as_bytes());
+    out.extend(std::iter::repeat_n(b' ', padding));
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    offsets.push((2, out.len()));
+    out.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [4 0 R 3 0 R] /Count 2 >>\nendobj\n");
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
+    for (num, o) in offsets {
+        out.extend_from_slice(format!("{num} 1\n{o:010} 00000 n \n").as_bytes());
+    }
+    if footer {
+        out.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    }
+    out
+}
+
+/// What the renderer shows of `file` (page count and the first page's size) and what the
+/// document model reads (the page tree's /Count), for comparing the two.
+fn renderer_and_model_pages(file: Vec<u8>) -> ((usize, (u32, u32)), i64) {
+    let bytes = Arc::new(file);
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig::default());
+    let count = r.page_count();
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let model = pages.as_dict().and_then(|d| d.int(b"Count")).unwrap();
+    ((count, (page.width, page.height)), model)
+}
+
+/// PDFBOX-3934, PDFBOX-3787: the last incremental update was cut off after its cross-reference
+/// rows, with no trailer, `startxref` or `%%EOF`, so the last `startxref` in the file is the
+/// older revision's, more than the footer window (4 KiB) from the end, and objects follow it.
+/// The update's objects are the latest revision (ISO 32000-2 §7.5.6); the document model rebuilds
+/// the file from object headers and reads them. The renderer read the older table the last
+/// `startxref` names instead and showed one page where the model has two. It now rebuilds too.
+#[test]
+fn an_update_cut_off_before_its_trailer_shows_its_pages_as_the_model_reads_them() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 5000, false));
+    assert_eq!(model, 2, "the model reads the update");
+    assert_eq!(count, 2, "the renderer shows the update's page tree");
+    assert_eq!(size, (300, 150), "and its new first page");
+}
+
+/// The same update with its footer, and a file with data after `%%EOF` that holds no object (a
+/// web page glued to a served file), are read through their tables as before: the second has a
+/// stale copy of its page that only a rebuild would show. A
+/// cut-off update that ends within the footer window leaves the older `startxref` near the end,
+/// which the model reads too: both keep the older revision there.
+#[test]
+fn complete_updates_trailing_data_and_short_cut_off_updates_read_as_before() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 5000, true));
+    assert_eq!((count, size, model), (2, (300, 150), 2), "a complete update");
+
+    let mut junk = one_page_file_with(true);
+    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj</p>");
+    junk.extend(std::iter::repeat_n(b' ', 5000));
+    junk.extend_from_slice(b"</html>\n");
+    let ((count, size), _) = renderer_and_model_pages(junk);
+    assert_eq!((count, size), (1, (200, 100)), "trailing data without objects");
+
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 100, false));
+    assert_eq!((count, size, model), (1, (200, 100), 1), "a short cut-off update");
+}
+/// A file cut short in the middle of its last update, whose new page tree names a page that is
+/// not there: the rebuilt table finds no page, so the older table is read and the file still
+/// opens with the page it had, rather than not at all.
+#[test]
+fn an_update_cut_off_before_its_new_pages_keeps_the_older_table() {
+    let file = String::from_utf8(with_update(&one_page_file(), 5000, false)).unwrap().replace("4 0 obj", "9 0 obj").into_bytes();
+    let mut r = PageRenderer::new(Arc::new(file), RenderConfig::default());
+    assert_eq!(r.page_count(), 1);
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 100));
+}
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]

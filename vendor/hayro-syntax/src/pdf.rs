@@ -6,7 +6,7 @@ use crate::page::Pages;
 use crate::page::cached::CachedPages;
 use crate::reader::Reader;
 use crate::sync::Arc;
-use crate::xref::{XRef, XRefError, fallback, root_xref};
+use crate::xref::{XRef, XRefError, cut_off_update_follows, fallback, root_xref};
 
 pub use crate::crypto::DecryptionError;
 use crate::metadata::Metadata;
@@ -47,6 +47,26 @@ impl Pdf {
         let data = data.into();
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
+        // PdfCraft patch: (hayro-syntax (43)) a last update cut off before its trailer is read by
+        // rebuilding the table from object headers, the latest definition of each object
+        // winning, as the document model reads such a file. Only when that finds no page is the
+        // older table the last `startxref` names read instead (a file cut short in the middle of
+        // the update, whose new page tree names pages that are not there).
+        if cut_off_update_follows(data.as_ref())
+            && let Some(xref) = fallback(data.clone(), password)
+        {
+            let xref = Arc::new(xref);
+            if let Some(pages) = CachedPages::new(xref.clone())
+                && !pages.get().is_empty()
+            {
+                return Ok(Self {
+                    xref,
+                    header_version: version,
+                    pages,
+                    data,
+                });
+            }
+        }
         let xref = match root_xref(data.clone(), password) {
             Ok(x) => x,
             Err(e) => match e {
