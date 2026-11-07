@@ -11586,5 +11586,8 @@ fn pdfa_verify_rejects_document_without_editor() {
     std::fs::write(dir.join("junk.pdf"), junk).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "junk.pdf" }))["doc"].as_u64().unwrap();
-    assert!(a.call("pdfa_verify", &json!({ "doc": doc })).is_err(), "pdfa_verify must reject a document without an editor instead of reporting it compliant");
+    assert!(
+        a.call("pdfa_verify", &json!({ "doc": doc })).is_err(),
+        "pdfa_verify must reject a document without an editor instead of reporting it compliant"
+    );
 }
