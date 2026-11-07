@@ -59,6 +59,20 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
+        if cx.allowed
+            && cx.tool == QuickTool::Select
+            && !a.locked
+            && let Some(mut r) = cx.caption_rect(a)
+        {
+            match (&cv.gesture, pointer, &view.pending_edit) {
+                (Some(Gesture::Caption { page: p, index: i, from }), Some(at), _) if (*p, *i) == (page, index) => r = r.translate(at - *from),
+                (_, _, Some(Edit::MoveMeasurementCaption { page: p, index: i, dx, dy })) if (*p, *i) == (page, index) => {
+                    r = r.translate(cx.to_screen([*dx, *dy]) - cx.to_screen([0.0, 0.0]));
+                }
+                _ => {}
+            }
+            painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+        }
         if cx.allowed && reaches_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }

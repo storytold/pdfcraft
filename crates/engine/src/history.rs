@@ -64,6 +64,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::LockAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
+        | Edit::MoveMeasurementCaption { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
         | Edit::ResizeAnnotation { .. }

@@ -85,7 +85,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
 /// A comment (a Fill & Sign mark included) is being moved, resized or reshaped on `page`: it keeps
 /// the page's frames until its gesture ends.
 pub(crate) fn moving_on(view: &DocView, page: usize) -> bool {
-    matches!(view.comments.gesture, Some(Gesture::Move { page: p, .. } | Gesture::Resize { page: p, .. } | Gesture::Reshape { page: p, .. }) if p == page)
+    matches!(view.comments.gesture, Some(Gesture::Caption { page: p, .. } | Gesture::Move { page: p, .. } | Gesture::Resize { page: p, .. } | Gesture::Reshape { page: p, .. }) if p == page)
 }
 
 /// What of the comments lies under `p`, for the cursor, the tip and the press: the one hit test
@@ -119,6 +119,9 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
             && let Some(point) = point_handle(cx, a, p)
         {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
+        }
+        if cx.tool == QuickTool::Select && !a.locked && cx.caption_rect(a).is_some_and(|r| r.expand(3.0).contains(p)) {
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Caption }, Layer::Handle, egui::CursorIcon::Move));
         }
         if resizable(a)
             && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
@@ -231,6 +234,12 @@ fn select_input(
         && let (Some((a, part)), Some(o)) = (owner, origin)
     {
         match part {
+            CommentPart::Caption => {
+                if cx.allowed && !a.locked {
+                    cv.gesture = Some(Gesture::Caption { page: cx.page, index: a.index, from: o });
+                }
+                consumed = true;
+            }
             CommentPart::Point(point) => {
                 let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
                 cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
@@ -272,7 +281,8 @@ fn select_input(
             CommentPart::Body => {}
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Caption { page, .. } | Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
+    {
         consumed = true;
     }
     if resp.drag_stopped()
@@ -323,6 +333,15 @@ fn select_input(
 /// for the pointer released at `p`.
 fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: Pos2) {
     match view.comments.gesture.clone() {
+        Some(Gesture::Caption { page, index, from }) if page == cx.page => {
+            view.comments.gesture = None;
+            if from.distance(p) >= 2.0 {
+                let (a, b) = (cx.xf.screen_to_view(from), cx.xf.screen_to_view(p));
+                if let Some([dx, dy]) = cx.doc.and_then(|doc| doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]).ok()) {
+                    view.pending_edit = Some(Edit::MoveMeasurementCaption { page, index, dx, dy });
+                }
+            }
+        }
         Some(Gesture::Move { page, index, from }) if page == cx.page => {
             view.comments.gesture = None;
             let (a, b) = (cx.to_user(from), cx.to_user(p));

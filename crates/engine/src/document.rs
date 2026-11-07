@@ -543,6 +543,11 @@ impl Document {
         Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
     }
 
+    /// User-space bounds of a PdfCraft distance measurement's horizontal numeric readout.
+    pub fn measurement_caption_rect(&self, page: usize, index: usize) -> Option<[f64; 4]> {
+        pdfcraft_annot::measurement_caption_rect(&self.editor.as_ref()?.cos, page, index)
+    }
+
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).
     pub fn comment_props(&self, page: usize, index: usize) -> Option<pdfcraft_annot::Props> {
         self.editor.as_ref().and_then(|e| pdfcraft_annot::props(&e.cos, page, index))
