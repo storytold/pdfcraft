@@ -2204,6 +2204,7 @@ fn text_borders_take_an_oval_or_a_circle_through_the_tools() {
     ));
 }
 
+/// Highlights support optional rounded corners through comment_add, comment_edit, and comment_list.
 #[test]
 fn highlight_round_corners_through_the_tools() {
     let dir = workdir("highlight-round-corners");

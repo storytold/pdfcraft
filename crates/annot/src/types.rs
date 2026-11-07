@@ -609,10 +609,12 @@ pub struct StyleChange {
     pub opacity: Option<f64>,
     pub width: Option<f64>,
     pub endings: Option<Vec<LineEnding>>,
+    /// Whether highlight corners are drawn rounded (`Some(true)`), square (`Some(false)`), or left unchanged (`None`).
     pub round_corners: Option<bool>,
 }
 
 impl StyleChange {
+    /// Create a style change with standard properties, leaving rounded corners unchanged.
     pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
         Self { color, opacity, width, endings, round_corners: None }
     }

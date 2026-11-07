@@ -2780,6 +2780,7 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&reopen(&doc));
 }
 
+/// Round corners mode on highlights: persistence, appearance streams, normalization, and validation.
 #[test]
 fn highlight_round_corners_appearance_and_persistence() {
     let mut doc = fixture();
