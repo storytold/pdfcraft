@@ -1,6 +1,7 @@
 //! The Print dialog in the real shell (egui_kittest): settings, preview sheets, Save as PDF.
 
 use egui::accesskit::Role;
+use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
@@ -118,6 +119,85 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
     assert_eq!(pdfcraft_model::pages(&doc).len(), 1);
     let _ = std::fs::remove_file(out);
+}
+
+/// Poster's Pages to Print selects the generated tiles: a typed range saves exactly those
+/// sheets, and Current page saves the tile the preview shows. Outside Poster the choice keeps
+/// counting document pages.
+#[test]
+fn poster_pages_to_print_select_the_generated_tiles() {
+    let mut h = harness();
+    // Two 200×300 pages; Poster at 400 % tiles each 2 × 2: 8 sheets in all.
+    let bytes = h.state().session.create_blank(200.0, 300.0, 2).unwrap();
+    h.state_mut().open_bytes("tiled.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Poster").click();
+    h.run_steps(2);
+    h.state_mut().print_draft.poster_scale = 400.0;
+    h.run_steps(2);
+    h.get_by_label("Sheet 1 of 8");
+    // Tiles 6 and 7 through the range field.
+    h.get_by_role_and_label(Role::RadioButton, "Pages").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Pages").click();
+    h.get_by_role_and_label(Role::TextInput, "Pages").type_text("6-7");
+    h.run_steps(3);
+    h.get_by_label_contains("2 of the 8 tiles will print");
+    let out = std::env::temp_dir().join(format!("pdfcraft-poster-tiles-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
+    let pages = pdfcraft_model::pages(&printed);
+    assert_eq!(pages.len(), 2, "tiles 6 and 7 only");
+    let size = pages[0].display_size(&printed);
+    assert!((size.0 - 612.0).abs() < 0.01 && (size.1 - 792.0).abs() < 0.01, "a Letter tile: {size:?}");
+    std::fs::remove_file(&out).unwrap();
+
+    // Current page is the tile the preview shows: sheet 4 of 8.
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Poster").click();
+    h.run_steps(2);
+    h.state_mut().print_draft.poster_scale = 400.0;
+    h.state_mut().print_draft.sheet = 3;
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::RadioButton, "Current page").click();
+    h.run_steps(3);
+    h.get_by_label_contains("1 of the 8 tiles will print");
+    h.state_mut().print_draft.printer = None;
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
+    assert_eq!(pdfcraft_model::pages(&printed).len(), 1, "the tile in the preview");
+    std::fs::remove_file(&out).unwrap();
+
+    // In Size the typed range counts document pages again, not tiles.
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Size").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::RadioButton, "Pages").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Pages").click();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Pages").type_text("2");
+    h.run_steps(3);
+    let sizes: Vec<_> = {
+        let id = h.state().views[h.state().active.unwrap()].id;
+        h.state().session.get(id).unwrap().info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect()
+    };
+    let settings = h.state().print_draft.settings(&sizes, &[]).unwrap();
+    assert_eq!(settings.pages, vec![1]);
+    assert_eq!(settings.tiles, None);
 }
 
 /// Pages picked beforehand are what the dialog offers to print (Acrobat's "Selected pages").
@@ -406,7 +486,7 @@ fn architectural_page_can_be_matched_at_100_percent() {
     h.get_by_label("PDF scale: 100.00%");
     h.get_by_label("36.00 × 24.00 in");
     h.get_by_label("Printer paper and scaling may differ. Check driver settings.");
-    let settings = h.state().print_draft.settings(1, &[]).unwrap();
+    let settings = h.state().print_draft.settings(&[(2592.0, 1728.0)], &[]).unwrap();
     assert_eq!(settings.paper, (1728.0, 2592.0));
     assert_eq!(settings.layout, pdfcraft_engine::print::Layout::Size(pdfcraft_engine::print::SizeMode::Actual));
 }
@@ -866,7 +946,7 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     let doc = h.state().session.get(id).unwrap();
     let sizes: Vec<_> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
     let labels: Vec<_> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-    let settings = h.state().print_draft.settings(sizes.len(), &labels).unwrap();
+    let settings = h.state().print_draft.settings(&sizes, &labels).unwrap();
     assert_eq!(settings.paper, a4);
     let sheets = print::layout(&sizes, &settings).unwrap();
     assert_eq!(sheets.len(), 1);

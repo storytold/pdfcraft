@@ -321,7 +321,26 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             }
         }
     }
-    Ok(sheets)
+    // Poster's tile choice: keep the laid-out sheets at the chosen positions. Any other setting
+    // leaves `tiles` empty, so the sheets go out as they were laid out.
+    match &settings.tiles {
+        Some(tiles) => keep_sheets(sheets, tiles),
+        None => Ok(sheets),
+    }
+}
+
+/// The sheets at the chosen positions: a position past the sheets is a fault, an empty choice
+/// prints nothing, and a repeated position prints its sheet again, as a repeated page does.
+fn keep_sheets(sheets: Vec<Sheet>, tiles: &[usize]) -> Result<Vec<Sheet>, PrintError> {
+    let mut kept = Vec::with_capacity(tiles.len());
+    for &t in tiles {
+        let sheet = sheets.get(t).ok_or_else(|| PrintError::Invalid(format!("there is no sheet {}", t.saturating_add(1))))?;
+        kept.push(sheet.clone());
+    }
+    if kept.is_empty() {
+        return Err(PrintError::NoPages);
+    }
+    Ok(kept)
 }
 
 fn layout_labels(sizes: &[(f64, f64)], pages: &[usize], paper: (f64, f64), orientation: Orientation, settings: &Settings, flip: bool) -> Vec<Sheet> {

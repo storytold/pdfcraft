@@ -240,6 +240,28 @@ fn huge_posters_are_refused_at_the_sheet_limit() {
     }
 }
 
+/// Poster's tile choice (`Settings::tiles`): the laid-out sheets are kept by position, so a page
+/// tiled across many sheets can print a few of its tiles. A position past the sheets is a fault,
+/// an empty choice prints nothing, and a repeated position prints its sheet again, as a repeated
+/// page does.
+#[test]
+fn poster_tiles_are_kept_by_their_position() {
+    let tiled = |tiles: Option<Vec<usize>>| {
+        let mut s = settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: false });
+        s.tiles = tiles;
+        s
+    };
+    // A 200×300 page at 400 % tiles 2 × 2 (see `posters_tile_with_overlap`); tiles 1 and 3 stay.
+    let sheets = layout(&[(200.0, 300.0)], &tiled(Some(vec![0, 2]))).unwrap();
+    assert_eq!(sheets.len(), 2);
+    assert_eq!(sheet_pages(&sheets), [vec![0], vec![0]]);
+    assert_eq!(layout(&[(200.0, 300.0)], &tiled(Some(vec![4]))), Err(PrintError::Invalid("there is no sheet 5".into())));
+    assert_eq!(layout(&[(200.0, 300.0)], &tiled(Some(Vec::new()))), Err(PrintError::NoPages));
+    assert_eq!(layout(&[(200.0, 300.0)], &tiled(Some(vec![1, 1]))).unwrap().len(), 2, "a repeated position prints twice");
+    // `None` keeps every sheet, as before the choice existed.
+    assert_eq!(layout(&[(200.0, 300.0)], &tiled(None)).unwrap().len(), 4);
+}
+
 #[test]
 fn imposed_pdf_has_the_sheets_and_honours_comments_and_forms() {
     let doc = fixture(3);

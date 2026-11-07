@@ -8283,8 +8283,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::posters_tile_with_overlap", "crates/automation/tests/it/automation.rs::printing_through_tools"]
-notes = "tile scale, overlap, cut marks (labels pending)"
+evidence = ["crates/print/src/tests.rs::posters_tile_with_overlap", "crates/print/src/tests.rs::poster_tiles_are_kept_by_their_position", "crates/ui-egui/tests/it/print.rs::poster_pages_to_print_select_the_generated_tiles", "crates/ui-egui/src/workflows/print_ui.rs::poster_pages_to_print_counts_tiles", "crates/automation/tests/it/automation.rs::printing_through_tools"]
+notes = "tile scale, overlap, cut marks (labels pending). Beyond Acrobat: in Poster the dialog's Pages to Print (all, current page, a range, odd/even, reverse) counts the generated tiles, not document pages, so a page tiled across many sheets can print a few of its tiles (`Settings::tiles`; `doc_print` keeps document-page ranges)"
 
 [[feature]]
 id = "print.orientation"

@@ -142,6 +142,11 @@ pub struct Settings {
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Which of the laid-out sheets to print: 0-based positions into the sheet list `layout`
+    /// builds, in print order (a repeated position prints its sheet again). Poster's tile
+    /// choice — the dialog's Pages to Print counts the generated tiles there. `None` keeps
+    /// every sheet.
+    pub tiles: Option<Vec<usize>>,
 }
 
 /// How pages are rendered when printing as image.
@@ -175,6 +180,7 @@ impl Default for Settings {
             content: Content::default(),
             raster: None,
             crops: Vec::new(),
+            tiles: None,
         }
     }
 }
