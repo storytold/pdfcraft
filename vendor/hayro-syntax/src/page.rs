@@ -120,14 +120,16 @@ const MAX_PAGE_TREE_DEPTH: usize = 256;
 const MAX_USER_UNIT: f64 = 75_000.0;
 
 /// PdfCraft patch: whether a `/Kids` entry is an intermediate node of the page tree. A node is
-/// `/Type /Pages`, or has `/Kids` and is not `/Type /Page`: ISO 32000-2 §7.7.3.2 requires both
-/// keys of a node, but writers leave `/Type` out, and a page has no `/Kids` (§7.7.3.3), so the
-/// key tells them apart. pdfcraft-model's page walk uses the same rule.
+/// `/Type /Pages`, or has a `/Kids` array and is not `/Type /Page`: ISO 32000-2 §7.7.3.2
+/// requires both keys of a node, but writers leave `/Type` out, and a page has no `/Kids`
+/// (§7.7.3.3), so the array tells them apart. A `/Kids` that is null (the same as absent,
+/// §7.3.9) or not an array leaves an untyped dictionary a page. pdfcraft-model's page walk
+/// uses the same rule.
 fn is_page_tree_node(dict: &Dict<'_>) -> bool {
     match dict.get::<Name<'_>>(TYPE).as_deref() {
         Some(PAGES) => true,
         Some(PAGE) => false,
-        _ => dict.contains_key(KIDS),
+        _ => dict.get::<Array<'_>>(KIDS).is_some(),
     }
 }
 
