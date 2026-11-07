@@ -248,6 +248,9 @@ impl Automation {
     pub(crate) fn pdfa_verify(&self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let doc = self.doc(a)?;
+        if !doc.editable() {
+            return Err(failed("the document structure could not be read for PDF/A verification"));
+        }
         let issues: Vec<Value> = doc
             .pdfa_verify(level)
             .iter()
