@@ -2901,3 +2901,141 @@ fn syriac_family_reselection_preserves_round_text_box_size() {
         }
     }
 }
+
+fn review3_has_family(family: pdfcraft_fonts::SyriacFamily) -> bool {
+    let present = pdfcraft_fonts::document_syriac_font_for_family(family).is_some();
+    assert!(present || std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "qualification requires the selected Syriac face");
+    present
+}
+
+#[test]
+fn review3_real_wrap_failure_warns_and_preserves_existing_appearance() {
+    if !review3_has_family(pdfcraft_fonts::SyriacFamily::Estrangela) {
+        return;
+    }
+    for variant in 0..5 {
+        let mut doc = fixture();
+        let mut t = new(0, Shape::Typewriter { rect: [100.0, 100.0, 300.0, 170.0], font_size: 12.0 });
+        t.contents = "\u{0712}".into();
+        let index = add_annotation(&mut doc, &t, &meta("real-wrap")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        let r = annots(&doc, page)[index].as_ref().unwrap();
+        doc.update_dict(r, |d| {
+            d.set(b"Contents".to_vec(), PdfString::text(&"\u{0712} ".repeat(1100)));
+            d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 10.0, 50000.0]));
+            match variant {
+                1 => {
+                    d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 50000.0, 10.0]));
+                    d.set(b"PCTextRotate".to_vec(), Object::Int(90));
+                }
+                2 | 3 => {
+                    d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 100.0, 50000.0]));
+                    d.set(b"RD".to_vec(), num_array(&[47.0, 0.0, 47.0, 0.0]));
+                    if variant == 2 {
+                        d.set(b"CL".to_vec(), num_array(&[0.0, 0.0, 30.0, 30.0, 47.0, 40.0]));
+                    } else {
+                        d.set(b"PCBorderShape".to_vec(), Object::name("Oval"));
+                    }
+                }
+                4 => {
+                    d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 40.0, 50000.0]));
+                    d.set(b"DA".to_vec(), PdfString::text("/Helv 500 Tf 0 g"));
+                }
+                _ => {}
+            }
+        })
+        .unwrap();
+        let d = list(&doc, 0)[index].clone();
+        assert!(appearance::undrawable_text(&d).is_some(), "real layout variant {variant} exceeds the wrap budget");
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert!(matches!(
+            set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("refused")),
+            Err(AnnotError::Undrawable(_))
+        ));
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "foreign appearance is preserved");
+        super::draw::draw_appearance(&mut doc, r).unwrap();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), Some('\u{0712}'));
+    }
+}
+
+#[test]
+fn review3_family_selection_keeps_an_enlarged_callout_text_box() {
+    use pdfcraft_fonts::SyriacFamily;
+    if !review3_has_family(SyriacFamily::Eastern) {
+        return;
+    }
+    let mut doc = fixture();
+    let mut t = new(
+        0,
+        Shape::Callout {
+            rect: [200.0, 400.0, 400.0, 450.0],
+            knee: [180.0, 420.0],
+            point: [150.0, 380.0],
+            font_size: 12.0,
+            ending: LineEnding::OpenArrow,
+        },
+    );
+    t.contents = "\u{072b}\u{0720}\u{0721}\u{0710}".into();
+    t.style.syriac_family = Some(SyriacFamily::Eastern);
+    let index = add_annotation(&mut doc, &t, &meta("callout")).unwrap();
+    set_rect(&mut doc, 0, index, [200.0, 300.0, 500.0, 650.0], &meta("enlarged")).unwrap();
+    let before = text_box_of(&list(&doc, 0)[index]).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: None, endings: None, syriac_family: Some(SyriacFamily::Eastern) },
+        &meta("family"),
+    )
+    .unwrap();
+    let after = text_box_of(&list(&doc, 0)[index]).unwrap();
+    assert!(before.iter().zip(after).all(|(a, b)| (a - b).abs() < 0.01), "enlarged callout stays {before:?}, got {after:?}");
+}
+
+#[test]
+fn review3_syriac_annotation_cache_rebinds_generated_fonts() {
+    if !review3_has_family(pdfcraft_fonts::SyriacFamily::Estrangela) {
+        return;
+    }
+    let mut doc = fixture();
+    let mut indices = Vec::new();
+    for y in [100.0, 200.0] {
+        let mut t = new(0, Shape::Typewriter { rect: [100.0, y, 300.0, y + 50.0], font_size: 12.0 });
+        t.contents = "\u{072b}\u{0720}\u{0721}\u{0710}".into();
+        let index = add_annotation(&mut doc, &t, &meta("cached-syriac")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        let r = annots(&doc, page)[index].as_ref().unwrap();
+        doc.update_dict(r, |d| {
+            d.remove(b"AP");
+        })
+        .unwrap();
+        indices.push(index);
+    }
+    let mut cache = AppearanceCache::default();
+    let first = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!(cache.builds(), 3, "both Syriac annotations and the fixture stamp are cached");
+    for _ in 0..17 {
+        doc.add(Object::Null);
+    }
+    let second = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!((cache.builds(), cache.hits()), (3, 3));
+    for copy in [&first, &second, &reopen(&second)] {
+        for &index in &indices {
+            let d = list(copy, 0)[index].clone();
+            assert!(ap_content(copy, &d).contains("/ActualText"));
+            let normal = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+            let object = copy.get(normal);
+            let Object::Stream(stream) = &*object else { panic!("appearance stream") };
+            let fonts = stream.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+            for (_, font) in fonts.iter() {
+                let font = copy.resolve(font);
+                let font = font.as_dict().unwrap();
+                assert_eq!(font.name(b"Subtype"), Some(b"Type3".as_slice()));
+                for (_, proc) in font.get(b"CharProcs").unwrap().as_dict().unwrap().iter() {
+                    assert!(matches!(&*copy.resolve(proc), Object::Stream(_)));
+                }
+            }
+        }
+    }
+    assert!(indices.iter().all(|i| !list(&doc, 0)[*i].contains(b"AP")));
+}

@@ -27,9 +27,8 @@ use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi,
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
-mod resources;
 mod syriac;
-pub(crate) use resources::PreparedAppearance;
+pub(crate) use pdfcraft_fonts::PreparedAppearance;
 
 /// The persisted Syriac content face, with a widget override before the field's choice.
 /// Older documents without private metadata use Estrangela.

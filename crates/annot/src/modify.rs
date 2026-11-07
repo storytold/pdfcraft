@@ -821,9 +821,7 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
         {
             // A family selection may need more room for marks but must not shrink a user's box.
             let current = annot_dict(doc, r);
-            if !current.contains(b"CL")
-                && let Some([x0, y0, x1, y1]) = text_box_of(&current)
-            {
+            if let Some([x0, y0, x1, y1]) = text_box_of(&current) {
                 fit = [fit[0].min(x0), fit[1].min(y0), fit[2].max(x1), fit[3].max(y1)];
             }
             let result = apply_text_box(doc, r, fit, meta, false);

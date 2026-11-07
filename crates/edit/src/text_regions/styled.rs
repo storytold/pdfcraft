@@ -57,19 +57,36 @@ impl FontResolver<'_> {
             let family = embedding::names(&bytes).map_err(EditError::Invalid)?.0;
             return self.embed_face(format!("source {}", source.font), &bytes, &family, "the source Syriac font could not be loaded").map(Some);
         }
-        let candidates: Vec<_> =
-            self.metrics.iter().filter(|(_, m)| span.split(['\n', '\r']).all(|row| source_encodes(m, row))).map(|(name, _)| name.clone()).collect();
-        for name in candidates {
+        let source_faces = embedding::matching_faces(&source.base_font);
+        let mut source_names = vec![embedding::face_key(&source.base_font)];
+        for face in &source_faces {
+            source_names.push(embedding::face_key(face.family));
+            source_names.push(embedding::face_key(&face.name()));
+        }
+        let (mut matching, mut unrelated) = (Vec::new(), Vec::new());
+        for (name, metrics) in self.metrics.iter().filter(|(_, m)| span.split(['\n', '\r']).all(|row| source_encodes(m, row))) {
+            if source_names.contains(&embedding::face_key(&metrics.base_font)) {
+                matching.push(name.clone());
+            } else {
+                unrelated.push(name.clone());
+            }
+        }
+        for name in matching {
             if self.cached_program(&name).is_some_and(|bytes| usable(&bytes)) {
                 return Ok(Some(name));
             }
         }
-        let face =
-            embedding::matching_faces(&source.base_font)
-                .into_iter()
-                .chain(pdfcraft_fonts::document_syriac_font())
-                .find(|f| usable(f.bytes))
-                .ok_or_else(|| EditError::Invalid("Syriac editing needs a complete source or loaded font, or a Syrc face in craft-fonts".into()))?;
+        if let Some(face) = source_faces.into_iter().find(|face| usable(face.bytes)) {
+            return self.embed_face(face.name(), face.bytes, face.family, "the full source Syriac font could not be loaded").map(Some);
+        }
+        for name in unrelated {
+            if self.cached_program(&name).is_some_and(|bytes| usable(&bytes)) {
+                return Ok(Some(name));
+            }
+        }
+        let face = pdfcraft_fonts::document_syriac_font()
+            .filter(|face| usable(face.bytes))
+            .ok_or_else(|| EditError::Invalid("Syriac editing needs a complete source or loaded font, or a Syrc face in craft-fonts".into()))?;
         self.embed_face(face.name(), face.bytes, face.family, "the Syriac font could not be loaded").map(Some)
     }
 

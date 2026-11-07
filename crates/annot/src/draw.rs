@@ -1,3 +1,5 @@
+use pdfcraft_fonts::PreparedAppearance;
+
 use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
@@ -64,6 +66,10 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
+    apply_appearance_with_missing(doc, r, d, stream, missing)
+}
+
+fn apply_appearance_with_missing(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream, missing: Option<char>) -> Result<(), AnnotError> {
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.
@@ -105,7 +111,7 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
 /// refreshes) and keep it for content-only ones.
 #[derive(Clone, Debug, Default)]
 pub struct AppearanceCache {
-    entries: std::collections::HashMap<ObjRef, Stream>,
+    entries: std::collections::HashMap<ObjRef, (PreparedAppearance, Option<char>)>,
     bytes: usize,
     hits: u64,
     builds: u64,
@@ -120,19 +126,19 @@ impl AppearanceCache {
         *self = Self::default();
     }
 
-    fn get(&mut self, r: ObjRef) -> Option<Stream> {
+    fn get(&mut self, r: ObjRef) -> Option<(PreparedAppearance, Option<char>)> {
         let stream = self.entries.get(&r)?.clone();
         self.hits += 1;
         Some(stream)
     }
 
-    fn insert(&mut self, r: ObjRef, stream: &Stream) {
+    fn insert(&mut self, r: ObjRef, stream: &(PreparedAppearance, Option<char>)) {
         self.builds += 1;
         if self.entries.len() >= 1_000_000 {
             self.clear();
         }
-        if self.bytes.saturating_add(stream.raw.len()) <= Self::MAX_BYTES {
-            self.bytes += stream.raw.len();
+        if self.bytes.saturating_add(stream.0.bytes()) <= Self::MAX_BYTES {
+            self.bytes += stream.0.bytes();
             self.entries.insert(r, stream.clone());
         }
         // Else over budget: keep serving the entries already cached instead of growing.
@@ -180,30 +186,29 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
             if has_normal {
                 continue;
             }
-            // Font references allocated in a display copy cannot be cached in another copy.
-            if appearance::syriac_contents(&d).is_some() {
-                let current = copy.get_or_insert_with(|| doc.clone());
-                if let Some(stream) = build_appearance_in(current, &d) {
-                    apply_appearance(current, r, &d, stream).ok();
+            let cached = match cache.get(r) {
+                Some(cached) => cached,
+                None => {
+                    // A foreign stamp may have a display-only standard appearance.
+                    let other_stamp = || {
+                        let mut bare = d.clone();
+                        bare.remove(b"AP");
+                        appearance::display_stamp(&bare)
+                    };
+                    let prepared = if appearance::syriac_contents(&d).is_some() {
+                        appearance::prepare_in(&d)
+                    } else {
+                        build_appearance(doc, &d).or_else(other_stamp).map(PreparedAppearance::plain)
+                    };
+                    let Some(prepared) = prepared else { continue };
+                    let cached = (prepared, appearance::undrawable_text(&d).map(|(_, c)| c));
+                    cache.insert(r, &cached);
+                    cached
                 }
-                continue;
-            }
-            if let Some(stream) = cache.get(r) {
-                // Fails only when `r` isn't a dictionary, which the cached build ruled out.
-                apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
-                continue;
-            }
-            // Another program's stamp gets a drawing for display only (ISO 32000-2 Table 184). Its
-            // `/AP`, if any, has no `/N` to keep here.
-            let other_stamp = || {
-                let mut bare = d.clone();
-                bare.remove(b"AP");
-                appearance::display_stamp(&bare)
             };
-            let Some(stream) = build_appearance(doc, &d).or_else(other_stamp) else { continue };
-            cache.insert(r, &stream);
-            // Fails only when `r` isn't a dictionary, which the build just ruled out.
-            apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
+            let current = copy.get_or_insert_with(|| doc.clone());
+            let stream = cached.0.install(current);
+            apply_appearance_with_missing(current, r, &d, stream, cached.1).ok();
         }
     }
     copy

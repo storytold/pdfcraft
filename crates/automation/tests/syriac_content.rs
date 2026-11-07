@@ -387,3 +387,48 @@ fn review2_mixed_hebrew_syriac_is_refused_atomically() {
     assert!(error.to_string().contains("mixing Hebrew and Syriac"), "reject before choosing a writer: {error}");
     assert_eq!(extracted(&mut auto, id), before);
 }
+
+#[test]
+fn review3_source_family_precedes_unrelated_loaded_fonts() {
+    use pdfcraft_fonts::{SyriacFamily, document_syriac_font_for_family, embedding};
+    let (Some(eastern), Some(western)) =
+        (document_syriac_font_for_family(SyriacFamily::Eastern), document_syriac_font_for_family(SyriacFamily::Western))
+    else {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none());
+        return;
+    };
+    for (load_matching, explicit, unknown_source) in [(false, false, false), (true, false, false), (false, true, false), (false, false, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = pdfcraft_cos::Document::open(std::sync::Arc::new(source_page())).unwrap();
+        source
+            .update_dict(pdfcraft_cos::ObjRef::new(5, 0), |d| {
+                d.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::name(if unknown_source { "UnlistedSyriacSource" } else { western.family }))
+            })
+            .unwrap();
+        std::fs::write(dir.path().join("source.pdf"), pdfcraft_cos::write_full(&source, &Default::default()).unwrap()).unwrap();
+        std::fs::write(dir.path().join("eastern.ttf"), eastern.bytes).unwrap();
+        let mut auto = Automation::new().with_root(dir.path()).unwrap();
+        let id = call(&mut auto, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+        let unrelated = call(&mut auto, "text_font_import", json!({"doc":id,"page":1,"path":"eastern.ttf"}))["resource"].as_str().unwrap().to_owned();
+        if load_matching {
+            std::fs::write(dir.path().join("western.ttf"), western.bytes).unwrap();
+            call(&mut auto, "text_font_import", json!({"doc":id,"page":1,"path":"western.ttf"}));
+        }
+        let text = "\u{072b}\u{0720}\u{0721}\u{0710}";
+        let mut args = json!({"doc":id,"page":1,"paragraph":1,"text":text,"width":450});
+        if explicit {
+            args["font_resource"] = unrelated.into();
+        }
+        call(&mut auto, "text_edit", args);
+        assert_eq!(extracted(&mut auto, id), text);
+        let expected = if explicit || unknown_source { eastern } else { western };
+        let lines = auto.session().get(DocId(id)).unwrap().text_lines(0);
+        assert!(!lines.is_empty());
+        assert!(
+            lines.iter().all(|line| embedding::matching_faces(&line.base_font).iter().any(|face| face.family == expected.family)),
+            "expected {}, got {:?}",
+            expected.name(),
+            lines.iter().map(|line| &line.base_font).collect::<Vec<_>>()
+        );
+    }
+}

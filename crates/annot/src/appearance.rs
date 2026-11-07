@@ -428,7 +428,9 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     };
     if d.name(b"Subtype") == Some(b"FreeText")
         && pdfcraft_fonts::content_text::contains_syriac(&text)
-        && pdfcraft_fonts::content_text::wrap_for_family(&text, 12.0, 1000.0, pdfcraft_fonts::SyriacFamily::from_dict(d)).is_ok()
+        && appearance_context(d)
+            .and_then(|context| free_text_frame(&context, &mut String::new()))
+            .is_some_and(|layout| syriac_lines(d, &layout, &text).is_ok())
     {
         return None;
     }
@@ -547,10 +549,14 @@ pub fn build_in(doc: &mut Document, d: &Dict) -> Option<Stream> {
     if syriac_contents(d).is_none() {
         return build(d);
     }
-    let mut staged = doc.clone();
-    let appearance = build_with(d, Some(&mut staged))?;
-    *doc = staged;
-    Some(appearance)
+    let prepared = prepare_in(d)?;
+    Some(prepared.install(doc))
+}
+
+/// Stage only generated font resources, without copying the working document overlay.
+pub(crate) fn prepare_in(d: &Dict) -> Option<pdfcraft_fonts::PreparedAppearance> {
+    pdfcraft_fonts::PreparedAppearance::draw(|fonts| build_with(d, Some(fonts)).ok_or_else(|| "the annotation appearance could not be built".into()))
+        .ok()
 }
 
 /// Dispatch supported annotation appearances, passing optional document resources to FreeText.
@@ -1060,12 +1066,15 @@ fn shaped_border(
 /// Draw FreeText or callout geometry and text, using shaped Syriac when resources are available.
 /// Preserve rotation and alignment, with a standard-font fallback when shaping is unavailable.
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, doc: Option<&mut Document>) -> Option<Stream> {
+    let layout = free_text_frame(context, &mut drawing.content)?;
+    draw_free_text_content(context, doc, layout, drawing)
+}
+
+/// Compute the effective displayed text box while emitting its border and callout frame.
+fn free_text_frame(context: &AppearanceContext<'_>, c: &mut String) -> Option<FreeTextLayout> {
     let d = context.dict;
     let rect = context.rect;
     let stroke = context.stroke;
-    let mut c = std::mem::take(&mut drawing.content);
-    let res = std::mem::take(&mut drawing.resources);
-    let _tail = std::mem::take(&mut drawing.tail);
     let (text_color, _) = parse_da(d);
     // The box's border and a callout's leader line: their own colour, else the text's.
     let line_color = da_border(d).unwrap_or(text_color);
@@ -1112,7 +1121,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
         }
         c.push_str("S\n");
-        if !line_end(&mut c, &end, pts[0], pts[1], lw) {
+        if !line_end(c, &end, pts[0], pts[1], lw) {
             return None;
         }
     }
@@ -1121,7 +1130,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     // in the text box as in a rectangle.
     let shape = crate::BorderShape::of(d);
     if shape != crate::BorderShape::Rectangle {
-        rect = shaped_border(d, shape, full, turn, bw, bg, line_color, &mut c)?;
+        rect = shaped_border(d, shape, full, turn, bw, bg, line_color, c)?;
     } else {
         if let Some(bg) = bg {
             c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
@@ -1140,20 +1149,23 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             ));
         }
     }
-    draw_free_text_content(
-        context,
-        doc,
-        FreeTextLayout { rect, full, matrix, pad: 2.0 + bw, round: shape != crate::BorderShape::Rectangle },
-        AppearanceDrawing { content: c, resources: res, tail: Vec::new() },
-    )
+    Some(FreeTextLayout { rect, full, matrix, pad: 2.0 + bw, round: shape != crate::BorderShape::Rectangle })
 }
 
+#[derive(Clone, Copy)]
 struct FreeTextLayout {
     rect: [f64; 4],
     full: [f64; 4],
     matrix: Option<[f64; 6]>,
     pad: f64,
     round: bool,
+}
+
+/// The exact shaped rows used by the FreeText drawing path and its warning check.
+fn syriac_lines(d: &Dict, layout: &FreeTextLayout, text: &str) -> Result<Vec<pdfcraft_fonts::content_text::Line>, String> {
+    let (_, size) = parse_da(d);
+    let width = (layout.rect[2] - layout.rect[0] - 2.0 * layout.pad).max(1.0);
+    pdfcraft_fonts::content_text::wrap_for_family(text, size, width, pdfcraft_fonts::SyriacFamily::from_dict(d))
 }
 
 /// Draw text in the already placed annotation box.
@@ -1178,7 +1190,7 @@ fn draw_free_text_content(
     }
     if pdfcraft_fonts::content_text::contains_syriac(&text)
         && let Some(doc) = doc
-        && let Ok(lines) = pdfcraft_fonts::content_text::wrap_for_family(&text, size, width, pdfcraft_fonts::SyriacFamily::from_dict(d))
+        && let Ok(lines) = syriac_lines(d, &layout, &text)
     {
         let mut ascent = 0.9f64;
         let mut descent = -0.2f64;

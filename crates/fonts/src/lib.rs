@@ -7,8 +7,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod appearance_resources;
 #[cfg(test)]
 mod cjk_scripts;
+pub use appearance_resources::PreparedAppearance;
 mod cluster_font;
 pub mod content_text;
 mod craft;

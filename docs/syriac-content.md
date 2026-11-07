@@ -2,7 +2,7 @@
 
 ## Current scope (2026-11-06)
 
-PR #5914 is being narrowed to Syriac against upstream `f42fda734243b66f54db87923d7c981d5221419e` (the content source in v0.19.0). The previous combined Arabic/Syriac implementation is preserved separately. Arabic generated appearances, explicit direction controls, IME changes and shared source-editing extensions are outside this contribution. Existing upstream Arabic and Hebrew support remains in place.
+PR #5914 focuses on Syriac against upstream `f42fda734243b66f54db87923d7c981d5221419e` (the content source in v0.19.0). The previous combined Arabic/Syriac implementation is preserved separately. Arabic generated appearances, explicit direction controls, IME changes and shared source-editing extensions are outside this contribution. Existing upstream Arabic and Hebrew support remains in place.
 
 The Syriac scope includes Estrangela, Eastern and Western families; added text and supported upright source edits; forms, FreeText/callouts, typed signature artwork, headers/footers and watermarks. It does not claim Syriac interface translation, keyboard composition, full Syriac Supplement coverage or native-reader approval.
 
@@ -15,6 +15,17 @@ This package adds Syriac document text through the existing engine and automatio
 tools. It does not translate the interface or qualify Windows/browser keyboard
 composition. Content editors receive the approved Syriac glyph fallback so their
 text can be displayed; no interface language or layout is added.
+
+## Current review verification (2026-11-07)
+
+The annotation/source-family follow-up passes all 105 annotation tests, all 245
+form tests and all seven Syriac automation scenarios (357 tests). The new cases
+cover real wrap failures with size/rotation/insets, preservation of foreign
+appearances and enlarged callouts, cached font references across display copies,
+and source-family preference with explicit and unrelated fallback choices.
+The warning and drawing paths share geometry and row layout. Forms and
+annotations share the prepared-font resource arena and retain atomic failure
+handling. Input and native-reader acceptance remain separate from these checks.
 
 ## Refocused validation (2026-11-07)
 

@@ -5,19 +5,23 @@ use std::{
     sync::Arc,
 };
 
+/// A generated appearance with self-contained font resources, reusable across document copies.
 #[derive(Clone, Debug)]
-pub(crate) struct PreparedAppearance {
-    pub(super) stream: Stream,
+pub struct PreparedAppearance {
+    stream: Stream,
     objects: Vec<(ObjRef, Arc<Object>)>,
 }
 
 impl PreparedAppearance {
-    pub(crate) fn plain(stream: Stream) -> Self {
+    /// Keep an ordinary appearance whose references already belong to the target document.
+    pub fn plain(stream: Stream) -> Self {
         Self { stream, objects: Vec::new() }
     }
 
-    /// Shape into a fresh resource arena. Failure cannot modify the caller's overlay.
-    pub(crate) fn draw(draw: impl FnOnce(&mut Document) -> Result<Stream, String>) -> Result<Self, String> {
+    /// Shape into a fresh font-resource arena. Failure cannot modify the caller's overlay.
+    /// Only font objects may be added to the arena. Non-font resources in the returned
+    /// stream (such as picture icons) must already reference the target document.
+    pub fn draw(draw: impl FnOnce(&mut Document) -> Result<Stream, String>) -> Result<Self, String> {
         let mut fonts = Document::new_empty();
         let initial: HashSet<_> = fonts.object_numbers().into_iter().collect();
         let stream = draw(&mut fonts)?;
@@ -40,7 +44,7 @@ impl PreparedAppearance {
 
     /// Rebind every generated font reference to this copy. Original icon references stay intact.
     /// All fallible shaping/validation finishes before any object is appended.
-    pub(crate) fn install(&self, doc: &mut Document) -> Stream {
+    pub fn install(&self, doc: &mut Document) -> Stream {
         if self.objects.is_empty() {
             return self.stream.clone();
         }
@@ -58,7 +62,8 @@ impl PreparedAppearance {
         stream
     }
 
-    pub(crate) fn bytes(&self) -> usize {
+    /// Conservative retained-byte estimate for bounded appearance caches.
+    pub fn bytes(&self) -> usize {
         if self.objects.is_empty() {
             return self.stream.raw.len();
         }
