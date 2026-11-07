@@ -119,6 +119,8 @@ struct DecodedImageCacheInner {
     bytes: usize,
     /// PdfCraft patch (32): how many keyed decodes ran (cache misses).
     decodes: usize,
+    /// PdfCraft patch (82): how many of `decodes` were of masks (keys with `mask_output`).
+    mask_decodes: usize,
 }
 
 impl DecodedImageCache {
@@ -133,6 +135,15 @@ impl DecodedImageCache {
     /// diagnostics and tests. 0 when the lock is poisoned.
     pub(crate) fn decodes(&self) -> usize {
         self.inner.lock().map(|locked| locked.decodes).unwrap_or(0)
+    }
+
+    /// PdfCraft patch (82): how many of [`Self::decodes`] were of soft masks and `/Mask` images,
+    /// for tests. 0 when the lock is poisoned.
+    pub(crate) fn mask_decodes(&self) -> usize {
+        self.inner
+            .lock()
+            .map(|locked| locked.mask_decodes)
+            .unwrap_or(0)
     }
 
     /// The same cache, for a preview (`true`) or a final render.
@@ -172,6 +183,9 @@ impl DecodedImageCache {
             return val;
         };
         locked.decodes = locked.decodes.saturating_add(1);
+        if key.mask_output {
+            locked.mask_decodes = locked.mask_decodes.saturating_add(1);
+        }
         // Another thread may have decoded it meanwhile: keep the first copy.
         if let Some(existing) = locked.map.get(&key)
             && let Some(existing) = existing.as_ref().and_then(|val| val.downcast_ref::<T>())

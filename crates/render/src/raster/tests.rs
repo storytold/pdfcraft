@@ -8187,13 +8187,14 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
         let mut device = Draws::default();
         interpret_page(page, &mut ctx, &mut device);
         assert_eq!(device.0, 5, "every draw of /{name} was handed its pixels");
-        cache.decoded_image_decodes()
+        // (image decodes, mask decodes)
+        let masks = cache.decoded_mask_decodes();
+        (cache.decoded_image_decodes() - masks, masks)
     };
-    assert_eq!(decodes("A"), 1, "a Flate image decodes the same at every size");
-    // The image and its JPX soft mask each decode once for each of the five sizes: the mask goes
-    // through the cache too since hayro-interpret patch 82, so its decodes are counted with the
-    // image's.
-    assert_eq!(decodes("B"), 10, "a JPX soft mask decodes for the size it is drawn at");
+    assert_eq!(decodes("A"), (1, 0), "a Flate image decodes the same at every size");
+    // The image and its JPX soft mask each decode once for each of the five sizes (the mask goes
+    // through the cache too since hayro-interpret patch 82).
+    assert_eq!(decodes("B"), (5, 5), "an image with a JPX soft mask, and the mask, decode for the size they are drawn at");
 }
 
 /// A soft mask far larger than where its image is drawn is averaged down to that size and cached
@@ -8356,7 +8357,8 @@ fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
     let (handed, _) = soft_masks_handed(7, 1, &[0, 0, 0, 255, 0, 0, 0], &[(3, 1)]);
     assert_eq!(handed, vec![(4, 1, vec![0, 0, 127, 0])], "centres, not left edges");
     let (handed, _) = soft_masks_handed(100, 100, &[255; 100 * 10], &[(20, 20)]);
-    assert!(!handed.is_empty() && handed.iter().all(|(_, _, data)| data.iter().all(|&a| a == 255)), "no uncovered rows: {handed:?}");
+    // 32 wide (20 rounded up to a power of two), and 10 rows, the ones decoded, not 32: all opaque.
+    assert_eq!(handed, vec![(32, 10, vec![255; 32 * 10])], "no uncovered rows");
     let sizes = |draws: &[(u32, u32)]| -> Vec<(u32, u32)> {
         soft_masks_handed(100, 100, &[255; 100 * 100], draws).0.iter().map(|(w, h, _)| (*w, *h)).collect()
     };
