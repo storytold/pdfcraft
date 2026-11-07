@@ -169,11 +169,19 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
 /// `/C`-style colour arrays (ISO 32000-2 Table 166): none (transparent), gray, RGB or CMYK.
 /// The entries should all be numbers; a four-entry array with a non-number in it, such as
 /// `[1 0 0 null]`, is still read as CMYK with that entry 0, as PDFium, MuPDF and Poppler read it.
+/// A reference is not such an entry: it stands for a value this builder can't see (§7.3.10), so
+/// the colour is unreadable, as any other unfollowed reference is here.
 pub(crate) fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     let c = match d.get(key) {
         None => return Some(None),
         Some(o) => match o.as_array()? {
-            a if a.len() == 4 => a.iter().map(|o| o.as_f64().unwrap_or(0.0)).collect(),
+            a if a.len() == 4 => a
+                .iter()
+                .map(|o| match o {
+                    Object::Ref(_) => None,
+                    o => Some(o.as_f64().unwrap_or(0.0)),
+                })
+                .collect::<Option<Vec<f64>>>()?,
             a => a.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>()?,
         },
     };

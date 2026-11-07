@@ -2798,6 +2798,27 @@ fn a_four_entry_colour_with_a_null_is_cmyk_with_zero() {
     assert!(cmyk.contains("0 1 1 RG") && cmyk.contains("1 1 0 rg"), "CMYK (1,0,0,0) stroke and (0,0,1,0) fill: {cmyk}");
     let rgb = ap_content(&display, &squares[1]);
     assert!(rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
-    // The properties read the fill as it is drawn.
-    assert_eq!(props(&doc, 0, 0).and_then(|p| p.fill), Some([1.0, 1.0, 0.0]));
+    // The properties read the stroke and the fill as they are drawn.
+    let p = props(&doc, 0, 0).expect("the square has properties");
+    assert_eq!((p.color, p.fill), (Some([0.0, 1.0, 1.0]), Some([1.0, 1.0, 0.0])));
+    assert_eq!(props(&doc, 0, 1).and_then(|p| p.color), Some([1.0, 0.0, 0.0]));
+}
+
+/// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
+/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The builder
+/// doesn't follow it and draws no appearance, as for any colour it can't read.
+#[test]
+fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C [1 0 0 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
+        b"1",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the RGB square gets a fallback appearance");
+    let squares = list(&display, 0);
+    assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
 }

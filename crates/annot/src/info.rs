@@ -235,8 +235,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let obj = doc.resolve(&entry);
     let d = obj.as_dict()?;
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array()?.iter().map(Object::as_f64).collect()).unwrap_or_default();
-    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
+    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { drawn_color(d, b"C") };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
         if subtype == "FreeText" {
             if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
@@ -269,6 +268,12 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
 /// A shape’s `/IC` or FreeText `/C` as RGB, read as it is drawn. Grey and CMYK fills are converted.
 fn fill_of(d: &Dict) -> Option<Rgb> {
     let key: &[u8] = if d.name(b"Subtype") == Some(b"FreeText") { b"C" } else { b"IC" };
+    drawn_color(d, key)
+}
+
+/// The colour array at `key` as RGB, read as the appearance builder draws it: grey and CMYK are
+/// converted, and a four-entry array with a non-number in it is CMYK with that entry 0.
+fn drawn_color(d: &Dict, key: &[u8]) -> Option<Rgb> {
     let rgb = appearance::color(d, key).flatten()?;
     finite(&rgb).then(|| rgb.map(|x| x.clamp(0.0, 1.0)))
 }
