@@ -7,6 +7,11 @@ use std::sync::Arc;
 const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
 
 fn fixture(test: &str) -> PathBuf {
+    fixture_with(test, "")
+}
+
+/// The two-page form, with `event` inside its `name` field.
+fn fixture_with(test: &str, event: &str) -> PathBuf {
     let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb">
@@ -15,11 +20,12 @@ fn fixture(test: &str) -> PathBuf {
   <medium short="200pt" long="300pt"/>
  </pageArea></pageSet>
  <draw w="160pt" h="20pt"><value><text>First XFA page</text></value></draw>
- <field name="name" w="160pt" h="20pt"><ui><textEdit/></ui><value><text>Ada</text></value></field>
+ <field name="name" w="160pt" h="20pt"><ui><textEdit/></ui><value><text>Ada</text></value>{event}</field>
  <subform name="last" layout="tb"><breakBefore targetType="pageArea"/>
   <draw w="160pt" h="20pt"><value><text>Second XFA page</text></value></draw>
  </subform>
-</subform></template></xdp:xdp>"#;
+</subform></template></xdp:xdp>"#
+        .replace("{event}", event);
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -65,6 +71,21 @@ fn info_reports_the_laid_out_pages_and_fields() {
     assert_eq!(info["first_page_pt"], serde_json::json!([200.0, 300.0]));
     assert_eq!(info["file_size"], original.len());
     assert_eq!(std::fs::read(path).unwrap(), original, "inspection must not write the layout to the input");
+}
+
+/// `info` inspects an untrusted file: a form's initialize script, which the app runs on opening
+/// and which here would change the field's value, does not run.
+#[test]
+fn info_runs_none_of_the_forms_scripts() {
+    let script = r#"<event activity="initialize"><script contentType="application/x-javascript">this.rawValue = "Changed";</script></event>"#;
+    let path = fixture_with("info-script", script);
+    let output = Command::new(BIN).arg("info").arg(&path).output().unwrap();
+    success(&output);
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(info["xfa_layout"]["pages"], 2, "the form is still laid out: {info}");
+    let warnings = info["warnings"].as_array().unwrap();
+    assert!(!warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("scripts changed it on opening"))), "{warnings:?}");
+    assert_eq!(info["repairs"], serde_json::json!([]), "{info}");
 }
 
 #[test]

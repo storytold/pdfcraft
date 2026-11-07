@@ -20,7 +20,10 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     let acroform_fields = info.fields.len();
     // The document as the app opens it: the notes about damage repaired while opening, which the
     // app shows in Document Properties, and for a dynamic XFA form the laid-out pages and fields.
+    // Inspection runs none of the document's scripts: an XFA form's initialize and calculate
+    // scripts, which the app runs on opening, are left alone, as with JavaScript turned off.
     let mut session = pdfcraft_engine::Session::new();
+    session.set_javascript(false);
     let opened = session.open("info.pdf", None, bytes.clone(), password).ok().and_then(|id| session.get(id));
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
     let xfa_layout = opened.filter(|_| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)).and_then(|d| {
