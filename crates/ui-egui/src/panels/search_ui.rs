@@ -18,13 +18,32 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     let Some(find) = view.find.as_mut() else { return };
     find.in_panel = true;
     let l = ui.label(egui::RichText::new(tl!("What word or phrase would you like to search for?")).color(t.text_muted));
+    let input_id = egui::Id::unique("search-panel-input");
+    let pointer_pressed = ui.input(|i| i.pointer.any_pressed());
+    let focus_requested = find.focus;
+    if focus_requested {
+        ui.memory_mut(|memory| memory.request_focus(input_id));
+        find.focus = false;
+    }
+    if pointer_pressed {
+        find.select_all_requested = false;
+    }
+    if find.select_all_requested && !pointer_pressed {
+        let mut state = egui::TextEdit::load_state(ui.ctx(), input_id).unwrap_or_default();
+        let end = egui::text::CCursor::new(find.query.chars().count());
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+        state.store(ui.ctx(), input_id);
+        find.select_all_requested = false;
+    }
     let r = ui
-        .add(crate::widgets::line(&mut find.query).id(egui::Id::unique("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY))
+        .add(crate::widgets::line(&mut find.query).id(input_id).hint_text(tl!("Search")).desired_width(f32::INFINITY))
         .accessible_name(tl!("Search"))
         .labelled_by(l.id);
-    if find.focus {
+    if focus_requested {
         r.request_focus();
-        find.focus = false;
+    }
+    if r.clicked() {
+        find.select_all_requested = false;
     }
     ui.horizontal(|ui| {
         // Outlined boxes (the panel and the check-box fill are alike), as in dialogs.

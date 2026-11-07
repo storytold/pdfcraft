@@ -4,6 +4,8 @@ use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens,
 #[derive(Default)]
 pub struct Find {
     pub query: String,
+    /// The keyboard shortcut requested selecting the existing query.
+    pub select_all_requested: bool,
     /// (page, glyph range) in document order.
     pub matches: Vec<(usize, Range<usize>)>,
     pub current: Option<usize>,
@@ -78,6 +80,14 @@ impl DocView {
     pub fn open_find(&mut self) {
         let f = self.find.get_or_insert_with(Find::default);
         f.focus = true;
+    }
+
+    /// Open or focus Find from ⌘/Ctrl+F and select its existing query.
+    pub(crate) fn open_find_from_shortcut(&mut self) {
+        self.open_find();
+        if let Some(f) = self.find.as_mut() {
+            f.select_all_requested = true;
+        }
     }
 
     /// Re-run the search on all pages whose text is known (after the query changed).
@@ -228,15 +238,40 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
+                        let input_id = egui::Id::unique("find-input");
+                        let pointer_pressed = ui.input(|i| i.pointer.any_pressed());
+                        let focus_requested = find.focus;
+                        if focus_requested {
+                            ui.memory_mut(|memory| memory.request_focus(input_id));
+                            find.focus = false;
+                        }
+                        if pointer_pressed {
+                            find.select_all_requested = false;
+                        }
+                        if find.select_all_requested && !pointer_pressed {
+                            let mut state = egui::TextEdit::load_state(ui.ctx(), input_id).unwrap_or_default();
+                            let end = egui::text::CCursor::new(find.query.chars().count());
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                            state.store(ui.ctx(), input_id);
+                            find.select_all_requested = false;
+                        }
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::unique("find-input"))
+                            .id(input_id)
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
-                        if find.focus {
+                        if focus_requested {
                             r.request_focus();
-                            find.focus = false;
+                        }
+                        if r.clicked() {
+                            find.select_all_requested = false;
+                        } else if r.gained_focus() && !pointer_pressed {
+                            let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+                            let end = egui::text::CCursor::new(find.query.chars().count());
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                            state.store(ui.ctx(), r.id);
+                            find.select_all_requested = false;
                         }
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             step = Some(!ui.input(|i| i.modifiers.shift));

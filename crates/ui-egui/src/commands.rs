@@ -447,6 +447,7 @@ impl PdfCraftApp {
         Some(true)
     }
 
+    /// Execute commands from the Edit menu and its keyboard shortcuts.
     fn run_edit_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "edit.attach" => self.attach_file_dialog(),
@@ -454,7 +455,7 @@ impl PdfCraftApp {
             "edit.redo" => self.redo(),
             "edit.find" => {
                 if let Some(i) = active {
-                    self.views[i].open_find();
+                    self.views[i].open_find_from_shortcut();
                 }
             }
             "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),

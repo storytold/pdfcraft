@@ -1259,12 +1259,49 @@ fn wrapped_revision_buttons_stay_above_binding_and_open_the_saved_revision() {
 }
 
 #[test]
+/// Advanced Search lists matches and replaces its query through the find shortcut.
 fn advanced_search_lists_results_with_context() {
     let mut h = harness();
     let i = h.state().active.unwrap();
     assert!(h.state_mut().execute("edit.advanced_search"));
     h.run_steps(2);
     h.get_by_label("What word or phrase would you like to search for?");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").click();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").type_text("pages");
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").type_text("brown");
+    h.run_steps(2);
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").value().as_deref(),
+        Some("brown")
+    );
+    h.state_mut().views[i].find.as_mut().unwrap().select_all_requested = true;
+    let search = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?");
+    let click_after_query = egui::pos2(search.rect().right() - 5.0, search.rect().center().y);
+    h.hover_at(click_after_query);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: click_after_query,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: click_after_query,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").type_text(" fox");
+    h.run_steps(2);
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").value().as_deref(),
+        Some("brown fox")
+    );
     h.state_mut().views[i].find.as_mut().unwrap().query = "pages".into();
     // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
     for _ in 0..3000 {
