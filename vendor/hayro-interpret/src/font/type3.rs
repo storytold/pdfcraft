@@ -123,7 +123,7 @@ impl<'a> Type3<'a> {
                 name.and_then(crate::font::glyph_name_to_unicode)
                     .or_else(|| (0x20..0x7f).contains(&code).then_some(code as char))
                     .map(BfString::Char)
-                    // PdfCraft patch (99): above 126, a name that only numbers its glyph reads
+                    // PdfCraft patch (100): above 126, a name that only numbers its glyph reads
                     // as the code's Latin-1 character when the number is that code and every
                     // numbered name in the font names its own code (`C174` at 174 reads `®`),
                     // as in a Type 1 font.
