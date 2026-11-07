@@ -387,6 +387,31 @@ fn opt_export_values_select_button_states() {
     assert!(err.to_string().contains("options: Post, Pick-up"), "{err}");
 }
 
+/// Export values that are themselves numbers (`/Opt [(1) (2)]`, as static XFA forms write their
+/// items) name the buttons in `/Opt` order when read as export values, though `1` is also the
+/// second button's on-state name (`/0`, `/1` by position; ISO 32000-2 Table 230).
+#[test]
+fn numeric_opt_export_values_name_their_own_buttons() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Btn /T (lang) /Ff 49152 /Opt [(1) (2)] /V /Off /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [100 700 115 715] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [200 700 215 715] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let lang = field(&all, "lang");
+    assert_eq!((lang.state_for_export("1"), lang.state_for_export("2")), (Some("0"), Some("1")));
+    // A state name no export value matches still names its button; anything else names none.
+    assert_eq!((lang.state_for_export("0"), lang.state_for_export("3")), (Some("0"), None));
+    // On-state names keep their meaning where the caller has one (a click sends the state).
+    assert_eq!(lang.state_for("1"), Some("1"));
+}
+
 /// What fits a text field is measured as its appearance draws it: in the field's own font (its
 /// `/DR` font, Helvetica where that can't show the text), inside the border and padding, at its
 /// size, wrapped for multi-line, at the smallest automatic size, as asterisks for a password,

@@ -2817,6 +2817,166 @@ fn form_fill_warns_when_a_value_does_not_fit() {
     assert!(r.get("warnings").is_none(), "{r}");
 }
 
+/// `form_fill` takes a radio option as `form_fields` lists it: the export value. With `/Opt [(1)
+/// (2) (3)]` and on states named by position (`/0`, `/1`, `/2`; ISO 32000-2 Table 230), `1` is the
+/// first button. It used to be read as the state `/1` and turn the second one on.
+#[test]
+fn form_fill_picks_a_radio_option_by_its_export_value() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (title) /Ff 49152 /Opt [(1) (2) (3)] /V /Off /Kids [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [70 250 82 262] /P 3 0 R /AP << /N << /2 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream",
+    ];
+    let dir = workdir("radio-export");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["options"], json!(["1", "2", "3"]));
+    for pick in ["1", "2", "3"] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "title": pick } }));
+        assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], pick);
+        // The button drawn on is the one picked.
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        let on: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect();
+        assert_eq!(on, [pick.parse::<usize>().unwrap() - 1], "picked {pick}");
+    }
+    // A number is the same option: `1` is the first button, not the state `/1`.
+    for pick in [1, 2, 3] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "title": pick } }));
+        assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], pick.to_string(), "picked {pick}");
+    }
+    // An on-state name the options do not list still selects its button.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "title": "0" } }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], "1");
+}
+
+/// The ambiguous pair: the second button's on state is named `1` and the first button exports
+/// `1`. The export value wins, however the number is written in JSON (`1`, `1.0`, `1e0`, `0.1e1`);
+/// `-0` is `0`, the first button's state. A string is matched as written, so `"1.0"` names no
+/// option, and neither does a number that is not whole (`1.5`) or past 2^53 (`1e300`): each is
+/// refused with the options listed and the selection kept.
+#[test]
+fn form_fill_reads_a_radio_number_by_its_integer_spelling() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (title) /Ff 49152 /Opt [(1) (2) (3)] /V /Off /Kids [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [70 250 82 262] /P 3 0 R /AP << /N << /2 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream",
+    ];
+    let dir = workdir("radio-number-spelling");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    // The values as JSON text, so each number keeps the spelling a client sends.
+    let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"title": {lit}}}}}"#)).unwrap() };
+    let on = |a: &Automation| -> Vec<usize> {
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+    };
+    for (lit, button) in [("2", 1), ("1", 0), ("3.0", 2), ("1.0", 0), ("2e0", 1), ("1e0", 0), ("0.1e1", 0), ("-0", 0), ("\"1\"", 0), ("2.000", 1)] {
+        // From another button, so a fill that does nothing would show.
+        ok(&mut a, "form_fill", fill(if button == 2 { "1" } else { "3" }));
+        ok(&mut a, "form_fill", fill(lit));
+        assert_eq!(on(&a), [button], "{lit} selects button {}", button + 1);
+    }
+    ok(&mut a, "form_fill", fill("2"));
+    for lit in ["\"1.0\"", "1.5", "-1", "1e300", "18446744073709551615", "9007199254740993.0"] {
+        let e = err(&mut a, "form_fill", fill(lit)).to_string();
+        assert!(e.contains("has no option") && e.contains("options: 1, 2, 3"), "{lit}: {e}");
+        assert_eq!(on(&a), [1], "{lit} keeps the selection");
+    }
+}
+
+/// Export values written as decimals (`/Opt [(1.0) (2.0)]`, states `/0 /1`): a number is compared
+/// with them as a number first, so `1`, `1.0` and `1e0` all pick the first button and `2.0` the
+/// second, where `1.0` had become `"1"`, matched no export value and picked the button whose state
+/// is `/1`. A string is still matched as written, and a number no export value equals is refused.
+#[test]
+fn form_fill_matches_a_radio_number_to_decimal_export_values() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (rate) /Ff 49152 /Opt [(1.0) (2.0)] /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>
+stream
+
+endstream",
+    ];
+    let dir = workdir("radio-decimal-exports");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"rate": {lit}}}}}"#)).unwrap() };
+    let on = |a: &Automation| -> Vec<usize> {
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+    };
+    for (lit, button) in [("1.0", 0), ("2.0", 1), ("1", 0), ("2", 1), ("1e0", 0), ("\"1.0\"", 0), ("\"2.0\"", 1)] {
+        // From the other button, so a fill that does nothing would show.
+        ok(&mut a, "form_fill", fill(if button == 0 { "2.0" } else { "1.0" }));
+        ok(&mut a, "form_fill", fill(lit));
+        assert_eq!(on(&a), [button], "{lit} selects button {}", button + 1);
+    }
+    let e = err(&mut a, "form_fill", fill("3")).to_string();
+    assert!(e.contains("has no option"), "{e}");
+}
+
+/// Past 2^53 a float no longer holds every integer, so `9007199254740992` and `9007199254740993`
+/// are the same `f64`. A number there is matched only by its exact text, never compared as a
+/// number with the export values: with `/Opt [(9007199254740992) (2)]` the number
+/// `9007199254740993` names no option, nor does `9007199254740992` with
+/// `/Opt [(9007199254740993) (2)]`. Each is refused and the selection kept, while the number
+/// spelled as its export value still picks that button.
+#[test]
+fn form_fill_matches_a_radio_number_past_2_53_only_by_its_text() {
+    for (export, other) in [("9007199254740992", "9007199254740993"), ("9007199254740993", "9007199254740992")] {
+        let field = format!("<< /FT /Btn /T (big) /Ff 49152 /Opt [({export}) (2)] /V /Off /Kids [6 0 R 7 0 R] >>");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+            field.as_str(),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>
+stream
+
+endstream",
+        ];
+        let dir = workdir(&format!("radio-past-2-53-{export}"));
+        std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+        let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"big": {lit}}}}}"#)).unwrap() };
+        let on = |a: &Automation| -> Vec<usize> {
+            let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+            f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+        };
+        ok(&mut a, "form_fill", fill(export));
+        assert_eq!(on(&a), [0], "{export} selects the button exported as {export}");
+        ok(&mut a, "form_fill", fill("2"));
+        let e = err(&mut a, "form_fill", fill(other)).to_string();
+        assert!(e.contains("has no option"), "{other} with /Opt [({export}) (2)]: {e}");
+        assert_eq!(on(&a), [1], "{other} keeps the selection");
+    }
+}
+
 /// A form whose fields are only page widgets (the `/Fields` list is empty) still lists, fills and
 /// resets through the tools, and the leniency shows up as a repair note.
 #[test]

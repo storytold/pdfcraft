@@ -214,6 +214,37 @@ impl Field {
         })
     }
 
+    /// The on-state name that selects `value` read as an export value: form data, or one of the
+    /// options [`Field::export_of`] lists. A field with one `/Opt` entry per widget matches those
+    /// entries first and its on-state names only after them: the names may be positions (`/0`,
+    /// `/1`; ISO 32000-2 Table 230), so the export value `1` is the first widget, not the second
+    /// one's state `/1`. The order is (1) an `/Opt` export value, (2) an on-state name: when one
+    /// button's on state is named `1` and another button exports `1`, `1` selects the one that
+    /// exports it. Elsewhere this is [`Field::state_for`].
+    pub fn state_for_export(&self, value: &str) -> Option<&str> {
+        let by_export = self.button_exports().and_then(|exports| {
+            let i = exports.iter().position(|(e, _)| e == value)?;
+            self.widgets.get(i)?.on_state.as_deref()
+        });
+        by_export.or_else(|| self.state_for(value))
+    }
+
+    /// The on-state name of the button whose export value is the number `value` (`/Opt [(1.0)
+    /// (2.0)]`: `1` and `1.0` both name the first button), compared as numbers, so the spelling a
+    /// caller writes a number in doesn't matter. `None` when no export value is that number, or
+    /// the field has no `/Opt`, and for a number at or past 2^53 in magnitude: there a float no
+    /// longer holds every integer (`9007199254740992` and `9007199254740993` are the same `f64`),
+    /// so such a number is left to match an export value only by its text.
+    pub fn state_for_number(&self, value: f64) -> Option<&str> {
+        const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+        if !value.is_finite() || value.abs() >= EXACT {
+            return None;
+        }
+        let exports = self.button_exports()?;
+        let i = exports.iter().position(|(e, _)| e.trim().parse::<f64>().is_ok_and(|x| x == value))?;
+        self.widgets.get(i)?.on_state.as_deref()
+    }
+
     /// The export value for an on-state name such as the field's value; the name itself when the
     /// field has no `/Opt`.
     pub fn export_for_state<'a>(&'a self, state: &'a str) -> &'a str {
