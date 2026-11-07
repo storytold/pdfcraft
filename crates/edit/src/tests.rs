@@ -1048,6 +1048,164 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+/// #6440: added text in a print file can be gray or CMYK, painted with `g` / `k`, so its black
+/// stays 100 K. The ink survives save and reopen; another colour drops it for good.
+#[test]
+fn gray_and_cmyk_added_text_writes_g_and_k_until_it_is_recoloured() {
+    use crate::added::Ink;
+    let item_stream = |doc: &Document, i: usize| {
+        let obj = list_added(doc)[i].obj;
+        let Object::Stream(s) = &*doc.get(obj) else { panic!("an item is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let mut doc = fixture();
+    let base = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    let mut black = base.clone();
+    black.set_ink(Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(black.color, [0.0; 3], "100 K looks black on screen");
+    let mut gray = AddedText { rect: [72.0, 400.0, 300.0, 500.0], ..base.clone() };
+    gray.set_ink(Some(Ink::Gray(0.25)));
+    add_content(&mut doc, 0, &Content::Text(black)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(gray)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 200.0, 300.0, 300.0], ..base.clone() })).unwrap();
+
+    let doc = reopen(&doc);
+    let (k, g, rgb) = (item_stream(&doc, 0), item_stream(&doc, 1), item_stream(&doc, 2));
+    assert!(k.contains("/PCFHelvetica 14 Tf 0 0 0 1 k\n") && !k.contains("rg"), "{k}");
+    assert!(g.contains("/PCFHelvetica 14 Tf 0.25 g\n") && !g.contains("rg"), "{g}");
+    assert!(rgb.contains("/PCFHelvetica 14 Tf 0 0 0 rg\n"), "RGB text paints as before: {rgb}");
+    let inks: Vec<Option<Ink>> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.painted_ink() } else { None }).collect();
+    assert_eq!(inks, [Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), Some(Ink::Gray(0.25)), None]);
+
+    // Another colour drops the ink, and picking the ink's look again later doesn't bring it back;
+    // picking that look while the ink is there keeps it.
+    let Content::Text(cmyk) = list_added(&doc)[0].content.clone() else { panic!() };
+    let mut same = cmyk.clone();
+    same.set_color([0.0; 3]);
+    assert_eq!(same, cmyk, "black on 100 K stays 100 K");
+    let mut recoloured = cmyk.clone();
+    recoloured.set_color([1.0, 0.0, 0.0]);
+    assert_eq!(recoloured.ink, None);
+    recoloured.set_color([0.0; 3]);
+    assert_eq!((recoloured.ink, recoloured.painted_ink()), (None, None), "the ink stays gone");
+
+    // Set directly, a colour paints in RGB too, and the item reads back without the ink: what a
+    // draft with its stale ink dropped compares equal to.
+    let mut doc = doc;
+    let red = AddedText { color: [1.0, 0.0, 0.0], ..cmyk };
+    update_content(&mut doc, 0, 0, &Content::Text(red.clone())).unwrap();
+    let stream = item_stream(&doc, 0);
+    assert!(stream.contains("1 0 0 rg") && !stream.contains(" k\n"), "{stream}");
+    let mut settled = red;
+    settled.drop_stale_ink();
+    for doc in [&doc, &reopen(&doc)] {
+        let Content::Text(back) = list_added(doc)[0].content.clone() else { panic!() };
+        // The stored box is the text's own height.
+        assert_eq!(back, AddedText { rect: back.rect, ..settled.clone() });
+    }
+
+    // CMYK looks as ISO 32000-2 §10.4.2.5 maps it to RGB; an ink out of range is refused.
+    assert_eq!(Ink::Cmyk([0.5, 0.0, 1.0, 0.25]).rgb(), [0.25, 0.75, 0.0]);
+    let mut wrong = base;
+    wrong.ink = Some(Ink::Gray(1.5));
+    assert!(add_content(&mut doc, 0, &Content::Text(wrong)).is_err());
+}
+
+/// #6440: a file edited by hand paints its added text in RGB unless the stored gray or CMYK is
+/// in range, the right length and still the look of `/Color`; nothing in it panics.
+#[test]
+fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), ..AddedText::default() })).unwrap();
+    let obj = list_added(&doc)[0].obj;
+    let real = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+    // A `/CMYK` far longer than four numbers, as a hostile file might store it: an ink first.
+    let long = real(&[0.0, 0.0, 0.0, 1.0].repeat(50_000));
+    let long_ref = Object::Ref(doc.add(long.clone()));
+    let ink_ref = Object::Ref(doc.add(real(&[0.0, 0.0, 0.0, 1.0])));
+    let read_text = |entries: &[(&[u8], Object)]| {
+        let mut edited = doc.clone();
+        let Object::Stream(mut s) = (*edited.get(obj)).clone() else { panic!("an item is a stream") };
+        let mut params = s.dict.get(b"PCAdded").and_then(|p| p.as_dict().cloned()).unwrap();
+        for (key, value) in entries {
+            params.set(key.to_vec(), value.clone());
+        }
+        s.dict.set(b"PCAdded".to_vec(), Object::Dict(params));
+        edited.set(obj, Object::Stream(s));
+        let Content::Text(t) = list_added(&edited)[0].content.clone() else { panic!() };
+        t
+    };
+    let read = |entries: &[(&[u8], Object)]| read_text(entries).ink;
+    // As PDFCraft writes it: the ink stands.
+    assert_eq!(read(&[(b"Color", real(&[0.5; 3])), (b"Gray", Object::Real(0.5))]), Some(Ink::Gray(0.5)));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", ink_ref)]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), "by reference");
+    // Finer than it paints, it reads back as painted (`0.5 g`), its look with it.
+    let fine = read_text(&[(b"Color", real(&[0.50049; 3])), (b"Gray", Object::Real(0.50049))]);
+    assert_eq!((fine.ink, fine.color), (Some(Ink::Gray(0.5)), [0.5; 3]));
+    for (what, entries) in [
+        ("a colour the ink isn't the look of", vec![(&b"Color"[..], real(&[1.0, 0.0, 0.0])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]),
+        ("three CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 1.0]))]),
+        ("five CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0, 0.0]))]),
+        ("a long CMYK", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long.clone())]),
+        ("a long CMYK by reference", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long_ref.clone())]),
+        ("gray a long array", vec![(b"Color", real(&[0.0; 3])), (b"Gray", long.clone())]),
+        ("CMYK not an array", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", Object::Real(1.0))]),
+        ("gray out of range", vec![(b"Color", real(&[1.0; 3])), (b"Gray", Object::Real(2.0))]),
+        ("gray not a number", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black"))]),
+        (
+            "a CMYK entry not a number",
+            vec![
+                (b"Color", real(&[0.0; 3])),
+                (b"CMYK", Object::Array(vec![Object::Real(0.0), Object::name("Bad"), Object::Real(0.0), Object::Real(1.0)])),
+            ],
+        ),
+        (
+            "gray not a number beside a CMYK",
+            vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black")), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))],
+        ),
+        ("gray NaN", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::Real(f64::NAN))]),
+        ("CMYK infinite", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, f64::INFINITY]))]),
+    ] {
+        assert_eq!(read(&entries), None, "{what}");
+    }
+}
+
+/// #6440: an ink finer than the thousandth `g` and `k` are written to is kept as painted, so the
+/// item, its stored `/CMYK` and what it reads back as are what the page shows.
+#[test]
+fn an_ink_is_kept_as_it_is_painted() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    let mut t = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    t.set_ink(Some(Ink::Cmyk([0.12345, 0.00049, 0.0, 0.99951])));
+    let painted = Ink::Cmyk([0.123, 0.0, 0.0, 1.0]);
+    assert_eq!((t.ink, t.color), (Some(painted), painted.rgb()));
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let doc = reopen(&doc);
+    let item = &list_added(&doc)[0];
+    let Object::Stream(s) = &*doc.get(item.obj) else { panic!("an item is a stream") };
+    let stream = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(
+        stream.contains(
+            "/PCFHelvetica 14 Tf 0.123 0 0 1 k
+"
+        ),
+        "{stream}"
+    );
+    let stored = s
+        .dict
+        .get(b"PCAdded")
+        .and_then(|p| p.as_dict())
+        .and_then(|p| p.get(b"CMYK"))
+        .and_then(Object::as_array)
+        .map(|a| a.iter().filter_map(Object::as_f64).collect::<Vec<_>>());
+    assert_eq!(stored, Some(vec![0.123, 0.0, 0.0, 1.0]));
+    let Content::Text(back) = &item.content else { panic!() };
+    assert_eq!(back.painted_ink(), Some(painted));
+}
+
 /// #4464: a page left with one added item draws that item and nothing else.
 #[test]
 fn an_isolated_item_is_all_that_is_left_on_its_page() {
@@ -3514,7 +3672,10 @@ fn page_content_bytes(doc: &Document, page: usize) -> Vec<u8> {
     }
 }
 
-/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2).
+/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2), on a real optional
+/// content layer: the catalog's `/OCProperties` declares object 7 as the only OCG and the page
+/// resources' `/Properties` maps `/L0` to it, so `/OC /L0 BDC` marks a valid optional-content
+/// member rather than a dangling name.
 fn image_page() -> Document {
     image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET")
 }
@@ -3534,12 +3695,13 @@ fn remove_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), Edit
 
 fn image_page_with(content: &str) -> Document {
     let objs: Vec<String> = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /Order [7 0 R] >> >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> /Properties << /L0 7 0 R >> >> >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /OCG /Name (Layer 0) >>".into(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
@@ -3751,6 +3913,30 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
     assert!(close(images::page_images(&doc, 0).unwrap()[0].visible_rect.unwrap(), moved(start.visible_rect.unwrap())));
     let caption: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
     assert_eq!(caption, ["Caption"]);
+}
+
+#[test]
+fn moving_an_image_inside_marked_content_leaves_every_sequence_intact() {
+    // `translate_images` changes the image's own `cm`; its `Do` stays where it was, so a moved
+    // image stays in the sequence that tags it (an image on a layer sits in `/OC … BDC`).
+    for content in [
+        "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+        "/OC /L0 BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+    ] {
+        let mut doc = image_page_with(content);
+        let before = images::page_images(&doc, 0).unwrap()[0].rect;
+        images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]).unwrap();
+        let after = images::page_images(&doc, 0).unwrap()[0].rect;
+        assert!(close(after, [before[0] + 10.0, before[1], before[2] + 10.0, before[3]]), "{content}: {after:?}");
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let count = |name: &str| ops.iter().filter(|op| op.is(name)).count();
+        assert_eq!((count("BDC"), count("EMC")), (2, 2), "{content}: both sequences remain");
+        let first = ops.iter().position(|op| op.is("BDC")).unwrap();
+        let end = ops.iter().position(|op| op.is("EMC")).unwrap();
+        let image = ops.iter().position(|op| op.is("Do")).unwrap();
+        assert!(first < image && image < end, "{content}: the image is still inside its own sequence");
+        assert!(!ops[end..].iter().any(|op| op.is("Do")), "{content}: the other sequence gained no image");
+    }
 }
 
 #[test]
@@ -10227,6 +10413,86 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert!(error.to_string().contains("justification"));
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+/// The OCR stamp path registers the plan's Type3 faces (a free `PCOcr…` name per stamp, so a
+/// page that is OCR'd twice keeps both layers' fonts), and the stamped codes extract back
+/// through the font's ToUnicode CMap.
+#[test]
+fn stamp_with_fonts_registers_the_planned_type3_faces() {
+    if without_craft_fonts("stamp_with_fonts_registers_the_planned_type3_faces") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let mut plan = pdfcraft_fonts::TextPlan::for_words(["日本"]);
+    assert_eq!(plan.missing(), 0);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, |p| {
+        let codes: Vec<u8> = p.encoding(0).iter().map(|&(_, c)| c).collect();
+        let mut c = format!("BT 3 Tr /PCHelv 1 Tf\n/{} 1 Tf 100 700 Td ", p.fonts[0].name).into_bytes();
+        c.extend_from_slice(&pdfcraft_fonts::literal(&codes));
+        c.extend_from_slice(b" Tj ET");
+        c
+    })
+    .unwrap();
+    assert!(plan.fonts[0].name.starts_with("PCOcr"), "{:?}", plan.fonts[0].name);
+    // The registered font carries a ToUnicode CMap; the engine's own reader decodes the run.
+    let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text.contains("日本")), "{lines:?}");
+    // A second stamp on the same page takes the next free name; the first layer's font stands.
+    let mut second = pdfcraft_fonts::TextPlan::for_words(["語"]);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut second, |p| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes())
+        .unwrap();
+    assert_eq!(second.fonts[0].name, format!("{}1", plan.fonts[0].name));
+}
+
+/// A Type3 face built for page 1 is reused on page 2, but page 2 already has a font under the
+/// name page 1 gave it: page 2's own font keeps its name, and the shared face is registered on
+/// page 2 under a free one that the plan carries for page 2's content. (The plan is written out
+/// by hand, so this runs without the craft-fonts build input.)
+#[test]
+fn a_reused_type3_face_never_replaces_a_later_page_s_font_of_the_same_name() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 6 0 R /Resources << /Font << /PCOcr 7 0 R >> >> >>",
+        &stream("", ""),
+        &stream("", "BT /PCOcr 12 Tf 72 700 Td (own) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let glyph = pdfcraft_fonts::GlyphOutline { contours: vec![vec![[0.1, 0.0], [0.9, 0.0], [0.5, 0.8]]], width: 1.0, bbox: [0.1, 0.0, 0.9, 0.8] };
+    let mut plan = pdfcraft_fonts::TextPlan::default();
+    plan.fonts.push(pdfcraft_fonts::PlannedType3 { family: "Test", glyphs: vec![('日', glyph)], name: String::new(), object: None });
+    let draw = |p: &pdfcraft_fonts::TextPlan| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes();
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, draw).unwrap();
+    assert_eq!(plan.fonts[0].name, "PCOcr", "free on page 1");
+    let face = plan.fonts[0].object.expect("built once");
+    stamp_with_fonts(&mut doc, 1, "OCR", &mut plan, draw).unwrap();
+    assert_ne!(plan.fonts[0].name, "PCOcr", "page 2 already has a PCOcr");
+    let page2 = &pdfcraft_model::pages(&doc)[1];
+    let res = doc.resolve(page2.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    assert_eq!(fonts.get(b"PCOcr").and_then(|o| o.as_ref()), Some(pdfcraft_cos::ObjRef::new(7, 0)), "page 2's own font keeps its name");
+    assert_eq!(fonts.get(plan.fonts[0].name.as_bytes()).and_then(|o| o.as_ref()), Some(face), "the shared face, under a free name");
+    assert_eq!(plan.fonts[0].object, Some(face), "still built once");
+}
+
+#[test]
+fn planned_type3_charproc_has_valid_metrics_and_encloses_its_ink() {
+    let glyph = pdfcraft_fonts::GlyphOutline {
+        contours: vec![vec![[-0.1001, -0.2001], [0.9001, 1.1001]]],
+        width: 0.8,
+        bbox: [-0.1001, -0.2001, 0.9001, 1.1001],
+    };
+    let parsed = pdfcraft_content::parse(&text::glyph_path(&glyph));
+    assert_eq!(parsed.skipped, 0);
+    let metrics = &parsed.ops[0];
+    assert!(metrics.is("d1"));
+    assert_eq!(metrics.operands.len(), 6);
+    assert_eq!((metrics.num(0), metrics.num(1)), (Some(800.0), Some(0.0)));
+    assert_eq!((metrics.num(2), metrics.num(3), metrics.num(4), metrics.num(5)), (Some(-101.0), Some(-201.0), Some(901.0), Some(1101.0)));
 }
 
 #[test]
