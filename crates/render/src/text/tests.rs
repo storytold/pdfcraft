@@ -170,6 +170,24 @@ fn marked_text(pdf: &Pdf, page: usize) -> PageText {
     extract_page(pdf, page, &InterpreterSettings::default()).unwrap()
 }
 
+/// Each span's replacement (a named property reused by many spans decodes afresh every time) is
+/// charged against the page's allowance; past it a span opens no replacement.
+#[test]
+fn replacement_text_is_charged_against_the_page_allowance() {
+    use super::device::MAX_ACTUAL_TEXT;
+    let text = vec![b'A'; 64 << 10];
+    let mut dev = super::device::TextDevice::new();
+    let mut opened = 0usize;
+    for _ in 0..1000 {
+        dev.begin_marked_content(b"Span", None);
+        dev.actual_text(&text);
+        opened += usize::from(dev.actual.is_some());
+        dev.end_marked_content();
+    }
+    // Each is charged both kept copies; none may be opened beyond the allowance.
+    assert!(opened > 0 && opened * 2 * text.len() <= MAX_ACTUAL_TEXT, "{opened}");
+}
+
 #[test]
 fn redraws_of_a_long_replacement_share_a_text_budget() {
     let long = "0041".repeat(32 * 1024);
