@@ -19,7 +19,7 @@ pub struct ShapedRun {
 /// Complex scripts/marks require shaping instead of independently encoding characters.
 pub fn required(text: &str) -> bool {
     text.chars()
-        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
+        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e34..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
@@ -30,7 +30,9 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0fff | 0x1780..=0x17ff)) && face.gsub().is_err() {
+    if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff))
+        && face.gsub().is_err()
+    {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
     let data = ShaperData::new(&face);
@@ -73,4 +75,21 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Err("shaped row exceeds its geometry budget".into());
     }
     Ok(ShapedRun { glyphs, advance: x })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thai_base_characters_do_not_require_shaping() {
+        // Thai base characters are one glyph each and need no substitution; only the
+        // combining marks need positioning.
+        let bases = ["\u{0e01}", "\u{0e2a}", "\u{0e27}", "\u{0e32}", "\u{0e44}", "\u{0e51}", "\u{0e53}"];
+        for text in bases {
+            assert!(!required(text), "{text:?} is a Thai base character");
+        }
+        assert!(required("\u{0e31}"), "a Thai combining mark needs positioning");
+        assert!(required("\u{0e34}"), "a Thai combining mark needs positioning");
+    }
 }
