@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::geometry::{corner_ratio, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
+use crate::page_keys::PageKeys;
 
 /// The user's login name, which Acrobat uses as the default comment author.
 pub(super) fn login_name() -> String {
@@ -387,6 +388,8 @@ pub(crate) struct PageCx<'a> {
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
+    /// This frame's keys as the pages see them.
+    pub keys: PageKeys,
 }
 
 impl PageCx<'_> {

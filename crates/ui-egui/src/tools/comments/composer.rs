@@ -28,6 +28,7 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
         allowed: true,
         hidden: false,
         redact_mark: ([0.89, 0.13, 0.13], 1.0),
+        keys,
     };
     let anchor = cx.to_screen(c.at);
     let viewport = view.viewport_rect();

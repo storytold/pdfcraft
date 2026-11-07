@@ -297,12 +297,12 @@ pub(crate) fn page_input(
     press: PagePress,
     view: &mut DocView,
 ) -> Outcome {
-    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    let PageToolContext { ui, resp, xf, ptr, page, info, keys, .. } = cx;
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ptr.pos;
     let prep = &mut view.prepare;
 
-    if prep.marquee_before.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if prep.marquee_before.is_some() && keys.take(ui.ctx(), egui::Key::Escape) {
         cancel_marquee(prep);
         out.consumed = true;
         return out;

@@ -286,8 +286,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, press: PagePress, view: &mut D
         && view.pending_edit.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
     {
-        let deleted =
-            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+        let deleted = cx.keys.take(ui.ctx(), egui::Key::Delete) || cx.keys.take(ui.ctx(), egui::Key::Backspace);
         if deleted {
             view.pending_edit = delete_edit(page, view.objects.selected.iter().map(|o| o.target).collect());
             return true;
@@ -640,7 +639,11 @@ mod tests {
             },
             |ui| {
                 let resp = ui.interact(ui.available_rect_before_wrap(), egui::Id::unique("page"), egui::Sense::click());
-                page_input(PageToolContext { ui, resp: &resp, xf: &xf, ptr: &ptr, page: 0, doc, info: &info }, PagePress::Free, &mut view);
+                page_input(
+                    PageToolContext { ui, resp: &resp, xf: &xf, ptr: &ptr, page: 0, doc, info: &info, keys: Default::default() },
+                    PagePress::Free,
+                    &mut view,
+                );
             },
         );
         output.textures_delta.clear();

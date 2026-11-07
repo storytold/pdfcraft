@@ -2342,3 +2342,20 @@ fn end_with_a_menu_open_turns_no_page() {
     h.run_steps(4);
     assert_eq!(h.state().views[0].current, current, "End with a menu open turns no page");
 }
+
+/// With a menu of the menu bar open, Delete leaves the picture selected with Edit text: the key is
+/// the menu's. It deleted the picture.
+#[test]
+fn delete_with_a_menu_open_leaves_the_selected_picture() {
+    let mut h = open(linked_picture_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.run_steps(3);
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was deleted");
+    assert!(s.views[0].image_selection.is_some(), "and the picture is still selected");
+}

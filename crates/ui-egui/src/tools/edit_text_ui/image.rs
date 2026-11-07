@@ -2,6 +2,7 @@ use super::{ACCENT, Color32, CornerRadius, DocInfo, DocView, Edit, MAX_OUTLINES,
 use crate::canvas::{ImageObb, PainterExt, image_screen_rect};
 use crate::image_engine::{CROP_ACCENT, apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{CropPart, Hit, Owner, PagePress, PicturePart};
 
 /// What the pointer and the page are, for the image tools on one page.
@@ -474,13 +475,13 @@ fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
 /// Enter applies the crop and Escape leaves it, though not while a button is down (`held`): Escape
 /// then cancels the press the pages hold, if any (`canvas::cancel_on_escape`), and crop mode stays.
 /// Nothing while a text field has the keyboard.
-pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], held: bool) {
+pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], held: bool) {
     if ctx.egui_wants_keyboard_input() || view.page_screen_rect(page).is_none() {
         return;
     }
     let Some(s) = view.image_selection.as_ref().filter(|s| s.page == page) else { return };
     let index = s.index;
-    let key = |k: egui::Key| ctx.input(|i| i.key_pressed(k));
+    let key = |k: egui::Key| keys.pressed(ctx, k);
     let image = images.get(index);
     if s.crop.is_some() {
         if key(egui::Key::Enter) {
@@ -495,10 +496,8 @@ pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, page: usize,
         }
     } else if !held && !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image.is_some() {
         // The key is the picture's: added content's own Delete runs later this frame.
-        ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
-            i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace);
-        });
+        keys.take(ctx, egui::Key::Delete);
+        keys.take(ctx, egui::Key::Backspace);
         view.image_selection = None;
         // Added content's selection follows the picture's (`content_ui::sync_image_selection`), and
         // goes with it: once the picture is gone it would be the next added item's.

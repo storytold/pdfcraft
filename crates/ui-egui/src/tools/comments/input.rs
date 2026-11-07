@@ -28,7 +28,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     };
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
-    if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if cv.gesture.is_some() && cx.keys.take(ui.ctx(), egui::Key::Escape) {
         cv.gesture = None;
         return true;
     }
@@ -514,13 +514,12 @@ impl Gestures<'_> {
                 false
             }
         };
-        let finish =
-            resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) || (drawing_here && std::mem::take(&mut cv.finish_request));
+        let finish = resp.double_clicked() || cx.keys.pressed(ui.ctx(), egui::Key::Enter) || (drawing_here && std::mem::take(&mut cv.finish_request));
         // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
         // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
         if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
             && !ui.ctx().egui_wants_keyboard_input()
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+            && (cx.keys.take(ui.ctx(), egui::Key::Backspace) || cx.keys.take(ui.ctx(), egui::Key::Delete))
         {
             cv.undo_point();
             return true;

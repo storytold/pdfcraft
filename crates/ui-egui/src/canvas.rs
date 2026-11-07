@@ -1533,7 +1533,7 @@ fn cached_edit_images<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document
 }
 
 fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i: usize) {
-    let PageEnv { allowed, comments_hidden, doc, editing_content, info, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
+    let PageEnv { allowed, comments_hidden, doc, editing_content, info, keys, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
     let PageFrame { ptr, origin, visible, pressed, pointer, .. } = *frame;
     let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
     if !r.intersects(visible.expand(400.0)) {
@@ -1570,7 +1570,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
@@ -2944,7 +2944,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);
-        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, invert_middle, ui, &t);
+        organize_grid(view, doc, unobstructed, keys, app.show_page_edge_shadows, invert_middle, ui, &t);
         app.organize_zoom = view.grid_zoom();
         return;
     }
