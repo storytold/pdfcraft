@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: pin stream-based Windows PDF job loading; hidden-file regression fails before and passes after; HUAWEI CV81Z submission succeeds; physical output still unqualified; estimates unchanged)
+> **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: adopt stream-based Windows PDF job loading through craft-print, preserve the #5006 Direct2D fix, remove personal-fork/global overrides; physical output still unqualified; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 

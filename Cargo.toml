@@ -24,7 +24,7 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e398084b63413aa5d872da43496f0c0822cb749a" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
@@ -161,7 +161,3 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc79968157
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
-
-# Temporary until craft-print adopts storytold/winprint.rs#15.
-[patch."https://github.com/storytold/winprint.rs"]
-winprint = { git = "https://github.com/songzhihui/winprint.rs", rev = "857407c33bc1e2ef53cd35388512658c25945d79" }
