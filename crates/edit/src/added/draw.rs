@@ -1,7 +1,7 @@
 use super::layout::{
     Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
 };
-use super::types::{AddedText, Align, Family};
+use super::types::{AddedText, Align, Family, Ink};
 use super::{
     Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
     align_code, literal, matrix_number, n, shaped_glyph, win_ansi,
@@ -105,8 +105,7 @@ pub(super) fn draw_laid_shaped(
         fonts.set(name.clone().into_bytes(), Object::Ref(font));
         names.push(name);
     }
-    let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
-    out.extend(format!("BT {} {} {} rg\n", n(cr), n(cg), n(cb)).bytes());
+    out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
     }
@@ -320,8 +319,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             }
             res.set(b"Font".to_vec(), Object::Dict(fonts));
             let r = text_rect(t);
-            let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
-            out.extend(format!("BT /{name} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
+            out.extend(format!("BT /{name} {} Tf {}\n", n(t.size), t.fill_op()).bytes());
             if t.char_spacing != 0.0 {
                 out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
             }
@@ -382,6 +380,12 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
+            // The ink beside its RGB look, which a reader that knows no ink keeps showing.
+            match t.painted_ink() {
+                Some(Ink::Gray(g)) => d.set(b"Gray".to_vec(), Object::Real(g)),
+                Some(Ink::Cmyk(c)) => d.set(b"CMYK".to_vec(), arr(&c)),
+                None => {}
+            }
             d.set(b"Align".to_vec(), Object::Int(align_code(t.align)));
             // Each paragraph's own alignment, or null where it follows /Align.
             let aligns = crate::paragraph_align::tidy(t.aligns.clone(), t.align);
