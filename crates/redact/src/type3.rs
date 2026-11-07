@@ -381,9 +381,9 @@ fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     streams
 }
 
-/// The decoded appearance streams of a page's annotations that have no resources of their own:
-/// they draw through the page's, as [`scan_stream_object`] reads them.
-fn resourceless_appearances(doc: &Document, page: &Dict) -> Result<Vec<Vec<u8>>, CosError> {
+/// The appearance streams of a page's annotations that have no resources of their own: they draw
+/// through the page's, as [`scan_stream_object`] reads them.
+fn resourceless_appearances(doc: &Document, page: &Dict) -> Vec<ObjRef> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for annot in crate::annots_of(doc, page) {
@@ -394,11 +394,11 @@ fn resourceless_appearances(doc: &Document, page: &Dict) -> Result<Vec<Vec<u8>>,
             if let Object::Stream(s) = &*doc.get(r)
                 && s.dict.get(b"Resources").is_none_or(|ro| doc.resolve(ro).as_dict().is_none())
             {
-                out.push(s.decoded()?);
+                out.push(r);
             }
         }
     }
-    Ok(out)
+    out
 }
 
 /// Add to `ops` those of the soft mask groups without resources of their own that `ops` set
@@ -495,8 +495,12 @@ pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content
     if fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))) {
         if let Some(page) = page {
             // One total for all of them, as for the content: each appearance under the cap could
-            // still add up to far more than it.
-            for data in resourceless_appearances(doc, page)? {
+            // still add up to far more than it. Their decoded bytes share one page's allowance
+            // too, and each is decoded only in its turn, so they are never all held at once.
+            let mut budget = pdfcraft_cos::DecodeBudget::page();
+            for r in resourceless_appearances(doc, page) {
+                let Object::Stream(s) = &*doc.get(r) else { continue };
+                let data = budget.decode(s)?;
                 let more = crate::interp::resource_ops(doc, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });

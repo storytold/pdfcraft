@@ -412,6 +412,33 @@ fn a_page_s_appearances_share_one_operator_total() {
     assert!(refused.is_err(), "two appearances over the operator cap together were judged in part: {refused:?}");
 }
 
+/// Their decoded bytes share one page's allowance too. Two compressed appearances, each under it
+/// but past it together (and blank, so far from the operator cap), refuse the redaction rather
+/// than being decoded and held in full.
+#[test]
+fn a_page_s_appearances_share_one_decoded_byte_allowance() {
+    let packed = pdfcraft_filters::encode_flate(&vec![b' '; pdfcraft_cos::MAX_PAGE_DECODED / 2 + 1]);
+    let big = || stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Filter /FlateDecode", packed.as_slice());
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R 8 0 R] >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        type3_abc(11),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /AP << /N 9 0 R >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 240 250 260] /P 3 0 R /AP << /N 10 0 R >> >>".to_vec(),
+        big(),
+        big(),
+        stream("", b"% GLYPH_A"),
+        stream("", b"% GLYPH_B"),
+        stream("", b"% GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    let refused = apply(&mut doc, None);
+    assert!(refused.is_err(), "two appearances past the page's decoded-byte allowance together were read in full: {refused:?}");
+}
+
 /// Whether the first page of a full save of `doc` lists the font `name` in its resources.
 fn saved_first_page_lists_font(doc: &Document, name: &[u8]) -> bool {
     let bytes = write_full(doc, &SaveOptions::default()).unwrap();
