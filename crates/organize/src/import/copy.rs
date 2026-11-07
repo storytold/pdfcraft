@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, named_dest};
 
 /// Keys that must not be followed when copying: they point back up or across the source
@@ -57,8 +59,9 @@ pub(crate) struct Copier<'a> {
     /// Optional content groups copied: (source, destination).
     pub(crate) ocgs: Vec<(ObjRef, ObjRef)>,
     /// When only some pages are copied: the annotations on them and the fields above each, the
-    /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid.
-    pub(super) kept: Option<HashSet<ObjRef>>,
+    /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
+    /// copiers made for a repeated page or an action don't each copy it.
+    pub(super) kept: Option<Rc<HashSet<ObjRef>>>,
 }
 
 impl<'a> Copier<'a> {
@@ -95,6 +98,9 @@ impl<'a> Copier<'a> {
     pub(crate) fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
         if !matches!(o, Object::Ref(_) | Object::Array(_) | Object::Dict(_) | Object::Stream(_)) {
             return Ok(o.clone());
+        }
+        if self.acts_on_none(o) {
+            return Ok(Object::Null);
         }
         self.descend()?;
         let copied = match o {
@@ -169,6 +175,33 @@ impl<'a> Copier<'a> {
         Ok(out)
     }
 
+    /// Whether `o` is a reset or submit action that names only fields left behind (see `kept`).
+    /// Its copy would list none, and an empty list reads as every field, as an omitted one does
+    /// (ISO 32000-2 §12.7.6): it is not copied, nor are the actions after it, as with a link to a
+    /// page left behind. A list of fields to leave out (Include/Exclude flag set) loses nothing.
+    fn acts_on_none(&self, o: &Object) -> bool {
+        let Some(kept) = &self.kept else { return false };
+        let held;
+        let action = match o {
+            // One copied already is not such an action, and needn't be fetched again.
+            Object::Ref(r) if !self.map.contains_key(r) => {
+                held = self.src.resolve(o);
+                held.as_dict()
+            }
+            Object::Dict(d) => Some(d),
+            _ => None,
+        };
+        let Some(a) = action.filter(|a| matches!(a.name(b"S"), Some(b"ResetForm" | b"SubmitForm"))) else { return false };
+        if a.get(b"Flags").and_then(|f| self.src.resolve(f).as_int()).is_some_and(|f| f & 1 != 0) {
+            return false;
+        }
+        let Some(v) = a.get(b"Fields") else { return false };
+        let listed = self.src.resolve(v);
+        // As `copy_dict` reads the list: a lone entry stands for a list of one.
+        let entries = listed.as_array().map_or(std::slice::from_ref(v), Vec::as_slice);
+        !entries.is_empty() && entries.iter().all(|e| e.as_ref().is_some_and(|r| !kept.contains(&r)))
+    }
+
     /// Map a source destination (explicit array or reference to one) to the destination
     /// document; `None` if it targets a page that was not copied.
     pub(super) fn map_dest(&self, dest: &Object) -> Option<Object> {
@@ -229,6 +262,8 @@ impl<'a> Copier<'a> {
                                 d.remove(b"A");
                             }
                         }
+                    } else if self.acts_on_none(&action) {
+                        d.remove(b"A");
                     } else {
                         // Other actions (URI, Launch, JavaScript…) carry no page references. The
                         // copier lends its map out and takes it back with the new copies in it,

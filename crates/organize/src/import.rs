@@ -20,6 +20,7 @@
 //!   `/OCProperties`, keeping their default on/off state.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -223,7 +224,7 @@ fn import_pages_mapped(
         })
         .collect();
     if src_pages.iter().collect::<HashSet<_>>().len() < source.len() {
-        copier.kept = Some(fields_on(src, copier.pages.keys().copied()));
+        copier.kept = Some(Rc::new(fields_on(src, copier.pages.keys().copied())));
     }
     let mut annot_pages = HashMap::new();
     let mut new_pages = Vec::new();
