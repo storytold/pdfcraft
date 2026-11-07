@@ -2262,3 +2262,33 @@ fn delete_and_escape_under_a_dialog_leave_the_selected_link() {
         assert_eq!(s.dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
     }
 }
+
+/// Escape with a dialog open over Edit text objects that an area selected closes the dialog, and
+/// the objects stay selected: Delete then removes them. Escape went to the objects instead, and the
+/// dialog stayed open.
+#[test]
+fn escape_under_a_dialog_closes_it_over_selected_edit_text_objects() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
+    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
+    let blocks = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(1).len()
+    };
+    assert_eq!(blocks(&h), 1, "page 2's line is there");
+    h.state_mut().dialog = Some(Dialog::Shortcuts);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(blocks(&h), 0, "the objects stayed selected: Delete removes them");
+}
