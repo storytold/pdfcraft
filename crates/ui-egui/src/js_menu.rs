@@ -456,6 +456,8 @@ impl PdfCraftApp {
 #[derive(Default)]
 struct MenuView {
     keyboard: Option<Vec<usize>>,
+    /// Keyboard selection painted in a completed frame, including clipping/Area visibility.
+    painted_keyboard: Option<(Vec<usize>, u64)>,
     opened: Vec<usize>,
     rects: Vec<egui::Rect>,
     focus_ids: Vec<egui::Id>,
@@ -504,7 +506,9 @@ impl MenuView {
             // not be cancelled by the tail of an earlier document scroll animation.
             // Document shortcuts run in App::logic before this UI pass and can consume
             // events. Their arrival must still dismiss the menu after the command runs.
-            let wheel = i.raw.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. }));
+            // The canvas removes its synthetic wheel reset from processed events.
+            // Raw events still contain that reset; it is not a new outside interaction.
+            let wheel = i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. }));
             ((!inside) && (i.pointer.any_pressed() || i.pointer.any_click() || wheel || i.zoom_delta() != 1.0))
                 || i.raw
                     .events
@@ -525,7 +529,13 @@ impl MenuView {
         if enabled.is_empty() {
             return None;
         }
-        let selected = previous.filter(|p| enabled.contains(p)).unwrap_or_else(|| *enabled.first().unwrap_or(&0));
+        // Activation never invents a selection. Only arrow navigation establishes the
+        // keyboard path painted by rows(); mouse hover alone does not authorize a key.
+        let previous = previous.filter(|p| enabled.contains(p));
+        if matches!(key, egui::Key::Enter | egui::Key::Space) && previous.is_none() {
+            return None;
+        }
+        let selected = previous.unwrap_or_else(|| *enabled.first().unwrap_or(&0));
         let at = enabled.iter().position(|p| *p == selected).unwrap_or(0);
         let index = match key {
             egui::Key::ArrowDown if previous.is_some() => *enabled.get(at.saturating_add(1) % enabled.len()).unwrap_or(&selected),
@@ -568,6 +578,15 @@ impl MenuView {
                 // egui determined a spatial focus direction at begin_pass, before we consumed
                 // the key. Our menu owns arrow navigation; do not move focus again at end_pass.
                 ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                // A navigation key and activation can arrive together. The new path
+                // must be visible in a completed frame before activation can choose it.
+                let visibly_selected = self
+                    .painted_keyboard
+                    .as_ref()
+                    .is_some_and(|(path, frame)| self.keyboard.as_ref() == Some(path) && *frame < ctx.cumulative_frame_nr());
+                if matches!(key, egui::Key::Enter | egui::Key::Space) && !visibly_selected {
+                    continue;
+                }
                 if let Some(value) = self.key(items, key) {
                     return Some(Some(value));
                 }
@@ -575,6 +594,7 @@ impl MenuView {
         }
         self.rects.clear();
         self.focus_ids.clear();
+        self.painted_keyboard = None;
         let anchor = bounds.clamp(if anchor.is_finite() { anchor } else { bounds.center() });
         let width = self.width(ctx, &[], items, bounds.width() - 32.0);
         let height = (bounds.height() - 32.0).min(420.0);
@@ -611,6 +631,9 @@ impl MenuView {
                 let response = ui.push_id(&*path, |ui| ui.add_enabled(item.enabled, button)).inner;
                 self.focus_ids.push(response.id);
                 if selected {
+                    if ui.is_rect_visible(response.rect) {
+                        self.painted_keyboard = Some((path.clone(), ui.ctx().cumulative_frame_nr()));
+                    }
                     response.request_focus();
                     response.scroll_to_me(Some(egui::Align::Center));
                 }
@@ -759,10 +782,13 @@ mod tests {
     #[test]
     fn busy_script_document_request_notifies_without_replacing_pending_consent() {
         let mut missing = Vec::new();
-        for (language, notice) in [
-            ("en", "Another link request is awaiting your permission. Respond to it, then try opening the document again."),
-            ("fr", "Une autre demande de lien attend votre autorisation. Répondez-y, puis réessayez d’ouvrir le document."),
-        ] {
+        assert!(crate::i18n::Lang::from_code("en").is_some(), "the English cases always run");
+        for language in ["en", "fr"] {
+            // Only embedded languages are selectable in an English-only developer build.
+            let Some(lang) = crate::i18n::Lang::from_code(language) else { continue };
+            // This still detects notify instead of notify_tr when a French row is embedded.
+            let notice =
+                crate::i18n::tr(lang, "Another link request is awaiting your permission. Respond to it, then try opening the document again.");
             for pending_file in [false, true] {
                 let mut h = harness();
                 h.state_mut().set_option("language", language).unwrap();
@@ -1318,6 +1344,37 @@ mod tests {
             assert!(painted_text(&h, summary).is_some(), "signature verdict must remain visible, menu_open={menu_open}");
             assert_eq!(ready_menu(h.state()), menu_open);
         }
+    }
+
+    #[test]
+    fn javascript_menu_ignores_canvas_wheel_reset_but_respects_fresh_wheel() {
+        let ctx = egui::Context::default();
+        let popup = MenuView::default();
+        ctx.run_ui(Default::default(), |ui| crate::canvas::wheel_reset::consumed(ui.ctx())).textures_delta.clear();
+        ctx.run_ui(Default::default(), |ui| {
+            assert!(ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { phase: egui::TouchPhase::Cancel, .. }))));
+            assert!(!popup.outside_interaction(ui.ctx()), "the canvas reset is not fresh user input");
+            // A reset and a fresh gesture can arrive together on the following pass.
+            crate::canvas::wheel_reset::consumed(ui.ctx());
+        })
+        .textures_delta
+        .clear();
+        let raw = egui::RawInput {
+            events: vec![egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -30.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            }],
+            ..Default::default()
+        };
+        ctx.run_ui(raw, |ui| {
+            assert!(crate::canvas::wheel_reset::reset_this_pass(ui.ctx()));
+            assert!(popup.outside_interaction(ui.ctx()), "fresh wheel input alongside a reset still dismisses the menu");
+        })
+        .textures_delta
+        .clear();
     }
 
     #[test]
@@ -2028,5 +2085,102 @@ mod tests {
         assert!(!doc.dirty);
         assert_eq!(doc.can_undo(), None);
         assert!(h.state().pending_remote_link.is_none());
+    }
+
+    #[test]
+    fn deepseek_activation_requires_an_explicit_keyboard_selection() {
+        let items = vec![entry("Dangerous first", true, vec![]), entry("Last", true, vec![])];
+        for key in [egui::Key::Enter, egui::Key::Space] {
+            let mut view = MenuView::default();
+            assert_eq!(view.key(&items, key), None, "invisible first action: {key:?}");
+            assert!(view.keyboard.is_none());
+        }
+        let mut view = MenuView::default();
+        view.key(&items, egui::Key::ArrowDown);
+        assert_eq!(view.keyboard, Some(vec![0]));
+        assert_eq!(view.key(&items, egui::Key::Enter).as_deref(), Some("return Dangerous first"));
+        let mut view = MenuView::default();
+        view.key(&items, egui::Key::ArrowUp);
+        assert_eq!(view.keyboard, Some(vec![1]));
+        assert_eq!(view.key(&items, egui::Key::Space).as_deref(), Some("return Last"));
+        view.keyboard = Some(vec![999]);
+        assert_eq!(view.key(&items, egui::Key::Enter), None, "stale selection cannot fall back to first");
+    }
+
+    #[test]
+    fn deepseek_native_menu_ignores_unselected_activation_and_late_keys() {
+        for key in [egui::Key::Space, egui::Key::Enter] {
+            let mut h = scripted_harness(
+                "var c=app.popUpMenuEx({cName:'Dangerous first',cReturn:'apply'},{cName:'Other'});if(c==='apply')this.pageNum=1;console.println('choice='+c);",
+            );
+            h.key_press(key);
+            h.run_steps(3);
+            assert!(ready_menu(h.state()), "unselected activation closed menu: {key:?}");
+            assert_eq!(h.state().views[0].current, 0);
+            let node = h.get_by_label("Dangerous first");
+            node.hover();
+            h.step();
+            h.key_press(key);
+            h.run_steps(3);
+            assert!(ready_menu(h.state()), "hover alone cannot authorize keyboard activation");
+            h.key_press(egui::Key::ArrowDown);
+            h.step();
+            let job = h.state().link_script.active.as_ref().unwrap();
+            assert_eq!(job.popup.keyboard, Some(vec![0]));
+            assert_eq!(h.ctx.memory(|m| m.focused()), Some(job.popup.focus_ids[0]));
+            h.key_press(key);
+            wait(&mut h, |a| a.link_script.is_none());
+            assert_eq!(h.state().views[0].current, 1);
+            h.key_press(key);
+            h.run_steps(2);
+            assert_eq!(h.state().js_console.log.iter().filter(|s| *s == "choice=apply").count(), 1);
+        }
+    }
+    #[test]
+    fn deepseek_same_frame_navigation_cannot_activate_an_unpainted_row() {
+        let mut h = scripted_harness("var c=app.popUpMenuEx({cName:'Dangerous first'});if(c!==null)this.pageNum=1;");
+        for key in [egui::Key::ArrowDown, egui::Key::Enter] {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        h.step();
+        h.run_steps(2);
+        assert!(ready_menu(h.state()), "the arrow path had never been painted when Enter arrived");
+        assert_eq!(h.state().views[0].current, 0);
+        h.key_press(egui::Key::Enter);
+        wait(&mut h, |a| a.link_script.is_none());
+        assert_eq!(h.state().views[0].current, 1);
+    }
+
+    #[test]
+    fn deepseek_focus_and_escape_do_not_resurrect_a_submenu_selection() {
+        for lose_focus in [false, true] {
+            let mut h = scripted_harness(
+                "var c=app.popUpMenuEx({cName:'Group',oSubMenu:{cName:'Dangerous child'}});if(c!==null)this.pageNum=1;console.println('choice='+c);",
+            );
+            h.key_press(egui::Key::ArrowDown);
+            h.step();
+            h.key_press(egui::Key::ArrowRight);
+            h.run_steps(3);
+            assert_eq!(h.state().link_script.active.as_ref().unwrap().popup.keyboard, Some(vec![0, 0]));
+            if lose_focus {
+                h.input_mut().focused = false;
+                h.event(egui::Event::WindowFocused(false));
+            } else {
+                h.key_press(egui::Key::Escape);
+            }
+            h.step();
+            assert!(h.state().link_script.is_none());
+            h.input_mut().focused = true;
+            h.event(egui::Event::WindowFocused(true));
+            h.run_steps(3);
+            for key in [egui::Key::Enter, egui::Key::Space] {
+                h.key_press(key);
+                h.run_steps(2);
+            }
+            assert!(h.state().link_script.is_none());
+            assert_eq!(h.state().views[0].current, 0);
+            assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+            assert!(!h.state().js_console.log.iter().any(|s| s == "choice=Dangerous child"));
+        }
     }
 }

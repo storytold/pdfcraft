@@ -3,7 +3,7 @@ use super::host::host;
 use super::run::{initialization_limit, run_here};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{Arc, DocInfo, Event, FieldState, Limits, SCRIPT_STACK, refuse};
-use super::{Context, JsArray, JsResult, JsValue, Outcome, RefCell, Request, arg, error, js_string, s, text};
+use super::{Context, JsArray, JsObject, JsResult, JsValue, Outcome, RefCell, Request, arg, error, js_string, s, text};
 
 /// A menu tree; the UI never evaluates script-provided text.
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +74,9 @@ fn read_menu(value: &JsValue, ctx: &mut Context, depth: usize, remaining: &mut u
 /// A selection must match an enabled, non-separator leaf through enabled ancestors.
 /// Reply validation does not authorize document effects; the caller revalidates completion.
 pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if !host(ctx)?.borrow().effects_enabled {
+        return Ok(JsValue::null());
+    }
     let mut remaining = 1024;
     let mut items = Vec::new();
     for arg in args {
@@ -107,21 +110,29 @@ pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
 }
 
 /// Queue OpenDoc as a viewer request and return null, never a live document or file contents.
-/// Reject empty/oversized paths, nonempty cFS, non-null oDoc and unsupported positional
+/// Reject empty/oversized paths, nonempty cFS, other document objects and unsupported positional
 /// options. This host performs no file I/O; request retention follows the host's limits.
 /// Local-path resolution and consent belong to the frontend, while headless tools return
 /// the request as data. A request alone is not permission to open a file.
 pub(crate) fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let arg = arg(args, 0);
+    // Only this context's actual document can select the existing source-relative base.
+    // Lookalikes, inherited objects and proxies must not select another document or file system.
+    let current_document = |value: &JsValue, ctx: &Context| {
+        value.is_undefined() || value.is_null() || value.as_object().is_some_and(|object| JsObject::equals(&object, &ctx.global_object()))
+    };
     let path = if let Some(o) = arg.as_object() {
+        if !args.iter().skip(1).all(|v| v.is_undefined() || v.is_null()) {
+            return Err(error("unsupported openDoc options"));
+        }
         let fs = o.get(js_string!("cFS"), ctx)?;
         let base = o.get(js_string!("oDoc"), ctx)?;
-        if (!fs.is_undefined() && !text(&fs, ctx)?.is_empty()) || (!base.is_undefined() && !base.is_null()) {
+        if (!fs.is_undefined() && !text(&fs, ctx)?.is_empty()) || !current_document(&base, ctx) {
             return Err(error("openDoc supports only the current document's local file system"));
         }
         text(&o.get(js_string!("cPath"), ctx)?, ctx)?
     } else {
-        if !superfluous_open_arguments(args) {
+        if !current_document(&super::arg(args, 1), ctx) || !superfluous_open_arguments(args) {
             return Err(error("unsupported openDoc options"));
         }
         text(&arg, ctx)?
@@ -170,5 +181,5 @@ pub fn interactive(
 }
 
 fn superfluous_open_arguments(args: &[JsValue]) -> bool {
-    args.iter().skip(1).all(|v| v.is_undefined() || v.is_null())
+    args.iter().skip(2).all(|v| v.is_undefined() || v.is_null())
 }

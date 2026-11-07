@@ -216,6 +216,9 @@ pub(crate) fn page_num_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsR
 pub(crate) fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let n = arg(args, 0).to_number(ctx)?;
     let mut h = host(ctx)?.borrow_mut();
+    if !h.effects_enabled {
+        return Ok(JsValue::undefined());
+    }
     let last = h.doc.num_pages.saturating_sub(1);
     let p = (n.max(0.0) as usize).min(last);
     h.doc.page = p;

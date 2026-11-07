@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn freehand_highlight_and_draw_accept_widths_up_to_100() {
+    assert_eq!(CommentTool::FreehandHighlight.group(), CommentTool::Highlight.group());
+    assert_eq!(GROUPS.len(), 3);
+    let mut prefs = CommentPrefs::default();
+    assert_eq!(prefs.style(CommentTool::FreehandHighlight).width, 14.0);
+    assert_eq!(prefs.style(CommentTool::FreehandHighlight).opacity, 0.35);
+    for tool in [CommentTool::Ink, CommentTool::FreehandHighlight] {
+        prefs.set_width(tool, 75.0);
+        assert_eq!(prefs.style(tool).width, 75.0);
+        prefs.set_width(tool, 200.0);
+        assert_eq!(prefs.style(tool).width, 100.0);
+        prefs.set_width(tool, f64::NAN);
+        assert_eq!(prefs.style(tool).width, 100.0);
+    }
+}
+
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
 /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
 #[test]
@@ -16,6 +33,13 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to = Some(pos2(60.0, 10.0));
     assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
     assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    // Released with the rest of the selection: its own move in the batch.
+    let together = Edit::Batch {
+        label: "Move comments".into(),
+        edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
+    };
+    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, false), None, "not in the batch");
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -390,7 +414,8 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
             ui.button("Page").context_menu(|ui| {
-                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, true, true) {
+                let rights = MenuRights { allowed: true, can_paste: false, can_modify: true };
+                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, rights) {
                     actions.push(a);
                 }
             });
@@ -474,6 +499,24 @@ fn drawn_shapes_ignore_slips() {
 }
 
 #[test]
+fn shift_click_selects_the_range_from_the_comment_with_the_handles() {
+    let order = [(0, 3), (0, 1), (0, 0), (1, 2), (1, 0)];
+    let mut cv = CommentView::default();
+    cv.select_only((0, 1));
+    cv.select_range(&order, (1, 2));
+    assert_eq!(cv.selection(), vec![(0, 1), (0, 0), (1, 2)], "from the anchor down, the anchor keeps the handles");
+    // Another ⇧-click from the same anchor changes the range, upwards too.
+    cv.select_range(&order, (0, 3));
+    assert_eq!(cv.selection(), vec![(0, 1), (0, 3)]);
+    // Nothing to start from, or a card not in the list: added as by ⌘/Ctrl-click.
+    let mut none = CommentView::default();
+    none.select_range(&order, (0, 0));
+    assert_eq!(none.selection(), vec![(0, 0)]);
+    cv.select_range(&order, (9, 9));
+    assert_eq!(cv.selected, Some((9, 9)));
+}
+
+#[test]
 fn text_boxes_fit_their_text() {
     let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
     assert_eq!((r[0], r[3]), (100.0, 500.0));
@@ -481,4 +524,40 @@ fn text_boxes_fit_their_text() {
     let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
+}
+
+/// The hover outline goes round the comment a press under the pointer would take (the top hit
+/// there): not a highlight under a form field, which takes the press.
+#[test]
+fn the_hover_outline_goes_round_what_a_press_would_take() {
+    use super::paint::hover_outline;
+    use crate::page_cursor::Layer;
+    use crate::page_router::{CommentPart, Hit, Owner};
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let highlight = Annotation { rect: [50.0, 50.0, 150.0, 150.0], ..annotation("Highlight", None, false) };
+    let info = DocInfo { pages: vec![page], annotations: vec![highlight], ..Default::default() };
+    let prefs = CommentPrefs::default();
+    // The pointer is over the highlight.
+    let ptr = PagePointer { pos: Some(pos2(100.0, 100.0)), ..PagePointer::default() };
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &ptr,
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.0; 3], 1.0),
+    };
+    let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
+    let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);
+    let field = on(Owner::Field { field: 0, widget: 0 }, Layer::Field);
+    let cv = CommentView::default();
+    assert!(hover_outline(&cx, &cv, Some(&comment)).is_some(), "the highlight a press there selects");
+    assert!(hover_outline(&cx, &cv, Some(&field)).is_none(), "not under a field that takes the press");
+    assert!(hover_outline(&cx, &cv, None).is_none(), "nor where nothing would take it");
+    let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
+    assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
 }

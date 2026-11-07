@@ -34,7 +34,14 @@ when a link is clicked.
 An initializer that is refused or throws stops the Link action; its edits and external requests
 are not committed. Ordinary field, button and console initialization retains upstream's separate
 policy: document-script errors are reported while later initializers and the requested script
-can continue. All paths retain the aggregate initialization bound. When XFA layout owns the form,
+can continue. Rebuilding definitions for those ordinary events disables initializer field
+writes, page changes, menus and viewer requests at the host boundary, and uses a separate
+event object. Reads see the current saved/edited state throughout bootstrap, not temporary
+defaults that would later be rolled back. Functions and globals are still evaluated; calling
+those functions from the requested event can perform legitimate field edits and requests.
+Console diagnostics and alerts remain available under the existing reporting policy.
+An explicitly requested Doc/Open retains initializer effects; no automatic Open is added.
+All paths retain the aggregate initialization bound. When XFA layout owns the form,
 the upstream runner omits PDF fallback scripts from initialization; it keeps them in the file.
 
 `app.popUpMenuEx` sends a plain menu tree to the frontend and waits only on the worker thread.
@@ -45,13 +52,17 @@ special-case handling of document generators. `Function.prototype.apply` works n
 ## Desktop context menus
 
 The canvas captures the activation position in egui viewport points before starting the worker.
-The desktop host uses egui 0.36.2 `PopupKind::Menu`, anchored below/right with automatic
+The desktop host uses egui 0.37 `PopupKind::Menu`, anchored below/right with automatic
 flipping and viewport constraints. Root menus and submenus have independently measured widths,
 capped at 340 points; their scroll areas are capped at 420 points and the available height.
 The menu has no dialog title or modal overlay. Labels wrap, disabled entries cannot activate,
 marked entries show a check, and separators and nested submenus retain their PDF values.
 Arrow keys navigate enabled entries, Right/Enter enter submenus, Left leaves, Enter/Space select,
-and Escape cancels. Menu-owned focus is released when the interaction ends.
+and Escape cancels. Enter/Space require an existing keyboard selection, painted as a
+selected row; neither key chooses an invisible first entry, and hover alone is insufficient.
+While the menu owns these keys, Space is consumed and page pan is suspended; arrows first
+establish the selection. Mouse clicks still activate their own row. Menu-owned focus is
+released when the interaction ends.
 
 JavaScript annotation hover tips disappear in the activation frame and stay hidden while
 that interaction is running or queued, including between popup replies. Ordinary link and
@@ -114,12 +125,19 @@ These aggregate limits also apply to fields, buttons and the console. Refusal pr
 input value and reports a diagnostic to the host; field calculation does not open a modal alert.
 
 `pageNum` requests navigate the source document's view. `app.launchURL` uses the existing
-document URL allowlist and explicit consent flow. `app.openDoc(cPath)` and
-`app.openDoc({cPath: ...})` return a file-opening request; the UI asks consent even for
-relative paths. No file is read by Boa. Windows `/C/path` and `/C:/path` forms normalize to
-`C:/path` before the existing local PDF resolver. URL and network paths remain rejected.
-Filesystem validation, PDF extension, regular-file, size and password checks still apply.
-Other filesystems or an `oDoc` base option are refused.
+document URL allowlist and explicit consent flow. `app.openDoc(cPath, oDoc?)` and
+`app.openDoc({cPath: ..., oDoc: ...})` return a file-opening request and JavaScript `null`,
+never a live document or navigation proxy. The optional base may be the current document
+(`this`, or the Link event's `event.target`); omitted, undefined and null keep that same base.
+Other objects, including lookalikes and proxies, other file systems and unsupported positional
+options are refused. This does not grant access to another document or remember permission.
+
+On desktop, the UI asks consent even for relative paths. No file is read by Boa. The desktop
+resolver normalizes Windows `/C/path` and `/C:/path` forms to `C:/path` and rejects URL and
+network paths. Its filesystem validation, PDF extension, regular-file, size and password
+checks still apply. Headless requests are untrusted data, not paths validated by this resolver:
+their consumers must validate the path, enforce their own root/access policy and obtain
+consent before opening anything.
 On desktop, if a file-opening or URL consent prompt is already pending, another script document-opening
 request is ignored with a translated notification asking the user to respond first and retry.
 The existing prompt is preserved; the ignored request is not queued and no file is opened.
@@ -154,7 +172,14 @@ it may change fields and issue viewer requests, and a successful completion appl
 in the usual Undo batch. This differs from desktop cancellation of a waiting menu, which retires
 the whole action and discards its effects. Invalid selections fail closed. External URL/file
 requests are returned to the caller and never executed; consequently this tool does not read
-paths outside `--root`.
+paths outside `--root`. Returning a request does not authorize a later read outside that
+root: a consumer must validate it and obtain consent before acting on it.
+
+The native tool returns a tool error after ten seconds without a worker event. This timeout
+applies separately to each receive, not to the whole action or its synchronous preparation.
+No result from the timed-out action is applied. Abandoning the receiver does not terminate
+the worker: it may continue running, so callers must handle the error and must not assume
+that retrying stopped the earlier worker. Existing cooperative VM limits still apply.
 The tool is marked destructive in MCP because scripts can change fields or reset the form.
 That hint does not grant permissions; the engine still checks all edits and batches them for Undo.
 

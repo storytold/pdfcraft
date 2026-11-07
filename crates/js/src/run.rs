@@ -1,5 +1,5 @@
 use super::globals::{event_object, install};
-use super::host::{Host, Shared, text};
+use super::host::{Host, Shared, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
 use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
 
@@ -136,11 +136,13 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The script's thread writes dates as this one asked (`with_english_printd`).
+        let english = crate::format::printd_english();
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, kept, skipped, limits));
+                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, limits)));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -198,7 +200,10 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 
 /// Evaluate in a fresh Boa context with string-code generation disabled and COW fields.
 /// Link actions initialize document scripts under a synthetic Doc/Open event, then restore
-/// the real event before the action; other callers initialize under their actual event.
+/// the real event before the action; other callers rebuild definitions under a separate copy
+/// of their actual event, with field writes and viewer requests disabled at the host boundary
+/// (except an explicitly requested Doc/Open). Diagnostics and definitions remain available;
+/// the requested script and the functions it calls then run with effects enabled.
 /// A Link initialization error stops evaluation. Other hosts record document-script errors
 /// and continue with later initializers and the action, preserving upstream form behavior.
 /// Collected field changes, diagnostics and requests can still accompany an error; this
@@ -225,6 +230,7 @@ pub(super) fn run_here(
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
+        effects_enabled: true,
         fields,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
@@ -246,10 +252,16 @@ pub(super) fn run_here(
         // non-enumerable avoids a global -> event -> target cycle during serialization.
         let event_attributes = if link { Attribute::WRITABLE | Attribute::CONFIGURABLE } else { Attribute::all() };
         ctx.register_global_property(js_string!("event"), ev.clone(), event_attributes)?;
-        if link {
-            let open_event = event_object(&mut ctx, &Event::doc("Open"), true);
-            ctx.register_global_property(js_string!("event"), open_event, event_attributes)?;
-        }
+        // Explicit Link initialization belongs to its transaction, as does an explicitly
+        // requested Doc/Open. Other events only rebuild definitions: their authoritative
+        // field/page snapshot must not be replaced by an initializer's defaults. Gate at
+        // the host boundary, rather than restoring fields after JS has read wrong values.
+        let initialize_effects = link || (event.kind == "Doc" && event.name == "Open");
+        host(&ctx)?.borrow_mut().effects_enabled = initialize_effects;
+        let initialization_event = if link { Event::doc("Open") } else { event.clone() };
+        // Keep bootstrap event writes (value/rc/change) out of the actual event too.
+        let bootstrap = if initialize_effects && !link { ev.clone() } else { event_object(&mut ctx, &initialization_event, link) };
+        ctx.register_global_property(js_string!("event"), bootstrap, event_attributes)?;
         // Unrequested field initialization is tolerant upstream (#3940). A user-activated
         // Link retains its all-or-error initialization contract before its own action runs.
         for &(i, d) in doc_scripts {
@@ -259,6 +271,7 @@ pub(super) fn run_here(
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
+        host(&ctx)?.borrow_mut().effects_enabled = true;
         ctx.register_global_property(js_string!("event"), ev.clone(), event_attributes)?;
         let r = ctx.eval(Source::from_bytes(script))?;
         if !r.is_undefined() {

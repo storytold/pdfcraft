@@ -355,6 +355,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        effects_enabled: true,
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),
@@ -1024,6 +1025,20 @@ mod formcalc {
         assert_eq!(calc(r#"Format("9.9", -0.04)"#), "0.0");
         assert_eq!(calc(r#"Format("99", -0.2)"#), "00");
         assert_eq!(calc(r#"Format("9.9", -1.5)"#), "-1.5");
+    }
+
+    /// A calculated amount shows the number it is, not the binary noise past a double's 15
+    /// significant digits: 279893.88 is stored as 279893.880000000004656…, which twelve fixed
+    /// decimals printed as `279893.880000000005`. Small values keep their twelve decimals.
+    #[test]
+    fn calculated_numbers_print_at_most_fifteen_significant_digits() {
+        assert_eq!(calc("1 * 279893.88"), "279893.88");
+        assert_eq!(calc("1 * 291774.12"), "291774.12");
+        assert_eq!(calc("279893.88 + 291774.12 + 304171.06 + 317107.44 + 273970.85"), "1466917.35");
+        assert_eq!(calc("1000000 / 3"), "333333.333333333");
+        assert_eq!(calc("1000 / 3"), "333.333333333333");
+        assert_eq!(calc("1 / 3"), "0.333333333333");
+        assert_eq!(calc("0.1 + 0.2"), "0.3");
     }
 
     /// Assigning one long value to many fields at once stops at the run's byte budget and is
@@ -2288,4 +2303,171 @@ fn empty_popups_keep_the_interactive_call_limit() {
             }
         }
     }
+}
+
+#[test]
+fn pr2081_current_document_base_returns_only_a_deferred_request() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:this})",
+        "app.openDoc('other.pdf',this)",
+        "app.openDoc('other.pdf',event.target)",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:''})",
+        "app.openDoc('other.pdf',null)",
+    ] {
+        let out = go(&format!("getField('price').value='17';console.println({call}===null);"), &event);
+        assert_eq!(out.error, None, "{call}");
+        assert_eq!(out.requests, [Request::OpenDoc("other.pdf".into())], "{call}");
+        assert_eq!(out.console, ["true"], "consent has not returned a live document: {call}");
+        assert_eq!(out.changed.iter().find(|field| field.name == "price").unwrap().value, ["17"]);
+    }
+}
+
+#[test]
+fn pr2081_current_document_base_rejects_other_objects_and_options() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:{}})",
+        "app.openDoc('other.pdf',{})",
+        "app.openDoc('other.pdf',Object.create(this))",
+        "app.openDoc('other.pdf',new Proxy(this,{}))",
+        "app.openDoc('other.pdf',getField('price'))",
+        "app.openDoc('other.pdf',this,true)",
+        "app.openDoc('other.pdf',this,'CHTTP')",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:'CHTTP'})",
+    ] {
+        let out = go(call, &event);
+        assert!(
+            out.error.as_deref().is_some_and(|error| error.contains("openDoc")),
+            "unsupported base or option accepted, or failed before its guard: {call}: {:?}",
+            out.error
+        );
+        assert!(out.requests.is_empty() && out.changed.is_empty(), "refusal must not queue an effect: {call}");
+    }
+}
+
+/// Rebuilding function definitions is not permission to replay the document's effects.
+#[test]
+fn deepseek_non_link_bootstrap_reads_current_state_without_replaying_effects() {
+    let scripts = vec!["getField('price').value=0;getField('price').readonly=true;getField('agree').checkThisBox(0,true);this.pageNum=2;resetForm();print();app.alert('bootstrap');app.launchURL('https://example.invalid');app.openDoc('other.pdf');event.value='init';event.rc=false;var seen=getField('price').value;var pageSeen=this.pageNum;function amount(){return seen*2;}".into()];
+    for event in [
+        Event::doc("Console"),
+        Event::field("Calculate", "total", "unchanged"),
+        Event::field("Validate", "qty", "unchanged"),
+        Event::field("Keystroke", "qty", "unchanged"),
+        Event::field("Format", "qty", "unchanged"),
+        Event::field("Mouse Up", "agree", "unchanged"),
+    ] {
+        let out = run(
+            "console.println(seen+':'+pageSeen);event.value=amount();getField('total').value=amount();",
+            &event,
+            &doc(),
+            &fields(),
+            &scripts,
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{event:?}");
+        assert_eq!(out.console, ["12.5:0"], "initialization reads authoritative values, not discarded temporary writes: {event:?}");
+        assert_eq!(out.value, "25");
+        assert!(out.rc);
+        // Upstream keeps initialization diagnostics for ordinary/inactive XFA containers.
+        assert_eq!(out.alerts, [Message::plain("bootstrap")], "initializer diagnostic was lost: {event:?}");
+        assert!(out.requests.is_empty(), "initializer requests escaped: {event:?}: {:?}", out.requests);
+        assert_eq!(out.changed.len(), 1, "initializer field writes escaped: {event:?}");
+        assert_eq!(out.changed[0].name, "total");
+        assert_eq!(out.changed[0].value, ["25"]);
+    }
+}
+
+#[test]
+fn deepseek_event_effects_and_explicit_initialization_still_work() {
+    let scripts=vec!["function update(){getField('price').value=5;getField('price').required=true;resetForm(['qty']);print();app.launchURL('https://example.invalid');this.pageNum=1;}".into()];
+    let out = run("update();", &Event::field("Calculate", "total", ""), &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(out.error, None);
+    assert_eq!(out.changed.len(), 1);
+    assert_eq!(out.changed[0].value, ["5"]);
+    assert!(out.changed[0].required);
+    assert_eq!(
+        out.requests,
+        [Request::Reset(vec!["qty".into()]), Request::Print, Request::LaunchUrl("https://example.invalid".into()), Request::GoToPage(1)]
+    );
+    let open = run("", &Event::doc("Open"), &doc(), &fields(), &["event.value='explicit open';event.rc=false;".into()], Limits::default());
+    assert_eq!(open.value, "explicit open");
+    assert!(!open.rc);
+    for event in [Event::doc("Open"), Event { kind: "Link".into(), ..Event::doc("Mouse Up") }] {
+        let out = run(
+            "console.println(getField('price').value);",
+            &event,
+            &doc(),
+            &fields(),
+            &["getField('price').value=0;this.pageNum=1;".into()],
+            Limits::default(),
+        );
+        assert_eq!(out.error, None);
+        assert_eq!(out.console, ["0"]);
+        assert_eq!(out.changed[0].value, ["0"]);
+        assert_eq!(out.requests, [Request::GoToPage(1)]);
+    }
+}
+
+#[test]
+fn deepseek_open_doc_rejects_extra_arguments_in_both_forms() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'x.pdf'},true)",
+        "app.openDoc({cPath:'x.pdf'},this)",
+        "app.openDoc({cPath:'x.pdf'},null,true)",
+        "app.openDoc('x.pdf',this,true)",
+        "app.openDoc('x.pdf',this,null,true)",
+    ] {
+        let out = go(call, &event);
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("openDoc")), "{call}: {:?}", out.error);
+        assert!(out.requests.is_empty(), "{call}");
+    }
+    for call in ["app.openDoc({cPath:'x.pdf',oDoc:this})", "app.openDoc({cPath:'x.pdf'},null,undefined)", "app.openDoc('x.pdf',this,null,undefined)"]
+    {
+        let out = go(call, &event);
+        assert_eq!(out.error, None, "{call}");
+        assert_eq!(out.requests, [Request::OpenDoc("x.pdf".into())]);
+    }
+}
+
+/// A bounded lifetime probe, not a termination guarantee: each worker waits on a held
+/// menu reply, a short receive deadline expires, and abandoning its receiver leaves it alive.
+#[cfg(windows)]
+#[test]
+fn deepseek_abandoning_receivers_does_not_terminate_workers() {
+    fn threads() -> usize {
+        let command = format!("(Get-Process -Id {}).Threads.Count", std::process::id());
+        let out = std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &command]).output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().parse().unwrap()
+    }
+    let before = threads();
+    let mut replies = Vec::new();
+    for _ in 0..3 {
+        let rx =
+            interactive("app.popUpMenuEx({cName:'Wait'});".into(), Event { kind: "Link".into(), ..Event::doc("Mouse Up") }, doc(), vec![], vec![])
+                .unwrap();
+        let InteractiveEvent::Menu(_, reply) = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() else { panic!("menu expected") };
+        replies.push(reply);
+        assert!(matches!(rx.recv_timeout(std::time::Duration::from_millis(10)), Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+        drop(rx);
+    }
+    let abandoned = threads();
+    // Sending succeeds after all receivers above were dropped: each worker is still
+    // receiving its own menu reply. This is cooperation, never forced VM interruption.
+    for reply in replies {
+        reply.send(None).unwrap();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut finished = threads();
+    while finished > before && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        finished = threads();
+    }
+    println!("WORKER_LIFETIME before={before} abandoned={abandoned} released={finished}");
+    // Process-wide counts are observations, not assertions: unrelated tests may create
+    // or finish threads in the normal parallel harness. The three successful reply sends
+    // above establish that our own workers survived receiver abandonment independently.
 }

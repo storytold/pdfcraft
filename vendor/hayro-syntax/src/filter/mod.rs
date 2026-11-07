@@ -9,6 +9,10 @@ mod dct;
 #[cfg(feature = "images")]
 mod jbig2;
 #[cfg(feature = "images")]
+pub use jbig2::{MAX_PAGE_JBIG2_WORK, page_jbig2_work_spent};
+#[cfg(all(feature = "images", feature = "std"))]
+pub use jbig2::set_page_jbig2_work;
+#[cfg(feature = "images")]
 mod jpx;
 mod lzw_flate;
 mod run_length;
@@ -126,7 +130,8 @@ impl Filter {
                 warn!("image decoding is not supported (enable the `images` feature)");
                 Err(DecodeFailure::ImageDecode)
             }
-            _ => Err(DecodeFailure::StreamDecode),
+            // PdfCraft patch (30): `Stream::raw_data` decrypted the data with the filter this names.
+            Self::Crypt => Ok(FilterResult::from_data(data.to_vec())),
         };
 
         if res.is_err() {

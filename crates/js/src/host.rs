@@ -6,6 +6,9 @@ use super::{
 };
 
 pub(crate) struct Host {
+    /// False only while rebuilding definitions for an ordinary event. Reads still see
+    /// the authoritative snapshot; ignored writes never become temporary input to JS.
+    pub(crate) effects_enabled: bool,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
@@ -54,6 +57,9 @@ impl Host {
     /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
     /// requests and the run's byte budget.
     pub(crate) fn request(&mut self, r: Request) {
+        if !self.effects_enabled {
+            return;
+        }
         if self.requests.len() >= xfa::MAX_EFFECTS {
             self.dropped = self.dropped.saturating_add(1);
             return;
@@ -173,6 +179,9 @@ pub(crate) fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
 pub(crate) fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
+    if !h.effects_enabled {
+        return Ok(());
+    }
     let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
     change(field);
     h.changed.insert(i);
