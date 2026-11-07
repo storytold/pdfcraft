@@ -175,9 +175,10 @@ fn outline_len_seen(
 
 /// Takes out the action of outline item `d` when it does more than go to a place in this document
 /// (a script, a launch, a web or remote link, a form submission); a jump with an action chained
-/// after it (`/Next`) keeps only the jump. Items written in place below it (`/First`, `/Next`) are
-/// cleaned the same way, and items that are objects of their own go on `next`. Returns how many
-/// actions went, or `None` past the depth limit.
+/// after it (`/Next`) keeps only the jump. Items it links to that are written in place are cleaned
+/// the same way, and items that are objects of their own go on `next`. Every link counts, not only
+/// `/First` and `/Next`: a damaged outline may reach an item only backwards, and a full save keeps
+/// that item too. Returns how many actions went, or `None` past the depth limit.
 fn clean_outline_item(doc: &Document, d: &mut Dict, next: &mut Vec<ObjRef>, depth: usize) -> Option<usize> {
     if depth > MAX_DIRECT_DEPTH {
         return None;
@@ -199,7 +200,7 @@ fn clean_outline_item(doc: &Document, d: &mut Dict, next: &mut Vec<ObjRef>, dept
             }
         }
     }
-    for key in [&b"First"[..], b"Next"] {
+    for key in [&b"First"[..], b"Last", b"Next", b"Prev", b"Parent"] {
         match d.get_mut(key) {
             Some(Object::Ref(r)) => next.push(*r),
             Some(Object::Dict(kid)) => n += clean_outline_item(doc, kid, next, depth + 1)?,

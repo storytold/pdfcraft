@@ -2577,6 +2577,26 @@ fn bookmarks_that_stay_lose_their_scripts() {
     assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "the bookmark's script survived the save");
 }
 
+/// A damaged outline may reach an item only backwards (`/Last`, `/Prev`, `/Parent`). The full save
+/// keeps that item all the same, so its script goes too.
+#[test]
+fn bookmarks_reached_only_backwards_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    // /First and /Next reach only 6; 7, 8 and 9 hang off its /Last, /Prev and /Parent and share script 10
+    let mut doc = outlined_document(vec![
+        b"<< /Title (Reached) /Last 7 0 R /Prev 8 0 R /Parent 9 0 R >>".to_vec(),
+        b"<< /Title (Last) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Prev) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Parent) /A 10 0 R >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 3)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 3)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"(Parent)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "a script reached only backwards survived the save");
+}
+
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
 /// (`/OBJR`). Removing them must drop those references too, or the full rewrite keeps the
 /// annotations, the URL and the comment text included, while the page no longer lists them.
