@@ -211,8 +211,46 @@ impl PdfCraftApp {
         if !self.may_copy(id) {
             return false;
         }
-        ctx.copy_text(text);
+        // Built only when there is a clipboard to take it.
+        let html = if self.takes_html() {
+            self.views
+                .get(i)
+                .and_then(DocView::selected_glyphs)
+                .and_then(|(page, layer, glyphs)| self.session.get(id)?.rich_copy(page, &layer, &glyphs).ok())
+                // A capped copy would paste less than the plain text holds; paste that instead.
+                .filter(|copy| !copy.truncated)
+                .map(|copy| copy.html)
+                .filter(|html| !html.is_empty())
+        } else {
+            None
+        };
+        if !html.is_some_and(|html| self.put_rich_text(&html, &text)) {
+            ctx.copy_text(text);
+        }
         true
+    }
+
+    /// Whether Copy with formatting has a clipboard to write: the system clipboard is on, and
+    /// this isn't the web build (or a test stands in for the clipboard).
+    fn takes_html(&self) -> bool {
+        self.system_clipboard && (self.html_clipboard_override.is_some() || cfg!(not(target_arch = "wasm32")))
+    }
+
+    /// Put `html` on the clipboard with `text` as its plain alternative, in one set (egui has no
+    /// HTML output, and its own text copy at the end of the frame would replace the HTML).
+    /// `false` when it wasn't, so the caller copies the plain text the usual way.
+    fn put_rich_text(&mut self, html: &str, text: &str) -> bool {
+        if let Some(set) = self.html_clipboard_override.as_mut() {
+            return set(html, text);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::os_clipboard::with_kept(&mut self.os_clipboard, |c| c.set().html(html, Some(text))).is_ok()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// The clipboard text of a whole-document copy, once its pages are read; dropped with the
