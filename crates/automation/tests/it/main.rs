@@ -18,3 +18,4 @@ mod redact_after_stray_q_form;
 mod redact_text_after_q;
 mod render_warnings;
 mod tagged_headings_export;
+mod unreadable_objects;
