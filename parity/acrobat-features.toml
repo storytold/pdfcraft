@@ -8259,8 +8259,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::multiple_pages_per_sheet", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/print/src/tests.rs::cut_stack_keeps_piles_in_order_and_blanks_in_place", "crates/print/src/tests.rs::cutting_and_stacking_recovers_every_selected_page", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools", "crates/ui-egui/tests/it/print.rs::cut_stack_dialog_previews_saves_and_refuses_duplex"]
-notes = "2/4/6/9/16, four sequential orders, borders, auto-rotate; also single-sided cut-and-stack order with aligned gutter cut marks, blank padding and range/reverse support (an extension, not an Acrobat parity claim). Duplex cut-and-stack is refused."
+evidence = ["crates/print/src/tests.rs::multiple_pages_per_sheet", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/print/src/tests.rs::cut_stack_keeps_piles_in_order_and_blanks_in_place", "crates/print/src/tests.rs::cutting_and_stacking_recovers_every_selected_page", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools", "crates/ui-egui/tests/it/print.rs::cut_stack_dialog_previews_saves_and_refuses_duplex", "crates/print/src/tests.rs::a_custom_grid_is_laid_out_as_given_on_the_chosen_sheet", "crates/automation/tests/it/automation.rs::custom_pages_per_sheet_prints_the_grid_as_given", "crates/ui-egui/tests/it/print.rs::custom_pages_per_sheet_takes_columns_by_rows"]
+notes = "2/4/6/9/16 (the sheet turns to suit the grid with Auto orientation) or Custom columns by rows, 1-99 each, laid out across and down the sheet as oriented (Auto prints portrait; doc_print cols/rows); four sequential orders, borders, auto-rotate; also single-sided cut-and-stack order with aligned gutter cut marks, blank padding and range/reverse support (an extension, not an Acrobat parity claim). Duplex cut-and-stack is refused."
 
 [[feature]]
 id = "print.booklet"
