@@ -4,6 +4,11 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
 
 ## What it does
 
+Syriac FreeText appearances require the document-backed `appearance::build_in`
+path so generated glyph streams have valid indirect references. This covers text
+boxes, callouts and Fill & Sign text, including regeneration. The dictionary-only
+builder cannot embed those streams. See [content support](../../docs/syriac-content.md).
+
 - **Builders** for the comment types Acrobat's commenting tools create: sticky note (`Text` +
   `Popup`), highlight, underline, strikethrough, squiggly, rectangle (`Square`), oval (`Circle`),
   line and arrow (`Line` with `/LE`), freehand drawing (`Ink`) and text box (`FreeText`).

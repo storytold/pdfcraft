@@ -161,7 +161,15 @@ impl PdfCraftApp {
             .into_iter()
             .filter(|(p, ix)| doc.info.annotations.iter().any(|a| a.page == *p && a.index == *ix && !a.is_reply() && only(a)))
             .filter(|(p, ix)| doc.comment_props(*p, *ix).is_some_and(|c| c.restylable && !c.locked))
-            .map(|(page, index)| Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None })
+            .map(|(page, index)| Edit::StyleAnnotation {
+                page,
+                index,
+                color: Some(color),
+                opacity: None,
+                width: None,
+                endings: None,
+                syriac_family: None,
+            })
             .collect();
         match edits.len() {
             0 => {}
@@ -248,7 +256,7 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
     let endings =
         (e.endings != o.endings).then(|| e.endings.clone()).flatten().filter(|ends| t.endings.as_ref().is_some_and(|own| own.len() == ends.len()));
     if t.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
-        out.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings });
+        out.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings, syriac_family: None });
     }
     if t.restylable && t.fillable && e.fill != o.fill {
         out.push(Edit::FillAnnotation { page, index, fill: e.fill });

@@ -557,7 +557,7 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect();
-    out.push(Field {
+    let mut field = Field {
         name: inh.name.clone(),
         obj: r,
         kind,
@@ -572,7 +572,15 @@ fn walk(
         widgets,
         actions,
         button,
-    });
+    };
+    // The click/scroll row geometry must match the selected Syriac face's drawn extents.
+    if field.kind == FieldKind::List && field.widgets.iter().any(|w| appearance::needs_syriac(doc, &field, w, &field.value)) {
+        let rows: Vec<_> = field.widgets.iter().map(|w| appearance::list_rows(doc, &field, w)).collect();
+        for (w, rows) in field.widgets.iter_mut().zip(rows) {
+            w.list = Some(rows);
+        }
+    }
+    out.push(field);
 }
 
 pub(crate) fn field_flags(doc: &Document, dict: &Dict) -> Option<u32> {

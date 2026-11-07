@@ -22,6 +22,14 @@ pub fn required(text: &str) -> bool {
         .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
 }
 
+/// Syriac and its supplement share joining behavior, even when a selected face
+/// lacks a supplement glyph (which remains an explicit missing-glyph error).
+pub fn is_syriac(c: char) -> bool {
+    matches!(u32::from(c), 0x0700..=0x074f | 0x0860..=0x086f)
+}
+
+/// Shape a bounded row from explicit font bytes with per-run bidi order and logical text.
+/// Refuse missing contextual tables, missing glyphs and excessive output geometry.
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     if text.len() > 262_144 || text.contains(['\n', '\r']) {
         return Err("shape one bounded text row at a time".into());
@@ -30,7 +38,9 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0fff | 0x1780..=0x17ff)) && face.gsub().is_err() {
+    if text.chars().any(|c| is_syriac(c) || matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0fff | 0x1780..=0x17ff))
+        && face.gsub().is_err()
+    {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
     let data = ShaperData::new(&face);

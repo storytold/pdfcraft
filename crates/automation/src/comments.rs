@@ -175,6 +175,7 @@ impl Automation {
         Ok((page, index))
     }
 
+    /// List comment threads with stable targets, review states and persisted Syriac family metadata.
     pub(crate) fn comment_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
@@ -219,6 +220,9 @@ impl Automation {
                 let page = doc.info.pages.get(c.page);
                 v["points"] =
                     json!(c.points.iter().map(|q| page.map_or([q[0], q[1]], |p| p.user_to_view(q[0], q[1])).map(round)).collect::<Vec<_>>());
+            }
+            if let Some(family) = doc.comment_props(c.page, c.index).and_then(|props| props.syriac_family) {
+                v["syriac_family"] = json!(family.name());
             }
             v
         };
@@ -266,10 +270,16 @@ impl Automation {
         Ok(json!({ "count": roots.len(), "comments": roots }))
     }
 
+    /// Parse a comment shape and its style, validate text-family applicability, then add the annotation.
+    /// Report created comment metadata for subsequent headless edits.
     pub(crate) fn comment_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
         let kind = a.str("type")?;
+        let syriac_family = crate::content::opt_syriac_family(a)?;
+        if syriac_family.is_some() && !matches!(kind, "textbox" | "callout") {
+            return Err(ToolError::InvalidArgs("syriac_family applies to a textbox or callout".into()));
+        }
         let endings = line_endings(a)?;
         if endings.is_some() && !matches!(kind, "line" | "arrow" | "polyline" | "callout") {
             return Err(ToolError::InvalidArgs("endings apply to a line, arrow, polyline or callout".into()));
@@ -451,6 +461,7 @@ impl Automation {
             }
         };
         let mut style = Style::default_for(&shape);
+        style.syriac_family = syriac_family;
         if let Some(c) = a.color("color")? {
             style.color = c;
         }
@@ -539,6 +550,8 @@ impl Automation {
         }))
     }
 
+    /// Place text, dates, typed/image signatures or simple Fill & Sign marks in displayed coordinates.
+    /// Validate family selection before applying it to text or signature outlines.
     pub(crate) fn fill_sign_add(&mut self, a: &Args) -> Result<Value> {
         let border_shape = border_shape(a)?;
         use pdfcraft_engine::FillMark;
@@ -548,6 +561,11 @@ impl Automation {
         let at = to_user(&info, x, y);
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let kind = a.str("type")?;
+        let syriac_family = crate::content::opt_syriac_family(a)?;
+        if syriac_family.is_some() && (!matches!(kind, "text" | "date" | "signature" | "initials") || a.opt_str("path")?.is_some()) {
+            return Err(ToolError::InvalidArgs("syriac_family applies to text, dates or typed signatures/initials".into()));
+        }
+        let family = syriac_family.unwrap_or_default();
         let scan = a.opt_bool("scan")?.unwrap_or(false);
         let sensitivity = a.opt_int("sensitivity")?;
         if (scan || sensitivity.is_some()) && a.opt_str("path")?.is_none() {
@@ -610,21 +628,17 @@ impl Automation {
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
-        // A circle goes around the text, so its box is no wider than the text needs.
         let min_width = if border_shape == Some(BorderShape::Circle) { 0.0 } else { 20.0 };
-        let text_at = |t: &str| {
-            let longest = t.lines().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
-            let w = (longest + 8.0).clamp(min_width, 600.0);
-            let rows = pdfcraft_engine::annot_text::wrap(t, size, w - 4.0).len().max(1);
-            let h = rows as f64 * size * 1.2 + 6.0;
+        let text_at = |t: &str| -> Result<Shape> {
+            let [w, h] = pdfcraft_engine::annot_text::text_box_size_for_family_min(t, size, family, min_width).map_err(ToolError::InvalidArgs)?;
             let [x0, y0, x1, y1] = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
-            // A border goes around the box, so the text sits where it would without one.
-            Shape::Typewriter { rect: [x0 - border, y0 - border, x1 + border, y1 + border], font_size: size }
+            // A border goes around the box, so the text keeps its position.
+            Ok(Shape::Typewriter { rect: [x0 - border, y0 - border, x1 + border, y1 + border], font_size: size })
         };
         let (shape, contents) = match kind {
             "text" => {
                 let t = a.str("text")?.to_string();
-                (text_at(&t), t)
+                (text_at(&t)?, t)
             }
             "date" => {
                 let lang = a.opt_str("language")?;
@@ -632,21 +646,21 @@ impl Automation {
                     return Err(ToolError::InvalidArgs(format!("unknown date language {l:?} (see fill_sign_date_format)")));
                 }
                 let t = self.session.today_text_for_pdf(a.opt_str("format")?, lang).map_err(ToolError::InvalidArgs)?;
-                (text_at(&t), t)
+                (text_at(&t)?, t)
             }
             // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
                 // Nobody sees a preview here: refuse what the script font would leave out.
-                if let Some(c) = pdfcraft_engine::script_missing(t) {
+                if let Some(c) = pdfcraft_engine::script_missing_for_family(t, family) {
                     return Err(ToolError::InvalidArgs(format!(
-                        "the signature script font can't draw \"{}\" (U+{:04X}); type the {kind} in Latin, Cyrillic or Greek letters, or pass `path` to a PNG or JPEG image of it instead of `text`",
+                        "the selected signature fonts can't draw \"{}\" (U+{:04X}); choose an available Syriac family or pass `path` to a PNG or JPEG image of the {kind} instead of `text`",
                         c.escape_debug(),
                         u32::from(c)
                     )));
                 }
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
-                let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
+                let shape = pdfcraft_engine::typed_signature_shape_with_family(at, t, h, i64::from(info.rotation), family)
                     .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }
@@ -662,6 +676,7 @@ impl Automation {
             }
         };
         let mut style = Style::default_for(&shape);
+        style.syriac_family = syriac_family;
         if let Some(color) = requested_color {
             style.color = color;
         }
@@ -721,16 +736,24 @@ impl Automation {
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 
+    /// Apply requested content, style and geometry changes to one resolved comment target.
+    /// Reject family changes outside FreeText before collecting the edit batch.
     pub(crate) fn comment_edit(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
+        let syriac_family = crate::content::opt_syriac_family(a)?;
+        if syriac_family.is_some() && self.doc(a)?.comment_props(page, index).is_none_or(|props| props.subtype != "FreeText") {
+            return Err(ToolError::InvalidArgs(
+                "syriac_family can change only on a textbox, callout or Fill & Sign text; recreate typed signatures".into(),
+            ));
+        }
         let mut edits = Vec::new();
         if let Some(text) = a.opt_str("contents")? {
             edits.push(Edit::SetAnnotationContents { page, index, text: text.to_string() });
         }
         let (color, opacity, width) = (a.color("color")?, a.opt_num("opacity")?, a.opt_num("width")?);
-        if color.is_some() || opacity.is_some() || width.is_some() {
-            edits.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings: None });
+        if color.is_some() || opacity.is_some() || width.is_some() || syriac_family.is_some() {
+            edits.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings: None, syriac_family });
         }
         if let Some(f) = a.opt_str("fill")? {
             let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
@@ -784,7 +807,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, syriac_family, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

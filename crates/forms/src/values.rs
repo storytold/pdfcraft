@@ -432,19 +432,19 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     for w in &f.widgets {
         let (stream, missing) = match &shown {
             Some(s) => {
-                let drawn = appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false);
+                let drawn = appearance::field_appearance_drawn_in(doc, f, w, std::slice::from_ref(s), false);
                 // Taken when the English run happened and draws whole, even where it is the
                 // stored value ("18-Oct-26" printed again from itself).
                 let again = match (&drawn.1, values) {
                     (Some(_), [one]) => english.get_or_insert_with(|| scripting::formatted_in_english(doc, f, one, scripts)).as_ref(),
                     _ => None,
                 };
-                match again.map(|e| appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(e), false)) {
+                match again.map(|e| appearance::field_appearance_drawn_in(doc, f, w, std::slice::from_ref(e), false)) {
                     Some(english) if english.1.is_none() => english,
                     _ => drawn,
                 }
             }
-            None => appearance::field_appearance_drawn(doc, f, w, values, true),
+            None => appearance::field_appearance_drawn_in(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
         let existing_ap = in_place

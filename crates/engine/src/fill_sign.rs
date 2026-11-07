@@ -1,6 +1,6 @@
 //! Fill & Sign geometry: typed signatures, and boxes placed as a turned page displays them.
 
-use crate::{Shape, script_outline, signature_image};
+use crate::{Shape, SyriacFamily, script_outline, script_outline_for_family, signature_image};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
@@ -9,7 +9,12 @@ use crate::{Shape, script_outline, signature_image};
 /// the box runs along the displayed axes, like an image signature's
 /// ([`SignatureImage::rect`](crate::SignatureImage::rect)), and the outlines are turned back so the name reads across.
 pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64, rotation: i64) -> Option<Shape> {
-    let o = script_outline(text);
+    typed_signature_shape_with_family(at, text, height, rotation, SyriacFamily::default())
+}
+
+/// Like [`typed_signature_shape`], using the selected family for Syriac signature outlines.
+pub fn typed_signature_shape_with_family(at: [f64; 2], text: &str, height: f64, rotation: i64, family: SyriacFamily) -> Option<Shape> {
+    let o = script_outline_for_family(text, family);
     let [left, bottom, right, top] = o.bounds();
     let span = (top - bottom).max(0.1);
     let width = right - left;

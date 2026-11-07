@@ -171,6 +171,8 @@ impl ImageState {
         if x.is_finite() && y.is_finite() { Some(Point::new(x, y)) } else { None }
     }
 
+    /// Track bounded graphics-state and clipping-path operators for image placement.
+    /// Ignore path segments without a current point and reject hostile coordinates or excessive complexity.
     fn apply(&mut self, op: &Op) -> Result<(), EditError> {
         if matches!(op.op.as_slice(), b"cm" | b"m" | b"l" | b"c" | b"v" | b"y" | b"re")
             && op.operands.iter().any(|v| v.as_f64().is_some_and(|v| !v.is_finite() || v.abs() > 1e12))
@@ -239,11 +241,9 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
+            b"h" if self.has_current_point() => {
                 // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
+                self.path.close_path();
             }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()

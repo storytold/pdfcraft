@@ -403,7 +403,15 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
     };
     h.state_mut().views[0].comments.selected = Some((page, index));
     // As Comment Properties ▸ Thickness does.
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(2.0), endings: None });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation {
+        page,
+        index,
+        color: None,
+        opacity: None,
+        width: Some(2.0),
+        endings: None,
+        syriac_family: None,
+    });
     h.run_steps(3);
     assert!(shows(&h, "2 pt"), "the toolbar shows the selected text's border");
     assert_eq!(h.state().fill_text_border, 0.0, "new text keeps none");
@@ -621,7 +629,7 @@ fn typed_text_made_default_is_what_new_text_gets() {
     let (page, index) = type_at(&mut h, 150.0, "Model");
     let red = Some([0.89, 0.13, 0.13]);
     for edit in [
-        Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(1.5), endings: None },
+        Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(1.5), endings: None, syriac_family: None },
         Edit::BorderColorAnnotation { page, index, color: red },
         Edit::BorderShapeAnnotation { page, index, shape: BorderShape::Circle },
         Edit::FontSizeAnnotation { page, index, size: 14.0 },

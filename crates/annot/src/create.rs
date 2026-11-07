@@ -206,14 +206,30 @@ pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
     }
 }
 
+/// Refuse a family on non-text shapes and validate explicitly selected FreeText shaping.
+fn validate_syriac_family(new: &NewAnnotation) -> Result<(), AnnotError> {
+    let Some(family) = new.style.syriac_family else { return Ok(()) };
+    if !matches!(&new.shape, Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. } | Shape::TypedSignature { .. }) {
+        return Err(AnnotError::Invalid("a Syriac family is only for text boxes, callouts, Fill & Sign text or typed signatures".into()));
+    }
+    if new.shape.subtype() == "FreeText" && pdfcraft_fonts::content_text::contains_syriac(&new.contents) {
+        pdfcraft_fonts::content_text::wrap_for_family(&new.contents, 12.0, 1000.0, family).map_err(AnnotError::Invalid)?;
+    }
+    Ok(())
+}
+
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
     validate_style(style)?;
+    validate_syriac_family(new)?;
     let rect = rect_for(&new.shape, style)?;
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
+    if let Some(family) = style.syriac_family {
+        d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name()));
+    }
     if style.fill_opacity.into_iter().chain(style.text_opacity).any(|o| !o.is_finite()) {
         return Err(AnnotError::Invalid("invalid opacity".into()));
     }

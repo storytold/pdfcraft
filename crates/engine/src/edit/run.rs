@@ -577,12 +577,18 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
-        Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
+        Edit::StyleAnnotation { page, index, color, opacity, width, endings, syriac_family } => {
             pdfcraft_annot::set_style(
                 doc,
                 *page,
                 *index,
-                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone() },
+                pdfcraft_annot::StyleChange {
+                    color: *color,
+                    opacity: *opacity,
+                    width: *width,
+                    endings: endings.clone(),
+                    syriac_family: *syriac_family,
+                },
                 &cx.meta(),
             )?;
         }

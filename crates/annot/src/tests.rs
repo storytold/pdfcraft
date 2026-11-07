@@ -37,6 +37,7 @@ fn meta(id: &str) -> Meta {
     Meta { date: Some("D:20261001120000Z".into()), id: id.into() }
 }
 
+/// Create a synthetic annotation with a stable blue style, sample text and author.
 fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
@@ -1239,6 +1240,7 @@ fn cloud_ys(path: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Replacement markup keeps its strikeout and caret grouped through editing and saving.
 #[test]
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
@@ -1404,6 +1406,60 @@ fn comments_without_appearances_get_one_for_display_only() {
         b"<< /Type /XObject /Subtype /Form /BBox [10 10 50 50] /Length 0 >>\nstream\n\nendstream",
     ]);
     assert!(with_missing_appearances(&complete).is_none());
+}
+
+/// Unavailable Syriac glyphs retain logical contents, a marked fallback and restylability after saving.
+#[test]
+fn syriac_freetext_keeps_a_legacy_fallback_without_document_or_glyphs() {
+    let mut bare = Dict::new();
+    bare.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    bare.set(b"Rect".to_vec(), num_array(&[20.0, 20.0, 200.0, 70.0]));
+    bare.set(b"Contents".to_vec(), PdfString::text("ܒ"));
+    let stream = appearance::build(&bare).expect("dictionary-only callers retain the standard-font appearance");
+    assert!(String::from_utf8_lossy(&stream.decoded().unwrap()).contains("(?)"));
+    assert_eq!(text(&bare, b"Contents"), "ܒ", "fallback drawing keeps the logical text");
+
+    // All approved Syriac releases lack this supplement glyph. This exercises
+    // the missing-face/glyph fallback without switching the build's font input.
+    let mut doc = fixture();
+    let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 });
+    boxed.contents = "\u{0860}".into();
+    let index = add_annotation(&mut doc, &boxed, &meta("missing-syriac")).expect("unavailable glyphs retain a marked fallback appearance");
+    assert_eq!(text(&list(&doc, 0)[index], b"Contents"), "\u{0860}");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), Some('\u{0860}'));
+    assert!(ap_content(&doc, &list(&doc, 0)[index]).contains("(?)"));
+    assert!(props(&doc, 0, index).unwrap().restylable, "our marked fallback remains restylable");
+    set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("restyled")).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text(&list(&reopened, 0)[index], b"Contents"), "\u{0860}");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&reopened, 0)[index]), Some('\u{0860}'));
+    assert!(ap_content(&reopened, &list(&reopened, 0)[index]).contains("(?)"));
+}
+
+/// Malformed Syriac annotations must not suppress valid neighboring display appearances or mutate input.
+#[test]
+fn one_unbuildable_syriac_comment_does_not_discard_other_display_appearances() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [1 0 0] >>",
+        // Malformed geometry remains unbuildable even with the text fallback.
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20] /Contents <FEFF0712> >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [100 100 150 150] /C [0 0 1] >>",
+    ]);
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut cache = AppearanceCache::default();
+    for _ in 0..2 {
+        let display = with_missing_appearances_cached(&doc, &mut cache).expect("valid comments before and after the bad comment remain visible");
+        let shown = list(&display, 0);
+        assert!(shown[0].get(b"AP").is_some(), "keep the appearance built before the failed annotation");
+        assert!(shown[1].get(b"AP").is_none(), "skip only the unbuildable annotation");
+        assert!(shown[2].get(b"AP").is_some(), "continue to later annotations, including on a cache hit");
+        assert_eq!(text(&shown[1], b"Contents"), "ܒ");
+    }
+    assert!(list(&doc, 0).iter().all(|annotation| annotation.get(b"AP").is_none()));
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "display-only recovery does not mutate the original document");
 }
 
 fn line_dict(coords: [f64; 4], ending: &str) -> pdfcraft_cos::Dict {
@@ -2565,6 +2621,7 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(!long.contains(&"w".repeat(257)));
 }
 
+/// Freehand highlights save compatible Ink geometry with marker opacity and blend resources.
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
@@ -2588,18 +2645,33 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         list(doc, 0)[idx].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect()
     };
     let rect_before = rect_of(&doc, index);
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider")).unwrap();
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, syriac_family: None }, &meta("wider"))
+        .unwrap();
     let rect_after = rect_of(&doc, index);
     assert!((rect_after[0] - (rect_before[0] - 10.0)).abs() < 1e-4);
     assert!((rect_after[2] - (rect_before[2] + 10.0)).abs() < 1e-4);
 
     // Repeated increase/decrease cycles must keep bounds stable and never accumulate padding.
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(14.0), endings: None }, &meta("narrower")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(14.0), endings: None, syriac_family: None },
+        &meta("narrower"),
+    )
+    .unwrap();
     let rect_restored = rect_of(&doc, index);
     for (a, b) in rect_restored.iter().zip(rect_before.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_before:?}, got {rect_restored:?}");
     }
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider-again")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, syriac_family: None },
+        &meta("wider-again"),
+    )
+    .unwrap();
     let rect_second_wide = rect_of(&doc, index);
     for (a, b) in rect_second_wide.iter().zip(rect_after.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_after:?}, got {rect_second_wide:?}");
@@ -2614,7 +2686,14 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         d.set(b"Rect".to_vec(), create::num_array(&[5.0, 85.0, 135.0, 115.0]));
     })
     .unwrap();
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(10.0), endings: None }, &meta("border-shrink")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(10.0), endings: None, syriac_family: None },
+        &meta("border-shrink"),
+    )
+    .unwrap();
     let rect_from_border = rect_of(&doc, index);
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
@@ -2778,4 +2857,185 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     };
     check(&doc);
     check(&reopen(&doc));
+}
+
+#[test]
+fn syriac_family_reselection_preserves_round_text_box_size() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied fonts must include Eastern Syriac");
+        return;
+    }
+    for shape in [BorderShape::Oval, BorderShape::Circle] {
+        let mut doc = fixture();
+        let mut boxed = new(0, Shape::Typewriter { rect: [100.0, 100.0, 300.0, 170.0], font_size: 12.0 });
+        boxed.contents = "ܫܠܡܐ".into();
+        boxed.style.syriac_family = Some(SyriacFamily::Eastern);
+        let index = add_annotation(&mut doc, &boxed, &meta("syriac-round")).unwrap();
+        set_border_shape(&mut doc, 0, index, shape, &meta("shape")).unwrap();
+        // A first family application may grow a compact circle to fit shaped marks.
+        set_style(
+            &mut doc,
+            0,
+            index,
+            StyleChange { color: None, opacity: None, width: None, endings: None, syriac_family: Some(SyriacFamily::Eastern) },
+            &meta("initial-family"),
+        )
+        .unwrap();
+        let before = rect(&list(&doc, 0)[index]);
+        for _ in 0..3 {
+            set_style(
+                &mut doc,
+                0,
+                index,
+                StyleChange { color: None, opacity: None, width: None, endings: None, syriac_family: Some(SyriacFamily::Eastern) },
+                &meta("family"),
+            )
+            .unwrap();
+            let after = rect(&list(&doc, 0)[index]);
+            assert!(
+                before.iter().zip(after).all(|(a, b)| (a - b).abs() < 0.01),
+                "family reselection must preserve {shape:?}: {before:?}, actual: {:?}",
+                rect(&list(&doc, 0)[index])
+            );
+        }
+    }
+}
+
+fn review3_has_family(family: pdfcraft_fonts::SyriacFamily) -> bool {
+    let present = pdfcraft_fonts::document_syriac_font_for_family(family).is_some();
+    assert!(present || std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "qualification requires the selected Syriac face");
+    present
+}
+
+#[test]
+fn review3_real_wrap_failure_warns_and_preserves_existing_appearance() {
+    if !review3_has_family(pdfcraft_fonts::SyriacFamily::Estrangela) {
+        return;
+    }
+    for variant in 0..5 {
+        let mut doc = fixture();
+        let mut t = new(0, Shape::Typewriter { rect: [100.0, 100.0, 300.0, 170.0], font_size: 12.0 });
+        t.contents = "\u{0712}".into();
+        let index = add_annotation(&mut doc, &t, &meta("real-wrap")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        let r = annots(&doc, page)[index].as_ref().unwrap();
+        doc.update_dict(r, |d| {
+            d.set(b"Contents".to_vec(), PdfString::text(&"\u{0712} ".repeat(1100)));
+            d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 10.0, 50000.0]));
+            match variant {
+                1 => {
+                    d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 50000.0, 10.0]));
+                    d.set(b"PCTextRotate".to_vec(), Object::Int(90));
+                }
+                2 | 3 => {
+                    d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 100.0, 50000.0]));
+                    d.set(b"RD".to_vec(), num_array(&[47.0, 0.0, 47.0, 0.0]));
+                    if variant == 2 {
+                        d.set(b"CL".to_vec(), num_array(&[0.0, 0.0, 30.0, 30.0, 47.0, 40.0]));
+                    } else {
+                        d.set(b"PCBorderShape".to_vec(), Object::name("Oval"));
+                    }
+                }
+                4 => {
+                    d.set(b"Rect".to_vec(), num_array(&[0.0, 0.0, 40.0, 50000.0]));
+                    d.set(b"DA".to_vec(), PdfString::text("/Helv 500 Tf 0 g"));
+                }
+                _ => {}
+            }
+        })
+        .unwrap();
+        let d = list(&doc, 0)[index].clone();
+        assert!(appearance::undrawable_text(&d).is_some(), "real layout variant {variant} exceeds the wrap budget");
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert!(matches!(
+            set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("refused")),
+            Err(AnnotError::Undrawable(_))
+        ));
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "foreign appearance is preserved");
+        super::draw::draw_appearance(&mut doc, r).unwrap();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), Some('\u{0712}'));
+    }
+}
+
+#[test]
+fn review3_family_selection_keeps_an_enlarged_callout_text_box() {
+    use pdfcraft_fonts::SyriacFamily;
+    if !review3_has_family(SyriacFamily::Eastern) {
+        return;
+    }
+    let mut doc = fixture();
+    let mut t = new(
+        0,
+        Shape::Callout {
+            rect: [200.0, 400.0, 400.0, 450.0],
+            knee: [180.0, 420.0],
+            point: [150.0, 380.0],
+            font_size: 12.0,
+            ending: LineEnding::OpenArrow,
+        },
+    );
+    t.contents = "\u{072b}\u{0720}\u{0721}\u{0710}".into();
+    t.style.syriac_family = Some(SyriacFamily::Eastern);
+    let index = add_annotation(&mut doc, &t, &meta("callout")).unwrap();
+    set_rect(&mut doc, 0, index, [200.0, 300.0, 500.0, 650.0], &meta("enlarged")).unwrap();
+    let before = text_box_of(&list(&doc, 0)[index]).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: None, endings: None, syriac_family: Some(SyriacFamily::Eastern) },
+        &meta("family"),
+    )
+    .unwrap();
+    let after = text_box_of(&list(&doc, 0)[index]).unwrap();
+    assert!(before.iter().zip(after).all(|(a, b)| (a - b).abs() < 0.01), "enlarged callout stays {before:?}, got {after:?}");
+}
+
+#[test]
+fn review3_syriac_annotation_cache_rebinds_generated_fonts() {
+    if !review3_has_family(pdfcraft_fonts::SyriacFamily::Estrangela) {
+        return;
+    }
+    let mut doc = fixture();
+    let mut indices = Vec::new();
+    for y in [100.0, 200.0] {
+        let mut t = new(0, Shape::Typewriter { rect: [100.0, y, 300.0, y + 50.0], font_size: 12.0 });
+        t.contents = "\u{072b}\u{0720}\u{0721}\u{0710}".into();
+        let index = add_annotation(&mut doc, &t, &meta("cached-syriac")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        let r = annots(&doc, page)[index].as_ref().unwrap();
+        doc.update_dict(r, |d| {
+            d.remove(b"AP");
+        })
+        .unwrap();
+        indices.push(index);
+    }
+    let mut cache = AppearanceCache::default();
+    let first = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!(cache.builds(), 3, "both Syriac annotations and the fixture stamp are cached");
+    for _ in 0..17 {
+        doc.add(Object::Null);
+    }
+    let second = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!((cache.builds(), cache.hits()), (3, 3));
+    for copy in [&first, &second, &reopen(&second)] {
+        for &index in &indices {
+            let d = list(copy, 0)[index].clone();
+            assert!(ap_content(copy, &d).contains("/ActualText"));
+            let normal = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+            let object = copy.get(normal);
+            let Object::Stream(stream) = &*object else { panic!("appearance stream") };
+            let fonts = stream.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+            for (_, font) in fonts.iter() {
+                let font = copy.resolve(font);
+                let font = font.as_dict().unwrap();
+                assert_eq!(font.name(b"Subtype"), Some(b"Type3".as_slice()));
+                for (_, proc) in font.get(b"CharProcs").unwrap().as_dict().unwrap().iter() {
+                    assert!(matches!(&*copy.resolve(proc), Object::Stream(_)));
+                }
+            }
+        }
+    }
+    assert!(indices.iter().all(|i| !list(&doc, 0)[*i].contains(b"AP")));
 }

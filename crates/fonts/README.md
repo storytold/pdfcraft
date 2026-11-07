@@ -2,6 +2,11 @@
 
 Layer L2. Font helpers for the appearance streams PdfCraft generates (comments, form fields).
 
+Syriac content uses `shape_syriac` and `content_text` with the optional craft-fonts
+Syrc faces. The shared bounded writer emits shaped cluster fonts with ToUnicode
+and ActualText for page marks, FreeText and form appearances; typed signatures
+use the same outlines. See [supported content and limits](../../docs/syriac-content.md).
+
 Today it holds what generated appearances need without a font program:
 
 - `helvetica_width`: the **exact** standard-14 advance widths, via `Std14::Helvetica`. It was an
@@ -74,8 +79,9 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
-currently has no Chinese face, so Chinese there still shows the replacement glyph.
+wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr`, `Thai`,
+`Deva` or `Syrc` face, to keep the web build small: the web build currently has no
+Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
 committed here (`AGENTS.md` §1.4).
 

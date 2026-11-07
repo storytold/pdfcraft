@@ -38,7 +38,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     let mut out = Vec::new();
     for (index, para) in t.text.split('\n').enumerate() {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
-        let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
+        let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c) || is_syriac(c));
         let thai = para.chars().any(is_thai);
         if thai
             && !rtl_script
@@ -54,11 +54,25 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // of an em apart.
         let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
+        let syriac_spaces = syriac_spaces(t, para, rtl);
+        let syriac_space = if syriac_spaces.is_empty() {
+            space
+        } else {
+            pdfcraft_fonts::shape_syriac_for_family(" ", true, t.syriac_family)
+                .map(|clusters| clusters.iter().map(|c| c.advance * t.size + t.char_spacing).sum())
+                .unwrap_or(space)
+        };
+        let mut word_start = 0usize;
         let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
+            let separator = if syriac_spaces.contains(&word_start.saturating_sub(1)) { syriac_space } else { space };
+            word_start = word_start.saturating_add(word.len()).saturating_add(1);
             let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let candidate_w =
-                if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
+            let candidate_w = if rtl_script || thai {
+                if line.is_empty() { measure(word) } else { line_w + separator + measure(word) }
+            } else {
+                measure(&candidate)
+            };
             if !line.is_empty() && candidate_w > width {
                 out.push((std::mem::take(&mut line), rtl, index));
                 line = word.to_string();
@@ -102,6 +116,11 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     Ok(lines)
 }
 
+/// Recognize Syriac and supplement characters through the shared source-shaping classifier.
+pub(super) fn is_syriac(c: char) -> bool {
+    pdfcraft_fonts::source_shaping::is_syriac(c)
+}
+
 pub(super) fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
@@ -118,10 +137,11 @@ pub(super) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
-/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
-/// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
-/// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
-/// keeps it open.
+/// Coverage preflight for added text: check Thai, the selected Syriac family, Arabic and
+/// Hebrew faces, then remaining WinAnsi segments. Return an offending character when a
+/// required face or cmap glyph is missing. This does not certify contextual shaping or
+/// outline budgets; drawing can still fail. Page-content tools refuse detected missing
+/// characters, while the Add-text editor keeps the draft open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
@@ -129,6 +149,9 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         }
         let rest = AddedText { text: t.text.chars().filter(|c| !is_thai(*c)).collect(), ..t.clone() };
         return first_undrawable(&rest);
+    }
+    if let Some(c) = t.text.chars().find(|c| is_syriac(*c) && !pdfcraft_fonts::syriac_has_for_family(*c, t.syriac_family)) {
+        return Some(c);
     }
     // Arabic or Hebrew that nothing can draw: there's no face, or the face lacks it.
     if let Some(c) =
@@ -151,11 +174,12 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     })
 }
 
-/// Whether `t` has Arabic or Hebrew that its craft-fonts face draws (so `draw` lays it out with
-/// [`draw_shaped`]).
+/// Whether Arabic, Hebrew or selected-family Syriac text has its document face available.
+/// This selects shaped coverage checking; `first_undrawable` handles Thai separately first.
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
+        || (pdfcraft_fonts::document_syriac_font_for_family(t.syriac_family).is_some() && t.text.chars().any(is_syriac))
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
@@ -211,16 +235,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         // the faces lack) keeps the item's font.
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
-            let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
-            let script = if is_thai(c) {
-                Some(ShapedScript::Thai)
-            } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
-                Some(ShapedScript::Hebrew)
-            } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
-                Some(ShapedScript::Arabic)
-            } else {
-                None
-            };
+            let script = shaped_script(t, c, run_rtl, segments.last().and_then(|(kind, _)| *kind));
             match segments.last_mut() {
                 Some((kind, s)) if *kind == script => s.push(c),
                 _ => segments.push((script, c.to_string())),
@@ -235,6 +250,10 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    kind @ (ShapedScript::Syriac | ShapedScript::SyriacEastern | ShapedScript::SyriacWestern) => {
+                        pdfcraft_fonts::shape_syriac_for_family(&s, run_rtl, kind.syriac_family().unwrap_or_default())
+                            .map_err(|e| syriac_error(e, &s))?
+                    }
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
@@ -255,6 +274,50 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
     Ok((pieces, width))
 }
 
+/// Use exactly the same script context for separator measurement and drawing.
+fn shaped_script(t: &AddedText, c: char, run_rtl: bool, previous: Option<ShapedScript>) -> Option<ShapedScript> {
+    let after_syriac = previous.is_some_and(|kind| kind.syriac_family().is_some());
+    let after_hebrew = previous == Some(ShapedScript::Hebrew);
+    if is_syriac(c)
+        || (after_syriac && matches!(c, '\u{200c}' | '\u{200d}'))
+        || (run_rtl && after_syriac && !c.is_alphanumeric() && pdfcraft_fonts::syriac_has_for_family(c, t.syriac_family))
+    {
+        Some(ShapedScript::for_syriac(t.syriac_family))
+    } else if is_thai(c) {
+        Some(ShapedScript::Thai)
+    } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
+        Some(ShapedScript::Hebrew)
+    } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
+        Some(ShapedScript::Arabic)
+    } else {
+        None
+    }
+}
+
+/// Byte positions of separators that the paragraph draws with its selected Syriac face.
+fn syriac_spaces(t: &AddedText, paragraph: &str, rtl: bool) -> std::collections::HashSet<usize> {
+    let mut spaces = std::collections::HashSet::new();
+    if !paragraph.chars().any(is_syriac) {
+        return spaces;
+    }
+    let info = ParagraphBidiInfo::new(paragraph, Some(if rtl { Level::rtl() } else { Level::ltr() }));
+    let (levels, runs) = info.visual_runs(0..paragraph.len());
+    for run in runs {
+        let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
+        let start = run.start;
+        let Some(text) = paragraph.get(run) else { continue };
+        let mut previous = None;
+        for (offset, c) in text.char_indices().filter(|(_, c)| !is_bidi_control(*c)) {
+            let script = shaped_script(t, c, run_rtl, previous);
+            if c == ' ' && script.is_some_and(|kind| kind.syriac_family().is_some()) {
+                spaces.insert(start.saturating_add(offset));
+            }
+            previous = script;
+        }
+    }
+    spaces
+}
+
 /// The width of `s` in a shaped-text item; the item's font's estimate if it can't be shaped (drawing
 /// then reports why).
 fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
@@ -271,6 +334,7 @@ pub(super) fn arabic_error(e: GlyphError, text: &str) -> EditError {
     })
 }
 
+/// Translate an unavailable Hebrew face, missing glyph or excessive outline complexity into an actionable edit error.
 pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
     EditError::Invalid(match e {
         GlyphError::NoFont => "Hebrew text needs PdfCraft's Hebrew font, which this build doesn't include \
@@ -278,6 +342,15 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
             .into(),
         GlyphError::Missing => format!("the Hebrew font can't show \"{text}\""),
         GlyphError::TooComplex => format!("the Hebrew font's glyphs for \"{text}\" are too complex"),
+    })
+}
+
+/// Translate unavailable fonts, missing glyphs and geometry limits into actionable edit errors.
+pub(super) fn syriac_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(match e {
+        GlyphError::NoFont => "Syriac text needs a Syrc face in the optional craft-fonts build input".into(),
+        GlyphError::Missing => format!("the Syriac font cannot show the requested text: {text}"),
+        GlyphError::TooComplex => "the Syriac text or glyph exceeds its geometry budget".into(),
     })
 }
 

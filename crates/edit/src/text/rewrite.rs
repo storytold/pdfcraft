@@ -46,6 +46,9 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
+    if text.chars().any(pdfcraft_fonts::source_shaping::is_syriac) {
+        return Err(EditError::Invalid("Syriac text needs paragraph shaping; edit its paragraph instead of replacing one line".into()));
+    }
     // Copies of the line drawn on the same baseline go with it, so the replacement is all that
     // shows. Which operators go is settled here, before any font is generated, so that a refusal
     // leaves the document untouched.
@@ -214,6 +217,8 @@ struct RewriteDispatch {
     use_styled_path: bool,
 }
 
+/// Choose single-style or styled rewriting from source geometry, scripts and requested fonts.
+/// Refuse unsupported turned, legacy-order or partially styled RTL combinations before rewriting.
 fn choose_rewrite_path(
     doc: &Document,
     fonts: &Dict,
@@ -227,6 +232,10 @@ fn choose_rewrite_path(
     // Hebrew is written back in drawing order by the single-style path. Styled regions do not
     // reorder right-to-left runs.
     let hebrew = text.unwrap_or(&block.text).chars().any(crate::bidi::is_hebrew);
+    let syriac = text.unwrap_or(&block.editor_text).chars().any(pdfcraft_fonts::source_shaping::is_syriac);
+    if hebrew && syriac {
+        return Err(EditError::Invalid("paragraphs mixing Hebrew and Syriac are not supported; edit them separately".into()));
+    }
     if hebrew && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid(
             "formatting part of right-to-left (Hebrew) text, or choosing a document font for it, isn't supported yet".into(),
@@ -239,6 +248,11 @@ fn choose_rewrite_path(
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
+    if syriac && (!upright || visual_indic) {
+        return Err(EditError::Invalid(
+            "Syriac paragraph editing needs upright Unicode source text; turned and legacy visual-order text are not supported".into(),
+        ));
+    }
     let has_special_text = text.is_some_and(|draft| {
         draft.contains(['\n', '\r'])
             || pdfcraft_fonts::source_shaping::required(draft)
@@ -254,7 +268,7 @@ fn choose_rewrite_path(
         use_styled_path: upright
             && !hebrew
             && !visual_indic
-            && (explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none())),
+            && (syriac || explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none())),
     })
 }
 

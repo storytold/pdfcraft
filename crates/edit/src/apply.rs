@@ -5,7 +5,27 @@ use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
     place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
 };
-use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+use super::{Dict, Document, EditError, Object, added, backdrop, helvetica_width};
+use pdfcraft_fonts::content_text;
+
+/// Measure Syriac with the selected shaped face, otherwise use the caller's Latin metrics.
+fn content_width(text: &str, size: f64, family: pdfcraft_fonts::SyriacFamily, latin: impl FnOnce() -> f64) -> Result<f64, EditError> {
+    if content_text::contains_syriac(text) { content_text::width_for_family(text, size, family).map_err(EditError::Invalid) } else { Ok(latin()) }
+}
+
+/// Merge prepared font resources into the page without dropping its current resources.
+fn install_shaped_fonts(doc: &mut Document, page: &pdfcraft_model::Page, prepared: &Dict) -> Result<(), EditError> {
+    let current = doc.get(page.obj);
+    let mut resources =
+        current.as_dict().and_then(|d| d.get(b"Resources")).or_else(|| page.dict.get(b"Resources")).and_then(|r| doc.dict(r)).unwrap_or_default();
+    let mut fonts = resources.get(b"Font").and_then(|f| doc.dict(f)).unwrap_or_default();
+    for (name, font) in prepared.iter() {
+        fonts.set(name.clone(), font.clone());
+    }
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources)))?;
+    Ok(())
+}
 
 /// Commit one complete mark operation only after every selected page succeeds. The snapshot
 /// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
@@ -25,6 +45,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replace, cx))
 }
 
+/// Write expanded header/footer text on the staged document, preserving layout and selected-family metrics.
 fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -91,25 +112,42 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         let base = hf.font.base_font(false, false);
         let resource = free_font_name(doc, &page_fonts(doc, page), preferred, base);
         let mut body: Vec<u8> = format!("BT\n/{resource} {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();
+        let mut shaped_fonts = page_fonts(doc, page);
+        let mut has_shaped = false;
         let mut underlines = String::new();
         for (slot, template) in hf.text.iter().enumerate() {
             if template.trim().is_empty() {
                 continue;
             }
-            let lines: Vec<String> = expand(template, number, count, bates, cx).lines().map(str::to_owned).collect();
+            let expanded = expand(template, number, count, bates, cx);
+            let (ascent, descent, pitch) = HeaderFooter::column_metrics(&expanded, hf.syriac_family)?;
+            let lines: Vec<String> = expanded.lines().map(str::to_owned).collect();
             let header = slot < 3;
-            let line_h = size * 1.2;
+            let line_h = size * pitch;
             for (li, line) in lines.iter().enumerate() {
                 // Centred and right-aligned text is placed by its width in the chosen face.
-                let tw = hf.font.width(line, size, false, false);
+                let tw = content_width(line, size, hf.syriac_family, || hf.font.width(line, size, false, false))?;
                 let x = match slot % 3 {
                     0 => left,
                     1 => (w - tw) / 2.0,
                     _ => w - right - tw,
                 };
                 // Headers hang below the top margin; footers sit on the bottom margin.
-                let y = if header { h - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len() - 1 - li) as f64 * line_h };
-                body.extend(text_op(x, y, line));
+                let y = if header {
+                    h - top - size * ascent - li as f64 * line_h
+                } else {
+                    bottom - descent * size + lines.len().saturating_sub(1).saturating_sub(li) as f64 * line_h
+                };
+                if content_text::contains_syriac(line) {
+                    let laid = content_text::wrap_for_family(line, size, f64::MAX, hf.syriac_family).map_err(EditError::Invalid)?;
+                    let row = laid.first().ok_or_else(|| EditError::Invalid("the Syriac header row is missing".into()))?;
+                    body.extend_from_slice(b"ET\n");
+                    body.extend(row.write(doc, &mut shaped_fonts, [x, y], size).map_err(EditError::Invalid)?);
+                    body.extend_from_slice(b"BT\n");
+                    has_shaped = true;
+                } else {
+                    body.extend(text_op(x, y, line));
+                }
                 if hf.underline {
                     underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));
                 }
@@ -127,6 +165,9 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
         let page = &page_list(doc)[i];
+        if has_shaped {
+            install_shaped_fonts(doc, page, &shaped_fonts)?;
+        }
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
@@ -143,6 +184,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     apply_mark_transaction(doc, |staged| add_watermark_in_place(staged, pages, wm, replace))
 }
 
+/// Write a text or picture watermark into the staged document with requested placement and opacity.
 fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -185,7 +227,13 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
-        let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
+        let widest = lines
+            .iter()
+            .map(|line| content_width(line, 1.0, wm.syriac_family, || helvetica_width(line, 1.0)))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .fold(0.0, f64::max)
+            .max(0.01);
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
         let (s, c) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
@@ -205,16 +253,34 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             )
             .bytes(),
         );
-        let line_h = size * 1.15;
+        let syriac = content_text::contains_syriac(text);
+        let (ascent, descent, pitch) = if syriac { HeaderFooter::column_metrics(text, wm.syriac_family)? } else { (0.0, 0.0, 1.15) };
+        let line_h = size * pitch;
         let total = line_h * (lines.len() as f64 - 1.0);
+        let mut shaped_fonts = page_fonts(doc, &page);
+        let mut has_shaped = false;
         for (li, line) in lines.iter().enumerate() {
-            let tw = helvetica_width(line, size);
-            content.extend(text_op(-tw / 2.0, total / 2.0 - li as f64 * line_h - size * 0.35, line));
+            let tw = content_width(line, size, wm.syriac_family, || helvetica_width(line, size))?;
+            let baseline = if syriac { (ascent + descent) / 2.0 } else { 0.35 };
+            let at = [-tw / 2.0, total / 2.0 - li as f64 * line_h - size * baseline];
+            if content_text::contains_syriac(line) {
+                let laid = content_text::wrap_for_family(line, size, f64::MAX, wm.syriac_family).map_err(EditError::Invalid)?;
+                let row = laid.first().ok_or_else(|| EditError::Invalid("the Syriac watermark row is missing".into()))?;
+                content.extend_from_slice(b"ET\n");
+                content.extend(row.write(doc, &mut shaped_fonts, at, size).map_err(EditError::Invalid)?);
+                content.extend_from_slice(b"BT\n");
+                has_shaped = true;
+            } else {
+                content.extend(text_op(at[0], at[1], line));
+            }
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
         add_resources(doc, &page, Some(opacity), None)?;
         let page = &page_list(doc)[i];
+        if has_shaped {
+            install_shaped_fonts(doc, page, &shaped_fonts)?;
+        }
         place(doc, page, MarkKind::Watermark, content, wm.behind)?;
     }
     Ok(())

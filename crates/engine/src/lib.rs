@@ -107,7 +107,9 @@ pub use pdfcraft_xfa::Report as XfaLayout;
 
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
-pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
+pub use pdfcraft_fonts::{
+    MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_missing_for_family, script_outline, script_outline_for_family, undrawable_message,
+};
 
 /// Comment geometry helpers (text-box line breaking) for frontends.
 pub use pdfcraft_annot::appearance as annot_text;
@@ -141,11 +143,12 @@ pub use document::{Document, EditNotice, TextNotice, display_bytes_for, render_p
 use document::{display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
-pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
+pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape, typed_signature_shape_with_family};
 pub use history::Label;
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
+pub use pdfcraft_fonts::SyriacFamily;
 pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;

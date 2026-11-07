@@ -36,6 +36,60 @@ struct FontResolver<'a> {
 }
 
 impl FontResolver<'_> {
+    /// Decode and validate a source program once per resolver, including missing programs.
+    fn cached_program(&mut self, name: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.programs.entry(name.to_owned()).or_insert_with(|| source_program(self.doc, self.fonts, name).map(std::sync::Arc::new)).clone()
+    }
+
+    /// Prefer a complete source program, then compatible document faces and the selected Syriac fallback.
+    fn syriac_font(&mut self, source: &TextLine, span: &str) -> Result<Option<String>, EditError> {
+        use pdfcraft_fonts::{embedding, source_shaping};
+        if !span.chars().any(source_shaping::is_syriac) {
+            return Ok(None);
+        }
+        let usable = |bytes: &[u8]| embedding::covers(bytes, span) && span.split(['\n', '\r']).all(|row| source_shaping::shape(bytes, row).is_ok());
+        // A subset may retain a Unicode mapping after dropping its glyph; only a validated full face qualifies.
+        let program = self.cached_program(&source.font).filter(|bytes| usable(bytes));
+        if program.is_some() && self.metrics.get(&source.font).is_some_and(|m| span.split(['\n', '\r']).all(|row| source_encodes(m, row))) {
+            return Ok(Some(source.font.clone()));
+        }
+        if let Some(bytes) = program {
+            let family = embedding::names(&bytes).map_err(EditError::Invalid)?.0;
+            return self.embed_face(format!("source {}", source.font), &bytes, &family, "the source Syriac font could not be loaded").map(Some);
+        }
+        let source_faces = embedding::matching_faces(&source.base_font);
+        let mut source_names = vec![embedding::face_key(&source.base_font)];
+        for face in &source_faces {
+            source_names.push(embedding::face_key(face.family));
+            source_names.push(embedding::face_key(&face.name()));
+        }
+        let (mut matching, mut unrelated) = (Vec::new(), Vec::new());
+        for (name, metrics) in self.metrics.iter().filter(|(_, m)| span.split(['\n', '\r']).all(|row| source_encodes(m, row))) {
+            if source_names.contains(&embedding::face_key(&metrics.base_font)) {
+                matching.push(name.clone());
+            } else {
+                unrelated.push(name.clone());
+            }
+        }
+        for name in matching {
+            if self.cached_program(&name).is_some_and(|bytes| usable(&bytes)) {
+                return Ok(Some(name));
+            }
+        }
+        if let Some(face) = source_faces.into_iter().find(|face| usable(face.bytes)) {
+            return self.embed_face(face.name(), face.bytes, face.family, "the full source Syriac font could not be loaded").map(Some);
+        }
+        for name in unrelated {
+            if self.cached_program(&name).is_some_and(|bytes| usable(&bytes)) {
+                return Ok(Some(name));
+            }
+        }
+        let face = pdfcraft_fonts::document_syriac_font()
+            .filter(|face| usable(face.bytes))
+            .ok_or_else(|| EditError::Invalid("Syriac editing needs a complete source or loaded font, or a Syrc face in craft-fonts".into()))?;
+        self.embed_face(face.name(), face.bytes, face.family, "the Syriac font could not be loaded").map(Some)
+    }
+
     fn encodable_font(&mut self, source: &TextLine, text: &str, requested: Option<&str>) -> Result<Option<String>, EditError> {
         if let Some(resource) = requested {
             if !self.metrics.get(resource).is_some_and(|metrics| source_encodes(metrics, text)) {
@@ -123,6 +177,8 @@ struct CharacterPreparation<'a> {
 }
 
 impl CharacterPreparation<'_> {
+    /// Resolve source and requested fonts for styled spans, shaping complex text and tracking substitutions.
+    /// Install bounded fallback fonts for characters the resolved source cannot encode.
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
         let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let mut chars = Vec::new();
@@ -132,28 +188,43 @@ impl CharacterPreparation<'_> {
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
-            for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
-                if ch == '\n' {
-                    chars.push((ch, index, source.font.clone()));
-                    continue;
+            let span = draft.get(range).unwrap_or_default();
+            let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            let mut row_start = 0usize;
+            for row in span.split_inclusive(['\n', '\r']) {
+                let syriac = if requested.is_none() { resolver.syriac_font(source, row.trim_end_matches(['\n', '\r']))? } else { None };
+                if let Some(name) = &syriac
+                    && let Some(metrics) = resolver.metrics.get(name)
+                    && pdfcraft_fonts::embedding::face_key(&metrics.base_font) != pdfcraft_fonts::embedding::face_key(&source.base_font)
+                {
+                    substituted = Some(metrics.base_font.clone());
                 }
-                if ch == '\r' {
-                    let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
-                    chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
-                    continue;
+                let requested = requested.or(syriac.as_deref());
+                for (local_offset, ch) in row.char_indices() {
+                    let offset = row_start.saturating_add(local_offset);
+                    if ch == '\n' {
+                        chars.push((ch, index, source.font.clone()));
+                        continue;
+                    }
+                    if ch == '\r' {
+                        let crlf =
+                            start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                        chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
+                        continue;
+                    }
+                    let text = ch.to_string();
+                    let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
+                        name
+                    } else if needs_type3(&text) {
+                        fallback.prepare(source, ch, &text, chars.len())?
+                    } else {
+                        let name = resolver.substitute_font(source);
+                        substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
+                        name
+                    };
+                    chars.push((ch, index, name));
                 }
-                let text = ch.to_string();
-                let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-                let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
-                    name
-                } else if needs_type3(&text) {
-                    fallback.prepare(source, ch, &text, chars.len())?
-                } else {
-                    let name = resolver.substitute_font(source);
-                    substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
-                    name
-                };
-                chars.push((ch, index, name));
+                row_start = row_start.saturating_add(row.len());
             }
         }
         drop(resolver);

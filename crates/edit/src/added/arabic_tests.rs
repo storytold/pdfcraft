@@ -269,3 +269,16 @@ fn a_font_name_the_page_already_uses_is_not_reused() {
     assert_ne!(second, first);
     assert!(second.starts_with(b"PCAr"), "{}", String::from_utf8_lossy(&second));
 }
+
+#[test]
+fn review2_syriac_wrapping_measures_contextual_spaces() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none());
+        return;
+    }
+    let mut t = AddedText { text: "A \u{0710} \u{0712}".into(), syriac_family: SyriacFamily::Eastern, ..item() };
+    let (_, drawn) = layout::shaped_layout(&t, &t.text, false).unwrap();
+    t.rect[2] = t.rect[0] + drawn + 0.001;
+    assert_eq!(layout::lines(&t), vec![t.text.clone()], "text whose drawn width fits must not wrap early");
+}

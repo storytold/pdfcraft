@@ -391,7 +391,15 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
             // circle's line and its shape).
             let mut edits = Vec::new();
             if border.width != was.width {
-                edits.push(Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(border.width), endings: None });
+                edits.push(Edit::StyleAnnotation {
+                    page,
+                    index,
+                    color: None,
+                    opacity: None,
+                    width: Some(border.width),
+                    endings: None,
+                    syriac_family: None,
+                });
             }
             if border.color != was.color {
                 edits.push(Edit::BorderColorAnnotation { page, index, color: border.color });
@@ -424,7 +432,15 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
         if let Some(color) = comments::quick_bar_colour(ui, app.fill_text_color) {
             app.fill_text_color = color;
             if let Some((page, index)) = selected_fill_text(app) {
-                app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
+                app.apply_edit(Edit::StyleAnnotation {
+                    page,
+                    index,
+                    color: Some(color),
+                    opacity: None,
+                    width: None,
+                    endings: None,
+                    syriac_family: None,
+                });
             }
         }
         let resp = icons::button(ui, "a-large-small", 32.0, false, tl!("Font size"));

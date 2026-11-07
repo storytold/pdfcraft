@@ -86,6 +86,7 @@ fn prepared_open_does_not_mutate_the_session_until_commit() {
     assert_eq!(session.get(id).expect("committed document").info.pages.len(), 3);
 }
 
+/// Image stamps preserve their displayed quadrant colors through every page rotation.
 #[test]
 fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
     let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
@@ -129,7 +130,9 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
         for (actual, expected) in bounds.into_iter().zip([60.0, 80.0, 140.0, 120.0]) {
             assert!((actual - expected).abs() < 0.0001, "displayed bounds {bounds:?}");
         }
-        session.apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None, endings: None }).unwrap();
+        session
+            .apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None, endings: None, syriac_family: None })
+            .unwrap();
         check(&session, points);
         let resized = info.view_rect_to_user([40.0, 70.0, 160.0, 130.0]).map(f64::from);
         session.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: resized }).unwrap();
@@ -445,7 +448,9 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
             )
             .unwrap();
         assert_upright_quadrants(&session, id, degrees);
-        session.apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None, endings: None }).unwrap();
+        session
+            .apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None, endings: None, syriac_family: None })
+            .unwrap();
         assert_upright_quadrants(&session, id, degrees);
     }
 }
@@ -2207,6 +2212,7 @@ fn pixel(s: &Session, id: DocId, page: usize, x: u32, y: u32) -> [u8; 4] {
     out.rgba[i..i + 4].try_into().unwrap()
 }
 
+/// Create a filled red rectangle annotation edit for synthetic comment and history checks.
 fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
     Edit::AddAnnotation(NewAnnotation {
         page,
@@ -4177,6 +4183,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     let text = AddedText {
         rect: [20.0, 250.0, 180.0, 264.4],
         text: "Styled note".into(),
+        syriac_family: Default::default(),
         family: FontFamily::Times,
         bold: true,
         italic: true,
@@ -8108,6 +8115,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
         rect: [20.0, 20.0, 200.0, 60.0],
         text: "hello".into(),
         family: FontFamily::Helvetica,
+        syriac_family: Default::default(),
         bold: false,
         italic: false,
         size: 12.0,
@@ -8149,6 +8157,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
                 rect: [0.0, 0.0, 10.0, 10.0],
                 text: String::new(),
                 family: FontFamily::Helvetica,
+                syriac_family: Default::default(),
                 bold: false,
                 italic: false,
                 size: 12.0,

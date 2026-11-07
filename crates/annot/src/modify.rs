@@ -221,11 +221,32 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         w
     } else {
         // No usable old width: fall back to the creation-time width (at most 300 pt).
-        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+        let longest = if pdfcraft_fonts::content_text::contains_syriac(text) {
+            let family = pdfcraft_fonts::SyriacFamily::from_dict(&d);
+            let mut longest = 0.0f64;
+            for line in text.lines() {
+                longest = longest.max(pdfcraft_fonts::content_text::width_for_family(line, size, family).ok()?);
+            }
+            longest
+        } else {
+            text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max)
+        };
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let text_height = if pdfcraft_fonts::content_text::contains_syriac(text) {
+        let lines =
+            pdfcraft_fonts::content_text::wrap_for_family(text, size, (w - 2.0 * pad).max(1.0), pdfcraft_fonts::SyriacFamily::from_dict(&d)).ok()?;
+        let (mut ascent, mut descent) = (0.9f64, -0.2f64);
+        for line in &lines {
+            let (top, bottom) = line.vertical_extents().ok()?;
+            ascent = ascent.max(top);
+            descent = descent.min(bottom);
+        }
+        lines.len().max(1) as f64 * (ascent - descent + 0.1).max(1.2) * size
+    } else {
+        appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64 * size * 1.2
+    };
+    Some([x0, top - text_height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -701,16 +722,27 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
     Some([inner[0] - base[0] - new_half, inner[1] - base[1] - new_half, inner[2] + base[2] + new_half, inner[3] + base[3] + new_half])
 }
 
-/// Change a comment's colour, opacity (of the whole comment), line width and/or line endings, and
-/// redraw it.
+/// Change a comment's style and redraw it. A Syriac family change is limited to FreeText.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
+    let StyleChange { color, opacity, width, endings, syriac_family } = change;
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if syriac_family.is_some() && subtype != "FreeText" {
+        return Err(AnnotError::Invalid(
+            "only text boxes, typewriter text and callouts can change their Syriac family; recreate typed signatures".into(),
+        ));
+    }
+    let mut proposed = d.clone();
+    if let Some(family) = syriac_family {
+        proposed.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name()));
+        if let Some(text) = appearance::syriac_contents(&proposed) {
+            pdfcraft_fonts::content_text::wrap_for_family(&text, 12.0, 1000.0, family).map_err(AnnotError::Invalid)?;
+        }
+    }
     // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build(&d).is_none() {
+    if !appearance::can_build(&proposed) {
         return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
@@ -723,7 +755,7 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
             return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
         }
     }
-    refuse_foreign_text(doc, &d)?;
+    refuse_foreign_text(doc, &proposed)?;
     let free_text = subtype == "FreeText";
     // Typewriter text has no box of its own: a border goes around its text, so the box grows
     // (or shrinks) by the change on every side and the text keeps its place and its lines.
@@ -739,6 +771,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     doc.update_dict(r, |d| {
         if let Some((rect, w)) = regrow {
             shape_text_box(d, rect, shape, w);
+        }
+        if let Some(family) = syriac_family {
+            d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name()));
         }
         if let Some(c) = color {
             if free_text {
@@ -779,6 +814,23 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
         ensure_ending_room(d);
         touch(d, meta);
     })?;
+    if syriac_family.is_some() {
+        let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
+        if pdfcraft_fonts::content_text::contains_syriac(&text)
+            && let Some(mut fit) = fitted_box(doc, r, &text)
+        {
+            // A family selection may need more room for marks but must not shrink a user's box.
+            let current = annot_dict(doc, r);
+            if let Some([x0, y0, x1, y1]) = text_box_of(&current) {
+                fit = [fit[0].min(x0), fit[1].min(y0), fit[2].max(x1), fit[3].max(y1)];
+            }
+            let result = apply_text_box(doc, r, fit, meta, false);
+            if result.is_err() {
+                doc.set(r, Object::Dict(before));
+            }
+            return result;
+        }
+    }
     redraw_or_restore(doc, r, before)
 }
 
@@ -871,7 +923,7 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
-    if appearance::build(&d).is_none() {
+    if !appearance::can_build(&d) {
         return Err(AnnotError::Unsupported(subtype));
     }
     if fill.is_some_and(|c| !finite(&c)) {

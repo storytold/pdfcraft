@@ -97,6 +97,8 @@ pub struct AddedText {
     pub rect: [f64; 4],
     pub text: String,
     pub family: Family,
+    /// The approved family for Syriac glyphs, independent of the item's Latin face.
+    pub syriac_family: pdfcraft_fonts::SyriacFamily,
     pub bold: bool,
     pub italic: bool,
     pub size: f64,
@@ -117,11 +119,13 @@ impl AddedText {
 }
 
 impl Default for AddedText {
+    /// Start with empty, left-aligned black Helvetica text at 12 points and default Estrangela.
     fn default() -> Self {
         AddedText {
             rect: [0.0; 4],
             text: String::new(),
             family: Family::Helvetica,
+            syriac_family: pdfcraft_fonts::SyriacFamily::default(),
             bold: false,
             italic: false,
             size: 12.0,
