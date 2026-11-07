@@ -5530,9 +5530,12 @@ trailer << /Root 1 0 R >>
         let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
         assert_eq!((info.pages[0].width, info.pages[0].height), (612.0, 792.0), "inspected size, {media:?}");
     }
-    // The blue square sits at the bottom left of the Letter page.
-    let page = render_first_page(page_pdf(""));
-    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 792 - 30), [0, 0, 255]);
+    // The blue square sits at the bottom left of the Letter page, also when the box has no
+    // area: the page is placed and clipped by the same Letter region it is sized by.
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let page = render_first_page(page_pdf(media));
+        assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 792 - 30), [0, 0, 255], "{media:?}");
+    }
 }
 
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,

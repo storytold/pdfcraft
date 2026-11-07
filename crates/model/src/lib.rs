@@ -18,6 +18,10 @@ pub struct Page {
     pub dict: Dict,
 }
 
+/// The side, in points, at or below which a `/MediaBox` has no area and the page falls back to
+/// US Letter (the renderer's `is_nearly_zero`, 1/4096).
+const MIN_BOX_SIDE: f64 = 1.0 / 4096.0;
+
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
@@ -25,9 +29,13 @@ fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
 }
 
 impl Page {
-    /// The visible region (crop box clipped to the media box), in user space.
+    /// The visible region (crop box clipped to the media box), in user space. A page with no
+    /// `/MediaBox`, or one without area (a side of at most 1/4096 pt, as the renderer measures
+    /// it), is US Letter, as the renderer and inspector size it.
     pub fn crop(&self, doc: &Document) -> [f64; 4] {
-        let media = rect(doc, self.dict.get(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
+        let media = rect(doc, self.dict.get(b"MediaBox"))
+            .filter(|m| m[2] - m[0] > MIN_BOX_SIDE && m[3] - m[1] > MIN_BOX_SIDE)
+            .unwrap_or([0.0, 0.0, 612.0, 792.0]);
         match rect(doc, self.dict.get(b"CropBox")) {
             Some(c) => {
                 let r = [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])];
@@ -258,6 +266,19 @@ mod tests {
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
             "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);
+        assert_eq!(p.display_size(&d), (612.0, 792.0));
+    }
+
+    /// A `/MediaBox` without area (`[0 0 0 0]`) is US Letter too, as the renderer draws it.
+    #[test]
+    fn a_page_whose_media_box_has_no_area_is_letter() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 0 0] >>".to_string(),
         ]);
         let p = &pages(&d)[0];
         assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);

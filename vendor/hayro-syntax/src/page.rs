@@ -405,8 +405,14 @@ impl<'a> Page<'a> {
 
         // PdfCraft patch (44): a page with no `/MediaBox`, its own or inherited, is US Letter,
         // not A4. The box is required (ISO 32000-2 §7.7.3.3, Table 31) and has no default;
-        // other readers use Letter, as do PdfCraft's page model and inspector.
-        let media_box = dict.get::<Rect>(MEDIA_BOX).or(ctx.media_box).unwrap_or(LETTER);
+        // other readers use Letter, as do PdfCraft's page model and inspector. A box without
+        // area (`[0 0 0 0]`) counts as missing, so the page is sized, placed and clipped by
+        // the same Letter region and its content shows.
+        let media_box = dict
+            .get::<Rect>(MEDIA_BOX)
+            .or(ctx.media_box)
+            .filter(|b| !(b.width() as f32).is_nearly_zero() && !(b.height() as f32).is_nearly_zero())
+            .unwrap_or(LETTER);
 
         let crop_box = dict
             .get::<Rect>(CROP_BOX)
