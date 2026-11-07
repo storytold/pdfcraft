@@ -232,9 +232,8 @@ impl Session {
         let (bytes, info, cos) = match cos {
             Ok(Ok(mut cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
-                let signed = pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
-                    Ok(n) if n > 0 && !signed => match rebase(&work) {
+                    Ok(n) if n > 0 && !pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed) => match rebase(&work) {
                         Ok(rebuilt) => Some(rebuilt).filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
                         Err(error) => {
                             cos.note_repair(format!("the page tree is missing; rebuilding it failed ({error})"));

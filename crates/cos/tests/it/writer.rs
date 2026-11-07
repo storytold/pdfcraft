@@ -92,7 +92,7 @@ fn reconstructed_full_saves_list_unreadable_objects_written_as_null() {
     assert!(!doc.repair_log().iter().any(|line| line.contains("object 3")), "{:?}", doc.repair_log());
 }
 
-fn member_container_fixture(container: u32) -> Vec<u8> {
+fn member_container_fixture(container: u32, container_body: &str) -> Vec<u8> {
     let mut bytes = b"%PDF-1.5\n".to_vec();
     let at = |out: &mut Vec<u8>, num: u32, body: &str| {
         let off = out.len();
@@ -101,7 +101,7 @@ fn member_container_fixture(container: u32) -> Vec<u8> {
     };
     let o1 = at(&mut bytes, 1, "<< /Type /Catalog /Pages 2 0 R /Custom 4 0 R >>");
     let o2 = at(&mut bytes, 2, "<< /Type /Pages /Kids [] /Count 0 >>");
-    let o3 = at(&mut bytes, 3, "<< /NotAStream true >>");
+    let o3 = at(&mut bytes, 3, container_body);
     let rows: Vec<[u8; 4]> =
         vec![[0, 0, 0, 255], [1, 0, o1 as u8, 0], [1, 0, o2 as u8, 0], [1, 0, o3 as u8, 0], [2, (container >> 8) as u8, container as u8, 0]];
     let mut rows: Vec<u8> = rows.concat();
@@ -117,7 +117,7 @@ fn member_container_fixture(container: u32) -> Vec<u8> {
 
 #[test]
 fn full_save_refuses_a_member_of_a_live_non_stream_container() {
-    let doc = Document::open(Arc::new(member_container_fixture(3))).unwrap();
+    let doc = Document::open(Arc::new(member_container_fixture(3, "<< /NotAStream true >>"))).unwrap();
     let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() });
     let packed = write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() });
     assert!(classic.is_err() && packed.is_err(), "full save succeeded: classic={}, object streams={}", classic.is_ok(), packed.is_ok());
@@ -129,8 +129,19 @@ fn full_save_refuses_a_member_of_a_live_non_stream_container() {
 }
 
 #[test]
+fn full_save_reports_an_object_stream_member_parse_error() {
+    let doc = Document::open(Arc::new(member_container_fixture(3, "<< /Type /ObjStm /N 1 /First 4 /Length 5 >>\nstream\n4 0 @\nendstream"))).unwrap();
+    for object_streams in [false, true] {
+        let result = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() });
+        let error = result.expect_err("an unreadable object-stream member must not become null");
+        assert_eq!(error, CosError::UnreadableObject(4), "object_streams={object_streams}");
+        assert_eq!(error.to_string(), "object 4 could not be read; full save stopped instead of writing it as null");
+    }
+}
+
+#[test]
 fn full_save_keeps_a_member_of_an_absent_container_dangling() {
-    let doc = Document::open(Arc::new(member_container_fixture(99))).unwrap();
+    let doc = Document::open(Arc::new(member_container_fixture(99, "<< /NotAStream true >>"))).unwrap();
     for object_streams in [false, true] {
         let full = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
         let back = Document::open(Arc::new(full)).unwrap();

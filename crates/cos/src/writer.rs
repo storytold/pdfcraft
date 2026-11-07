@@ -320,8 +320,7 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
                 // `try_get` recorded this in the unreadable-object list shared with the source.
                 continue;
             }
-            Err(CosError::MissingObject(_)) => return Err(CosError::UnreadableObject(r.num)),
-            Err(error) => return Err(error),
+            Err(error) => return Err(full_save_read_error(r, error)),
         };
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
@@ -340,6 +339,13 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
         visit_refs(&o, &mut queue);
     }
     Ok((map, order))
+}
+
+fn full_save_read_error(reference: ObjRef, error: CosError) -> CosError {
+    match error {
+        CosError::MissingObject(_) | CosError::UnreadableObject(_) | CosError::Syntax { .. } => CosError::UnreadableObject(reference.num),
+        error => error,
+    }
 }
 
 /// The object numbers a full save of `doc` would write: exactly the objects [`write_full`]
