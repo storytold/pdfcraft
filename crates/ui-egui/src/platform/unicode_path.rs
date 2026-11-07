@@ -1,11 +1,15 @@
 //! Open a path the operating system delivered in one Unicode normalization form from the file
 //! named in another (macOS open-documents events, #73).
 //!
-//! A Finder double-click, Open With or a Dock drop hands the app an 'odoc' Apple event whose
-//! file URL decodes through `NSURL.path` in NFD (decomposed) form, while APFS is byte-exact and
-//! keeps each name in whatever form it was created in — commonly NFC (precomposed), like names
-//! imported from Windows. A byte-exact lookup then misses, and the file does not open. Command
-//! lines, drag-drop and the file picker deliver the exact bytes and never hit this.
+//! A path can reach the app spelled in another normalization form than the name on disk:
+//! Foundation spells the path of a file URL it makes from a path decomposed (NFD), whatever
+//! form it was given, while names written elsewhere, such as those imported from Windows, are
+//! often precomposed (NFC). On macOS 13.3, the APFS and HFS+ volumes it makes, case-sensitive or
+//! not, fold the two forms in lookups, so there such a path opens as it arrives. Where a volume's
+//! lookups tell the forms apart, a component in the other form names no entry and the file would
+//! not open. Paths come here through `OsEvent::Open`: macOS 'odoc' events (a Finder double-click,
+//! Open With, a Dock drop) and, on Windows, Linux and the BSDs, the files a second launch hands
+//! to the running app. Drag-drop and the file picker deliver the exact bytes and do not.
 //!
 //! [`resolve`] walks the delivered path component by component, and where a component names no
 //! entry, tries its NFC and NFD forms. Both directions are covered — NFD delivered with NFC
@@ -88,11 +92,11 @@ mod tests {
         }
     }
 
-    /// Whether the filesystem under `dir` answers a lookup in one form for a name stored in
-    /// the other. APFS's default volume does (normalization-insensitive): there the delivered
-    /// name opens the file as it arrives, and the walk this module exists for has nothing to
-    /// do. Linux, Windows and case-sensitive APFS tell the forms apart, and the tests then
-    /// demand the resolution; everywhere they demand only that the file opens.
+    /// Whether the filesystem under `dir` tells the forms apart: a lookup in one form misses a
+    /// name stored in the other. The APFS and HFS+ volumes macOS 13.3 makes, case-sensitive or
+    /// not, fold the forms instead, and there a delivered name opens the file as it arrives; the
+    /// tests on the real filesystem then demand only that the file opens, and on a volume that
+    /// tells the forms apart, the resolution itself.
     fn tells_forms_apart(dir: &std::path::Path) -> bool {
         std::fs::write(dir.join(NFC), b"").unwrap();
         let apart = !dir.join(NFD).exists();
@@ -164,7 +168,8 @@ mod tests {
     fn a_name_that_exists_in_no_form_resolves_to_nothing() {
         let dir = TempDir::new("missing");
         std::fs::write(dir.0.join(NFC), b"pdf").unwrap();
-        // No "B\u{0300}se" (grave; NFC "B\u{00c0}se") anywhere, in either form: keep nothing.
+        // No "B\u{0300}se" anywhere; B with a combining grave has no precomposed form, so its NFC
+        // and NFD forms are itself and nothing else is tried.
         assert_eq!(resolve(dir.0.join("B\u{0300}se").to_str().unwrap()), None);
         // An ASCII miss says nothing more for the resolver to try.
         assert_eq!(resolve(dir.0.join("missing.pdf").to_str().unwrap()), None);

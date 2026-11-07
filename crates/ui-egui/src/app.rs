@@ -548,10 +548,10 @@ impl eframe::App for PdfCraftApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 OsEvent::Open(paths) => {
                     paths.iter().for_each(|p| {
-                        // The 'odoc' event's path comes decoded from its file URL, in NFD,
-                        // while APFS keeps the name as it was written, often NFC: a component
-                        // that matches in neither form leaves the path as delivered, so the
-                        // read error names what the OS sent.
+                        // A delivered path can spell a name in another Unicode normalization
+                        // form than the one on disk (see `unicode_path`). A path the resolver
+                        // finds no form of is opened as delivered, so the read error names
+                        // what the OS sent.
                         let resolved = unicode_path::resolve(p);
                         self.open_path(resolved.as_deref().unwrap_or(p));
                     });

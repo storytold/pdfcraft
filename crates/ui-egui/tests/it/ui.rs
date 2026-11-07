@@ -1181,14 +1181,14 @@ fn files_and_quit_from_the_operating_system() {
 }
 
 /// A file the operating system names in one Unicode normalization form but is stored in the
-/// other still opens: an `OsEvent::Open` delivered in NFD reaches the app's open path
-/// resolved to the NFC-stored name. A delivered name no form of matches is opened as sent,
-/// so its read failure reaches the user instead of vanishing.
+/// other still opens: an `OsEvent::Open` delivered in NFD for an NFC-stored name opens a tab,
+/// as delivered on a volume that folds the forms (the APFS and HFS+ volumes macOS 13.3 makes
+/// do) and resolved to the stored name on one that tells them apart. A delivered name no form
+/// of matches is opened as sent, so its read failure reaches the user instead of vanishing.
 #[test]
 fn an_os_delivered_path_opens_across_normalization_forms() {
-    // macOS decodes the 'odoc' event's file URL in NFD, while APFS keeps the name as it was
-    // written, often NFC (a name imported from Windows): "Área.pdf" either way, and byte-exact
-    // lookup would miss.
+    // "Área.pdf" stored precomposed (NFC), as names imported from Windows often are, and
+    // delivered decomposed (NFD): a lookup that tells the forms apart misses it as delivered.
     use pdfcraft_ui_egui::OsEvent;
     let nfc = "\u{00c1}rea.pdf";
     let nfd = "A\u{0301}rea.pdf";
