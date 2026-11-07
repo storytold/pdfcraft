@@ -421,3 +421,34 @@ fn an_appearance_reached_through_another_generation_is_not_only_the_fields() {
     let shared = signed("6 5 R");
     assert_refused(&redrawn(&shared).open(), shared.open(), 2);
 }
+
+/// An ordinary field's appearance stream that the signed signature field's widget draws too.
+/// Rewritten in place, it changes how the signature looks, so it is no form fill however the
+/// text field refers to it; drawn by the text field alone, it is (#3442).
+#[test]
+fn an_appearance_the_signed_signature_widget_shares_is_not_a_form_fill() {
+    let signed = |signature_ap: &str| {
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 7 0 R] /SigFlags 3 >> >>")),
+            (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+            (3, Row::Obj(0, 0, &page("/Annots [5 0 R 7 0 R]"))),
+            (4, Row::Obj(0, 0, "<< /Length 3 >>\nstream\nq Q\nendstream")),
+            (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [20 20 120 40] /P 3 0 R /AP << /N 6 0 R >> >>")),
+            (6, Row::Obj(0, 0, "<< /Length 3 >>\nstream\nq Q\nendstream")),
+            (
+                7,
+                Row::Obj(
+                    0,
+                    0,
+                    &format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /V 8 0 R /Rect [20 60 120 80] /P 3 0 R /F 4 /AP << /N {signature_ap} >> >>"),
+                ),
+            ),
+            (8, Row::Obj(0, 0, "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 0 0 0] /Contents <00> >>")),
+        ])
+    };
+    let redrawn = |file: &File| file.clone().revision(&[(6, Row::Obj(0, 0, "<< /Length 13 >>\nstream\n0 0 m 9 9 l S\nendstream"))]);
+    let own = signed("4 0 R");
+    assert_eq!(verdict(&redrawn(&own).open(), own.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let shared = signed("6 0 R");
+    assert_refused(&redrawn(&shared).open(), shared.open(), 2);
+}
