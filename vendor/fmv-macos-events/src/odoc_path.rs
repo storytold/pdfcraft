@@ -40,54 +40,69 @@ const MAX_COMPONENTS: usize = 128;
 /// a longer "record" is noise in the blob, not a name.
 const MAX_COMPONENT_BYTES: usize = 1024;
 
-/// The path of one odoc item, best-effort and never silent. In order:
+/// The path of one odoc item, best-effort and never silent. A `'bmrk'` or
+/// `'furl'` item has a raw decode of its own, tried in three steps:
 ///
-/// 1. the item's raw bytes, verified — a `'bmrk'` chain of byte-exact components
-///    that names an existing file, or a `'furl'` percent-decode (the URL's path,
-///    from the first `/` after `file://`; [`file_url_path`] yields none when the
-///    bytes are not a `file://` URL or have no `/` after it);
+/// 1. the raw decode, verified — a `'bmrk'` chain of byte-exact components that
+///    names an existing file, or a `'furl'` percent-decode (the URL's path, from
+///    the first `/` after `file://`) that names an existing file;
 /// 2. whatever `nsurl_path` returns (the `fileURLValue` / `NSURL.path` chain of
-///    the published crate);
-/// 3. for a `'bmrk'` item only, its raw bytes again, now unverified: the first
-///    plausible chain string in scan order, delivered rather than dropping the
-///    item silently.
+///    the published crate), which also resolves what a decode cannot follow: a
+///    file reference URL (`file:///.file/id=…`) decodes to a `/.file/id=…`
+///    string that does not open (`/.file` is a regular file, so the lookup fails
+///    with `ENOTDIR`), while `NSURL.path` resolves it to the file's current path;
+/// 3. the raw decode again, now unverified — for a `'bmrk'` item the first
+///    plausible chain string in scan order, for a `'furl'` item its decode —
+///    delivered rather than dropping the item silently.
 ///
-/// Step 3 is the never-drop rule (review on #6334): an open in which a bookmark
+/// So the path delivered is a raw decode that names an existing file, or the
+/// published crate's own answer, or — only where the published crate dropped
+/// the item — the raw decode, unverified. Any other descriptor type takes step 2
+/// alone. NSURL is consulted only when step 1 finds no file; for a `'furl'` item
+/// step 1 is one `is_file()` probe on the main thread (a bookmark's probes are
+/// bounded by `MAX_BOOKMARK_BYTES`).
+///
+/// Step 3 is the never-drop rule (review on #6334): an open in which an item
 /// fails every other way still queues a path, and the app's existing open error
 /// reports the file it names — a wrong name surfaced beats a silent no-op, and a
 /// partial multi-file open reports each failed item the same way. The unverified
-/// string has no gate of its own: it passes only the one every chain passes to
-/// exist at all, [`join_components`] — two or more component records, each
-/// non-empty and NUL-free, joined lossily as UTF-8 under a leading `/`. A
-/// bookmark in which no chain joins is dropped, as before, and so is any other
-/// item that steps 1 and 2 leave without a path.
+/// string has no gate of its own: a chain passes only the one every chain passes
+/// to exist at all, [`join_components`] — two or more component records, each
+/// non-empty and NUL-free, joined lossily as UTF-8 under a leading `/` — and a
+/// `'furl'` decode only [`file_url_path`]'s, a `file://` URL with a `/` after
+/// the prefix. With nothing from NSURL, a bookmark in which no chain joins, a
+/// `'furl'` that [`file_url_path`] refuses and any other item are dropped, as
+/// before.
 pub(crate) fn item_path(
     descriptor_type: u32,
     data: &[u8],
     nsurl_path: impl FnOnce() -> Option<String>,
 ) -> Option<PathBuf> {
-    let bookmark = descriptor_type == u32::from_be_bytes(*b"bmrk");
-    // 1. Verified raw bytes. A 'furl' decode needs no existence check of its
-    //    own: it is delivered as the published crate delivered NSURL paths.
-    let from_raw_bytes = if bookmark {
-        bookmark_chain(data)
-    } else if descriptor_type == u32::from_be_bytes(*b"furl") {
-        file_url_path(data)
-    } else {
-        None
-    };
-    from_raw_bytes
-        // 2. The published crate's chain.
-        .or_else(|| nsurl_path().map(PathBuf::from))
-        // 3. The never-drop string, scanned only now, for bookmarks whose chain
-        //    names no existing file (a 'furl' decode was already delivered at
-        //    step 1, or refused by `file_url_path`).
-        .or_else(|| if bookmark { bookmark_chain_best_effort(data) } else { None })
+    const BOOKMARK: u32 = u32::from_be_bytes(*b"bmrk");
+    const FILE_URL: u32 = u32::from_be_bytes(*b"furl");
+    // 2. The published crate's chain.
+    let from_nsurl = move || nsurl_path().map(PathBuf::from);
+    match descriptor_type {
+        // 1. A chain that names an existing file; 2; 3. the first chain that
+        //    joins, scanned only now that nothing else delivered a path.
+        BOOKMARK => bookmark_chain(data)
+            .or_else(from_nsurl)
+            .or_else(|| bookmark_chain_best_effort(data)),
+        // 1. The decode, when it names an existing file; 2; 3. the decode
+        //    again, unverified (`None` when `file_url_path` refuses the bytes).
+        FILE_URL => file_url_path(data)
+            .filter(|path| path.is_file())
+            .or_else(from_nsurl)
+            .or_else(|| file_url_path(data)),
+        _ => from_nsurl(),
+    }
 }
 
 /// The `'file://'` bytes of a `'furl'` descriptor, percent-decoded by hand so the
-/// exact bytes LaunchServices put in the event survive. The data is historically
-/// NUL-terminated; trailing NULs are stripped first.
+/// exact bytes the sender put in the event survive. The data is historically
+/// NUL-terminated; trailing NULs are stripped first. The decode is lexical: it
+/// does not resolve a file reference URL (`file:///.file/id=…`), which
+/// [`item_path`] leaves to NSURL when the decode names no file.
 pub(crate) fn file_url_path(data: &[u8]) -> Option<PathBuf> {
     let mut end = data.len();
     while end > 0 && data[end - 1] == 0 {
@@ -411,8 +426,9 @@ mod tests {
     }
 
     /// The item decode prefers the raw bytes and falls back to NSURL exactly as
-    /// intended: raw bookmark bytes that name a file win over a differing NSURL
-    /// path; everything unrecognized keeps the published crate's NSURL behaviour.
+    /// intended: raw bytes that name a file — a bookmark's chain or a `'furl'`
+    /// decode — win over a differing NSURL path; everything unrecognized keeps
+    /// the published crate's NSURL behaviour.
     #[cfg(unix)]
     #[test]
     fn item_path_prefers_existing_raw_bytes_and_falls_back_to_nsurl() {
@@ -438,10 +454,24 @@ mod tests {
             item_path(u32::from_be_bytes(*b"utf8"), b"some text", || Some("/from/nsurl".to_owned())),
             Some(PathBuf::from("/from/nsurl"))
         );
-        // ...and a 'furl' item decodes directly, with NSURL empty.
+        // A 'furl' whose decode names the file wins over a differing NSURL
+        // string the same way; a decode that names a directory is no file, so
+        // NSURL's answer is delivered. (Every byte but '/' is escaped, so the
+        // NFC Á travels as %C3%81.)
+        let file_url = |path: &std::path::Path| {
+            std::iter::once("file://".to_owned())
+                .chain(path.as_os_str().as_encoded_bytes().iter().map(|&byte| {
+                    if byte == b'/' { "/".to_owned() } else { format!("%{byte:02X}") }
+                }))
+                .collect::<String>()
+        };
+        let furl = u32::from_be_bytes(*b"furl");
+        assert_eq!(item_path(furl, file_url(&file).as_bytes(), || Some(nfd_full_path.clone())), Some(file.clone()));
+        // NSURL is not consulted at all when the decode names a file.
+        assert_eq!(item_path(furl, file_url(&file).as_bytes(), || panic!("NSURL consulted")), Some(file.clone()));
         assert_eq!(
-            item_path(u32::from_be_bytes(*b"furl"), b"file:///tmp/x", || None),
-            Some(PathBuf::from("/tmp/x"))
+            item_path(furl, file_url(&nfc).as_bytes(), || Some("/from/nsurl".to_owned())),
+            Some(PathBuf::from("/from/nsurl"))
         );
         // With nothing to fall back to and nothing path-like in the bytes, the
         // item is dropped, as before.
@@ -479,6 +509,31 @@ mod tests {
         assert_eq!(item_path(bookmark, &two, || None), Some(PathBuf::from("/definitely/missing/first.pdf")));
     }
 
+    /// A `'furl'` decode that names no existing file does not outrank NSURL
+    /// (review on #6334): a file reference URL decodes to `/.file/id=…`, which does
+    /// not open, while `NSURL.path` resolves it to the file's current path, as the
+    /// published crate delivered it; a decode with a trailing '/' names no file
+    /// either, and `NSURL.path` drops the slash. With NSURL empty too (a stale
+    /// reference, a missing file), the decode is still delivered, unverified.
+    #[test]
+    fn item_path_takes_nsurl_for_a_file_url_that_names_no_file() {
+        let furl = u32::from_be_bytes(*b"furl");
+        let reference = b"file:///.file/id=6571367.18547216";
+        let resolved = "/Users/someone/\u{00c1}rea fiscal/doc.pdf";
+        // NSURL's answer outranks a decode that names no file.
+        assert_eq!(item_path(furl, reference, || Some(resolved.to_owned())), Some(PathBuf::from(resolved)));
+        // Compared as bytes: `PathBuf` equality ignores a trailing '/'.
+        let slashed = b"file:///definitely/missing/nowhere.pdf/";
+        assert_eq!(
+            item_path(furl, slashed, || Some("/definitely/missing/nowhere.pdf".to_owned())).map(PathBuf::into_os_string),
+            Some(std::ffi::OsString::from("/definitely/missing/nowhere.pdf"))
+        );
+        // Nothing from NSURL: the decode is delivered, unverified (never drop).
+        assert_eq!(item_path(furl, reference, || None), Some(PathBuf::from("/.file/id=6571367.18547216")));
+        let missing = b"file:///definitely/missing/nowhere.pdf";
+        assert_eq!(item_path(furl, missing, || None), Some(PathBuf::from("/definitely/missing/nowhere.pdf")));
+    }
+
     /// A partial multi-file open reports every item: the handler collects one
     /// decode per item, so a mix of a verified file and an unverifiable one
     /// delivers both — the app's open error covers the failed one instead of it
@@ -510,8 +565,9 @@ mod tests {
     /// never-drop step has no gate of its own, so this pins `join_components` — two
     /// or more components, each non-empty and NUL-free — at the `item_path` level,
     /// where no existence check can mask it (`bookmark_chain` alone refuses these
-    /// chains for naming no file, gate or not). It also pins that the never-drop
-    /// scan is for bookmarks only. Garbage still yields `None` and the item is
+    /// chains for naming no file, gate or not). It also pins that the chain scan
+    /// is for bookmarks only: a `'furl'` item's never-drop string is its own URL
+    /// decode, never a chain. Garbage still yields `None` and the item is
     /// skipped, as before.
     #[test]
     fn garbage_that_decodes_to_no_path_is_still_dropped() {
@@ -537,9 +593,9 @@ mod tests {
         assert_eq!(item_path(furl, b"", || None), None);
         // ...and an unknown descriptor type with nothing to fall back to.
         assert_eq!(item_path(u32::from_be_bytes(*b"utf8"), b"some text", || None), None);
-        // The never-drop scan is for bookmarks only: the joinable chain a 'bmrk'
-        // item delivers unverified (see the never-drop test) is dropped under
-        // any other descriptor type.
+        // The chain scan is for bookmarks only: the joinable chain a 'bmrk' item
+        // delivers unverified (see the never-drop test) is dropped under any
+        // other descriptor type — under 'furl' its bytes are no `file://` URL.
         let chain = blob(&["definitely", "missing", "nowhere.pdf"], "/definitely/missing/nowhere.pdf");
         assert_eq!(item_path(furl, &chain, || None), None);
         assert_eq!(item_path(u32::from_be_bytes(*b"utf8"), &chain, || None), None);
