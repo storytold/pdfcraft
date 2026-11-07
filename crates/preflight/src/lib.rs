@@ -151,7 +151,8 @@ pub const WORDINGS: &[&str] = &[
     "The document has no XMP metadata",
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
-    "The XMP property {property} in metadata stream {object} doesn't have the value type the XMP Specification gives it",
+    "The XMP property {property} in metadata stream {object} should have the value type {type}",
+    "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -509,15 +510,30 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
     // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
-    for (object, name) in xmp_types::mistyped_in(&objs) {
-        let values = vec![("{property}", name), ("{object}", object.to_string())];
-        located_issue(
-            "6.6.2.3.1",
-            "The XMP property {property} in metadata stream {object} doesn't have the value type the XMP Specification gives it",
-            values,
-            object,
-            false,
-        );
+    let mut mistyped = Vec::new();
+    xmp_types::for_each_packet(&objs, |object, packet| {
+        mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|((name, written), ty)| (object, name, written, ty)));
+    });
+    for (object, name, written, ty) in mistyped {
+        let mut values = vec![("{property}", name.clone()), ("{object}", object.to_string()), ("{type}", ty)];
+        if written == name {
+            located_issue(
+                "6.6.2.3.1",
+                "The XMP property {property} in metadata stream {object} should have the value type {type}",
+                values,
+                object,
+                false,
+            );
+        } else {
+            values.push(("{written}", written));
+            located_issue(
+                "6.6.2.3.1",
+                "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
+                values,
+                object,
+                false,
+            );
+        }
     }
     let used = uses_device_colour(doc, &objs);
     match pdfa_intent_profile(doc) {
