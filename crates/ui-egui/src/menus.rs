@@ -128,6 +128,7 @@ const FILE: &[&str] = &[
     "file.word_count",
     SEP,
     "print.dialog",
+    "file.send_email",
 ];
 const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];
 const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.rtf", "export.html", "export.text", SEP, "export.image", "export.all_images"];

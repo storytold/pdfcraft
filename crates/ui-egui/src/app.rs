@@ -204,6 +204,7 @@ impl PdfCraftApp {
             ocr_batch: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
+            send_email: Default::default(),
             custom_actions: Vec::new(),
             wizard: Default::default(),
             action_run: None,
@@ -634,6 +635,7 @@ impl eframe::App for PdfCraftApp {
         if self.ocr_verify.reread.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
         }
+        self.poll_send_email();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();

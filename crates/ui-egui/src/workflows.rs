@@ -13,4 +13,5 @@ pub(super) mod ocr_verify;
 pub(super) mod optimize_ui;
 pub(super) mod print_ui;
 pub(super) mod scan_clean_ui;
+pub(super) mod send_email_ui;
 pub(super) mod web_print;
