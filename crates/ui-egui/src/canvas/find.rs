@@ -240,7 +240,8 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let input_id = egui::Id::unique("find-input");
                         let pointer_pressed = ui.input(|i| i.pointer.any_pressed());
-                        if find.focus {
+                        let focus_requested = find.focus;
+                        if focus_requested {
                             ui.memory_mut(|memory| memory.request_focus(input_id));
                             find.focus = false;
                         }
@@ -257,6 +258,9 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
+                        if focus_requested {
+                            r.request_focus();
+                        }
                         if r.clicked() {
                             find.select_all_requested = false;
                         } else if r.gained_focus() && !pointer_pressed {

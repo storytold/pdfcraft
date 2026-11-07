@@ -20,7 +20,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     let l = ui.label(egui::RichText::new(tl!("What word or phrase would you like to search for?")).color(t.text_muted));
     let input_id = egui::Id::unique("search-panel-input");
     let pointer_pressed = ui.input(|i| i.pointer.any_pressed());
-    if find.focus {
+    let focus_requested = find.focus;
+    if focus_requested {
         ui.memory_mut(|memory| memory.request_focus(input_id));
         find.focus = false;
     }
@@ -35,6 +36,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         .add(crate::widgets::line(&mut find.query).id(input_id).hint_text(tl!("Search")).desired_width(f32::INFINITY))
         .accessible_name(tl!("Search"))
         .labelled_by(l.id);
+    if focus_requested {
+        r.request_focus();
+    }
     if r.clicked() {
         find.select_all_requested = false;
     }

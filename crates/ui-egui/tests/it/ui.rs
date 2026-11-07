@@ -832,6 +832,17 @@ fn find_shortcut_replaces_the_existing_query_but_clicking_keeps_editing() {
 
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+    });
+    crate::support::settle(&mut h);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(3);
+    assert!(h.ctx.egui_wants_keyboard_input());
+    h.get_by_role_and_label(Role::TextInput, "Find text").type_text("fox");
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("fox"));
+
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("find", "brown").unwrap();
     });
     crate::support::settle(&mut h);
