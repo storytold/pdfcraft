@@ -10,17 +10,19 @@
 //!
 //! This module decodes the descriptor's data directly, with no Objective-C, so the
 //! decoding is unit-testable on every platform; the four tests that create real
-//! files are Unix-only. Delivery is best-effort and never silent (the contract
-//! asked for by the review on #6334): bytes that name an existing file are
-//! preferred, the NSURL chain of the published crate comes next, and an item
-//! nothing could verify is still delivered — its decoded string, unverified — so a
-//! failed open reaches the app and its own open error reports it, instead of the
-//! launch showing nothing. An item is dropped only when NSURL has nothing either
-//! and its bytes decode to no path: a bookmark in which no chain joins
-//! (`join_components`: two or more component records, each non-empty and
-//! NUL-free), a `'furl'` that is not a `file://` URL or has no `/` after the
-//! prefix, or a descriptor of any other type. Every parse is total: malformed or
-//! truncated data returns `None`. The bookmark component layout
+//! files are Unix-only. Delivery is best-effort and never silent for each item of
+//! the event's direct-object list (the contract asked for by the review on #6334):
+//! bytes that name an existing file are preferred, the NSURL chain of the
+//! published crate comes next, and an item nothing could verify is still
+//! delivered — its decoded string, unverified — so a failed open reaches the app
+//! and its own open error reports it, instead of the launch showing nothing. An
+//! item is dropped only when NSURL has nothing either and its bytes decode to no
+//! path: a bookmark in which no chain joins (`join_components`: two or more
+//! component records, each non-empty and NUL-free), a `'furl'` that is not a
+//! `file://` URL or has no `/` after the prefix, or a descriptor of any other
+//! type. As in the published crate, a direct object that is not a list yields no
+//! item at all (the handler walks the list's items only). Every parse is total:
+//! malformed or truncated data returns `None`. The bookmark component layout
 //! (`[length u32 LE][01 01 00 00][utf-8 bytes][NUL padding to a 4-byte boundary]`,
 //! records contiguous) was reverse-engineered from Ventura captures; see the
 //! pinned evidence on #6324.

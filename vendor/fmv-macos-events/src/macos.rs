@@ -70,10 +70,10 @@ define_class!(
             // crate's `?` silently dropped the item, so the open showed nothing.
             // Decode each item's raw bytes instead (byte-exact components, gated on
             // the result naming an existing file), with the NSURL chain kept as the
-            // fallback. An item nothing verifies is still delivered as an
-            // unverified path rather than dropped (never drop, review on #6334):
-            // the app's own open error reports it, so a full-failure or partial
-            // open is never silent.
+            // fallback. An item of the list that nothing verifies but whose bytes
+            // decode to a path is still delivered, unverified (never drop, review
+            // on #6334), so the app's own open error reports it. As in the
+            // published crate, a direct object that is not a list yields no item.
             let paths = (1..=list.numberOfItems()).filter_map(|index| {
                 let item = list.descriptorAtIndex(index)?;
                 // SAFETY: `descriptorType` takes no argument and returns a DescType

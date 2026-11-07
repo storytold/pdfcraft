@@ -6,9 +6,12 @@
 //! platform, the four that create real files on Unix only); the Objective-C adapter
 //! lives in [`macos`] and is upstream `fmv-macos-events` 0.1.0 except for the
 //! open-documents handler's item decode. The public API is unchanged.
-//! Delivery is best-effort and never silent: an item nothing could verify is still
-//! delivered as an unverified path, and verification failures surface through the
-//! app's own open error instead of the open doing nothing.
+//! Delivery is best-effort and never silent for each item of the event's
+//! direct-object list: an item nothing could verify is still delivered as an
+//! unverified path, so its failure surfaces through the app's own open error
+//! instead of the open doing nothing, and an item is dropped only when its bytes
+//! decode to no path and NSURL has none either. As in the published crate, a
+//! direct object that is not a list yields no item.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 /// Byte-level odoc decoding, independent of Objective-C so it is testable off macOS.
