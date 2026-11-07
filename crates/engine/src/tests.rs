@@ -4182,6 +4182,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
         italic: true,
         size: 12.0,
         color: [0.8, 0.1, 0.2],
+        ink: None,
         align: TextAlign::Center,
         aligns: Vec::new(),
         char_spacing: 0.0,
@@ -5841,6 +5842,10 @@ fn comparing_two_versions_of_a_document() {
     let got: Vec<(compare::Kind, &str, &str)> = c.changes.iter().map(|x| (x.kind, x.old.text.as_str(), x.new.text.as_str())).collect();
     assert_eq!(got, [(compare::Kind::Replaced, "Monday.", "Tuesday."), (compare::Kind::Replaced, "days.", "days of invoice.")], "{got:?}");
     assert!(s.compare(old, old).unwrap().identical());
+    // limited to pages of the new file: both changes are on the first
+    assert_eq!(s.compare_pages(old, new, &[]).unwrap().changes.len(), 2);
+    assert_eq!(s.compare_pages(old, new, &[0]).unwrap().changes.len(), 2);
+    assert!(s.compare_pages(old, new, &[1]).unwrap().identical());
 
     let report = s.compare_report(old, new).unwrap();
     let rid = s.open("report.pdf", None, report, None).unwrap();
@@ -8108,6 +8113,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
         italic: false,
         size: 12.0,
         color: [0.0, 0.0, 0.0],
+        ink: None,
         align: TextAlign::Left,
         aligns: Vec::new(),
         char_spacing: 0.0,
@@ -8149,6 +8155,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
                 italic: false,
                 size: 12.0,
                 color: [0.0, 0.0, 0.0],
+                ink: None,
                 align: TextAlign::Left,
                 aligns: Vec::new(),
                 char_spacing: 0.0,

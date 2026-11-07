@@ -1,7 +1,7 @@
 use super::reader::find;
 use super::state::{Credentials, Slot};
 use super::xref::XrefIndex;
-use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, Mutex, ObjRef, Object};
+use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
 
 /// More objects than `/Encrypt` and `/ID` refer to in any file, so that one which refers to the page
 /// tree, say, doesn't have a whole document read to open it.
@@ -20,9 +20,10 @@ impl Document {
             revisions: Arc::new(Vec::new()),
             xref_oddities: Arc::default(),
             located: Arc::default(),
-            repair_log: Arc::new(Mutex::new(Vec::new())),
+            repair_log: Arc::new(Vec::new()),
             cache: Arc::default(),
             objstms: Arc::default(),
+            unreadable: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
             overlay: BTreeMap::new(),
@@ -107,9 +108,10 @@ impl Document {
             revisions: Arc::new(Vec::new()),
             xref_oddities: Arc::default(),
             located: Arc::default(),
-            repair_log: Arc::new(Mutex::new(Vec::new())),
+            repair_log: Arc::new(Vec::new()),
             cache: Arc::default(),
             objstms: Arc::default(),
+            unreadable: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
             overlay: BTreeMap::new(),
@@ -161,7 +163,7 @@ impl Document {
         // Header generations are plaintext, including in encrypted files. Inspect only the
         // bounded headers, not object bodies, and retain the compact xref representation.
         doc.note_xref_generation_repairs(&mut log);
-        doc.repair_log = Arc::new(Mutex::new(log));
+        doc.repair_log = Arc::new(log);
         // Reconstruction may have found a different trailer: (re)authenticate against it.
         if (!ok || !authenticated)
             && let Some(enc) = doc.trailer.get(b"Encrypt").cloned()
@@ -169,12 +171,12 @@ impl Document {
             doc.authenticate(&enc, &credentials)?;
         }
         if Arc::make_mut(&mut doc.entries).remove_exhausted() {
-            doc.note_repair("skipped exhausted xref object number 4294967295".into());
+            Arc::make_mut(&mut doc.repair_log).push("skipped exhausted xref object number 4294967295".into());
         }
         let max = doc.entries.max_num();
         let size = u32::try_from(doc.trailer.int(b"Size").unwrap_or(0).max(0)).unwrap_or(u32::MAX);
         if size == u32::MAX {
-            doc.note_repair("exhausted trailer /Size; new objects use unused object numbers".into());
+            Arc::make_mut(&mut doc.repair_log).push("exhausted trailer /Size; new objects use unused object numbers".into());
         }
         doc.next_num = max.saturating_add(1).max(size).max(1);
         Ok(doc)
@@ -190,7 +192,9 @@ impl Document {
         };
         let Some(dict) = dict else {
             // A dangling /Encrypt: viewers treat the file as unencrypted, and so do we.
-            self.note_repair("the trailer names an /Encrypt dictionary that does not exist; reading the file as unencrypted".into());
+            let mut log = self.repair_log.as_ref().clone();
+            log.push("the trailer names an /Encrypt dictionary that does not exist; reading the file as unencrypted".into());
+            self.repair_log = Arc::new(log);
             self.trailer.remove(b"Encrypt");
             return Ok(());
         };
@@ -214,6 +218,7 @@ impl Document {
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
+        self.unreadable = Arc::default();
         Ok(())
     }
 

@@ -246,7 +246,7 @@ impl Session {
                 match rebuilt {
                     Some((b, i, mut c)) => {
                         for line in cos.repair_log() {
-                            c.note_repair(line);
+                            c.note_repair(line.clone());
                         }
                         c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
                         (b, i, Ok(Ok(c)))
