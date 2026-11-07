@@ -20,6 +20,8 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
+    /// Office document already converted to PDF bytes on a background thread.
+    ConvertedPdf(Arc<Vec<u8>>),
     Prepared { bytes: Arc<Vec<u8>>, result: Box<Result<PreparedDocument, OpenError>> },
     ReadFailed(String),
     RemoteFailed(String),
@@ -142,44 +144,93 @@ fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
         let reply = job.reply.clone();
         #[cfg(test)]
         let gate = job.gate.clone();
-        let kind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare(job)))
-            .unwrap_or_else(|_| ResultKind::Failed("opening failed unexpectedly in the background worker".into()));
-        let _ = reply.send(ResultMessage { token, kind });
-        let repaint = {
-            let (lock, _) = &*queue;
-            lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()
-        };
-        if let Some(ctx) = repaint {
-            ctx.request_repaint();
-        }
-        #[cfg(test)]
-        if let Some(gate) = &gate {
-            let _ = gate.finished.send(());
+        let queue_for_office = queue.clone();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare(job)))
+            .unwrap_or_else(|_| PrepareOutcome::Ready(ResultKind::Failed("opening failed unexpectedly in the background worker".into())));
+        match outcome {
+            PrepareOutcome::Ready(kind) => {
+                let _ = reply.send(ResultMessage { token, kind });
+                let repaint = {
+                    let (lock, _) = &*queue;
+                    lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()
+                };
+                if let Some(ctx) = repaint {
+                    ctx.request_repaint();
+                }
+                #[cfg(test)]
+                if let Some(gate) = &gate {
+                    let _ = gate.finished.send(());
+                }
+            }
+            PrepareOutcome::ConvertOffice { name, bytes } => {
+                let reply_clone = reply.clone();
+                let spawn_res = std::thread::Builder::new().name("pdfcraft-office".into()).spawn(move || {
+                    let kind = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pdfcraft_engine::office::convert(&name, &bytes))) {
+                        Ok(Ok(pdf)) => ResultKind::ConvertedPdf(Arc::new(pdf)),
+                        Ok(Err(error)) => ResultKind::Failed(error.to_string()),
+                        Err(_) => ResultKind::Failed("opening failed unexpectedly in the background worker".into()),
+                    };
+                    let _ = reply_clone.send(ResultMessage { token, kind });
+                    let repaint = {
+                        let (lock, _) = &*queue_for_office;
+                        lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()
+                    };
+                    if let Some(ctx) = repaint {
+                        ctx.request_repaint();
+                    }
+                    #[cfg(test)]
+                    if let Some(gate) = &gate {
+                        let _ = gate.finished.send(());
+                    }
+                });
+                if let Err(e) = spawn_res {
+                    let kind = ResultKind::Failed(format!("Office conversion worker could not start: {e}"));
+                    let _ = reply.send(ResultMessage { token, kind });
+                    let repaint = {
+                        let (lock, _) = &*queue;
+                        lock.lock().unwrap_or_else(PoisonError::into_inner).repaint.clone()
+                    };
+                    if let Some(ctx) = repaint {
+                        ctx.request_repaint();
+                    }
+                    #[cfg(test)]
+                    if let Some(gate) = &gate {
+                        let _ = gate.finished.send(());
+                    }
+                }
+            }
         }
     }
 }
 
-fn prepare(job: Job) -> ResultKind {
+enum PrepareOutcome {
+    Ready(ResultKind),
+    ConvertOffice { name: String, bytes: Arc<Vec<u8>> },
+}
+
+fn prepare(job: Job) -> PrepareOutcome {
     let bytes = match &job.input {
         Input::Path(path) => match std::fs::read(path) {
             Ok(bytes) => Arc::new(bytes),
-            Err(error) => return ResultKind::ReadFailed(error.to_string()),
+            Err(error) => return PrepareOutcome::Ready(ResultKind::ReadFailed(error.to_string())),
         },
         Input::RemotePath(path) => match pdfcraft_engine::read_remote_document(path) {
             Ok(bytes) => Arc::new(bytes),
-            Err(error) => return ResultKind::RemoteFailed(error.to_string()),
+            Err(error) => return PrepareOutcome::Ready(ResultKind::RemoteFailed(error.to_string())),
         },
         Input::Recovery(store, key) => match store.read(key) {
             Ok(bytes) => Arc::new(bytes),
-            Err(error) => return ResultKind::RecoveryFailed(error.to_string()),
+            Err(error) => return PrepareOutcome::Ready(ResultKind::RecoveryFailed(error.to_string())),
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
-    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
-        return ResultKind::Conversion(bytes);
+    match pdfcraft_engine::source_kind(&job.name, &bytes) {
+        Some(SourceKind::Image | SourceKind::Text) => return PrepareOutcome::Ready(ResultKind::Conversion(bytes)),
+        Some(SourceKind::Office) => return PrepareOutcome::ConvertOffice { name: job.name, bytes },
+        _ => {}
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
-    ResultKind::Prepared { bytes, result: Box::new(result) }
+    PrepareOutcome::Ready(ResultKind::Prepared { bytes, result: Box::new(result) })
 }
 
 #[cfg(test)]

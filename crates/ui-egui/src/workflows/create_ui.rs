@@ -116,6 +116,11 @@ impl PdfCraftApp {
         Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
     }
 
+    /// Open PDF bytes that were already converted on a background worker thread into a new tab.
+    pub(crate) fn open_converted_pdf(&mut self, name: &str, pdf: Arc<Vec<u8>>) -> Result<(), String> {
+        self.open_created_bytes(&format!("{}.pdf", stem(name)), Ok(pdf))
+    }
+
     fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
