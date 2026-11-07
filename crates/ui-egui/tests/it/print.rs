@@ -942,6 +942,47 @@ fn auto_select_default_paper_preserves_user_orientation() {
 }
 
 #[test]
+fn cached_papers_apply_immediately_and_refresh_in_background() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+
+    let mut h = harness();
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Cached Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().printer_papers_source = Some(Arc::new(move |_| {
+        calls_clone.fetch_add(1, Ordering::SeqCst);
+        vec![("A4".into(), (595.28, 841.89))]
+    }));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Cached Printer" { Some(("A4".into(), (595.28, 841.89))) } else { None }));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading.is_some()) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let a4 = h.state().print_draft.paper;
+
+    h.state_mut().dialog = None;
+
+    assert!(h.state_mut().execute("print.dialog"));
+    assert_eq!(h.state().print_draft.paper, a4);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.papers_loading.is_some() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};
     let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;

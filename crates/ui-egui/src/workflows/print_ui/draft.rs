@@ -361,6 +361,7 @@ impl PrintDraft {
         })
     }
 
+    /// Whether multiple pages per sheet should be cut and stacked into sorted piles.
     fn cut_and_stack(&self) -> bool {
         self.handling == Handling::Multiple && self.order == PageOrder::CutStack
     }

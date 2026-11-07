@@ -191,6 +191,7 @@ fn spooled(job: &Job) -> Job {
     }
 }
 
+/// Submit a PDF to the system print spooler for the configured `job`.
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
     craft_print::submit(pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
@@ -201,6 +202,7 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
     craft_print::submit_with_progress(pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
+/// Opens the printer driver's native Printing Preferences window (Windows `printui.dll`).
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
     craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
@@ -235,11 +237,13 @@ pub fn printer_papers(printer: &str) -> Vec<Paper> {
     papers
 }
 
+/// The paper sizes supported by `printer` (fallback for non-Windows platforms).
 #[cfg(not(windows))]
 pub fn printer_papers(_printer: &str) -> Vec<Paper> {
     Vec::new()
 }
 
+/// Match `paper_pts` against detected driver `papers` within a 1.0 pt tolerance.
 #[cfg(windows)]
 fn resolve_paper_name(papers: &[Paper], paper_pts: (f64, f64)) -> Paper {
     let w_pts = (paper_pts.0 * 100.0).round() / 100.0;

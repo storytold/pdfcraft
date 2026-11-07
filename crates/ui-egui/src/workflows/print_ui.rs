@@ -151,6 +151,7 @@ impl Drop for WakeOnExit {
 }
 
 impl PdfCraftApp {
+    /// Open the Print dialog, preselecting the default printer and reading papers in the background.
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
         let (printers, printers_loading) = match self.printer_source.clone() {
@@ -241,6 +242,7 @@ impl PdfCraftApp {
         self.print_draft.crop_pages = Some(pages);
     }
 
+    /// Read the printer list in the background off the GUI thread; `poll_print` picks it up.
     #[cfg(not(target_arch = "wasm32"))]
     fn list_printers_in_background(&mut self, source: PrinterSource) {
         // A list already being read is as fresh as a new one would be.
@@ -302,8 +304,13 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn read_papers_in_background(&mut self, printer: String) {
         if let Some((papers, default_paper)) = self.print_tasks.papers_cache.get(&printer).cloned() {
-            self.receive_papers(printer, papers, default_paper);
-            return;
+            let d = &mut self.print_draft;
+            if d.printer.as_deref() == Some(printer.as_str()) {
+                d.apply_printer_papers(papers);
+                if !d.paper_overridden {
+                    d.apply_default_paper(default_paper);
+                }
+            }
         }
         if self.print_tasks.papers.iter().any(|(p, _)| *p == printer) {
             return;
@@ -347,14 +354,18 @@ impl PdfCraftApp {
     /// The papers and default paper read for `printer` arrived, or the read died.
     #[cfg(not(target_arch = "wasm32"))]
     fn receive_papers(&mut self, printer: String, papers: Vec<spool::Paper>, default_paper: Option<spool::Paper>) {
-        self.print_tasks.papers_cache.insert(printer.clone(), (papers.clone(), default_paper.clone()));
+        if !papers.is_empty() || default_paper.is_some() {
+            self.print_tasks.papers_cache.insert(printer.clone(), (papers.clone(), default_paper.clone()));
+        }
         let d = &mut self.print_draft;
         if d.papers_loading.as_deref() == Some(printer.as_str()) {
             d.papers_loading = None;
         }
         if d.printer.as_deref() == Some(printer.as_str()) {
-            d.apply_printer_papers(papers);
-            if !d.paper_overridden {
+            if !papers.is_empty() {
+                d.apply_printer_papers(papers);
+            }
+            if !d.paper_overridden && default_paper.is_some() {
                 d.apply_default_paper(default_paper);
             }
         }
@@ -414,13 +425,14 @@ impl PdfCraftApp {
                     self.print_tasks.printers = None;
                     let d = &mut self.print_draft;
                     // A picked printer that is no longer listed falls back to the default too.
-                    let changed = if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
+                    let new_printer = if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
-                        d.printer = default_printer(&printers);
-                        true
+                        default_printer(&printers)
                     } else {
-                        false
+                        d.printer.clone()
                     };
+                    let changed = d.printer != new_printer;
+                    d.printer = new_printer;
                     d.printers = printers;
                     d.printers_loading = false;
                     if changed && let Some(p) = d.printer.clone() {
@@ -486,6 +498,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Report the outcome of a finished print job to the user.
     fn report_print_job(&mut self, printer: &str, result: Result<String, String>) {
         match result {
             Ok(msg) if msg.is_empty() => self.notify(crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])),
