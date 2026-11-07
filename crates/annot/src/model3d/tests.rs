@@ -86,3 +86,21 @@ fn another_annotation_is_not_a_3d_one() {
     assert_eq!(model_3d_annotations(&d, 0), Ok(vec![1]));
     assert_eq!(model_3d_annotations(&d, 1), Err(AnnotError::NoSuchPage(1)));
 }
+
+#[test]
+fn shown_positions_follow_the_inspectors_rules() {
+    // A 3D annotation whose `/Subtype` is a reference, one listed twice, a hidden one, and a
+    // square: the first is listed, the repeat counted once, where it is first listed.
+    let d = doc(
+        "[6 0 R 4 0 R 7 0 R 4 0 R 8 0 R]",
+        &[
+            b"<< /Type /Annot /Subtype 5 0 R /Rect [0 0 1 1] >>".to_vec(),
+            b"/3D".to_vec(),
+            b"<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] /F 2 >>".to_vec(),
+            b"<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] >>".to_vec(),
+        ],
+    );
+    assert_eq!(shown_model_3d_positions(&d), Ok(vec![(0, 1), (0, 4)]));
+    assert_eq!(model_3d_annotations(&d, 0), Ok(vec![1, 2, 3, 4]));
+}

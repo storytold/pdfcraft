@@ -318,6 +318,11 @@ impl Session {
         if scope == Scope::Links {
             return Self::refresh_links(doc);
         }
+        // 3D annotations' indexes are /Annots positions too. A comment edit (or its undo) that adds
+        // or removes a 3D annotation changes which models there are: inspect again.
+        if scope == Scope::Comments && doc.editor.as_ref().is_some_and(|e| !reindex_annots_3d(&mut doc.info.annots_3d, &e.cos)) {
+            return Self::refresh(doc);
+        }
         // Metadata edits keep the renderer, which holds the working file anyway.
         if scope != Scope::Metadata {
             Self::release_working(doc);
@@ -357,9 +362,7 @@ impl Session {
                 doc.info.annotations = comment_list(&editor.cos);
                 // Link indexes are positions in /Annots, so comment insertion/deletion can move them.
                 doc.links = OnceLock::new();
-                // So are 3D annotations' indexes. Comment edits neither add nor remove 3D
-                // annotations, so each page's keep their order.
-                reindex_annots_3d(&mut doc.info.annots_3d, &editor.cos);
+                // So are 3D annotations' (reindexed above).
             }
             Scope::Form => {
                 // PERF: keystroke path, index once. A linear find per field is O(F^2);
@@ -540,17 +543,19 @@ impl Session {
     }
 }
 
-/// Moves each listed 3D annotation to its page's current `/Annots` position, after comments were
-/// added or removed around it.
-fn reindex_annots_3d(list: &mut [pdfcraft_render::Annot3d], cos: &pdfcraft_cos::Document) {
-    let mut pages: Vec<usize> = list.iter().map(|a| a.page).collect();
-    pages.dedup();
-    for page in pages {
-        let Ok(now) = pdfcraft_annot::shown_model_3d_annotations(cos, page) else { continue };
-        for (a, index) in list.iter_mut().filter(|a| a.page == page).zip(now) {
-            a.index = index;
-        }
+/// Moves each listed 3D annotation to its current `/Annots` position, after comments were added
+/// or removed around it. `false`, leaving `list` as it was, when the pages no longer show the
+/// same 3D annotations on the same pages (one was added, deleted or moved): the caller then
+/// inspects the file again.
+fn reindex_annots_3d(list: &mut [pdfcraft_render::Annot3d], cos: &pdfcraft_cos::Document) -> bool {
+    let Ok(now) = pdfcraft_annot::shown_model_3d_positions(cos) else { return false };
+    if now.len() != list.len() || list.iter().zip(&now).any(|(a, &(page, _))| a.page != page) {
+        return false;
     }
+    for (a, &(_, index)) in list.iter_mut().zip(&now) {
+        a.index = index;
+    }
+    true
 }
 
 /// What `edit`, taking `prev` to `next`, wants said: never silent (AGENTS.md §4).

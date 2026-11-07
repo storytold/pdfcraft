@@ -104,12 +104,14 @@ impl<'a> Inspector<'a> {
                 _ => None,
             },
             // A name matches a view's internal name `/IN`; a view without one is matched by its
-            // external name `/XN`. Compared as written, without decoding, over a bounded number
-            // of views and only for a short name, so no file makes this scan costly.
+            // external name `/XN`. Compared as text (PDFDocEncoding or UTF-16BE, §7.9.2.2), over
+            // a bounded number of views and only for short names, so no file makes this scan
+            // costly.
             Object::String(s, _) if s.len() <= MAX_VIEW_NAME_BYTES => {
+                let wanted = text_string(s);
                 let named = |d: &Dictionary| {
                     let key: &[u8] = if d.has(b"IN") { b"IN" } else { b"XN" };
-                    matches!(d.get(key).map(|o| self.resolve(o)), Ok(Object::String(n, _)) if n == s)
+                    matches!(d.get(key).map(|o| self.resolve(o)), Ok(Object::String(n, _)) if n.len() <= MAX_VIEW_NAME_BYTES && text_string(n) == wanted)
                 };
                 views.iter().take(MAX_VIEWS_SEARCHED).filter_map(|v| self.dict(v)).find(|d| named(d))
             }
