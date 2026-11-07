@@ -5,6 +5,7 @@
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
+//! Callers that hold the document follow references first (`draw::with_direct_values`).
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
@@ -1019,7 +1020,11 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let mut rect = rect;
     if d.contains(b"CL") {
         let cl = nums(d, b"CL").filter(|l| l.len() == 4 || l.len() == 6)?;
-        let rd = nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| *x >= 0.0))?;
+        // `/RD` is optional (Table 177; null is absent, §7.3.9): without it the text box is `/Rect`.
+        let rd = match d.get(b"RD") {
+            None | Some(Object::Null) => vec![0.0; 4],
+            Some(_) => nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| *x >= 0.0))?,
+        };
         rect = [full[0] + rd[0], full[1] + rd[1], full[2] - rd[2], full[3] - rd[3]];
         if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
             return None;

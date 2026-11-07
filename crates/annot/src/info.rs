@@ -233,7 +233,10 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let p = page_ref(doc, page).ok()?;
     let entry = annots(doc, p).get(index).cloned()?;
     let obj = doc.resolve(&entry);
-    let d = obj.as_dict()?;
+    // Values given by reference (`/C 7 0 R`, `/BS 5 0 R`, ISO 32000-2 §7.3.10) read as the display draws them.
+    let raw = obj.as_dict()?;
+    let direct = crate::draw::with_direct_values(doc, raw);
+    let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
     let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
@@ -252,7 +255,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
-        restylable: appearance::build(d).is_some(),
+        restylable: crate::draw::can_draw(doc, raw),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
