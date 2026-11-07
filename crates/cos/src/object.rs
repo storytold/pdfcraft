@@ -314,6 +314,14 @@ impl Stream {
         pdfcraft_filters::decode_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), work).map_err(filter)
     }
 
+    /// [`Stream::decoded_spending`] for the samples of an image `rows` high (its `/Height`):
+    /// [`pdfcraft_filters::decode_image_tolerant_within`].
+    pub(crate) fn decoded_image_rows_spending(&self, max: usize, rows: u32, work: &mut u64) -> Result<Vec<u8>, CosError> {
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = self.readable_filters().map_err(filter)?;
+        pdfcraft_filters::decode_image_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), rows, work).map_err(filter)
+    }
+
     /// The stream decoded through its filters by `decode`, or copied when it has none, within
     /// `max` and [`MAX_DECODED`].
     fn decode_chain(
