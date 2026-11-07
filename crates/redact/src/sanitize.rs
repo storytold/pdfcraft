@@ -343,16 +343,34 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     } else {
         off.into_iter().filter(|g| all.contains(g)).collect()
     };
+    // Each rule, layer list and layer is read once, however often the rules name them: many rules
+    // can share one long list.
+    let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
+    let mut looked: std::collections::HashSet<ObjRef> = hidden.iter().copied().collect();
+    let mut read = std::collections::HashSet::new();
     let rules = d.get(b"AS").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
-    for rule in rules.iter().filter_map(|r| doc.resolve(r).as_dict().cloned()) {
+    for rule in &rules {
+        if let Some(r) = rule.as_ref()
+            && !read.insert(r)
+        {
+            continue;
+        }
+        let Some(rule) = doc.resolve(rule).as_dict().cloned() else { continue };
         let categories = rule.get(b"Category").and_then(|c| doc.resolve(c).as_array().cloned()).unwrap_or_default();
         if rule.name(b"Event") != Some(b"View") || !categories.iter().any(|c| c.as_name() == Some(b"View")) {
             continue;
         }
+        if let Some(r) = rule.get(b"OCGs").and_then(Object::as_ref)
+            && !read.insert(r)
+        {
+            continue;
+        }
         for g in refs(rule.get(b"OCGs")) {
+            if !known.contains(&g) || !looked.insert(g) {
+                continue;
+            }
             let usage = doc.get(g).as_dict().and_then(|layer| sub(doc, layer, b"Usage"));
-            let view_off = usage.and_then(|u| sub(doc, &u, b"View")).is_some_and(|v| v.name(b"ViewState") == Some(b"OFF"));
-            if view_off && all.contains(&g) && !hidden.contains(&g) {
+            if usage.and_then(|u| sub(doc, &u, b"View")).is_some_and(|v| v.name(b"ViewState") == Some(b"OFF")) {
                 hidden.push(g);
             }
         }
