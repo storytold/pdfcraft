@@ -175,7 +175,7 @@ pub fn deny(_: &[String]) -> anyhow::Result<()> {
     run_args(&["deny", "--log-level", "error", "check"])
 }
 
-fn run_args(args: &[&str]) -> anyhow::Result<()> {
+pub fn run_args(args: &[&str]) -> anyhow::Result<()> {
     let mut c = cargo();
     c.args(args);
     run(c, &format!("cargo {}", args.join(" ")))

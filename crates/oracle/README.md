@@ -39,6 +39,8 @@ match pdfcraft_oracle::pdftotext() {
 | `qpdf()` | qpdf | `--check` structural validation; the independent owner-password oracle |
 | `pdftoppm()` | Poppler | page pixels, for comparing against our own raster output |
 | `pdftotext()` | Poppler | text extraction (`cargo xtask text-oracle` scores word F1 and reading order against it) |
+| `pdfinfo()` | Poppler | page count and encryption state (`cargo xtask interop`) |
+| `mutool()` | MuPDF | opening and rendering our output (`cargo xtask interop`) |
 
 Each returns `Result<Oracle, Absent>`. `Oracle::command()` hands back a fresh `Command`;
 `Absent` renders as an actionable sentence naming the install command.
