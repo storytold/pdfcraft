@@ -2779,3 +2779,25 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// PDFBOX-2699: a `/C` written `[1 0 0 null]` (Table 166 asks for numbers) is still a four-entry
+/// colour, CMYK with the null as 0 as PDFium, MuPDF and Poppler read it, so a shape without an
+/// appearance is drawn instead of dropped. `/IC` is read the same way, and three numbers stay RGB.
+#[test]
+fn a_four_entry_colour_with_a_null_is_cmyk_with_zero() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C [1 0 0 null] /IC [0 0 1 null] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("both squares get a fallback appearance");
+    let squares = list(&display, 0);
+    let cmyk = ap_content(&display, &squares[0]);
+    assert!(cmyk.contains("0 1 1 RG") && cmyk.contains("1 1 0 rg"), "CMYK (1,0,0,0) stroke and (0,0,1,0) fill: {cmyk}");
+    let rgb = ap_content(&display, &squares[1]);
+    assert!(rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
+    // The properties read the fill as it is drawn.
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.fill), Some([1.0, 1.0, 0.0]));
+}

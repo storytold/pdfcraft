@@ -166,11 +166,16 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
 }
 
-/// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
-fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
+/// `/C`-style colour arrays (ISO 32000-2 Table 166): none (transparent), gray, RGB or CMYK.
+/// The entries should all be numbers; a four-entry array with a non-number in it, such as
+/// `[1 0 0 null]`, is still read as CMYK with that entry 0, as PDFium, MuPDF and Poppler read it.
+pub(crate) fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     let c = match d.get(key) {
         None => return Some(None),
-        Some(o) => o.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>()?,
+        Some(o) => match o.as_array()? {
+            a if a.len() == 4 => a.iter().map(|o| o.as_f64().unwrap_or(0.0)).collect(),
+            a => a.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>()?,
+        },
     };
     Some(match c.as_slice() {
         [] => None,

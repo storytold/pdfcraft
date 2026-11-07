@@ -235,7 +235,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let obj = doc.resolve(&entry);
     let d = obj.as_dict()?;
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
+    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array()?.iter().map(Object::as_f64).collect()).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
         if subtype == "FreeText" {
@@ -266,16 +266,10 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     })
 }
 
-/// A shape’s `/IC` or FreeText `/C` as RGB. Grey and CMYK fills are converted.
+/// A shape’s `/IC` or FreeText `/C` as RGB, read as it is drawn. Grey and CMYK fills are converted.
 fn fill_of(d: &Dict) -> Option<Rgb> {
     let key: &[u8] = if d.name(b"Subtype") == Some(b"FreeText") { b"C" } else { b"IC" };
-    let c: Vec<f64> = d.get(key)?.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
-    let rgb = match c.as_slice() {
-        [g] => [*g; 3],
-        [r, g, b] => [*r, *g, *b],
-        [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
-        _ => return None,
-    };
+    let rgb = appearance::color(d, key).flatten()?;
     finite(&rgb).then(|| rgb.map(|x| x.clamp(0.0, 1.0)))
 }
 
