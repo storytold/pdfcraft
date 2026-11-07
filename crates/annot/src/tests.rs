@@ -1487,6 +1487,22 @@ fn indirect_border_style_and_colour_are_drawn() {
     assert_eq!(props.width, Some(6.0), "the properties show the width drawn");
 }
 
+/// A followed reference the builder can't draw (a cloudy border effect on a square, which it
+/// leaves alone) keeps the drawing made without it instead of none.
+#[test]
+fn an_undrawable_indirect_value_keeps_the_plain_drawing() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /BE 5 0 R /C [1 0 0] >>",
+        b"<< /S /C /I 1 >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the square is still drawn");
+    let shown = list(&display, 0).remove(0);
+    assert!(ap_content(&display, &shown).contains("1 0 0 RG\n1 w\n"));
+}
+
 /// Following references copies a bounded number of values: an indirect array past the budget
 /// stays a reference (and the comment is not drawn from it), a chain that never ends is not
 /// followed, and links to other objects are never copied.
