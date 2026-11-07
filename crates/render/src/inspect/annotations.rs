@@ -59,15 +59,18 @@ pub(super) fn retained(a: &Annotation) -> usize {
 impl<'a> Inspector<'a> {
     /// The format of a 3D annotation's model: its `/3DD` stream's `/Subtype`, following one 3D
     /// reference dictionary (`/Type /3DRef`, a stream another annotation shares; §13.6.3) to the
-    /// stream its `/3D` names, as `pdfcraft_annot::model_3d` does.
+    /// stream its `/3D` names, as `pdfcraft_annot::model_3d` does. Only a dictionary is a
+    /// reference, and only a stream is a model, so both read the same stream or none.
     fn model_3d(&self, page: usize, index: usize, annot: &Dictionary) -> Annot3d {
         let rect = rect4(self.resolve(annot.get(b"Rect").unwrap_or(&Object::Null)));
-        let mut data = annot.get(b"3DD").ok().and_then(|o| self.dict(o));
-        if let Some(d) = data
-            && self.name(d, b"Type").as_deref() == Some("3DRef")
-        {
-            data = d.get(b"3D").ok().and_then(|o| self.dict(o));
-        }
+        let target = annot.get(b"3DD").ok().map(|o| self.resolve(o)).and_then(|o| match o {
+            Object::Dictionary(d) if self.name(d, b"Type").as_deref() == Some("3DRef") => d.get(b"3D").ok().map(|t| self.resolve(t)),
+            o => Some(o),
+        });
+        let data = match target {
+            Some(Object::Stream(s)) => Some(&s.dict),
+            _ => None,
+        };
         let format = match data.and_then(|d| self.name(d, b"Subtype")).as_deref() {
             Some("PRC") => Format3d::Prc,
             Some("U3D") => Format3d::U3d,

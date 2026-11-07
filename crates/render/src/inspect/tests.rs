@@ -624,12 +624,14 @@ fn page_label_limits_keep_other_ranges_when_one_is_too_long() {
 }
 
 /// Page 1: a PRC model (as SOLIDWORKS writes it) after a comment, and a 3D annotation without
-/// data. Page 2: a 3D reference to a shared U3D stream, with a flipped `/Rect`.
+/// data. Page 2: a 3D reference to a shared U3D stream, with a flipped `/Rect`; the same reference
+/// with no `/3DV`, so the shared stream's `/DV`; a U3D stream that is not a reference though it
+/// says `/Type /3DRef`; and a reference to a dictionary, not a stream.
 const MODELS_3D: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Annots [5 0 R 6 0 R 7 0 R] >> endobj
-4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Annots [8 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Annots [8 0 R 13 0 R 14 0 R 15 0 R] >> endobj
 5 0 obj << /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (note) >> endobj
 6 0 obj << /Type /Annot /Subtype /3D /Rect [50 50 750 550] /3DD 9 0 R /3DV /D >> endobj
 7 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DV (Front) >> endobj
@@ -637,11 +639,17 @@ const MODELS_3D: &[u8] = b"%PDF-1.7
 9 0 obj << /Type /3D /Subtype /PRC /VA [11 0 R 12 0 R] /DV 1 /Length 3 >> stream
 PRC
 endstream endobj
-10 0 obj << /Type /3D /Subtype /U3D /Length 3 >> stream
+10 0 obj << /Type /3D /Subtype /U3D /VA [11 0 R 12 0 R] /DV 1 /Length 3 >> stream
 U3D
 endstream endobj
 11 0 obj << /Type /3DView /XN (Front) /MS /M /C2W [1 0 0 0 0 -1 0 1 0 0 -10 0] /CO 10 /P << /Subtype /P /FOV 30 /PS /Min >> >> endobj
 12 0 obj << /Type /3DView /XN (Default) /C2W [-0.5 0 0.5 0 1 0 -0.5 0 -0.5 4 5 6] /CO 7.5 /P << /Subtype /O /OS 0.25 /OB /Min >> /BG << /C [0.5 0.5 1] >> >> endobj
+13 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD << /Type /3DRef /3D 10 0 R >> >> endobj
+14 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD 16 0 R >> endobj
+15 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD << /Type /3DRef /3D << /Subtype /PRC >> >> >> endobj
+16 0 obj << /Type /3DRef /Subtype /U3D /3D 9 0 R /Length 3 >> stream
+U3D
+endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
@@ -668,6 +676,12 @@ fn models_3d_are_listed_with_their_format_and_view_and_not_as_comments() {
             // No data, so no views to name.
             Annot3d { page: 0, index: 2, rect: [0.0, 0.0, 10.0, 10.0], format: Format3d::Unknown, view: None },
             Annot3d { page: 1, index: 0, rect: [100.0, 200.0, 300.0, 400.0], format: Format3d::U3d, view: Some(front) },
+            // No `/3DV`: the shared stream's `/DV`, its second view.
+            Annot3d { page: 1, index: 1, rect: [0.0, 0.0, 10.0, 10.0], format: Format3d::U3d, view: Some(default) },
+            // A stream is the model itself, so its `/3D` is not followed to the PRC stream.
+            Annot3d { page: 1, index: 2, rect: [0.0, 0.0, 10.0, 10.0], format: Format3d::U3d, view: None },
+            // A reference to a dictionary names no model.
+            Annot3d { page: 1, index: 3, rect: [0.0, 0.0, 10.0, 10.0], format: Format3d::Unknown, view: None },
         ]
     );
     assert_eq!(info.annotations.iter().map(|a| a.subtype.as_str()).collect::<Vec<_>>(), ["Text"]);
