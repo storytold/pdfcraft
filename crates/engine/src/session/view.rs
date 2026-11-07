@@ -120,17 +120,7 @@ impl Session {
                 let rects: Vec<[f64; 4]> = text
                     .line_rects(glyphs)
                     .into_iter()
-                    .map(|v| {
-                        let q = doc.info.pages[page].view_rect_to_quad(v);
-                        let xs = [q[0], q[2], q[4], q[6]];
-                        let ys = [q[1], q[3], q[5], q[7]];
-                        [
-                            xs.iter().copied().fold(f64::MAX, f64::min),
-                            ys.iter().copied().fold(f64::MAX, f64::min),
-                            xs.iter().copied().fold(f64::MIN, f64::max),
-                            ys.iter().copied().fold(f64::MIN, f64::max),
-                        ]
-                    })
+                    .filter_map(|v| line_user_rect(&doc.info.pages[page], v))
                     .filter(|r| {
                         !doc.links().iter().any(|l| l.page == page && l.rect[0] < r[2] && r[0] < l.rect[2] && l.rect[1] < r[3] && r[1] < l.rect[3])
                     })
@@ -311,5 +301,88 @@ impl Session {
 
     pub fn docs(&self) -> &[Document] {
         &self.docs
+    }
+}
+
+fn line_user_rect(page: &pdfcraft_render::PageInfo, v: [f32; 4]) -> Option<[f64; 4]> {
+    if !v.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let r = page.view_rect_to_user(v).map(f64::from);
+    r.iter().all(|x| x.is_finite()).then_some(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line_user_rect;
+    use crate::{Edit, Session};
+    use pdfcraft_render::PageInfo;
+    use std::sync::Arc;
+
+    fn sample_page(rotation: u16) -> PageInfo {
+        let (width, height) = if rotation % 180 == 90 { (300.0, 200.0) } else { (200.0, 300.0) };
+        PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, 200.0, 300.0], rotation }
+    }
+
+    #[test]
+    fn line_user_rect_rejects_non_finite_coordinates() {
+        let page = sample_page(0);
+        assert_eq!(line_user_rect(&page, [f32::NAN; 4]), None);
+        assert_eq!(line_user_rect(&page, [f32::NAN, 10.0, 50.0, 20.0]), None);
+        assert_eq!(line_user_rect(&page, [10.0, 20.0, f32::INFINITY, 30.0]), None);
+        assert_eq!(line_user_rect(&page, [10.0, f32::NEG_INFINITY, 50.0, 30.0]), None);
+
+        let mut bad_crop = sample_page(0);
+        bad_crop.crop = [f32::NAN, 0.0, 200.0, 300.0];
+        assert_eq!(line_user_rect(&bad_crop, [10.0, 20.0, 50.0, 40.0]), None);
+    }
+
+    #[test]
+    fn line_user_rect_matches_view_rect_to_user_across_rotations() {
+        let v = [12.0, 24.0, 96.0, 48.0];
+        for rotation in [0, 90, 180, 270] {
+            let page = sample_page(rotation);
+            let got = line_user_rect(&page, v).expect("finite view rect maps to user space");
+            let expected = page.view_rect_to_user(v).map(f64::from);
+            assert_eq!(got, expected, "rotation {rotation}");
+        }
+    }
+
+    #[test]
+    fn find_urls_returns_finite_user_rects_on_rotated_page() {
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+        ];
+        let body = "BT /F1 12 Tf 20 150 Td (Visit https://example.com today) Tj ET";
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(o);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+        let mut session = Session::new();
+        let id = session.open("urls.pdf", None, Arc::new(pdf), None).expect("opens");
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotates");
+        let urls = session.find_urls(id);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].0, 0);
+        assert_eq!(urls[0].2, "https://example.com");
+        assert_eq!(urls[0].1.len(), 1);
+        let r = urls[0].1[0];
+        assert!(r.iter().all(|c| c.is_finite()));
+        assert!(r[0] < r[2] && r[1] < r[3], "expected ordered user rect, got {r:?}");
     }
 }
