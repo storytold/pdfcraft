@@ -922,7 +922,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && tool == QuickTool::Select
         && !input.consumed
         && frame.out.clicked_link.is_none()
-        && let Some(Owner::TextLink { index }) = view.router.owner(i)
+        && let PagePress::Mine(Owner::TextLink { index }) = input.press
         && input.released_over
         && let Some(uri) = view.text_link_uri(i, index)
     {
