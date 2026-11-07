@@ -230,6 +230,11 @@ mod tests {
             format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << /Font << >> >> {pages} >>"),
             format!("<< /Type /Page /Parent 2 0 R /CropBox [10 20 210 320] {page} >>"),
         ];
+        doc_from(&objs)
+    }
+
+    /// A document whose objects 1, 2, … are `objs`, object 1 its catalog.
+    fn doc_from(objs: &[String]) -> Document {
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offs = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -243,6 +248,20 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
         Document::open(Arc::new(out)).unwrap()
+    }
+
+    /// A page with no `/MediaBox`, its own or inherited, is US Letter, the size the renderer
+    /// and the inspector use too (hayro-syntax patch 44; ISO 32000-2 Table 31 gives no default).
+    #[test]
+    fn a_page_without_a_media_box_is_letter() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);
+        assert_eq!(p.display_size(&d), (612.0, 792.0));
     }
 
     #[test]

@@ -403,7 +403,10 @@ impl<'a> Page<'a> {
             return None;
         }
 
-        let media_box = dict.get::<Rect>(MEDIA_BOX).or(ctx.media_box).unwrap_or(A4);
+        // PdfCraft patch (44): a page with no `/MediaBox`, its own or inherited, is US Letter,
+        // not A4. The box is required (ISO 32000-2 §7.7.3.3, Table 31) and has no default;
+        // other readers use Letter, as do PdfCraft's page model and inspector.
+        let media_box = dict.get::<Rect>(MEDIA_BOX).or(ctx.media_box).unwrap_or(LETTER);
 
         let crop_box = dict
             .get::<Rect>(CROP_BOX)
@@ -556,7 +559,8 @@ impl<'a> Page<'a> {
 
         if (crop_box.width() as f32).is_nearly_zero() || (crop_box.height() as f32).is_nearly_zero()
         {
-            (A4.width() as f32, A4.height() as f32)
+            // PdfCraft patch (44): the same US Letter default as a missing `/MediaBox`.
+            (LETTER.width() as f32, LETTER.height() as f32)
         } else {
             // PdfCraft patch: retain a one-point floor after UserUnit, not one raw unit.
             // The stored unit is finite and within 1..=75000. Round upward only if the
@@ -804,6 +808,15 @@ pub const A4: Rect = Rect {
     y0: 0.0,
     x1: 210.0 * POINTS_PER_MM,
     y1: 297.0 * POINTS_PER_MM,
+};
+
+/// PdfCraft patch (44): the dimension of a US Letter page (8.5 × 11 in), the size of a page
+/// that has no `/MediaBox`.
+pub const LETTER: Rect = Rect {
+    x0: 0.0,
+    y0: 0.0,
+    x1: 8.5 * POINTS_PER_INCH,
+    y1: 11.0 * POINTS_PER_INCH,
 };
 
 pub(crate) mod cached {
