@@ -25,6 +25,9 @@ pub(crate) struct Hotbar {
     picker_open: bool,
     #[serde(skip)]
     picker_drag_pos: Option<egui::Pos2>,
+    /// The Toolbar size slider is being adjusted with the keyboard (until it loses focus).
+    #[serde(skip)]
+    keyboard_sizing: bool,
 }
 
 impl Default for Hotbar {
@@ -41,6 +44,7 @@ impl Default for Hotbar {
             search: String::new(),
             picker_open: false,
             picker_drag_pos: None,
+            keyboard_sizing: false,
         }
     }
 }
@@ -540,6 +544,31 @@ fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
     }
 }
 
+/// The arrow keys the Toolbar size slider answers to while it has focus.
+const SIZE_SLIDER_KEYS: [egui::Key; 4] = [egui::Key::ArrowLeft, egui::Key::ArrowRight, egui::Key::ArrowUp, egui::Key::ArrowDown];
+
+/// Whether an arrow key was pressed this frame. Read it before the slider is added, because the
+/// slider consumes the keys it acts on.
+fn size_slider_key_pressed(ui: &egui::Ui) -> bool {
+    ui.input(|input| SIZE_SLIDER_KEYS.iter().any(|key| input.key_pressed(*key)))
+}
+
+/// Whether the Toolbar size slider is being adjusted, which keeps its picker from moving.
+///
+/// A pointer adjustment lasts while the button is held. A keyboard one starts with the first arrow
+/// key press that changes the value and lasts until the slider loses focus, so the picker does not
+/// jump between presses. `keyboard` carries that state from frame to frame. Focusing the slider, or
+/// releasing the pointer on it, does not count as a keyboard adjustment.
+fn size_slider_adjusting(slider: &egui::Response, key_pressed: bool, keyboard: &mut bool) -> bool {
+    let pointer = slider.is_pointer_button_down_on();
+    if pointer || !slider.has_focus() {
+        *keyboard = false;
+    } else if key_pressed && slider.changed() {
+        *keyboard = true;
+    }
+    pointer || *keyboard
+}
+
 /// Draw the unified floating or side-docked toolbar, combining quick actions, core tools, and custom shortcuts.
 pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
@@ -728,7 +757,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     } else {
         bar_rect.top().clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
     };
-    // Resizing the bar can move or flip its picker; hold the slider in place until release.
+    // Resizing the bar can move or flip its picker; hold the slider in place until the pointer is
+    // released, or, for the keyboard, until the slider loses focus.
     let picker_pos =
         bar.picker_drag_pos.unwrap_or_else(|| egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y));
     let mut sizing = false;
@@ -773,7 +803,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 ui.label(egui::RichText::new(tl!("Toolbar size")).size(12.5).color(t.text));
                 let slider_width = (ui.available_width() - 55.0).clamp(50.0, 140.0);
                 ui.spacing_mut().slider_width = slider_width;
-                sizing = ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false)).is_pointer_button_down_on();
+                let key_pressed = size_slider_key_pressed(ui);
+                let slider = ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
+                sizing = size_slider_adjusting(&slider, key_pressed, &mut bar.keyboard_sizing);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).size(12.0).color(t.text_muted));
                 });
@@ -866,6 +898,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     if close_dialog {
         picker_open = false;
     }
+    if !picker_open {
+        bar.keyboard_sizing = false;
+    }
     bar.picker_drag_pos = (picker_open && sizing).then_some(picker_pos);
     ctx.data_mut(|data| {
         data.insert_temp(id, shown.response.rect.size());
@@ -883,6 +918,52 @@ mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
 
+    // Build a harness that draws the hotbar docked to `$side`, with its tools picker open.
+    macro_rules! hotbar_harness {
+        ($side:expr, $vertical:expr, $full_side:expr) => {{
+            let mut app = PdfCraftApp::new();
+            app.hotbar.place($side).unwrap();
+            app.hotbar.vertical = $vertical;
+            app.hotbar.full_side = $full_side;
+            app.hotbar.position = [0.5, 0.5];
+            app.hotbar.picker_open = true;
+            let mut fonts = false;
+            let mut harness = Harness::builder().with_size(vec2(1000.0, 900.0)).with_accessibility_check(false).build_ui_state(
+                move |ui, app: &mut PdfCraftApp| {
+                    if !fonts {
+                        ui.ctx().set_fonts(theme::font_definitions());
+                        fonts = true;
+                    }
+                    show(app, ui.max_rect(), None, ui);
+                },
+                app,
+            );
+            harness.run_steps(5);
+            harness
+        }};
+    }
+
+    // Drag the size slider from `$from` to `$to` and release, checking on every step that the picker
+    // (found through its slider) has not left `$pinned`.
+    macro_rules! drag_slider_pinned {
+        ($h:expr, $pinned:expr, $from:expr, $to:expr, $what:expr) => {{
+            let (from, to): (egui::Pos2, egui::Pos2) = ($from, $to);
+            $h.hover_at(from);
+            $h.run_steps(1);
+            $h.drag_at(from);
+            $h.run_steps(1);
+            for step in 1..=8 {
+                $h.hover_at(from + (to - from) * (step as f32 / 8.0));
+                $h.run_steps(2);
+                assert_eq!($h.get_by_role(egui::accesskit::Role::Slider).rect(), $pinned, "{}: picker moved during drag", $what);
+            }
+            $h.drop_at(to);
+            $h.run_steps(3);
+        }};
+    }
+
+    /// Dragging the Toolbar size slider with the pointer keeps the picker where it is, in both
+    /// directions and in every layout, and the picker takes its recalculated place after release.
     #[test]
     fn picker_stays_put_while_resizing_hotbar() {
         for (side, vertical, full_side) in [
@@ -894,61 +975,61 @@ mod tests {
             ("left", true, false),
             ("right", true, false),
             ("float", true, false),
+            ("left", true, true),
+            ("right", true, true),
         ] {
-            let mut app = PdfCraftApp::new();
-            app.hotbar.place(side).unwrap();
-            app.hotbar.vertical = vertical;
-            app.hotbar.full_side = full_side;
-            app.hotbar.position = [0.5, 0.5];
-            app.hotbar.picker_open = true;
-            let mut fonts = false;
-            let mut h = Harness::builder().with_size(vec2(1000.0, 900.0)).with_accessibility_check(false).build_ui_state(
-                move |ui, app: &mut PdfCraftApp| {
-                    if !fonts {
-                        ui.ctx().set_fonts(theme::font_definitions());
-                        fonts = true;
-                    }
-                    show(app, ui.max_rect(), None, ui);
-                },
-                app,
-            );
-            h.run_steps(5);
-            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
-            let start = slider.left_center() + vec2(slider.width() * 0.2, 0.0);
-            let end = slider.right_center() - vec2(2.0, 0.0);
-            h.hover_at(start);
-            h.run_steps(1);
-            h.drag_at(start);
-            h.run_steps(1);
-            for step in 1..=8 {
-                h.hover_at(start + (end - start) * (step as f32 / 8.0));
-                h.run_steps(2);
-                assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{side}, strip={full_side}: picker moved during drag");
-            }
-            assert!(h.state().hotbar.button_size > 60.0, "{side}, strip={full_side}: slider did not reach the upper end");
-            h.drop_at(end);
-            h.run_steps(3);
-            assert!(h.state().hotbar.picker_drag_pos.is_none(), "release must unpin the picker");
+            let what = format!("{side}, vertical={vertical}, strip={full_side}");
+            let mut h = hotbar_harness!(side, vertical, full_side);
 
+            // Drag the slider up to the largest size.
+            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            drag_slider_pinned!(h, slider, slider.left_center() + vec2(slider.width() * 0.2, 0.0), slider.right_center() - vec2(2.0, 0.0), what);
+            assert!(h.state().hotbar.button_size > 60.0, "{what}: slider did not reach the upper end");
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: release must unpin the picker");
+            let resized = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            assert_ne!(resized, slider, "{what}: picker should take its new place after release");
             if !vertical && !full_side {
-                let resized = h.get_by_role(egui::accesskit::Role::Slider).rect();
-                assert!(resized.left() < slider.left(), "{side}: picker should move to the left after release");
-                let start = resized.right_center() - vec2(2.0, 0.0);
-                let end = resized.left_center() + vec2(2.0, 0.0);
-                h.hover_at(start);
-                h.run_steps(1);
-                h.drag_at(start);
-                h.run_steps(1);
-                for step in 1..=8 {
-                    h.hover_at(start + (end - start) * (step as f32 / 8.0));
-                    h.run_steps(2);
-                    assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), resized, "{side}: picker moved during reverse drag");
-                }
-                assert!(h.state().hotbar.button_size < 28.0, "{side}: slider did not reach the lower end");
-                h.drop_at(end);
-                h.run_steps(3);
-                assert!(h.get_by_role(egui::accesskit::Role::Slider).rect().left() > resized.left(), "{side}: picker should return to the right");
+                assert!(resized.left() < slider.left(), "{what}: picker should move to the left after release");
             }
+
+            // And back down to the smallest.
+            drag_slider_pinned!(h, resized, resized.right_center() - vec2(2.0, 0.0), resized.left_center() + vec2(2.0, 0.0), what);
+            assert!(h.state().hotbar.button_size < 28.0, "{what}: slider did not reach the lower end");
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: release must unpin the picker");
+            let restored = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            assert_ne!(restored, resized, "{what}: picker should take its new place after the reverse drag");
+            if !vertical && !full_side {
+                assert!(restored.left() > resized.left(), "{what}: picker should return to the right");
+            }
+        }
+    }
+
+    /// Adjusting the Toolbar size slider with the arrow keys also keeps the picker where it is, until
+    /// the slider loses focus.
+    #[test]
+    fn picker_stays_put_while_resizing_hotbar_with_keyboard() {
+        for (side, vertical, full_side) in [("top", false, false), ("float", false, false), ("bottom", false, true), ("left", true, false)] {
+            let what = format!("{side}, vertical={vertical}, strip={full_side}");
+            let mut h = hotbar_harness!(side, vertical, full_side);
+            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            h.get_by_role(egui::accesskit::Role::Slider).focus();
+            h.run_steps(2);
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: focusing the slider alone must not pin the picker");
+
+            // The slider moves about a pixel per key press, so this crosses its whole travel.
+            for _ in 0..150 {
+                h.key_press(egui::Key::ArrowRight);
+                h.run_steps(1);
+                assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{what}: picker moved during keyboard resize");
+            }
+            assert!(h.state().hotbar.button_size > 60.0, "{what}: keys did not reach the upper end");
+            assert!(h.state().hotbar.picker_drag_pos.is_some(), "{what}: picker must stay pinned while the slider has focus");
+
+            // Moving focus away ends the adjustment.
+            h.key_press(egui::Key::Tab);
+            h.run_steps(3);
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: losing focus must unpin the picker");
+            assert_ne!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{what}: picker should take its new place after focus leaves");
         }
     }
 
