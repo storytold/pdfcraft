@@ -19,12 +19,16 @@ use hayro_syntax::object::dict::keys::{CHAR_PROCS, FONT_BBOX, FONT_MATRIX, RESOU
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, BezPath, Rect};
 use skrifa::GlyphId;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub(crate) struct Type3<'a> {
     widths: Vec<Width>,
     missing_width: f32,
+    /// PdfCraft patch (90): the width each code's glyph procedure gives with `d0`/`d1`, read
+    /// the first time the code is shown in a font without `/Widths`. One cell per code.
+    proc_widths: Vec<OnceCell<Option<f32>>>,
     encoding: Encoding,
     encodings: HashMap<u8, String>,
     dict: Dict<'a>,
@@ -71,6 +75,7 @@ impl<'a> Type3<'a> {
             char_procs,
             widths,
             missing_width,
+            proc_widths: vec![OnceCell::new(); usize::from(u8::MAX) + 1],
             encodings,
             matrix,
             dict: dict.clone(),
@@ -88,11 +93,45 @@ impl<'a> Type3<'a> {
     }
 
     pub(crate) fn glyph_width(&self, code: u8) -> f32 {
+        // PdfCraft patch (90): /Widths, /FirstChar and /LastChar are required for Type 3 fonts
+        // (Table 110), but a font without them gave every glyph no advance and its text was drawn on one spot. The glyph
+        // procedure's `d0`/`d1` operator states the glyph's width too (9.6.4), so such a font
+        // takes that width, as PDFium does. A font with /Widths is read as before: a code
+        // outside FirstChar..LastChar has width 0 (Table 110), as in Poppler and MuPDF.
         let w = match self.widths.get(code as usize).copied() {
             Some(Width::Value(w)) => w,
+            _ if self.widths.is_empty() => self.proc_width(code).unwrap_or(self.missing_width),
             _ => self.missing_width,
         };
         (w * self.matrix.as_coeffs()[0] as f32) * UNITS_PER_EM
+    }
+
+    /// PdfCraft patch (90): the horizontal width `wx` that the glyph procedure for `code`
+    /// sets with `d0` or `d1`, in glyph space. `None` when the code has no procedure, the
+    /// procedure sets no width or its width isn't finite. A procedure the page's content
+    /// budget can't decode isn't remembered, so a later page may still read it.
+    fn proc_width(&self, code: u8) -> Option<f32> {
+        let cell = self.proc_widths.get(usize::from(code))?;
+        if let Some(width) = cell.get() {
+            return *width;
+        }
+        let name = self.glyph_simulator.glyph_to_string(self.map_code(code))?;
+        let program = self.char_procs.get(&name)?;
+        let decoded = crate::context::decode_content(program)?;
+        let mut iter = TypedIter::new(decoded.as_ref());
+        let mut width = None;
+        while let Some(op) = iter.next() {
+            match op {
+                TypedInstruction::ColorGlyph(d0) => width = Some(d0.0.as_f32()),
+                TypedInstruction::ShapeGlyph(d1) => width = Some(d1.0.as_f32()),
+                _ => continue,
+            }
+            break;
+        }
+        let width = width.filter(|w| w.is_finite());
+        // Setting can't fail here: the cell was empty above and nothing in between fills it.
+        let _ = cell.set(width);
+        width
     }
 
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
