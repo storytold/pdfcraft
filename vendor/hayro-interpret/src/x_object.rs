@@ -578,7 +578,8 @@ impl<'a> ImageXObject<'a> {
             self.decode_key(cache, true, target_dimension),
             MAX_DECODED_IMAGE_BYTES,
             decoded_mask_size,
-            || decode_mask(self, target_dimension),
+            &self.warning_sink,
+            |sink| decode_mask(&self.reporting_to(sink), target_dimension),
         )
     }
 
@@ -598,7 +599,8 @@ impl<'a> ImageXObject<'a> {
             self.decode_key(cache, false, target_dimension),
             MAX_DECODED_IMAGE_BYTES,
             decoded_raster_size,
-            || decode_raster(self, target_dimension),
+            &self.warning_sink,
+            |sink| decode_raster(&self.reporting_to(sink), target_dimension),
         )
     }
 
@@ -647,6 +649,14 @@ impl<'a> ImageXObject<'a> {
         uses_jpx(&self.stream)
             || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s))
             || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s))
+    }
+
+    /// PdfCraft patch (91): this image, reporting its warnings to `sink`.
+    fn reporting_to(&self, sink: &WarningSinkFn) -> Self {
+        Self {
+            warning_sink: sink.clone(),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn width(&self) -> u32 {
