@@ -79,13 +79,15 @@ const LINK_KEYS: [&[u8]; 5] = [b"P", b"Popup", b"IRT", b"Parent", b"AP"];
 /// arrays, `/Border` may end in a dash array.
 const INLINE_DEPTH: usize = 4;
 
-/// Values [`with_direct_values`] copies out of referenced arrays and dictionaries for one
-/// annotation, so a file can't have a large object copied for every entry that points at it.
-const INLINE_BUDGET: usize = 1 << 16;
+/// Values [`with_direct_values`] copies out of referenced arrays and dictionaries, or walks
+/// before finding one too large to copy, for one annotation, so a file can't have a large object
+/// copied or scanned for every entry that points at it.
+pub(crate) const INLINE_BUDGET: usize = 1 << 16;
 
-/// Values copied for all the annotations one display pass draws
+/// Values copied or walked for all the annotations one display pass draws
 /// ([`with_missing_appearances_cached`]), so a large object that many annotations point at is
-/// not copied for each of them without bound. Past it, references are left as they are.
+/// not copied, or scanned and found too large, for each of them without bound. Past it,
+/// references are left as they are.
 pub(crate) const PASS_BUDGET: usize = 1 << 22;
 
 /// `d` with the references among the values [`appearance::build`] reads followed. Any value may be
@@ -117,13 +119,18 @@ pub(crate) fn with_direct_values_within<'d>(doc: &Document, d: &'d Dict, pass: &
 }
 
 /// The number of values in `o`, counting into its arrays and dictionaries (not through
-/// references, which are charged when followed), or `None` past `limit`. Walks at most `limit`
-/// values and holds no more than `limit` waiting.
-fn weight(o: &Object, limit: usize) -> Option<usize> {
+/// references, which are charged when followed), or, past `limit`, `Err` with the values it
+/// visited or queued before finding that out (at least one), so a rejected walk is charged too.
+/// Walks at most `limit` values and holds no more than `limit` waiting.
+fn weight(o: &Object, limit: usize) -> Result<usize, usize> {
     let mut count = 0usize;
     let mut stack = vec![o];
     while let Some(o) = stack.pop() {
-        count = count.checked_add(1).filter(|c| *c <= limit)?;
+        let spent = count.saturating_add(stack.len()).max(1);
+        count = match count.checked_add(1).filter(|c| *c <= limit) {
+            Some(c) => c,
+            None => return Err(spent),
+        };
         let inner = match o {
             Object::Array(items) => items.len(),
             Object::Dict(entries) => entries.len(),
@@ -131,7 +138,7 @@ fn weight(o: &Object, limit: usize) -> Option<usize> {
         };
         // Every value waiting is counted later, so more than `limit` in all is over it already.
         if count.saturating_add(stack.len()).saturating_add(inner) > limit {
-            return None;
+            return Err(spent.saturating_add(1));
         }
         match o {
             Object::Array(items) => stack.extend(items.iter()),
@@ -139,7 +146,7 @@ fn weight(o: &Object, limit: usize) -> Option<usize> {
             _ => {}
         }
     }
-    Some(count)
+    Ok(count)
 }
 
 /// `o` with references followed `depth` levels into arrays and dictionaries, or `None` when there
@@ -148,12 +155,24 @@ fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut usize) ->
     let held;
     let (base, followed) = match o {
         Object::Ref(_) => {
+            // A spent budget follows nothing more, not even to find out what is there.
+            if *budget == 0 {
+                return None;
+            }
             held = doc.resolve(o);
             if matches!(&*held, Object::Stream(_) | Object::Ref(_)) {
                 return None;
             }
-            // Everything copied counts, inner arrays and dictionaries too.
-            *budget = budget.checked_sub(weight(&held, *budget)?)?;
+            // Everything copied counts, inner arrays and dictionaries too, and so does the walk
+            // that finds an object too large: many references to one would otherwise each walk
+            // it again for free.
+            match weight(&held, *budget) {
+                Ok(n) => *budget = budget.checked_sub(n)?,
+                Err(spent) => {
+                    *budget = budget.saturating_sub(spent);
+                    return None;
+                }
+            }
             (&*held, true)
         }
         other => (other, false),

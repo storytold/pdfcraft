@@ -1593,6 +1593,33 @@ fn following_references_is_bounded_per_value_and_per_pass() {
     assert_eq!(copies, crate::draw::PASS_BUDGET / 60_001, "copies stop when the pass budget is spent");
 }
 
+/// Finding an object too large to copy costs the walk that found it out: an array of two arrays
+/// of 40,000 numbers that many annotations point at is walked about 40,000 values deep before it
+/// is rejected, and that is charged to the annotation and to the pass, so after a bounded number
+/// of such walks the pass has no room left to walk it again. A reference to it repeated in one annotation
+/// is not walked again in full, and a small referenced colour after it is still read.
+#[test]
+fn a_rejected_large_object_is_charged_to_the_budgets() {
+    let mut doc = fixture();
+    let inner = Object::Array(vec![Object::Int(0); 40_000]);
+    let nested = doc.add(Object::Array(vec![inner.clone(), inner]));
+    let red = doc.add(Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)]));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Junk".to_vec(), Object::Array(vec![Object::Ref(nested); 1_000]));
+    d.set(b"C".to_vec(), Object::Ref(red));
+    let mut pass = crate::draw::PASS_BUDGET;
+    let direct = crate::draw::with_direct_values_within(&doc, &d, &mut pass);
+    assert_eq!(direct.get(b"C"), Some(&Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)])));
+    let charged = crate::draw::PASS_BUDGET - pass;
+    assert!((40_000..=crate::draw::INLINE_BUDGET).contains(&charged), "the rejected walk is charged once: {charged}");
+    d.set(b"Junk".to_vec(), Object::Ref(nested));
+    for _ in 0..crate::draw::PASS_BUDGET / 40_000 {
+        crate::draw::with_direct_values_within(&doc, &d, &mut pass);
+    }
+    assert!(pass < 40_000, "after {} annotations the pass has no room for another full walk: {pass}", crate::draw::PASS_BUDGET / 40_000 + 1);
+}
+
 /// `/RD` is optional (ISO 32000-2 Table 177): a callout without it has its text box at `/Rect`
 /// and is drawn, box, text and leader line. A callout line and `/RD` given by reference are read too.
 #[test]
