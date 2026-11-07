@@ -71,6 +71,25 @@ fn full_save_refuses_an_unreadable_reachable_object() {
     assert_eq!(reopened.root(), doc.root());
 }
 
+#[test]
+fn reconstructed_full_saves_record_unreadable_objects_written_as_null() {
+    let mut bytes = Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R /Custom 3 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").obj("[").build();
+    let xref = bytes.windows(5).position(|w| w == b"xref\n").unwrap();
+    bytes.truncate(xref);
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.reconstructed(), "the missing xref must exercise repaired-document saving");
+
+    let incremental = write_incremental(&doc, &SaveOptions::default()).expect("Save writes the repaired document");
+    let full = write_full(&doc, &SaveOptions::default()).expect("Save As writes the repaired document");
+    for output in [incremental, full] {
+        let back = Document::open(Arc::new(output)).unwrap();
+        let catalog = back.get(back.root().unwrap());
+        assert!(matches!(*back.resolve(catalog.as_dict().unwrap().get(b"Custom").unwrap()), Object::Null));
+    }
+    let notes = doc.repair_log().into_iter().filter(|line| line.contains("object 3 could not be read and was saved as null")).count();
+    assert_eq!(notes, 1, "{:?}", doc.repair_log());
+}
+
 fn member_container_fixture(container: u32) -> Vec<u8> {
     let mut bytes = b"%PDF-1.5\n".to_vec();
     let at = |out: &mut Vec<u8>, num: u32, body: &str| {

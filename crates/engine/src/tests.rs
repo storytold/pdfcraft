@@ -8473,6 +8473,35 @@ fn fixture_without_page_tree() -> Vec<u8> {
     out
 }
 
+fn reconstructed_fixture_without_page_tree_and_with_an_unreadable_object() -> Vec<u8> {
+    let mut bytes = fixture_without_page_tree();
+    let catalog = b"<< /Type /Catalog /Pages 9 0 R >>";
+    let at = bytes.windows(catalog.len()).position(|w| w == catalog).unwrap();
+    bytes.splice(at..at + catalog.len(), b"<< /Type /Catalog /Pages 9 0 R /Custom 99 0 R >>".iter().copied());
+    let xref = bytes.windows(5).position(|w| w == b"xref\n").unwrap();
+    bytes.truncate(xref);
+    bytes.extend_from_slice(b"99 0 obj\n[\nendobj\n");
+    bytes
+}
+
+fn fixture_without_page_tree_and_with_an_unreadable_object() -> Vec<u8> {
+    let mut bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 9 0 R /Custom 8 0 R >>")
+        .obj("<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
+        .stream("", b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
+        .stream("", b"BT /F1 24 Tf 20 150 Td (Page 2) Tj ET")
+        .obj("[")
+        .build();
+    let header = bytes.windows(8).position(|w| w == b"1 0 obj\n").unwrap();
+    bytes[header + 2] = b'1';
+    let root = bytes.windows(11).position(|w| w == b"/Root 1 0 R").unwrap();
+    bytes[root + 8] = b'1';
+    bytes
+}
+
 #[test]
 fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     let mut s = Session::new();
@@ -8483,6 +8512,34 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     assert!(doc.repair_log().iter().any(|l| l.contains("page tree is missing")), "{:?}", doc.repair_log());
     s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
+}
+
+#[test]
+fn a_reconstructed_page_tree_repair_survives_an_unreadable_object() {
+    let mut s = Session::new();
+    let id = s.open("damaged.pdf", None, Arc::new(reconstructed_fixture_without_page_tree_and_with_an_unreadable_object()), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    assert_eq!(pdfcraft_organize::page_count(cos), Ok(2), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|line| line.contains("object 99 could not be read and was saved as null")), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|line| line.contains("page tree is missing")), "{:?}", doc.repair_log());
+    let catalog = cos.get(cos.root().unwrap());
+    assert!(matches!(*cos.resolve(catalog.as_dict().unwrap().get(b"Custom").unwrap()), pdfcraft_cos::Object::Null));
+}
+
+#[test]
+fn a_failed_page_tree_repair_is_reported() {
+    let mut s = Session::new();
+    let id = s.open("damaged.pdf", None, Arc::new(fixture_without_page_tree_and_with_an_unreadable_object()), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    assert_eq!(pdfcraft_organize::page_count(&doc.editor.as_ref().unwrap().cos), Ok(0));
+    assert!(
+        doc.repair_log().iter().any(|line| line.contains("the page tree is missing; rebuilding it failed (object 8 could not be read")),
+        "{:?}",
+        doc.repair_log()
+    );
 }
 
 #[test]

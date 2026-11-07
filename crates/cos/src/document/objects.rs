@@ -4,7 +4,7 @@ use super::reader::find;
 use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, held_bytes, objstm_member};
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
-    Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
+    Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, Mutex, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
 };
 
 /// The most decoded `/JBIG2Globals` a document keeps for its images to share (see
@@ -84,16 +84,25 @@ impl Document {
         ends
     }
 
-    pub fn repair_log(&self) -> &[String] {
-        &self.repair_log
+    /// A snapshot of the repairs applied while reading or saving the document.
+    pub fn repair_log(&self) -> Vec<String> {
+        self.repair_log.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Add a line to [`Self::repair_log`]: a leniency applied while reading that the user should
     /// know about (fidelity: never silent).
     pub fn note_repair(&mut self, line: String) {
-        let mut log = self.repair_log.as_ref().clone();
+        let mut log = self.repair_log();
         log.push(line);
-        self.repair_log = Arc::new(log);
+        self.repair_log = Arc::new(Mutex::new(log));
+    }
+
+    /// Record a repair found while a temporary whole-document reader holds a clone.
+    pub(crate) fn note_shared_repair(&self, line: String) {
+        let mut log = self.repair_log.lock().unwrap_or_else(|error| error.into_inner());
+        if !log.contains(&line) {
+            log.push(line);
+        }
     }
 
     /// `true` when there are unsaved edits. Removing an `/Encrypt` dictionary written inline in

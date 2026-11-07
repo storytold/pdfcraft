@@ -230,17 +230,23 @@ impl Session {
         // (#1656). Kept only when the reader then shows the same pages, and never on a signed
         // document, where writing the repair could rewrite the file under its signatures.
         let (bytes, info, cos) = match cos {
-            Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
+            Ok(Ok(mut cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
-                let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
+                let signed = pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
-                    Ok(n) if n > 0 && !signed() => rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
+                    Ok(n) if n > 0 && !signed => match rebase(&work) {
+                        Ok(rebuilt) => Some(rebuilt).filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
+                        Err(error) => {
+                            cos.note_repair(format!("the page tree is missing; rebuilding it failed ({error})"));
+                            None
+                        }
+                    },
                     _ => None,
                 };
                 match rebuilt {
                     Some((b, i, mut c)) => {
                         for line in cos.repair_log() {
-                            c.note_repair(line.clone());
+                            c.note_repair(line);
                         }
                         c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
                         (b, i, Ok(Ok(c)))

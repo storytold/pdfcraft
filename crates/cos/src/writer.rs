@@ -320,6 +320,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             {
                 continue;
             }
+            Err(_) if reader.document.reconstructed() => {
+                reader.document.note_shared_repair(format!("object {} could not be read and was saved as null", r.num));
+                continue;
+            }
             Err(CosError::MissingObject(_)) => return Err(CosError::UnreadableObject(r.num)),
             Err(error) => return Err(error),
         };

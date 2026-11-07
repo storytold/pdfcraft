@@ -629,7 +629,7 @@ impl Document {
 
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).
     pub fn repair_log(&self) -> Vec<String> {
-        self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
+        self.editor.as_ref().map(|e| e.cos.repair_log()).unwrap_or_default()
     }
 }
 

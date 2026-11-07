@@ -47,7 +47,8 @@ pub struct Document {
     /// number. Filled only when the cross-reference data proved inconsistent; see
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
-    repair_log: Arc<Vec<String>>,
+    /// Shared so a temporary full-save reader can report damage it discovers to its source.
+    repair_log: Arc<Mutex<Vec<String>>>,
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
