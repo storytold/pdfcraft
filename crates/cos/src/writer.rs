@@ -15,7 +15,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::CosError;
-use crate::document::{Document, ObjectReader, XrefEntry};
+use crate::document::{Document, ObjectReader, XrefEntry, held_bytes};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -275,14 +275,19 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
 
 /// The objects [`write_full`] writes: everything reachable from the trailer's /Root, /Info and
 /// /Encrypt and from its unknown entries, breadth-first, with the new number each gets
-/// (aliases of one slot included) and, in visit order, whether it is a stream.
-type SaveOrder = (HashMap<ObjRef, u32>, Vec<(ObjRef, bool)>);
+/// (aliases of one slot included) and, in visit order, whether it is a stream and the parsed
+/// object where the budget allowed keeping it.
+type SaveOrder = (HashMap<ObjRef, u32>, Vec<(ObjRef, bool)>, Vec<Option<Arc<Object>>>);
 
 fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveOrder, CosError> {
     // Breadth-first walk from the trailer, assigning new numbers in visit order.
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
     // Record the type while traversing so classifying packed objects needs no second parse.
     let mut order: Vec<(ObjRef, bool)> = Vec::new();
+    // The parsed object of each entry in `order`, kept for the write pass while the budget
+    // allows it. Past the budget the write pass reads the object again.
+    let mut kept: Vec<Option<Arc<Object>>> = Vec::new();
+    let mut kept_budget = KeptObjects::default();
     let mut queue: VecDeque<ObjRef> = VecDeque::new();
     let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
     for key in [&b"Root"[..], b"Info", b"Encrypt"] {
@@ -321,8 +326,9 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
         map.insert(canonical, num);
         order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
+        kept.push(kept_budget.admit(&o, reader.document.bytes()).then_some(o));
     }
-    Ok((map, order))
+    Ok((map, order, kept))
 }
 
 /// The object numbers a full save of `doc` would write: exactly the objects [`write_full`]
@@ -331,7 +337,7 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
 pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
     let mut reader = doc.object_reader();
     let trailer_in = reader.document.trailer().clone();
-    let (_, order) = full_save_order(&mut reader, &trailer_in)?;
+    let (_, order, _) = full_save_order(&mut reader, &trailer_in)?;
     Ok(order.into_iter().map(|(r, _)| r.num).collect())
 }
 
@@ -345,7 +351,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut reader = doc.object_reader();
     stamp_mod_date(&mut reader.document, opts);
     let trailer_in = reader.document.trailer().clone();
-    let (map, order) = full_save_order(&mut reader, &trailer_in)?;
+    let (map, order, mut kept) = full_save_order(&mut reader, &trailer_in)?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
@@ -375,14 +381,14 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
     // objects still precede object streams, preserving the established output order.
-    let mut packed: Vec<(u32, ObjRef)> = Vec::new();
+    let mut packed: Vec<(u32, ObjRef, Option<Arc<Object>>)> = Vec::new();
     for (i, (r, is_stream)) in order.iter().enumerate() {
         let num = output_number(i)?;
         let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(&num) && root_outside != Some(num);
         if in_stream {
-            packed.push((num, *r));
+            packed.push((num, *r, kept[i].take()));
         } else {
-            let o = reread(&mut reader, *r, *is_stream)?;
+            let o = written_object(&mut reader, *r, *is_stream, kept[i].take())?;
             let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
             write_indirect(num, 0, &o, &mut out);
@@ -392,9 +398,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // individually: the whole stream is (§7.5.7, §7.6.2).
     let mut next = output_number(order.len())?;
     let mut batch = ObjectStreamBatch::default();
-    for (num, reference) in packed {
+    for (num, reference, parsed) in packed {
         let mut encoded = Vec::new();
-        serialize(&renumber(&*reread(&mut reader, reference, false)?, &map), &mut encoded);
+        serialize(&renumber(&*written_object(&mut reader, reference, false, parsed)?, &map), &mut encoded);
         if batch.count > 0 && batch.body.len().saturating_add(encoded.len()).saturating_add(1) > OBJSTM_BYTES {
             batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
         }
@@ -426,6 +432,38 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
     Ok(out)
+}
+
+/// What `write_full` keeps of the objects it parsed while numbering them, measured with
+/// [`held_bytes`] (the parsed tree and any data that is not a view into the file). Beyond the
+/// budget objects are read again when written, which bounds the memory of a save of a huge
+/// document.
+#[derive(Default)]
+struct KeptObjects {
+    bytes: usize,
+}
+
+impl KeptObjects {
+    const BYTES: usize = 64 * 1024 * 1024;
+
+    /// Whether `object` still fits the budget; if so it is counted against it.
+    fn admit(&mut self, object: &Object, data: &Arc<Vec<u8>>) -> bool {
+        let bytes = self.bytes.saturating_add(held_bytes(object, data, 0));
+        if bytes > Self::BYTES {
+            return false;
+        }
+        self.bytes = bytes;
+        true
+    }
+}
+
+/// The object to write for `r`: the one parsed while numbering when it was kept, else `r` read
+/// again.
+fn written_object(reader: &mut ObjectReader, r: ObjRef, is_stream: bool, kept: Option<Arc<Object>>) -> Result<Arc<Object>, CosError> {
+    match kept {
+        Some(o) => Ok(o),
+        None => reread(reader, r, is_stream),
+    }
 }
 
 /// Assemble the full rewrite's trailer and apply its identifier policy.
@@ -933,6 +971,38 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
+    }
+
+    #[test]
+    fn kept_objects_stop_at_their_byte_budget() {
+        let data = Arc::new(Vec::new());
+        let string = Object::String(PdfString::literal(vec![b'x'; 1000]));
+        let array = Object::Array(vec![Object::Int(1), Object::Null]);
+        let mut kept = KeptObjects::default();
+        assert!(kept.admit(&string, &data) && kept.admit(&array, &data));
+        assert_eq!(kept.bytes, held_bytes(&string, &data, 0) + held_bytes(&array, &data, 0));
+        let mut full = KeptObjects { bytes: KeptObjects::BYTES - held_bytes(&string, &data, 0) + 1 };
+        let before = full.bytes;
+        assert!(!full.admit(&string, &data), "one byte over the budget");
+        assert_eq!(full.bytes, before, "a refused object is not counted");
+        let mut deep = Object::Null;
+        for _ in 0..300 {
+            deep = Object::Array(vec![deep]);
+        }
+        assert!(!KeptObjects::default().admit(&deep, &data), "nesting past the limit is never kept");
+    }
+
+    #[test]
+    fn kept_objects_count_names_and_dictionary_keys() {
+        let data = Arc::new(Vec::new());
+        let name = Object::Name(vec![b'n'; KeptObjects::BYTES + 1]);
+        let mut kept = KeptObjects::default();
+        assert!(!kept.admit(&name, &data), "a name over the byte budget is not kept");
+        assert_eq!(kept.bytes, 0);
+        let mut dict = Dict::new();
+        dict.set(vec![b'k'; KeptObjects::BYTES + 1], Object::Null);
+        assert!(!kept.admit(&Object::Dict(dict), &data), "nor a dictionary key");
+        assert_eq!(kept.bytes, 0);
     }
 
     #[test]
