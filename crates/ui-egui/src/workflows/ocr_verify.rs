@@ -3160,6 +3160,30 @@ mod tests {
         assert!(!failed.reject(), "a failed run that read nothing has nothing to reject");
     }
 
+    /// The web build cannot hold a reload or a closed tab the way Quit is held, so the browser's
+    /// leave warning asks while a reading is under review, even when nothing is unsaved, and
+    /// stops asking once the review is rejected.
+    #[test]
+    fn the_web_leave_warning_asks_while_a_review_is_open() {
+        use std::sync::atomic::Ordering;
+        let mut app = PdfCraftApp::new();
+        let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
+        app.open_bytes("a.pdf", None, bytes).expect("fixture");
+        let a = app.views[0].id;
+        let ctx = egui::Context::default();
+        app.guard_quit(&ctx);
+        assert!(!app.unsaved_flag.load(Ordering::Relaxed), "nothing to lose yet");
+        let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        app.ocr_verify.load(a, job.guard.clone(), vec![page]);
+        assert!(app.first_dirty().is_none(), "nothing is unsaved");
+        app.guard_quit(&ctx);
+        assert!(app.unsaved_flag.load(Ordering::Relaxed), "the open review is work a reload would lose");
+        assert!(app.ocr_verify.reject());
+        app.guard_quit(&ctx);
+        assert!(!app.unsaved_flag.load(Ordering::Relaxed), "after Reject there is nothing to lose");
+    }
+
     /// Quitting, from Quit or by closing the window, while a reading is under review keeps the
     /// application open and brings the review forward, even when no document has unsaved
     /// changes; once the review is rejected, the application quits.

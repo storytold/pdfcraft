@@ -65,8 +65,12 @@ impl PdfCraftApp {
     /// ([`Self::hold_close_for_ocr_review`]), even when it has no unsaved changes. Whether they
     /// were held.
     fn hold_for_any_ocr_review(&mut self) -> bool {
-        let reviewed = self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id));
-        reviewed.is_some_and(|i| self.hold_close_for_ocr_review(i))
+        self.ocr_review_index().is_some_and(|i| self.hold_close_for_ocr_review(i))
+    }
+
+    /// The tab of the document whose OCR review is still open, if any.
+    fn ocr_review_index(&self) -> Option<usize> {
+        self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id))
     }
 
     /// File ▸ Revert (after the confirmation).
@@ -187,9 +191,12 @@ impl PdfCraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// Publish whether any document has unsaved work, for the browser's reload warning (#812).
+    /// Publish whether leaving would lose work, for the browser's reload warning (#812): a
+    /// document with unsaved changes, or an OCR review not yet accepted or rejected, which holds
+    /// Close and Quit the same way.
     pub(crate) fn sync_unsaved_flag(&self) {
-        self.unsaved_flag.store(self.first_dirty().is_some(), std::sync::atomic::Ordering::Relaxed);
+        let at_risk = self.first_dirty().is_some() || self.ocr_review_index().is_some();
+        self.unsaved_flag.store(at_risk, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Intercept window close while documents have unsaved changes or an OCR review is open.
