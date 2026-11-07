@@ -838,7 +838,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
-        t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark and replies (each with its own status and checkmark).")
+        t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark, round (highlight only: true when corners are rounded; omitted when false or not a highlight) and replies (each with its own status and checkmark).")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1, "description": "Only this page." } }), &["doc"])),
         t(
@@ -879,7 +879,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "border_shape": { "type": "string", "enum": ["rectangle", "oval", "circle"], "description": "A text box's or typewriter text's border shape: an oval or a circle goes around the text box." },
                 "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
                 "ortho": { "type": "boolean", "description": "line/arrow/polygon/cloud/polyline: hold each end or corner level or plumb with the one before, whichever is nearer (Shift while drawing)." },
-                "round": { "type": "boolean", "description": "Highlight: whether the corners are drawn rounded like paper." },
+                "round": { "type": "boolean", "description": "Highlight only: whether the corners are drawn rounded like paper (default false, square corners)." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
             }),
             &["doc", "page", "type"],
@@ -1021,7 +1021,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "fill": { "type": "string", "description": "Interior colour of a rectangle, oval, polygon, text box or callout: #RRGGBB, a colour name, or \"none\" for no fill." },
                 "border_color": { "type": "string", "description": "A text box's, typewriter text's or callout's border colour: #RRGGBB, a colour name, or \"text\" for the text's colour." },
                 "border_shape": { "type": "string", "enum": ["rectangle", "oval", "circle"], "description": "A text box's or typewriter text's border shape: an oval or a circle goes around the text, which keeps its place." },
-                "round": { "type": "boolean", "description": "Highlight: whether the corners are drawn rounded like paper." },
+                "round": { "type": "boolean", "description": "Highlight only: whether the corners are drawn rounded like paper (square when false)." },
                 "font_size": { "type": "number", "minimum": 1, "maximum": 400, "description": "Font size in points of a text box, typewriter text or callout; the box grows to hold the text." },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),

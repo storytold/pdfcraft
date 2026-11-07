@@ -2825,13 +2825,21 @@ fn highlight_round_corners_appearance_and_persistence() {
     let p2_after = props(&doc3, 0, square_idx).unwrap();
     assert_eq!(p2_after.round_corners, Some(true));
 
-    // CCW QuadPoints (§12.5.6.10): TL, BL, BR, TR normalized without a bow-tie
+    // CCW QuadPoints (§12.5.6.10): TL, BL, BR, TR normalized to Acrobat Z-order without a bow-tie
     let ccw_q = [72.0, 712.0, 72.0, 700.0, 200.0, 700.0, 200.0, 712.0];
     let mut ccw_item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![ccw_q] });
     ccw_item.style.round_corners = true;
     let ccw_idx = add_annotation(&mut doc3, &ccw_item, &meta("ccw")).unwrap();
     let ccw_ap = ap_content(&doc3, &list(&doc3, 0)[ccw_idx]);
-    assert!(ccw_ap.contains(" c ") && ccw_ap.contains(" h f"));
+    assert_eq!(ccw_ap, round_ap, "CCW QuadPoints must normalize to identical appearance stream as Z-order");
+
+    // Degenerate / zero-height quad falls back to straight quadrilateral (no Bézier 'c' operator)
+    let degen_q = [72.0, 700.0, 200.0, 700.0, 72.0, 700.0, 200.0, 700.0];
+    let mut degen_item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![degen_q] });
+    degen_item.style.round_corners = true;
+    let degen_idx = add_annotation(&mut doc3, &degen_item, &meta("degen")).unwrap();
+    let degen_ap = ap_content(&doc3, &list(&doc3, 0)[degen_idx]);
+    assert!(degen_ap.contains(" l ") && !degen_ap.contains(" c "), "degenerate quad falls back to straight lines");
 
     // Rejecting round_corners on non-highlight
     let rect_idx = add_annotation(&mut doc3, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("r")).unwrap();
