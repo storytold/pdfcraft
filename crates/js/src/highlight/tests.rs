@@ -128,7 +128,8 @@ fn a_slash_after_a_keyword_s_brackets_or_a_block_starts_a_regex() {
 
 /// What a guess about a `/` hid, and each script is valid once closed: a `/` after an object's `}` or
 /// after `of` or `await` as a name divides, though it colours as a regular expression. Enter and a typed
-/// `}` changed the white space these scripts hold.
+/// `}` changed the white space these scripts hold. Reading every such `/` one way or the other missed
+/// the template too, where they went both ways.
 #[test]
 fn a_slash_that_may_divide_hides_no_literal() {
     for (script, closer) in [
@@ -145,6 +146,10 @@ fn a_slash_that_may_divide_hides_no_literal() {
         ("var s = `a${ {} / 2 }c\n    ", "`;"),
         // A real regular expression after a block is still seen for what it is.
         ("function f() {}\n/x/.test(a);\nvar s = `a\n    ", "`;"),
+        // Both kinds: one way, the template is hidden; the other, `/*` starts a comment.
+        ("if (false) {} /[/*]/.test(\"x\"); var n = {} / 2; var s = `a\n    ", "`;"),
+        ("var n = {} / 2; if (false) {} /[/*]/.test(\"x\"); var s = `a\n    ", "`;"),
+        ("function f() {}\n/'/.test(a); var n = {} / 2; var s = `a\n    ", "`;"),
     ] {
         assert!(parses(&format!("{script}{closer}")), "{script}");
         assert!(in_literal(script, script.len()), "{script}");
@@ -157,7 +162,6 @@ fn a_slash_that_can_only_start_a_regex_does_not_make_code_a_literal() {
     for script in [
         "if (a) {\n    ",
         "var o = {a: 1};\n    ",
-        "var o = {} / 2;\n    ",
         "x = a / 2;\n    ",
         "x = /`/; y = 1;\n    ",
         "f(/`/);\n    ",
@@ -165,17 +169,24 @@ fn a_slash_that_can_only_start_a_regex_does_not_make_code_a_literal() {
         "return /`/;\n    ",
         "x = a ? /`/ : b;\n    ",
         "++/`/.lastIndex;\n    ",
+        // A `/` after a `${` can only start one, whatever came before the template.
+        "x = {} `${/a/.source}`;\n    ",
     ] {
         assert!(!in_literal(script, script.len()), "{script}");
     }
 }
 
-/// The price of erring towards leaving the text alone: a real regular expression holding a `` ` `` after
-/// a block reads, the other way, as a template opening. Enter and `}` then add nothing in what follows.
+/// The price of erring towards leaving the text alone: past a `/` that could go either way, nothing
+/// counts as code, so Enter and `}` add nothing in the rest of the script. Before it, they do.
 #[test]
-fn a_regex_after_a_block_that_could_open_a_template_counts_as_one() {
-    assert!(in_literal("function f() {}\n/`/.test(b);\n    ", 33));
-    assert_eq!(kinds("function f() {}\n/`/.test(b);").iter().filter(|(k, _)| *k == TokenKind::Template).count(), 0, "its colours stay right");
+fn past_a_slash_that_could_go_either_way_nothing_counts_as_code() {
+    for (script, slash) in [("function f() {}\n/x/.test(b);\n    ", 16), ("var o = {} / 2;\n    ", 11), ("var of = 1; of / 2;\n    ", 15)] {
+        assert!(script.get(slash..).is_some_and(|s| s.starts_with('/')), "{script}");
+        assert!(in_literal(script, script.len()), "{script}");
+        assert!(!in_literal(script, slash), "{script}: not at the slash");
+        assert!(!in_literal(script, 0), "{script}: nor before it");
+    }
+    assert!(kinds("function f() {}\n/x/.test(b);").contains(&(TokenKind::Regex, "/x/")), "its colours stay right");
 }
 
 /// In both readings at once, a template's piece ends where it says, and a position past it isn't in it.
@@ -187,7 +198,7 @@ fn the_ends_of_a_literal_are_where_they_were() {
     };
     assert!(inside("x = `a|`"));
     assert!(!inside("x = `a`|"));
-    assert!(!inside("x = {} / 2; y = `a`|;"));
+    assert!(!inside("x = 1; y = `a`|;"));
     assert!(!inside("x = `a${|b}`"));
 }
 

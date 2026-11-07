@@ -3,7 +3,7 @@
 //! the script nor the engine's parser, so showing a script from any document reaches neither.
 //!
 //! A wrong colour is only that, but editing mustn't change what a script holds on a guess, so what
-//! it asks ([`in_literal`]) reads a `/` both ways wherever it can't tell.
+//! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of.
 
 use std::ops::Range;
 
@@ -91,7 +91,7 @@ const MAX_TEMPLATE_DEPTH: usize = 64;
 /// operators, white space) is plain. Never fails: unclosed strings, comments and templates run
 /// to the end of their line or of the source.
 pub fn highlight(source: &str) -> Vec<Token> {
-    tokens(source, false)
+    lex(source).0
 }
 
 /// Whether byte `at` of `source` may be inside a string or template, where white space is what the
@@ -100,12 +100,13 @@ pub fn highlight(source: &str) -> Vec<Token> {
 ///
 /// Without a parser, a `/` after a `}`, or after a word that may be a name, can start a regular
 /// expression or divide: `{ valueOf() { return 6; } } / 2` is valid. Read the wrong way, it hides what
-/// follows on its line, a template's opening `` ` `` among them. So this is true if either reading
-/// says so, which errs towards leaving the text alone. It reads every such `/` the same way each time,
-/// so a script that has both kinds of `/` could still be misread.
+/// follows on its line, a template's opening `` ` `` among them, or turns a `/*` in a regular
+/// expression into a comment to the end. So past the first such `/`, this is always true: it errs
+/// towards leaving the text alone rather than guess.
 pub fn in_literal(source: &str, at: usize) -> bool {
-    [false, true].into_iter().any(|divide_when_unsure| {
-        tokens(source, divide_when_unsure).iter().filter(|t| matches!(t.kind, TokenKind::String | TokenKind::Template)).any(|t| {
+    let (tokens, doubt) = lex(source);
+    doubt.is_some_and(|slash| slash < at)
+        || tokens.iter().filter(|t| matches!(t.kind, TokenKind::String | TokenKind::Template)).any(|t| {
             let token = source.get(t.bytes.clone()).unwrap_or_default();
             let open_at_its_end = match t.kind {
                 // A piece of a template starts with `` ` `` or `}`, and ends with `` ` `` or `${`.
@@ -114,7 +115,6 @@ pub fn in_literal(source: &str, at: usize) -> bool {
             };
             t.bytes.start < at && (at < t.bytes.end || (at == t.bytes.end && open_at_its_end))
         })
-    })
 }
 
 /// Whether `token` ends with `end`, when that is neither all it holds nor escaped.
@@ -122,7 +122,9 @@ fn closed_by(token: &str, end: &str) -> bool {
     token.strip_suffix(end).is_some_and(|rest| !rest.is_empty() && rest.chars().rev().take_while(|c| *c == '\\').count().is_multiple_of(2))
 }
 
-fn tokens(source: &str, divide_when_unsure: bool) -> Vec<Token> {
+/// The tokens of `source`, and where the first `/` is that is read as starting a regular expression
+/// but could be dividing.
+fn lex(source: &str) -> (Vec<Token>, Option<usize>) {
     let mut lexer = Lexer {
         s: source,
         i: 0,
@@ -134,10 +136,10 @@ fn tokens(source: &str, divide_when_unsure: bool) -> Vec<Token> {
         parens: Vec::new(),
         line_start: false,
         may_be_value: false,
-        divide_when_unsure,
+        doubt: None,
     };
     lexer.run();
-    lexer.out
+    (lexer.out, lexer.doubt)
 }
 
 struct Lexer<'a> {
@@ -162,8 +164,8 @@ struct Lexer<'a> {
     /// Whether a `/` here, read as starting a regular expression, could instead be dividing what
     /// came last: an object's `}` rather than a block's, or `of` as a name.
     may_be_value: bool,
-    /// Whether such a `/` divides, instead of starting a regular expression as it does for colouring.
-    divide_when_unsure: bool,
+    /// Where the first such `/` is.
+    doubt: Option<usize>,
 }
 
 impl Lexer<'_> {
@@ -217,7 +219,10 @@ impl Lexer<'_> {
                 // HTML-like comments, as the parser reads a script (ECMAScript Annex B.1.1).
                 self.skip_to_line_end();
                 self.push(TokenKind::Comment, start);
-            } else if c == '/' && self.regex_ok && !(self.divide_when_unsure && self.may_be_value) {
+            } else if c == '/' && self.regex_ok {
+                if self.may_be_value {
+                    self.doubt = self.doubt.or(Some(start));
+                }
                 self.regex();
                 self.push(TokenKind::Regex, start);
                 self.after(false, false);
