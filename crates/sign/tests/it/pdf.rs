@@ -451,6 +451,50 @@ fn only_the_signature_the_catalog_names_certifies() {
     }
 }
 
+/// [`certified_p1`] with a fraction after its last `/ByteRange` number, signed again over the
+/// edited bytes. The ranges still cover whole bytes, so the signature verifies, but no signature
+/// in the signed revision has a byte range that ends exactly where that revision ends.
+fn certified_p1_with_a_fractional_range() -> (TrustStore, Vec<u8>) {
+    let (id, trust, mut signed) = certified_p1();
+    let prefix = b"/ByteRange [";
+    let at = signed.windows(prefix.len()).position(|w| w == prefix).unwrap() + prefix.len();
+    let end = at + signed[at..].iter().position(|b| *b == b']').unwrap();
+    let text = std::str::from_utf8(&signed[at..end]).unwrap().to_owned();
+    let range: Vec<usize> = text.split_ascii_whitespace().map(|n| n.parse().unwrap()).collect();
+    let mut fractional = format!("{}.5", text.trim_end()).into_bytes();
+    assert!(fractional.len() <= end - at, "no room for the fraction in {text:?}");
+    fractional.resize(end - at, b' ');
+    signed[at..end].copy_from_slice(&fractional);
+    let (start, stop) = (range[1], range[2]);
+    signed[start + 1..stop - 1].fill(b'0');
+    let alg = id.key.preferred_digest();
+    let digest = alg.digest(&[&signed[..start], &signed[stop..]]);
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest).unwrap();
+    let hex: Vec<u8> = cms.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+    signed[start + 1..start + 1 + hex.len()].copy_from_slice(&hex);
+    (trust, signed)
+}
+
+/// When the signed revision holds no signature whose byte range ends it, nothing signed says
+/// which permissions apply: later changes are not permitted, whatever the latest catalog says.
+#[test]
+fn changes_after_an_unmatched_signed_revision_are_not_permitted() {
+    let (trust, signed) = certified_p1_with_a_fractional_range();
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let s = check(&signed);
+    assert_eq!((s.status, &s.modification), (Status::Valid, &Modification::None), "{:?}", s.details);
+    let edited = edit_after(&signed, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+        add_comment(doc);
+    });
+    let s = check(&edited);
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::UNREADABLE])));
+}
+
 #[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();

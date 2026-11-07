@@ -41,7 +41,7 @@ pub mod kind {
     pub const PAGES: &str = "pages added or removed";
     pub const OTHER: &str = "other changes";
     /// Not a change but the reason there is nothing to compare: the signed revision itself could not
-    /// be read, so what came after it cannot be allowed.
+    /// be read, or does not hold the signature, so what came after it cannot be allowed.
     pub const UNREADABLE: &str = "the signed version could not be read";
 
     /// Every word above, for an interface to translate.

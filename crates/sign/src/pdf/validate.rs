@@ -268,18 +268,24 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788). This
-        // signature is the one whose byte range ends that revision.
+        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788) or the
+        // catalog's `/Perms`. This signature is the one whose byte range ends that revision. A
+        // revision that holds no such signature does not say which permissions apply, so what
+        // came after it is judged as when the revision cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        if let Some(old) = &old
-            && let Some(v) = sig_fields(old)
+        let signed = old.as_ref().and_then(|old| {
+            sig_fields(old)
                 .iter()
                 .filter_map(|f| f.signature(old))
                 .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
-        {
-            set_certification(old, &v, info);
+        });
+        match (old, signed) {
+            (Some(old), Some(v)) => {
+                set_certification(&old, &v, info);
+                classify_changes(doc, Some(old), info.certify)
+            }
+            _ => classify_changes(doc, None, info.certify),
         }
-        classify_changes(doc, old, info.certify)
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an
