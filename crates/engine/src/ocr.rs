@@ -1909,7 +1909,7 @@ mod tests {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             *self.height.lock().unwrap() = image.height();
             let width = image.width().max(1) as usize;
-            let top = image.rgba().chunks_exact(4).position(|p| p.first().is_some_and(|v| *v < 128)).map(|at| at / width);
+            let top = image.rgba().as_chunks::<4>().0.iter().position(|p| p.first().is_some_and(|v| *v < 128)).map(|at| at / width);
             *self.ink_top.lock().unwrap() = top.map(|row| row as f64 / f64::from(image.height().max(1)));
             Ok(Vec::new())
         }
