@@ -253,9 +253,13 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
     const ICON: f32 = 16.0;
     /// Content width below which the buttons stack under the message.
     const STACK_BELOW: f32 = 200.0;
+    /// Content width under which stacking is not tried: the message would wrap to a column of a
+    /// few characters, thousands of points tall, and push the hotbar off the screen. Such a width
+    /// is below the smallest supported window, so the single row stays as it was.
+    const STACK_ABOVE: f32 = 100.0;
     egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
         let width = ui.available_width();
-        if width < STACK_BELOW {
+        if (STACK_ABOVE..STACK_BELOW).contains(&width) {
             // A narrow document area (a half-width window): the message takes the full width and
             // the buttons sit on a row of their own below it, rather than squeezing it to nothing.
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
