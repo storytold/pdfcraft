@@ -2330,6 +2330,43 @@ fn a_radio_option_of_any_field_sharing_the_name_can_be_chosen() {
     }
 }
 
+/// The same group as a broken save leaves it: the kids carry no `/P` (their page is found through
+/// the page's `/Annots`), and both are drawn on with values that disagree (`/V /Off` with
+/// `/AS /Choice1`, `/V /Choice2` with `/AS /Choice2`). Choosing by the name leaves exactly one
+/// button on, across a save, whichever option it is.
+#[test]
+fn a_radio_choice_by_the_name_turns_one_button_on_in_kids_without_a_page_that_disagree() {
+    let kid = |state: &str, v: &str, x: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /V /{v} /AS /{state} /Rect [{x} 700 {} 715] /AP << /N << /Off 7 0 R /{state} 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /FT /Btn /Ff 49152 /T (Group1) /V /Choice2 /Kids [6 0 R 5 0 R] >>".into(),
+        kid("Choice1", "Off", 50),
+        kid("Choice2", "Choice2", 100),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let mut doc = document(&objs);
+    let st = |doc: &Document, n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.name(b"AS").map(<[u8]>::to_vec));
+    let all = fields(&doc);
+    assert_eq!(all.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Group1", "Group1"]);
+    assert!(all.iter().flat_map(|f| &f.widgets).all(|w| w.page == Some(0)), "found on the page without /P");
+    assert_eq!((st(&doc, 5), st(&doc, 6)), (Some(b"Choice1".to_vec()), Some(b"Choice2".to_vec())), "both drawn on as read");
+    for (choice, on, off) in [("Choice1", 5, 6), ("Choice2", 6, 5), ("Choice1", 5, 6)] {
+        set_value(&mut doc, "Group1", &FieldValue::Radio(Some(choice.into()))).unwrap_or_else(|e| panic!("Group1 = {choice}: {e}"));
+        doc = reopen(&doc);
+        assert_eq!((st(&doc, on), st(&doc, off)), (Some(choice.as_bytes().to_vec()), Some(b"Off".to_vec())), "Group1 = {choice}");
+        let values: Vec<Vec<String>> = fields(&doc).into_iter().map(|f| f.value).collect();
+        assert!(values.iter().all(|v| v.is_empty() || v == &[choice]), "Group1 = {choice}: {values:?}");
+        assert!(values.iter().any(|v| v == &[choice]), "Group1 = {choice}: {values:?}");
+    }
+}
+
 #[test]
 fn locked_fields_only_take_unlocking() {
     let mut doc = one_page();
