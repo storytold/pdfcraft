@@ -71,7 +71,22 @@ impl Session {
             old_words.retain(|w| pages.contains(&w.page));
             new_words.retain(|w| pages.contains(&w.page));
         }
-        Ok(pdfcraft_compare::compare(&old_words, &new_words))
+        let mut c = pdfcraft_compare::compare(&old_words, &new_words);
+        for ch in &mut c.changes {
+            if ch.new.rects.is_empty() {
+                ch.new.page = ch.old.page;
+                if ch.new.near.is_none() {
+                    ch.new.near = ch.old.rects.first().copied();
+                }
+            }
+            if ch.old.rects.is_empty() {
+                ch.old.page = ch.new.page;
+                if ch.old.near.is_none() {
+                    ch.old.near = ch.new.rects.first().copied();
+                }
+            }
+        }
+        Ok(c)
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`

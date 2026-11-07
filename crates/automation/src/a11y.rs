@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+use crate::json::one_based;
 use crate::{Args, Automation, Result, ToolError, child, failed, unused, write_atomic};
 
 #[cfg(any())]
@@ -314,8 +315,20 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
+        let before: Vec<Value> = self
+            .doc(a)?
+            .pdfa_verify(level)
+            .iter()
+            .map(|i| json!({ "clause": i.clause, "message": i.message, "page": i.page.map(|p| p + 1), "fixable": i.fixable }))
+            .collect();
         self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
-        self.pdfa_verify(a)
+        let after = self.pdfa_verify(a)?;
+        let remaining = after["issues"].clone();
+        let fixed: Vec<Value> =
+            before.iter().filter(|i| i["fixable"] == true && !remaining.as_array().unwrap_or(&Vec::new()).contains(i)).cloned().collect();
+        let mut out = after;
+        out["fixed"] = Value::Array(fixed);
+        Ok(out)
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
@@ -368,10 +381,13 @@ impl Automation {
                         target
                     };
                     if target.exists() {
-                        return Err(failed(format!("{}: no unused output name available", target.display())));
+                        json!({ "path": p, "error": format!("{}: no unused output name available", target.display()) })
+                    } else {
+                        match write_atomic(&target, &r.bytes) {
+                            Ok(()) => json!({ "path": p, "output": target.to_string_lossy(), "log": r.log }),
+                            Err(e) => json!({ "path": p, "error": e.to_string() }),
+                        }
                     }
-                    write_atomic(&target, &r.bytes)?;
-                    json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }
                 Err(e) => json!({ "path": p, "error": e }),
             });
@@ -406,7 +422,13 @@ impl Automation {
             .map(|ch| json!({ "kind": ch.kind.label().to_lowercase(), "old": side(&ch.old), "new": side(&ch.new) }))
             .collect();
         let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
-            self.session.compare_visual(old, new, 72.0).map_err(failed)?.iter().map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) })).collect()
+            self.session
+                .compare_visual(old, new, 72.0)
+                .map_err(failed)?
+                .iter()
+                .filter(|(p, _)| pages.is_empty() || pages.contains(p))
+                .map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) }))
+                .collect()
         } else {
             Vec::new()
         };
@@ -422,9 +444,27 @@ impl Automation {
         }))
     }
 
+    fn compare_pages_arg(&self, a: &Args) -> Result<Vec<usize>> {
+        let Some(raw) = a.opt_ints("pages")? else { return Ok(Vec::new()) };
+        let new = self.doc(a)?.id;
+        let other = a.int("other")?;
+        let max_pages = [new, u64::try_from(other).ok().and_then(|o| self.session.get(pdfcraft_engine::DocId(o))).map(|d| d.id).unwrap_or(new)]
+            .iter()
+            .filter_map(|id| self.session.get(*id))
+            .map(|d| d.info.pages.len())
+            .max()
+            .unwrap_or(0);
+        let pages = one_based(&raw)?;
+        if let Some(p) = pages.iter().find(|p| **p >= max_pages) {
+            return Err(ToolError::InvalidArgs(format!("page {} is out of range: the document has {max_pages} pages", p + 1)));
+        }
+        Ok(pages)
+    }
+
     pub(crate) fn doc_compare_report(&self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let bytes = self.session.compare_report(old, new).map_err(failed)?;
+        let pages = self.compare_pages_arg(a)?;
+        let bytes = self.session.compare_report_of(old, new, &pages).map_err(failed)?;
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len() }))
@@ -432,7 +472,8 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let n = self.session.mark_differences(old, new).map_err(failed)?;
+        let pages = self.compare_pages_arg(a)?;
+        let n = self.session.mark_differences_of(old, new, &pages).map_err(failed)?;
         Ok(json!({ "comments": n }))
     }
 }
