@@ -40,7 +40,7 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
 fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+    let mut stream = appearance::build(&with_direct_values(doc, d))?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -56,10 +56,89 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
     Some(stream)
 }
 
+/// Entries that link the annotation to other objects rather than describe how it looks: left as
+/// references by [`with_direct_values`].
+const LINK_KEYS: [&[u8]; 5] = [b"P", b"Popup", b"IRT", b"Parent", b"AP"];
+
+/// How deep inside an entry [`with_direct_values`] follows references: `/InkList` is an array of
+/// arrays, `/Border` may end in a dash array.
+const INLINE_DEPTH: usize = 4;
+
+/// Values [`with_direct_values`] copies out of referenced arrays and dictionaries for one
+/// annotation, so a file can't have a large object copied for every entry that points at it.
+const INLINE_BUDGET: usize = 1 << 16;
+
+/// `d` with the references among the values [`appearance::build`] reads followed. Any value may be
+/// given by reference (ISO 32000-2 §7.3.10): a border style dictionary (`/BS 5 0 R`, Table 168), a
+/// colour, `/RD`, `/CL`, a `/W` inside `/BS`. The builder reads only direct values, so it draws
+/// from this copy. The entries in [`LINK_KEYS`] and streams stay references; past
+/// [`INLINE_DEPTH`] levels or [`INLINE_BUDGET`] copied values a reference is left as it is, which
+/// the builder treats as unreadable. `d` itself when nothing is a reference.
+pub(crate) fn with_direct_values<'d>(doc: &Document, d: &'d Dict) -> std::borrow::Cow<'d, Dict> {
+    let mut budget = INLINE_BUDGET;
+    let mut out: Option<Dict> = None;
+    for (key, value) in d.iter() {
+        if LINK_KEYS.contains(&key.as_slice()) {
+            continue;
+        }
+        if let Some(direct) = direct_value(doc, value, INLINE_DEPTH, &mut budget) {
+            out.get_or_insert_with(|| d.clone()).set(key.clone(), direct);
+        }
+    }
+    out.map_or(std::borrow::Cow::Borrowed(d), std::borrow::Cow::Owned)
+}
+
+/// `o` with references followed `depth` levels into arrays and dictionaries, or `None` when there
+/// is nothing to follow (or it may not be: a stream, an over-budget object, a chain of references).
+fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut usize) -> Option<Object> {
+    let held;
+    let (base, followed) = match o {
+        Object::Ref(_) => {
+            held = doc.resolve(o);
+            let cost = match &*held {
+                Object::Stream(_) | Object::Ref(_) => return None,
+                Object::Array(a) => a.len().max(1),
+                Object::Dict(d) => d.len().max(1),
+                _ => 1,
+            };
+            *budget = budget.checked_sub(cost)?;
+            (&*held, true)
+        }
+        other => (other, false),
+    };
+    let Some(next) = depth.checked_sub(1) else { return followed.then(|| base.clone()) };
+    match base {
+        Object::Array(items) => {
+            let mut changed: Option<Vec<Object>> = None;
+            for (i, item) in items.iter().enumerate() {
+                if let Some(direct) = direct_value(doc, item, next, budget) {
+                    let copy = changed.get_or_insert_with(|| items.clone());
+                    if let Some(slot) = copy.get_mut(i) {
+                        *slot = direct;
+                    }
+                }
+            }
+            changed.map(Object::Array).or_else(|| followed.then(|| base.clone()))
+        }
+        Object::Dict(entries) => {
+            let mut changed: Option<Dict> = None;
+            for (key, value) in entries.iter() {
+                if let Some(direct) = direct_value(doc, value, next, budget) {
+                    changed.get_or_insert_with(|| entries.clone()).set(key.clone(), direct);
+                }
+            }
+            changed.map(Object::Dict).or_else(|| followed.then(|| base.clone()))
+        }
+        _ => followed.then(|| base.clone()),
+    }
+}
+
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
-    let missing = appearance::undrawable_text(d).map(|(_, c)| c);
+    // Read like the builder read it, references followed.
+    let direct = with_direct_values(doc, d);
+    let missing = appearance::undrawable_text(&direct).map(|(_, c)| c);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.
@@ -71,7 +150,7 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
     // The appearance's box is mapped onto `/Rect`, so any other `/Rect` (a large one, or one with
     // no width, as LaTeX `pdfcomment` writes) would stretch the icon or shrink it to nothing.
     let icon_rect = matches!(d.name(b"Subtype"), Some(b"Text" | b"FileAttachment"))
-        .then(|| d.get(b"Rect")?.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>())
+        .then(|| direct.get(b"Rect")?.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>())
         .flatten()
         .filter(|q| q.len() == 4 && finite(q))
         .map(|q| {

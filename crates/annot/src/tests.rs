@@ -1461,6 +1461,104 @@ fn malformed_optional_interior_color_does_not_hide_shape_strokes() {
     assert!(list(&doc, 0)[0].get(b"AP").is_none(), "display generation leaves the source document unchanged");
 }
 
+/// Any value may be given by reference (ISO 32000-2 §7.3.10). A Square whose border style
+/// dictionary (Table 168), colour and dash array are indirect objects is drawn with them, not
+/// with the 1 pt solid default; a reference cycle inside `/BS` is not followed for ever.
+#[test]
+fn indirect_border_style_and_colour_are_drawn() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /P 3 0 R /Rect [20 20 180 180] /BS 5 0 R /C 6 0 R >>",
+        b"<< /Type /Border /W 7 0 R /S /D /D 8 0 R /Self 5 0 R >>",
+        b"[0 0 1]",
+        b"6",
+        b"[4 2]",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the square gets a display appearance");
+    let shown = list(&display, 0).remove(0);
+    let content = ap_content(&display, &shown);
+    assert!(content.contains("0 0 1 RG\n6 w\n[4 2] 0 d\n"), "the indirect /BS, /W, /D and /C are used: {content}");
+    assert!(content.contains("23 23 154 154 re"), "the 6 pt border is inset by half its width: {content}");
+    assert_eq!(shown.get(b"BS"), Some(&Object::Ref(ObjRef::new(5, 0))), "the display copy keeps the reference");
+    assert_eq!(shown.get(b"P"), Some(&Object::Ref(ObjRef::new(3, 0))));
+    let props = props(&doc, 0, 0).expect("props");
+    assert_eq!(props.width, Some(6.0), "the properties show the width drawn");
+}
+
+/// Following references copies a bounded number of values: an indirect array past the budget
+/// stays a reference (and the comment is not drawn from it), a chain that never ends is not
+/// followed, and links to other objects are never copied.
+#[test]
+fn direct_values_are_bounded() {
+    let mut doc = fixture();
+    let huge = doc.add(Object::Array(vec![Object::Int(0); (1 << 16) + 1]));
+    let chain = doc.add(Object::Null);
+    doc.set(chain, Object::Ref(chain));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Rect".to_vec(), Object::Ref(doc.add(num_array(&[0.0, 0.0, 10.0, 10.0]))));
+    d.set(b"Vertices".to_vec(), Object::Ref(huge));
+    d.set(b"IC".to_vec(), Object::Ref(chain));
+    d.set(b"Popup".to_vec(), Object::Ref(huge));
+    let direct = crate::draw::with_direct_values(&doc, &d);
+    assert_eq!(direct.get(b"Rect").and_then(Object::as_array).map(Vec::len), Some(4), "a small array is followed");
+    assert_eq!(direct.get(b"Vertices"), Some(&Object::Ref(huge)), "over the budget: left as a reference");
+    assert_eq!(direct.get(b"IC"), Some(&Object::Ref(chain)), "a chain of references is left alone");
+    assert_eq!(direct.get(b"Popup"), Some(&Object::Ref(huge)), "a link is not copied");
+    let mut plain = Dict::new();
+    plain.set(b"W".to_vec(), Object::Int(2));
+    assert!(matches!(crate::draw::with_direct_values(&doc, &plain), std::borrow::Cow::Borrowed(_)), "nothing to follow: no copy");
+}
+
+/// A new width for a comment whose border style is an indirect object (§7.3.10) keeps that
+/// dictionary's other entries (a dashed style stays dashed) and leaves the shared object alone.
+#[test]
+fn new_width_keeps_an_indirect_border_style() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /BS 5 0 R /C [1 0 0] >>",
+        b"<< /W 6 /S /D /D [4 2] >>",
+    ]);
+    set_style(&mut doc, 0, 0, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = list(&doc, 0).remove(0);
+    let bs = d.get(b"BS").and_then(Object::as_dict).expect("a direct /BS");
+    assert_eq!(bs.get(b"W").and_then(Object::as_f64), Some(3.0));
+    assert_eq!(bs.name(b"S"), Some(b"D".as_slice()), "the dashed style is kept");
+    assert!(ap_content(&doc, &d).contains("3 w\n[4 2] 0 d\n"));
+    let shared = doc.get(ObjRef::new(5, 0));
+    assert_eq!(shared.as_dict().and_then(|b| b.get(b"W")).and_then(Object::as_f64), Some(6.0), "the shared object is unchanged");
+}
+
+/// `/RD` is optional (ISO 32000-2 Table 177): a callout without it has its text box at `/Rect`
+/// and is drawn, box, text and leader line. A callout line and `/RD` given by reference are read too.
+#[test]
+fn callout_without_rd_is_drawn() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 100 300 160] /CL [20 20 60 60 100 130] /LE /OpenArrow /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (callout) >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [10 200 300 300] /CL 7 0 R /RD 8 0 R /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (indirect) >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [10 300 300 390] /CL [5 305 10 350] /RD [1 2] /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (bad) >>",
+        b"[15 205 40 250 100 250]",
+        b"[90 0 0 0]",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the callouts get a display appearance");
+    let shown = list(&display, 0);
+    let plain = ap_content(&display, &shown[0]);
+    assert!(plain.contains("1 1 0 rg\n100 100 200 60 re f"), "the yellow box fills /Rect: {plain}");
+    assert!(plain.contains("20 20 m\n60 60 l\n100 130 l\nS"), "the leader line: {plain}");
+    assert!(plain.contains("(callout) Tj"), "the text: {plain}");
+    let indirect = ap_content(&display, &shown[1]);
+    assert!(indirect.contains("100 200 200 100 re f") && indirect.contains("15 205 m"), "indirect /CL and /RD: {indirect}");
+    assert!(shown[2].get(b"AP").is_none(), "a malformed /RD is still not guessed at");
+}
+
 /// #3175: viewers draw a note without an appearance as a fixed-size icon at the upper-left corner
 /// of its `/Rect`. The display copy must not stretch the icon over a large `/Rect` or shrink it
 /// to nothing in one with no width.

@@ -238,6 +238,9 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
+        // A border style given by reference (`/BS 5 0 R`) reads as the display draws it.
+        let direct = crate::draw::with_direct_values(doc, d);
+        let d = direct.as_ref();
         if subtype == "FreeText" {
             if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
         } else {

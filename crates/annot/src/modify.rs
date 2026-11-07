@@ -730,8 +730,12 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     // So does a text box inside an oval or a circle, which goes around it again.
     let shape = if free_text { BorderShape::of(&d) } else { BorderShape::Rectangle };
     let typewriter = free_text && (d.name(b"IT") == Some(b"FreeTextTypeWriter") || shape != BorderShape::Rectangle) && !d.contains(b"CL");
+    // A border style given by reference (`/BS 5 0 R`, ISO 32000-2 §7.3.10): its width and other
+    // entries, which a new width keeps.
+    let direct = crate::draw::with_direct_values(doc, &d);
+    let (old_width, old_bs) = (border_width_of(&direct), direct.get(b"BS").and_then(Object::as_dict).cloned());
     let regrow = width.filter(|_| typewriter).and_then(|w| {
-        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { old_width } else { 0.0 };
         let rect = grow(text_box_of(&d)?, by);
         (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some((rect, w.max(0.0)))
     });
@@ -755,9 +759,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
             set_part_keys(d, appearance::PartOpacity { line: o, fill: o, text: o });
         }
         if let Some(w) = width {
-            let old_w = border_width_of(d);
+            let old_w = old_width;
             let w = w.max(0.0);
-            let mut bs = d.get(b"BS").and_then(|b| b.as_dict()).cloned().unwrap_or_default();
+            let mut bs = old_bs.unwrap_or_default();
             bs.set(b"W".to_vec(), Object::Real(w));
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
