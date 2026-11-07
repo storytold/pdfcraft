@@ -105,7 +105,10 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let r = nums(b"Rect");
             let rect = if r.len() == 4 { [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])] } else { [0.0; 4] };
             let c = nums(b"C");
-            let mut color = (c.len() == 3).then(|| [c[0], c[1], c[2]]);
+            let rgb = (c.len() == 3).then(|| [c[0], c[1], c[2]]);
+            // Other comments report the stroke colour as it is drawn (grey, CMYK, a null entry
+            // read as 0), like `props`; three numbers, some given by reference, are still read.
+            let mut color = if subtype == "FreeText" { rgb } else { summary_color(doc, d).or(rgb) };
             if subtype == "FreeText"
                 && let Some(da) = text_value(doc, d, b"DA")
             {
@@ -269,6 +272,22 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
 fn fill_of(d: &Dict) -> Option<Rgb> {
     let key: &[u8] = if d.name(b"Subtype") == Some(b"FreeText") { b"C" } else { b"IC" };
     drawn_color(d, key)
+}
+
+/// `/C` as [`drawn_color`] reads it, the array itself followed when it is given by reference.
+/// Only an array of at most four entries is copied out of the reference.
+fn summary_color(doc: &Document, d: &Dict) -> Option<[f32; 3]> {
+    let rgb = match d.get(b"C") {
+        Some(o @ Object::Ref(_)) => {
+            let held = doc.resolve(o);
+            let entries = held.as_array().filter(|a| a.len() <= 4)?;
+            let mut direct = Dict::new();
+            direct.set(b"C".to_vec(), Object::Array(entries.clone()));
+            drawn_color(&direct, b"C")
+        }
+        _ => drawn_color(d, b"C"),
+    }?;
+    Some(rgb.map(|x| x as f32))
 }
 
 /// The colour array at `key` as RGB, read as the appearance builder draws it: grey and CMYK are

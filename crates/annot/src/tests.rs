@@ -2783,6 +2783,7 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
 /// PDFBOX-2699: a `/C` written `[1 0 0 null]` (Table 166 asks for numbers) is still a four-entry
 /// colour, CMYK with the null as 0 as PDFium, MuPDF and Poppler read it, so a shape without an
 /// appearance is drawn instead of dropped. `/IC` is read the same way, and three numbers stay RGB.
+/// The properties and the comment list report the colours as drawn.
 #[test]
 fn a_four_entry_colour_with_a_null_is_cmyk_with_zero() {
     let doc = document_of(&[
@@ -2802,6 +2803,26 @@ fn a_four_entry_colour_with_a_null_is_cmyk_with_zero() {
     let p = props(&doc, 0, 0).expect("the square has properties");
     assert_eq!((p.color, p.fill), (Some([0.0, 1.0, 1.0]), Some([1.0, 1.0, 0.0])));
     assert_eq!(props(&doc, 0, 1).and_then(|p| p.color), Some([1.0, 0.0, 0.0]));
+    // The comment list reports the same colours.
+    let colors: Vec<Option<[f32; 3]>> = summaries(&doc).iter().map(|s| s.color).collect();
+    assert_eq!(colors, [Some([0.0, 1.0, 1.0]), Some([1.0, 0.0, 0.0])]);
+}
+
+/// A `/C` given by reference is followed for the comment list, as three numbers were, and read
+/// like a direct one: `[0 0 1 null]` is CMYK yellow, and a referenced grey level is grey.
+#[test]
+fn a_referenced_colour_is_listed_like_a_direct_one() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C 6 0 R >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [55 5 95 35] /C 7 0 R >>",
+        b"[0 0 1 null]",
+        b"[0.5]",
+    ]);
+    let colors: Vec<Option<[f32; 3]>> = summaries(&doc).iter().map(|s| s.color).collect();
+    assert_eq!(colors, [Some([1.0, 1.0, 0.0]), Some([0.5, 0.5, 0.5])]);
 }
 
 /// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
@@ -2821,4 +2842,5 @@ fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
     let squares = list(&display, 0);
     assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
     assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
+    assert_eq!(summaries(&doc)[0].color, None, "nor in the comment list");
 }
