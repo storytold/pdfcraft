@@ -155,3 +155,21 @@ fn a_laid_out_form_keeps_the_original_copy_permissions() {
     assert_eq!(info["file_size"], original.len());
     assert_eq!(std::fs::read(path).unwrap(), original);
 }
+
+/// A damaged dynamic XFA form: `info` lists the cross-reference index rebuilt while opening it,
+/// as Document Properties does after the form is laid out as one more revision.
+#[test]
+fn info_lists_the_repairs_of_a_laid_out_form() {
+    let path = fixture("info-damaged");
+    let bytes = std::fs::read(&path).unwrap();
+    let at = bytes.windows(10).rposition(|w| w == b"startxref\n").unwrap() + 10;
+    let mut damaged = bytes[..at].to_vec();
+    damaged.extend_from_slice(b"20\n%%EOF\n");
+    std::fs::write(&path, &damaged).unwrap();
+    let output = Command::new(BIN).arg("info").arg(&path).output().unwrap();
+    success(&output);
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(info["xfa_layout"]["pages"], 2, "the form is still laid out: {info}");
+    let repairs = info["repairs"].as_array().unwrap();
+    assert!(repairs.iter().any(|l| l.as_str().is_some_and(|l| l.contains("rebuilt cross-reference index"))), "{repairs:?}");
+}

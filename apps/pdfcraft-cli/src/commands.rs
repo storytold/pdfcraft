@@ -8,6 +8,9 @@ pub(crate) fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
     std::fs::read(path).map(Arc::new).map_err(|e| format!("{path}: {e}"))
 }
 
+/// `info FILE`: a JSON summary of the document as the app opens it (pages, fields, metadata, the
+/// standards it declares, and the notes about damage repaired while opening it), with none of
+/// its scripts run.
 pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     validate_options("info", args, INFO_OPTIONS)?;
     let path = *positional(args, INFO_OPTIONS).first().ok_or("info: missing file")?;
@@ -34,17 +37,17 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
             serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
         })
     });
-    // What the document declares as a standard, read the way the Standards panel reads it, so
-    // `info` and the app agree. A file that declares nothing leaves these null and empty.
-    let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok();
-    let declared = cos.as_ref().map(pdfcraft_preflight::declared).unwrap_or_default();
-    // The app's notes include what it repaired after reading the objects (a page tree rebuilt
-    // from the pages found by scanning); a file it cannot open still has what reading repaired.
-    let repairs = opened
-        .map(pdfcraft_engine::Document::repair_log)
-        .filter(|log| !log.is_empty())
-        .or_else(|| cos.as_ref().map(|c| c.repair_log().to_vec()))
-        .unwrap_or_default();
+    // What the document declares as a standard, as the Standards panel reads it, and the notes
+    // Document Properties shows, which include what the app repaired after reading the objects (a
+    // page tree rebuilt from the pages found by scanning), both from the session's own reading. A
+    // file the app cannot open is read once more for what the object reader declares and repaired.
+    // A file that declares nothing leaves the standards null and empty.
+    let (declared, repairs) = match opened {
+        Some(d) => (d.standards(), d.repair_log()),
+        None => pdfcraft_cos::Document::open_with_password(bytes.clone(), password)
+            .map(|cos| (pdfcraft_preflight::declared(&cos), cos.repair_log().to_vec()))
+            .unwrap_or_default(),
+    };
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
