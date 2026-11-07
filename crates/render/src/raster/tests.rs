@@ -5503,6 +5503,40 @@ fn a_font_whose_post_version_has_swapped_halves_is_still_used() {
     assert_eq!(alternate([0, 0, 0, 2]), alternate([0, 2, 0, 0]), "and also with swapped halves");
 }
 
+/// An embedded CMap whose codes are all two bytes long (codespace `<0000> <FFFF>`) and whose
+/// mappings are written as `bfchar` reads `<2041>` as the one code 0x2041 (ISO 32000-2
+/// §9.7.6.2: the codespace ranges decide how many bytes form a code). It drew as two
+/// glyphs: the lone first byte 0x20 matched the two-byte entry `<0020>` (PDFBOX-1282,
+/// `Characters_Arial.pdf` page 3, codes 0x20AC to 0xFFFC). Vendored hayro-cmap patch 4.
+#[test]
+fn a_bfchar_cmap_reads_codes_of_its_codespace_length() {
+    let font = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+    let render = |encoding: &str, text: &str| -> Vec<u8> {
+        let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def
+/CMapName /Test-H def /CMapType 1 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+3 beginbfchar <0020> <0005> <0041> <0006> <2041> <0024> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end";
+        let resources = format!(
+            "<< /Font << /F1 << /Type /Font /Subtype /Type0 /BaseFont /JetBrainsMono-Regular /Encoding {encoding}              /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /JetBrainsMono-Regular              /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 600 /CIDToGIDMap /Identity              /FontDescriptor << /Type /FontDescriptor /FontName /JetBrainsMono-Regular /Flags 4 /FontBBox [-1000 -300 1000 1000]              /ItalicAngle 0 /Ascent 1020 /Descent -300 /CapHeight 730 /StemV 80 /FontFile2 5 0 R >> >>] >> >> >>"
+        );
+        let content = format!("BT /F1 40 Tf 10 20 Td {text} Tj ET");
+        let font_dict = format!("<< /Length {} >>", font.len());
+        let cmap_dict = format!(
+            "<< /Type /CMap /CMapName /Test-H /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /Length {} >>",
+            cmap.len()
+        );
+        let page = render_first_page(image_cache_pdf(&content, &resources, &[(&font_dict, font), (&cmap_dict, cmap)]));
+        page.rgba.to_vec()
+    };
+    let blank = render("/Identity-H", "<>");
+    let reference = render("/Identity-H", "<0024>");
+    assert_ne!(reference, blank, "the reference glyph draws");
+    assert_eq!(render("6 0 R", "<2041>"), reference, "<2041> is one code, CID 0x24");
+    assert_ne!(render("/Identity-H", "<00050006>"), reference, "the two-glyph misreading looks different");
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]
