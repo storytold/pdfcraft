@@ -199,6 +199,24 @@ impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
+        self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
+            rc: true,
+            value: value.to_string(),
+            changes: Vec::new(),
+            message: None,
+        })
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false))
+    }
+}
+
+impl JsRunner {
+    /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
+    /// when the script failed.
+    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -212,17 +230,18 @@ impl Scripts for JsRunner {
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
-        self.output.absorb(&o);
-        if o.error.is_some() {
-            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
+        if log {
+            self.output.absorb(&o);
         }
-        ScriptResult {
+        if o.error.is_some() {
+            return None;
+        }
+        Some(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
-        }
+        })
     }
 }
 
@@ -420,12 +439,16 @@ impl Session {
         let mut out = Vec::new();
         for page in list {
             let Some(info) = doc.info.pages.get(page) else { continue };
-            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let shapes = pdfcraft_forms::detect::page_shapes(cos, page);
             let existing: Vec<[f64; 4]> = doc.form.iter().flat_map(|f| f.widgets.iter()).filter(|w| w.page == Some(page)).map(|w| w.rect).collect();
             let (found, turn) = if shapes.boxes.is_empty() && shapes.rules.is_empty() && crate::scan_fields::is_scan(doc, page, info) {
-                self.detect_on_scan(id, &mut r, page, res.text.as_deref(), &existing, &taken)
+                // Labels come from the page's own text. Words that only /ActualText names (a stamp
+                // drawn as outlines) are no labels, and leave the scan to be read.
+                let own = crate::ocr::own_text(&mut r, page).ok();
+                self.detect_on_scan(id, &mut r, page, own.as_ref(), &existing, &taken)
             } else {
+                let res =
+                    r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
                 let words = res.text.map(|t| detection_words(&t, info)).unwrap_or_default();
                 (pdfcraft_forms::detect::detect(&words, &shapes, &existing, &taken), 0)
             };
