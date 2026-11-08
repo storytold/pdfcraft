@@ -121,6 +121,8 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("collab-client", "collab-server"),
     ("collab-ws", "collab-hub"),
     ("collab-ws", "collab-server"),
+    ("collab-ws", "collab-pdf"),
+    ("collab-ws", "collab-client-pdf"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).

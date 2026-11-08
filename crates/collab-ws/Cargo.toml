@@ -25,5 +25,8 @@ jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_c
 tungstenite = "0.30"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pdfcraft-collab-client-pdf = { workspace = true }
+pdfcraft-collab-pdf = { workspace = true }
+pdfcraft-engine = { workspace = true }
 rand = "0.8"
 rsa = "0.9"
