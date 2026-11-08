@@ -205,13 +205,17 @@ cargo check -p pdfcraft --features collab
 cargo test -p pdfcraft-ui-egui --features collab
 ```
 
-- UI suite after §6.5 (§6.5 touched `ui-egui`): 1492 passed, 2 failed. One is
+- UI suite after §6.5 (§6.5 touched `ui-egui`), run at `8a62b8fb`: 1492 passed,
+  2 failed. One is
   the known font glyph failure from above (`editing::a_custom_property_…`, fails
   without the feature too). The other,
   `fill_sign::fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels`,
   passes when run alone (`cargo test -p pdfcraft-ui-egui --features collab
   --test it fill_sign::…`), so it is a parallel-run flake, not a regression; the
-  test touches neither `collab.rs` nor the canvas presence path.
+  test touches neither `collab.rs` nor the canvas presence path. The two later
+  commits (`a7f769f3` docs, `0db03ed8` the rotation inverse and the address
+  rules in `collab-client`/`collab-client-pdf`) touch no `ui-egui` file; their
+  crates' suites and `cargo check -p pdfcraft --features collab` are green.
 - The UI suite before §6.5 was last run before the control-plane change, which
   touched neither `ui-egui` nor the client crates (`cargo check -p pdfcraft
   --features collab` was green then, as now).
