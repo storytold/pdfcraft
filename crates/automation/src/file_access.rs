@@ -394,8 +394,18 @@ mod tests {
         // Helpers that are only called with a resolved path. `doc_batch` and `sign_batch` (batch.rs)
         // resolve their inputs and out_dir, walk only inside them (skipping links) and resolve every
         // discovered file again (`resolve_discovered`) before it is read or `publish` writes it.
-        const RESOLVED_BY_CALLER: &[&str] =
-            &["write_atomic", "write_atomic_with", "read_input", "read_input_bytes", "read_review_sidecar", "process", "linked", "walk", "publish"];
+        const RESOLVED_BY_CALLER: &[&str] = &[
+            "write_atomic",
+            "write_atomic_with",
+            "read_input",
+            "read_input_bytes",
+            "read_model",
+            "read_review_sidecar",
+            "process",
+            "linked",
+            "walk",
+            "publish",
+        ];
         let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
         let mut files = vec![];
         while let Some(dir) = dirs.pop() {
