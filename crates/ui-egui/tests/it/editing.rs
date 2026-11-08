@@ -11015,6 +11015,62 @@ fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page
     assert_eq!(pages(&h), 4, "the late paste pasted the page");
 }
 
+/// Each Edit ▸ Paste waits for its own paste: on Wayland two requests are answered one by one, and
+/// with a page's context menu open each answer pastes the page. The first answer ended the wait
+/// of both, and the open menu held the second.
+#[test]
+fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    for _ in 0..2 {
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+        h.step();
+    }
+    for pasted in [4, 5] {
+        assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
+        h.event(egui::Event::Paste("clipboard text".into()));
+        h.run_steps(3);
+        assert_eq!(pages(&h), pasted, "each answer pastes the page");
+    }
+}
+
+/// With a page's context menu already open, a native Edit ▸ Paste that gets no paste, then ⌘V:
+/// on macOS ⌘V is Edit ▸ Paste's key equivalent, which craft-menu hands to egui as the key press,
+/// and a key press ends the menu's wait. A paste after it stays behind the menu.
+#[test]
+fn command_v_after_an_unanswered_native_edit_paste_with_a_context_menu_open_pastes_nothing() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 3, "a paste behind the context menu pasted the page");
+}
+
 /// A paste that comes after the user does something else is theirs, not Edit ▸ Paste's: egui-winit
 /// answers ⌘V as it answers the menu. With Edit ▸ Paste's paste not come yet, a right-click
 /// opening a page's context menu ends the wait, and the paste then (⌘V's) stays behind the menu.

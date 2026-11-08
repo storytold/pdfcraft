@@ -2382,6 +2382,23 @@ fn a_hotbar_window_hidden_by_full_screen_holds_no_keys() {
     assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
 }
 
+/// Full screen entered as a native menu's click is, between passes, closes the Hotbar tools window
+/// on the pass it hides it: → on that pass turns the page. The window, drawn on the pass before,
+/// held it.
+#[test]
+fn full_screen_from_a_native_menu_with_the_hotbar_window_open_leaves_the_keys_to_the_page() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    let before = h.state().views[0].current;
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
+}
+
 /// With a menu of the menu bar open, the view's chords wait, as the registered commands' do: ⌘=
 /// zooms nothing. It zoomed the view behind the menu.
 #[test]
