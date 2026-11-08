@@ -135,6 +135,10 @@ pub struct Ops<'a> {
     /// What failed operands and inline-image parameters have read so far, against
     /// [`RESCAN_PER_BYTE`].
     rescanned: usize,
+    /// Set once an array has been given up on. Its opener is damage, and an unterminated nest of
+    /// openers would otherwise be read to the end of the stream again at each one: later openers
+    /// are skipped as themselves, so the operands and operators after them are still read.
+    arrays_given_up: bool,
 }
 
 impl<'a> Ops<'a> {
@@ -151,6 +155,7 @@ impl<'a> Ops<'a> {
             boundary: 0,
             comment_edges: vec![(false, false); ends.len()],
             rescanned: 0,
+            arrays_given_up: false,
         }
     }
 
@@ -170,7 +175,20 @@ impl Iterator for Ops<'_> {
     type Item = Op;
 
     fn next(&mut self) -> Option<Op> {
-        let Ops { data, lx, operands, operand_bytes, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges, rescanned } = self;
+        let Ops {
+            data,
+            lx,
+            operands,
+            operand_bytes,
+            start,
+            skipped,
+            ambiguous_images,
+            ends,
+            boundary,
+            comment_edges: edges,
+            rescanned,
+            arrays_given_up,
+        } = self;
         let (data, ends): (&[u8], &[usize]) = (data, ends);
         let rescan_limit = data.len().saturating_mul(RESCAN_PER_BYTE).max(MIN_RESCAN);
         loop {
@@ -195,6 +213,13 @@ impl Iterator for Ops<'_> {
             let at = lx.pos;
             let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
             if operand_start {
+                if b == b'[' && *arrays_given_up {
+                    // An array the parser has given up on: its opener is the damage, and scanning
+                    // it again would read the rest of the stream for every one.
+                    lx.pos = at + 1;
+                    *skipped += 1;
+                    continue;
+                }
                 match lx.object() {
                     Ok(o) => {
                         start.get_or_insert(at);
@@ -212,7 +237,14 @@ impl Iterator for Ops<'_> {
                         tests::RESCANNED.with(|c| c.set(c.get() + read));
                         *rescanned = rescanned.saturating_add(read);
                         let number = matches!(b, b'+' | b'-' | b'.') || b.is_ascii_digit();
-                        if read > 0 && ((number && read > MAX_RETRIED_TOKEN) || *rescanned > rescan_limit) {
+                        if b == b'[' && read > 0 && (read > MAX_RETRIED_TOKEN || *rescanned > rescan_limit) {
+                            // An array opener the parser cannot finish: only the opener is skipped,
+                            // so the operands and operators after it are still read, and the rest of
+                            // the stream is not read again at every later opener.
+                            lx.pos = at + 1;
+                            *skipped += 1;
+                            *arrays_given_up = true;
+                        } else if read > 0 && ((number && read > MAX_RETRIED_TOKEN) || *rescanned > rescan_limit) {
                             // A long unreadable number is skipped whole: retrying from each of its
                             // bytes would read the rest of it again every time. So is any failed
                             // operand once retries have read more than the stream allows.

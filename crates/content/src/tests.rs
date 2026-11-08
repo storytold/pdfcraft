@@ -29,6 +29,20 @@ fn splicing_visits_each_piece_a_few_times() {
     assert_eq!(two.splice([(tj, b"(b) Tj".to_vec())]), [b"q (b) Tj".to_vec(), b" Q".to_vec()]);
 }
 
+/// An unterminated nest of array openers is given up on: only the openers are damage, so the
+/// operator after them is still read rather than being lost with the rest of the read.
+#[test]
+fn a_given_up_array_keeps_the_operator_after_it() {
+    let n = 1 << 15;
+    let mut src = "[".repeat(n);
+    src.push_str("\n1 0 0 1 0 0 cm");
+    RESCANNED.with(|c| c.set(0));
+    let p = parse(src.as_bytes());
+    let rescanned = RESCANNED.with(|c| c.get());
+    assert!(rescanned <= src.len() + MIN_RESCAN, "{rescanned} bytes read for a {}-byte stream", src.len());
+    assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+}
+
 #[test]
 fn a_long_unreadable_number_is_read_once() {
     for junk in ["+", "5"] {
