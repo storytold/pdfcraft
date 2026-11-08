@@ -20,6 +20,9 @@ pub(crate) struct CollabUi {
     doc: DocId,
     doc_key: DocKey,
     actor: Option<ActorId>,
+    /// Actor + a per-launch nonce: operation ids and comment names must not
+    /// repeat when the app restarts inside a living room.
+    client_id: String,
     role: Role,
     connected: bool,
     version: u64,
@@ -52,6 +55,8 @@ impl CollabUi {
             return;
         };
         let name = std::env::var("PDFCRAFT_COLLAB_NAME").unwrap_or_else(|_| "PdfCraft".into());
+        let nonce =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| format!("{:x}", d.as_nanos())).unwrap_or_else(|_| "0".into());
         let info = ClientInfo { name, version: env!("CARGO_PKG_VERSION").into() };
         match spawn(WireConfig::new(url, token, doc_key.clone(), info)) {
             Ok(handle) => {
@@ -60,6 +65,7 @@ impl CollabUi {
                     doc,
                     doc_key,
                     actor: None,
+                    client_id: format!("client-{nonce}"),
                     role: Role::Viewer,
                     connected: false,
                     version: 0,
@@ -81,8 +87,7 @@ impl CollabUi {
 
     fn next_op_id(&mut self) -> Option<OpId> {
         self.counter = self.counter.saturating_add(1);
-        let actor = self.actor.as_ref().map_or("client", ActorId::as_str);
-        OpId::new(format!("{actor}-{}", self.counter)).ok()
+        OpId::new(format!("{}-{}", self.client_id, self.counter)).ok()
     }
 }
 
@@ -115,6 +120,9 @@ impl PdfCraftApp {
             Event::Joined { welcome, .. } => {
                 collab.actor = Some(welcome.actor_id.clone());
                 collab.role = welcome.role;
+                // The actor names the person; the nonce keeps this launch's ids unique.
+                let nonce = collab.client_id.rsplit_once('-').map_or("0", |(_, nonce)| nonce);
+                collab.client_id = format!("{}-{nonce}", welcome.actor_id.as_str());
                 collab.connected = true;
                 collab.version = welcome.version;
                 collab.epoch = welcome.epoch;
@@ -244,8 +252,8 @@ impl PdfCraftApp {
         let Some(document) = self.session.get(doc) else { return Some(false) };
         let mut counter = collab.counter;
         let ops = {
-            let actor = collab.actor.as_ref().map_or("client", ActorId::as_str);
-            ops_for_edit(document, edit, collab.doc_key.clone(), actor, collab.version, collab.epoch, &mut counter)
+            let client_id = collab.client_id.clone();
+            ops_for_edit(document, edit, collab.doc_key.clone(), &client_id, collab.version, collab.epoch, &mut counter)
         };
         collab.counter = counter;
         let ops = match ops {
