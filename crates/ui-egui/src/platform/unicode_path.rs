@@ -39,7 +39,8 @@ fn resolve_with(delivered: &str, exists: impl Fn(&Path) -> bool) -> Option<Strin
     if exists(path) {
         return Some(delivered.to_owned());
     }
-    // Roots and prefixes (`/`, `C:`) carry no name to vary; `components` folds `.` away.
+    // Roots and prefixes (`/`, `C:`) carry no name to vary, nor does a leading `.`, the one `.`
+    // that `components` keeps.
     // `delivered` is a `&str`, so every component is UTF-8 and this `?` never returns: it keeps
     // the function total without an `expect`.
     let names = path.components().map(|c| c.as_os_str().to_str()).collect::<Option<Vec<_>>>()?;
@@ -56,10 +57,10 @@ fn resolve_with(delivered: &str, exists: impl Fn(&Path) -> bool) -> Option<Strin
 
 /// The first existing path naming each of `names` in one of its [`forms`], tried in that order:
 /// where a later component matches in no form, the walk goes back and tries the next form of the
-/// one before. `None` once `probes` runs out. The walk keeps its place on the heap, not on the
-/// call stack, so no path is deep enough to overflow it, and it keeps the form each component
-/// matched so far was found in rather than a path to each, so its memory grows with the path's
-/// length and not with its length times its depth.
+/// one before. `None` when no such path exists or once `probes` runs out. The walk keeps its
+/// place on the heap, not on the call stack, so no path is deep enough to overflow it, and it
+/// keeps the form each component matched so far was found in rather than a path to each, so its
+/// memory grows with the path's length and not with its length times its depth.
 fn walk(names: &[&str], probes: &mut usize, exists: &impl Fn(&Path) -> bool) -> Option<PathBuf> {
     // The form each component matched so far exists in, and for each of those components and the
     // one after them, the forms still to try.
