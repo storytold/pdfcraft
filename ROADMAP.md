@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 45b7eded and winprint/GDI to 03a4fb63 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
+> **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to e6489d92, PDF loader to 03a4fb63 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
 
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
 
@@ -792,6 +792,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |
 | 2026-11-07 | patch | M10 #6514: load Windows PDF print jobs on demand through a read-only file stream, avoiding StorageFile access denial, whole-file buffering and per-chunk async waits; approved dependencies retain the #5006 crash fix. Regression tests pass; physical output remains unqualified; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |

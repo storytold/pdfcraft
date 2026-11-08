@@ -6,7 +6,9 @@ The native submission test failed before queueing: `StorageFile::GetFileFromPath
 
 The winprint loader uses `CreateRandomAccessStreamOnFile` with read-only access, then calls `PdfDocument::LoadFromStreamAsync`. The stream is backed by the job file and reads on demand. There is no whole-job `InMemoryRandomAccessStream` copy, `DataWriter`, transfer loop or per-chunk `StoreAsync().join()`. The path is made absolute and embedded NUL characters are rejected before calling the native API. The temporary file remains alive throughout rendering and submission through craft-print's existing lifetime management. PDF decoding and rendering can still allocate memory; the change removes the loader's full-file copy, not all printing memory use.
 
-Upstream loader: https://github.com/storytold/winprint.rs/pull/15 (`03a4fb63`). Dependency follow-up: https://github.com/storytold/craft-libs/pull/636 (`45b7eded`, includes merged #605). PdfCraft updates only its normal `craft-print` dependency. There is no global patch or personal-fork source. The loader revision descends from `64e7afd4`, preserving the multi-threaded Direct2D factory fix for #5006. Upstream reviews are still required before release.
+Upstream loader: https://github.com/storytold/winprint.rs/pull/15 (`03a4fb63`). Dependency follow-up: https://github.com/storytold/craft-libs/pull/636 (`e6489d92`, includes merged #605). PdfCraft updates only its normal `craft-print` dependency. There is no global patch or personal-fork source. The loader revision descends from `64e7afd4`, preserving the multi-threaded Direct2D factory fix for #5006. Upstream reviews are still required before release.
+
+The public `craft_print::rgb` GDI transport remains pinned to main's `64e7afd4` revision. It is independent of the internal PDF-loader pin `03a4fb63`: retaining the public source identity avoids incompatible Rust types when a downstream application also uses that GDI revision directly. PdfCraft resolves one GDI package at that stable revision.
 
 ## Evidence
 
