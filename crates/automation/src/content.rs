@@ -2,7 +2,7 @@
 //! move/resize/retype/restyle it, delete it. Geometry is in points from the top-left of the
 //! displayed page (y down), like every other tool.
 
-use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign, TextInk};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;
@@ -30,6 +30,27 @@ fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
         .transpose()
 }
 
+const INK_ARGS: &str = "give one of color (#RRGGBB or a name), gray (0 black to 1 white) and cmyk ([c, m, y, k], each 0 to 1)";
+
+/// `gray` or `cmyk`: the text painted in DeviceGray or DeviceCMYK rather than RGB. At most one of
+/// them and `color`.
+fn ink_arg(a: &Args) -> Result<Option<TextInk>> {
+    if ["color", "gray", "cmyk"].iter().filter(|k| a.get(k).is_some()).count() > 1 {
+        return Err(bad(INK_ARGS));
+    }
+    let unit = |v: Option<f64>, key: &str| v.filter(|v| (0.0..=1.0).contains(v)).ok_or_else(|| bad(format!("{key} takes numbers from 0 to 1")));
+    if let Some(g) = a.get("gray") {
+        return Ok(Some(TextInk::Gray(unit(g.as_f64(), "gray")?)));
+    }
+    let Some(c) = a.get("cmyk") else { return Ok(None) };
+    let parts = c.as_array().filter(|p| p.len() == 4).ok_or_else(|| bad("cmyk must be [c, m, y, k]"))?;
+    let mut cmyk = [0.0; 4];
+    for (out, v) in cmyk.iter_mut().zip(parts) {
+        *out = unit(v.as_f64(), "cmyk")?;
+    }
+    Ok(Some(TextInk::Cmyk(cmyk)))
+}
+
 /// Apply the style arguments to `t`.
 fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(s) = a.opt_num("size")? {
@@ -49,8 +70,12 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(i) = a.opt_bool("italic")? {
         t.italic = i;
     }
-    if let Some(c) = a.opt_str("color")? {
-        t.color = parse_color(c)?;
+    if let Some(ink) = ink_arg(a)? {
+        t.set_ink(Some(ink));
+    } else if let Some(c) = a.opt_str("color")? {
+        // An RGB colour paints in RGB, even one that is the ink's look.
+        t.set_ink(None);
+        t.set_color(parse_color(c)?);
     }
     if let Some(al) = a.opt_str("align")? {
         t.align = parse_align(al)?;
@@ -124,6 +149,12 @@ impl Automation {
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
                         v["char_spacing"] = json!(t.char_spacing);
+                        // Text painted in a print colour space says so; RGB text has neither.
+                        match t.painted_ink() {
+                            Some(TextInk::Gray(g)) => v["gray"] = json!(g),
+                            Some(TextInk::Cmyk(c)) => v["cmyk"] = json!(c),
+                            None => {}
+                        }
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -205,8 +236,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align, aligns and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "color", "gray", "cmyk", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, gray, cmyk, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

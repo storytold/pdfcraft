@@ -461,7 +461,11 @@ impl PdfCraftApp {
     /// style at once and stays open. Text already on the page is updated with what has been typed,
     /// as one undoable change; new text waits until it is finished. Text typed after this styling
     /// starts from it too.
-    pub(crate) fn restyle_draft(&mut self, index: usize, style: pdfcraft_engine::AddedText) {
+    pub(crate) fn restyle_draft(&mut self, index: usize, mut style: pdfcraft_engine::AddedText) {
+        // A gray or CMYK ink the colour no longer shows goes now (#6440): kept, the draft would
+        // differ from the item the page reads back without it, and a later pick of the ink's
+        // look would bring it back.
+        style.drop_stale_ink();
         let Some(view) = self.views.get_mut(index) else { return };
         // Text the standard fonts can't draw stays in the box, unwritten, until it is corrected (#125).
         let blocked = view.content.blocked().is_some();
