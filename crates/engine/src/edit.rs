@@ -457,6 +457,21 @@ pub enum Edit {
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
     },
+    /// Update vector line segment endpoints on `page`.
+    UpdateLineEndpoints {
+        page: usize,
+        target: ObjectTarget,
+        new_start: [f64; 2],
+        new_end: [f64; 2],
+    },
+    /// Set vector line properties (stroke color, stroke width, dash pattern).
+    SetLineProperties {
+        page: usize,
+        target: ObjectTarget,
+        color: Option<[f64; 3]>,
+        width: Option<f64>,
+        dash: Option<Vec<f64>>,
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {

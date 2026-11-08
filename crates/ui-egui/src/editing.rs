@@ -1113,6 +1113,86 @@ fn typing_step(ctx: &egui::Context, id: egui::Id, text: &str, undo: bool) -> Opt
     Some(stepped)
 }
 
+/// Line Properties panel for vector line editing.
+pub fn line_properties_panel(
+    ui: &mut egui::Ui,
+    view: &mut crate::canvas::DocView,
+) {
+    if !view.vector_edit_mode {
+        return;
+    }
+    let Some(sel) = &view.canvas_selection.selected else {
+        return;
+    };
+    if sel.kind != crate::canvas_selection::SelectableKind::VectorLine || !view.canvas_selection.multi_selected.is_empty() {
+        return;
+    }
+
+    let page = sel.page;
+    let target = pdfcraft_engine::ObjectTarget {
+        kind: pdfcraft_engine::ObjectKind::VectorLine,
+        index: sel.index,
+    };
+
+    ui.group(|ui| {
+        ui.heading("Line Properties");
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Color:");
+            egui::color_picker::color_edit_button_rgb(ui, &mut view.line_properties.color);
+        });
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Width:");
+            ui.add(egui::Slider::new(&mut view.line_properties.width, 0.5..=20.0).step_by(0.5).suffix(" pt"));
+        });
+        ui.add_space(4.0);
+
+        let dash_labels = ["Solid", "Dotted", "Dashed"];
+        let current_dash = dash_labels.get(view.line_properties.dash_idx).copied().unwrap_or(dash_labels[0]);
+        craft_ui::ComboBox::from_id_salt("line-dash")
+            .selected_text(current_dash)
+            .show_ui(ui, |ui| {
+                for (idx, label) in dash_labels.iter().enumerate() {
+                    ui.selectable_value(&mut view.line_properties.dash_idx, idx, *label);
+                }
+            });
+        ui.add_space(4.0);
+        ui.add(crate::widgets::checkbox(&mut view.extend_perpendicular_lines, "Extend touching lines (Excel grid)"));
+        ui.add_space(6.0);
+
+        if ui.button(tl!("Apply")).clicked() {
+            let color = Some([
+                view.line_properties.color[0] as f64,
+                view.line_properties.color[1] as f64,
+                view.line_properties.color[2] as f64,
+            ]);
+            let width = Some(view.line_properties.width);
+            let dash = match view.line_properties.dash_idx {
+                1 => Some(vec![3.0, 3.0]),
+                2 => Some(vec![6.0, 3.0]),
+                _ => Some(vec![]),
+            };
+            view.pending_edit = Some(pdfcraft_engine::Edit::SetLineProperties {
+                page,
+                target,
+                color,
+                width,
+                dash,
+            });
+            view.line_properties.last_error = None;
+            ui.ctx().request_repaint();
+        }
+
+        if let Some(err) = &view.line_properties.last_error {
+            ui.add_space(4.0);
+            ui.colored_label(egui::Color32::from_rgb(220, 50, 50), err);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests;
 

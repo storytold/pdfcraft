@@ -341,7 +341,17 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
+                let mut now = gesture.now;
+                if ui.input(|i| i.modifiers.shift) {
+                    let dx = (now.x - gesture.start.x).abs();
+                    let dy = (now.y - gesture.start.y).abs();
+                    if dx > dy {
+                        now.y = gesture.start.y;
+                    } else {
+                        now.x = gesture.start.x;
+                    }
+                }
+                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(now));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                     Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
                     Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
@@ -515,10 +525,11 @@ fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
     targets.dedup();
     let mut edits: Vec<Edit> = targets
         .into_iter()
-        .map(|t| match t.kind {
-            ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() },
-            ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete },
-            ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        .filter_map(|t| match t.kind {
+            ObjectKind::Text => Some(Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() }),
+            ObjectKind::Image => Some(Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete }),
+            ObjectKind::Added => Some(Edit::DeleteContent { page, index: t.index }),
+            ObjectKind::VectorLine => None,
         })
         .collect();
     if edits.len() > 1 {

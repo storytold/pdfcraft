@@ -864,7 +864,17 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                             apply_resize(drag.initial_rect, handle, delta)
                         }
                     }
-                    DragTarget::Move => drag.initial_rect.translate(p - drag.start),
+                    DragTarget::Move => {
+                        let mut delta = p - drag.start;
+                        if ui.input(|i| i.modifiers.shift) {
+                            if delta.x.abs() > delta.y.abs() {
+                                delta.y = 0.0;
+                            } else {
+                                delta.x = 0.0;
+                            }
+                        }
+                        drag.initial_rect.translate(delta)
+                    }
                     _ => drag.initial_rect,
                 };
 

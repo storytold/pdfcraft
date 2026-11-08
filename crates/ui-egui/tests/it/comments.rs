@@ -3685,7 +3685,7 @@ fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
     h.run_steps(5);
     let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
     let (length, thickness) = if size.y > size.x { (size.y, size.x) } else { (size.x, size.y) };
-    assert!(thickness <= 64.0 && length < 550.0, "floating toolbar is compact: {size:?}");
+    assert!(thickness <= 64.0 && length < 650.0, "floating toolbar is compact: {size:?}");
 }
 
 #[test]

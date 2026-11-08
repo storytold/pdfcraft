@@ -240,6 +240,50 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
             }
         }
     }
+    // QR & Barcode Tools (Scanner & Generator)
+    if let Some((tab_idx, _)) = app.active_ids() {
+        let is_open = app.views.get(tab_idx).is_some_and(|v| v.barcode_hud.open);
+        if icons::button(ui, "scan", cell, is_open, tl!("QR & Barcode Tools")).clicked()
+            && let Some(v) = app.views.get_mut(tab_idx)
+        {
+            v.barcode_hud.open = !v.barcode_hud.open;
+            v.barcode_hud.panel_open = v.barcode_hud.open;
+            if v.barcode_hud.open {
+                v.barcode_hud.last_scanned_page = None;
+            }
+        }
+    }
+    // Barcode select tool: click a code on the page to open its HUD.
+    let qr_tool = app.quick_tool == QuickTool::QrBarcode;
+    if icons::button(ui, "scan-text", cell, qr_tool, tl!("Select barcodes")).clicked() {
+        app.quick_tool = if qr_tool { QuickTool::Select } else { QuickTool::QrBarcode };
+        if !qr_tool
+            && let Some((tab_idx, _)) = app.active_ids()
+            && let Some(v) = app.views.get_mut(tab_idx)
+        {
+            v.barcode_hud.last_scanned_page = None;
+        }
+    }
+    // Reading Eye-Strain Background Tint
+    let bg_mode = app.reading_bg.mode;
+    let bg_active = bg_mode != crate::canvas::PageBackground::Default;
+    let bg_tip = crate::i18n::fmt(
+        tl!("Eye strain background: {mode} (click to cycle, right-click for tint settings)"),
+        &[("mode", tl!(bg_mode.label()))],
+    );
+    let bg_resp = icons::button(ui, bg_mode.icon(), cell, bg_active, &bg_tip);
+    if bg_resp.clicked() {
+        app.reading_bg.mode = app.reading_bg.mode.next();
+        app.reading_bg.color = match app.reading_bg.mode {
+            crate::canvas::PageBackground::Light => Color32::from_rgb(0xF5, 0xF2, 0xEB),
+            crate::canvas::PageBackground::Dark => Color32::from_rgb(0x1E, 0x1E, 0x1E),
+            crate::canvas::PageBackground::Default => app.reading_bg.color,
+        };
+        ui.ctx().request_repaint();
+    }
+    if bg_resp.secondary_clicked() {
+        app.reading_bg.picker_open = !app.reading_bg.picker_open;
+    }
     // Fill & Sign ▸ (text, marks, date, signature).
     let current_fill = match app.quick_tool {
         QuickTool::Fill(f) => Some(f),

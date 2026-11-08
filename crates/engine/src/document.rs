@@ -7,7 +7,7 @@ use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
-    CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
+    CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, LineSegment, MarkKind, SecuritySummary,
     SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password,
     signatures_of, unrestricted,
 };
@@ -228,6 +228,12 @@ impl Document {
     pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
+    }
+
+    /// Stroked vector line segments on one page.
+    pub fn editable_lines(&self, page: usize) -> Result<Vec<LineSegment>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        pdfcraft_edit::editable_lines(&editor.cos, page).map_err(|e| e.to_string())
     }
 
     /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,

@@ -18,6 +18,13 @@ fn deletes_pages(edit: &Edit) -> bool {
 }
 
 impl Session {
+    /// Generate a QR code encoding `text` and place it onto `page` at `rect`.
+    pub fn add_qr_code(&mut self, id: DocId, page: usize, text: &str, rect: Option<[f64; 4]>) -> Result<(), EditError> {
+        let matrix = crate::qr::QrCode::encode_text(text).map_err(|e| EditError::Invalid(e.to_string()))?;
+        let png_bytes = matrix.to_png_bytes(8, 4).map_err(|e| EditError::Invalid(e.to_string()))?;
+        self.apply(id, Edit::AddImage { page, rect, name: "QRCode.png".into(), bytes: Arc::new(png_bytes) })
+    }
+
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
         let now = self.now();

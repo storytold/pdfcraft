@@ -131,10 +131,15 @@ impl PdfCraftApp {
     /// paragraph's text removed with no editor over it.
     pub(crate) fn put_down_edit_text(&mut self) {
         self.quick_tool = QuickTool::Select;
-        if let Some(ed) = self.active.and_then(|i| self.views.get_mut(i)).and_then(|v| v.line_editor.take())
-            && let Some(edit) = edit_text_ui::finished_edit(ed)
+        if let Some(i) = self.active
+            && let Some(view) = self.views.get_mut(i)
+            && let Some(ed) = view.line_editor.take()
         {
-            self.apply_edit(edit);
+            let reflow = view.reflow_paragraphs;
+            let blocks = view.edit_lines.get(&ed.page).map(|(_, b)| b.as_slice());
+            if let Some(edit) = edit_text_ui::finished_edit_with_reflow(ed, reflow, blocks) {
+                self.apply_edit(edit);
+            }
         }
     }
 

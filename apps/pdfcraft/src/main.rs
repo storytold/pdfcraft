@@ -44,6 +44,7 @@ mod settings;
 mod single_instance;
 mod startup;
 mod text_scale;
+pub mod typographic_export;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
@@ -356,6 +357,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     // provider would read every installed face, including proprietary ones, into every UI pass.
     native.system_font_fallback = false;
     if renderer == eframe::Renderer::Wgpu {
+        native.wgpu_options.surface.desired_maximum_frame_latency = Some(1);
         configure_gpu(&mut native);
     }
     native
