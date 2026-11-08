@@ -617,7 +617,10 @@ impl PdfCraftApp {
     }
 
     /// Organize ▸ Copy / Cut: remember the selected pages (the document as it is now); Cut also
-    /// deletes them (one page always stays).
+    /// deletes them (one page always stays). The system clipboard gets a line saying what was
+    /// copied, as copied comments put their XFDF there: on X11 and Windows ⌘V reaches the app
+    /// only as a paste of the clipboard's contents, and not at all while it holds nothing, so
+    /// without it ⌘V in the Pages panel or the page grid did nothing after a copy.
     pub fn copy_pages(&mut self, cut: bool) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
@@ -636,6 +639,9 @@ impl PdfCraftApp {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }
         let what = if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) };
+        if let (Some(ctx), Some(clip)) = (&self.ctx, &self.page_clipboard) {
+            ctx.copy_text(crate::i18n::fmt(tl!("{what} from {name}"), &[("what", &what), ("name", &clip.name)]));
+        }
         if cut {
             self.notify_fmt("Cut {what}", &[("what", &what)]);
         } else {
