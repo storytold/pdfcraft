@@ -184,6 +184,7 @@ impl DocView {
         self.stale_tiles.clear();
         self.forms.unbaked.clear();
         self.texts.clear();
+        self.accessibility_text_cache = None;
         self.text_failed.clear();
         self.errors.clear();
         self.slow_pages.clear();
@@ -227,6 +228,7 @@ impl DocView {
         }
         self.slow_pages.remove(&page);
         self.texts.remove(&page);
+        self.accessibility_text_cache = None;
         self.text_failed.remove(&page);
         self.errors.remove(&page);
         self.last_queue.clear();
@@ -265,6 +267,16 @@ impl DocView {
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
         self.texts.get(&page).cloned()
+    }
+
+    pub(super) fn accessibility_text(&mut self, page: usize) -> Option<(&str, &[u8])> {
+        let text = self.texts.get(&page)?;
+        if !self.accessibility_text_cache.as_ref().is_some_and(|(cached_page, _, _)| *cached_page == page) {
+            let value = text.plain_text();
+            let lengths = value.chars().map(|c| c.len_utf8() as u8).collect();
+            self.accessibility_text_cache = Some((page, value, lengths));
+        }
+        self.accessibility_text_cache.as_ref().map(|(_, value, lengths)| (value.as_str(), lengths.as_slice()))
     }
 
     /// Whether `page`'s text layer has arrived from the renderer. Selecting text, the I-beam and
@@ -563,6 +575,7 @@ impl DocView {
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {
+                    self.accessibility_text_cache = None;
                     self.texts.insert(r.request.page, t);
                     self.refresh_find_page(r.request.page);
                 }

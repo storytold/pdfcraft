@@ -553,6 +553,24 @@ fn find_test_text(s: &str) -> PageText {
     }
 }
 
+#[test]
+fn accessibility_text_is_reused_until_the_page_text_changes() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.texts.insert(0, Arc::new(find_test_text("héllo")));
+
+    let (text, lengths) = v.accessibility_text(0).unwrap();
+    assert_eq!(text, "héllo");
+    assert_eq!(lengths, &[1, 2, 1, 1, 1]);
+    let (text_ptr, lengths_ptr) = (text.as_ptr(), lengths.as_ptr());
+    let (text, lengths) = v.accessibility_text(0).unwrap();
+    assert_eq!((text.as_ptr(), lengths.as_ptr()), (text_ptr, lengths_ptr), "reuse the conversion on unchanged frames");
+
+    let result = find_text_result(0, "changed");
+    v.last_queue.push(result.request);
+    v.receive_result(&egui::Context::default(), result);
+    assert_eq!(v.accessibility_text(0).unwrap().0, "changed", "a replacement page layer refreshes the cached run");
+}
+
 /// A text-layer result for `page`, for the search tests below.
 fn find_text_result(page: usize, text: &str) -> pdfcraft_render::RenderedPage {
     pdfcraft_render::RenderedPage {
