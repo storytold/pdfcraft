@@ -142,6 +142,10 @@ impl CharacterPreparation<'_> {
                     chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
                     continue;
                 }
+                // No font has a glyph for a tab, a form feed or other control white space (a list's
+                // tab after its bullet reads back as one, #6145): written as a space, as the
+                // paragraph rewritten in one style writes it, not handed to a font that can't show it.
+                let ch = if ch.is_whitespace() && ch.is_control() { ' ' } else { ch };
                 let text = ch.to_string();
                 let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
                 let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
