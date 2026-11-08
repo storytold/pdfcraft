@@ -469,5 +469,8 @@ mod tests {
     fn number_literals_stop_before_second_dot_for_member_access() {
         assert_eq!(parse("1.5.rawValue"), Ok(vec![Stmt::Expr(Expr::Member(Box::new(Expr::Num(1.5)), "rawValue".into()))]));
         assert_eq!(parse("1.rawValue"), Ok(vec![Stmt::Expr(Expr::Member(Box::new(Expr::Num(1.0)), "rawValue".into()))]));
+        assert_eq!(parse("1.e2foo"), Ok(vec![Stmt::Expr(Expr::Member(Box::new(Expr::Num(1.0)), "e2foo".into()))]));
+        assert_eq!(parse("1.e2"), Ok(vec![Stmt::Expr(Expr::Num(100.0))]));
+        assert!(parse("1.2.3").is_err(), "a second decimal point followed by digits is a bad number");
     }
 }

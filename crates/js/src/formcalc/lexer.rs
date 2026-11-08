@@ -154,10 +154,13 @@ fn lex_string(chars: &[char], i: &mut usize, line: &mut usize) -> Result<String,
     }
 }
 
+/// Whether `c` may start a FormCalc identifier.
 fn is_ident_start(c: char) -> bool {
     c.is_alphabetic() || c == '_' || c == '$'
 }
 
+/// End index of a numeric exponent starting at `at` (`e`/`E`, optional sign, digits), or `None`
+/// if no valid exponent starts there or if identifier characters immediately follow the digits.
 fn exponent_end(chars: &[char], at: usize) -> Option<usize> {
     if !matches!(chars.get(at), Some('e' | 'E')) {
         return None;
@@ -172,9 +175,14 @@ fn exponent_end(chars: &[char], at: usize) -> Option<usize> {
     while chars.get(j).is_some_and(char::is_ascii_digit) {
         j += 1;
     }
+    if chars.get(j).is_some_and(|&c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return None;
+    }
     Some(j)
 }
 
+/// Scan a FormCalc number literal starting at `*i`, stopping before `.member` or `..` while
+/// rejecting malformed multi-dot literals such as `1.2.3`.
 fn lex_number(chars: &[char], i: &mut usize, line: usize) -> Result<f64, String> {
     let start = *i;
     let mut seen_dot = false;
@@ -186,6 +194,8 @@ fn lex_number(chars: &[char], i: &mut usize, line: usize) -> Result<f64, String>
         } else if chars[*i] == '.' && !seen_dot && next != Some('.') && !next_is_member {
             seen_dot = true;
             *i += 1;
+        } else if chars[*i] == '.' && seen_dot && next.is_some_and(|c| c.is_ascii_digit()) {
+            return Err(format!("line {line}: bad number"));
         } else {
             break;
         }
