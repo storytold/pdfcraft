@@ -133,7 +133,7 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
     let mut out = Vec::new();
     for (gid, ch) in nominal.chain(contextual) {
         let at = usize::from(gid);
-        if !loca.get_raw(at).zip(loca.get_raw(at + 1)).is_some_and(|(start, end)| end > start) {
+        if loca.get_raw(at).zip(loca.get_raw(at + 1)).is_none_or(|(start, end)| end <= start) {
             continue;
         }
         if advances.advance_width(skrifa::GlyphId::new(u32::from(gid))).is_none_or(|w| (w == 0.0) != is_thai_mark(ch)) {
