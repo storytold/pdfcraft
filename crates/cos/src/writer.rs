@@ -23,9 +23,7 @@ pub fn serialize(o: &Object, out: &mut Vec<u8>) {
     match o {
         Object::Null => out.extend_from_slice(b"null"),
         Object::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
-        Object::Int(i) => {
-            let _ = write!(out, "{i}");
-        }
+        Object::Int(i) => write_int(*i, out),
         Object::Real(r) => write_real(*r, out),
         Object::String(s) => write_string(s, out),
         Object::Name(n) => write_name(n, out),
@@ -42,9 +40,44 @@ pub fn serialize(o: &Object, out: &mut Vec<u8>) {
         Object::Dict(d) => write_dict(d, out),
         Object::Stream(s) => write_stream(s, out),
         Object::Ref(r) => {
-            let _ = write!(out, "{} {} R", r.num, r.generation);
+            write_digits(u64::from(r.num), out);
+            out.push(b' ');
+            write_digits(u64::from(r.generation), out);
+            out.extend_from_slice(b" R");
         }
     }
+}
+
+/// Upper-case hexadecimal digits.
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// The decimal digits of `v`, the same bytes `write!(out, "{v}")` gives, without the formatter.
+fn write_digits(mut v: u64, out: &mut Vec<u8>) {
+    // `u64::MAX` has 20 digits, so `at` never goes below 0.
+    let mut buf = [0u8; 20];
+    let mut at = buf.len();
+    loop {
+        at -= 1;
+        buf[at] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    out.extend_from_slice(&buf[at..]);
+}
+
+/// A signed integer in decimal, as `write!(out, "{i}")` writes it.
+fn write_int(i: i64, out: &mut Vec<u8>) {
+    if i < 0 {
+        out.push(b'-');
+    }
+    write_digits(i.unsigned_abs(), out);
+}
+
+/// `b` as two upper-case hexadecimal digits.
+fn hex_pair(b: u8) -> [u8; 2] {
+    [HEX[usize::from(b >> 4)], HEX[usize::from(b & 15)]]
 }
 
 fn write_real(r: f64, out: &mut Vec<u8>) {
@@ -55,7 +88,7 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
     // A whole number is written as an integer only within the integer range Annex C gives
     // (±2³¹−1), so `4e9` or `1e30` stays a real token for readers with 32-bit integers.
     if r.fract() == 0.0 && r.abs() <= f64::from(i32::MAX) {
-        let _ = write!(out, "{}", r as i32);
+        write_int(i64::from(r as i32), out);
         return;
     }
     // Plain decimal notation (§7.3.3 has no exponents). Rust's `Display` for f64 prints the
@@ -76,7 +109,8 @@ fn write_name(n: &[u8], out: &mut Vec<u8>) {
         if regular {
             out.push(b);
         } else {
-            let _ = write!(out, "#{b:02X}");
+            out.push(b'#');
+            out.extend_from_slice(&hex_pair(b));
         }
     }
 }
@@ -84,9 +118,10 @@ fn write_name(n: &[u8], out: &mut Vec<u8>) {
 fn write_string(s: &PdfString, out: &mut Vec<u8>) {
     let binary = s.bytes.iter().filter(|b| !(b' '..=b'~').contains(*b) && !matches!(b, b'\n' | b'\r' | b'\t')).count();
     if s.hex || binary * 4 > s.bytes.len().max(1) {
+        out.reserve(s.bytes.len().saturating_mul(2).saturating_add(2));
         out.push(b'<');
-        for b in &s.bytes {
-            let _ = write!(out, "{b:02X}");
+        for &b in &s.bytes {
+            out.extend_from_slice(&hex_pair(b));
         }
         out.push(b'>');
         return;
@@ -105,7 +140,7 @@ fn write_string(s: &PdfString, out: &mut Vec<u8>) {
             0x0C => out.extend_from_slice(b"\\f"),
             b' '..=b'~' => out.push(b),
             _ => {
-                let _ = write!(out, "\\{b:03o}");
+                out.extend_from_slice(&[b'\\', b'0' + (b >> 6), b'0' + ((b >> 3) & 7), b'0' + (b & 7)]);
             }
         }
     }
