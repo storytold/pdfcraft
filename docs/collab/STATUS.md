@@ -184,7 +184,8 @@ ws 6 unit + 4 e2e, pdf 13, annot 10, daemon 5.
   `PDFCRAFT_COLLAB_*` variables. `/health` went from `clients:1` to `clients:0`
   when the app closed. This proves connection, JWT and presence wiring in the
   app, not only in the unit/e2e harness.
-- UI suite with the feature: 1493 passed, 1 failed. The failure is
+- UI suite with the feature: 1493 passed, 1 failed (re-run after the typed
+  annotation payload: the same numbers). The failure is
   `editing::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone`:
   `No glyph for "�" (U+FFFD)`. It fails **without** the `collab` feature too and
   is an environment/font issue, not a regression.
