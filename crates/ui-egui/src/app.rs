@@ -211,6 +211,7 @@ impl PdfCraftApp {
             action_files_override: None,
             pdfa: Default::default(),
             compare_old: None,
+            compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
             doc_js: Default::default(),
@@ -245,6 +246,9 @@ impl PdfCraftApp {
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
+            html_clipboard_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            os_clipboard: None,
             clipboard_override: None,
             attach_override: None,
             duplicate_draft: None,
@@ -605,9 +609,15 @@ impl eframe::App for PdfCraftApp {
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
-            view.objects.set_input_blocked(blocked || self.active != Some(index));
-            if blocked || self.active != Some(index) {
+            let shut = blocked || self.active != Some(index);
+            view.objects.set_input_blocked(shut);
+            if shut {
                 view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing

@@ -198,7 +198,27 @@ fn entries() -> Result<Entries, SignError> {
 
 /// Whether the store's key is what the certificate needs (RSA; ECDSA on its curve).
 fn matches_key(key: &NCryptKey, want: StoreKey) -> Result<(), String> {
-    let group = key.algorithm_group().map_err(|e| format!("its private key's algorithm couldn't be read: {}", describe(&e)))?;
+    // Some KSPs (Certisign's desktopID, for one) report NCRYPT_ALGORITHM_GROUP_PROPERTY
+    // as a character count instead of a byte count, so the group can't be read even though
+    // the key works. The certificate already names the key type, so an unreadable group is
+    // trusted: a working key is accepted instead of wrongly rejected. The key size, when it
+    // can be read, still has to agree with the certificate.
+    matches_key_from_group(key.algorithm_group().ok(), key, want)
+}
+
+/// Core check, decoupled from the NCryptKey handle so the algorithm group can be injected
+/// (e.g. forced to `None` to simulate a KSP that reports the property as a character count
+/// instead of a byte count, as Certisign's desktopID KSP does).
+fn matches_key_from_group(group: Option<AlgorithmGroup>, key: &NCryptKey, want: StoreKey) -> Result<(), String> {
+    let Some(group) = group else {
+        return match want {
+            StoreKey::Rsa => Ok(()),
+            StoreKey::Ecdsa(bits) => match key.bits() {
+                Ok(actual) if actual != bits => Err(format!("its certificate holds a P-{bits} key but the store's private key has {actual} bits")),
+                _ => Ok(()),
+            },
+        };
+    };
     let name = |g: &AlgorithmGroup| match g {
         AlgorithmGroup::Rsa => "an RSA".to_string(),
         AlgorithmGroup::Ecdsa => "an ECDSA".to_string(),
@@ -291,5 +311,14 @@ mod tests {
         );
         assert_eq!(describe(&CngError::WindowsError(0x57)), "Windows error 0x00000057");
         assert_eq!(describe(&CngError::InvalidHashLength), "Invalid hash length");
+    }
+
+    #[test]
+    fn key_group_matches_trusts_when_group_unreadable() {
+        // Certisign's desktopID KSP reports the algorithm-group property as a character
+        // count (3 for "RSA") instead of a byte count (8), so `algorithm_group` fails. An
+        // unreadable group must not make a usable key look unusable.
+        let key = NCryptKey::new_owned(0);
+        assert_eq!(matches_key(&key, StoreKey::Rsa), Ok(()));
     }
 }
