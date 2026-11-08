@@ -11,6 +11,9 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+mod reset_diagnostics;
+use reset_diagnostics::ResetDiagnostics;
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -38,6 +41,15 @@ impl JsOutput {
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
+        self.absorb_requests_and_errors(o);
+    }
+
+    fn absorb_reset(&mut self, o: &Outcome, diagnostics: &mut ResetDiagnostics) {
+        diagnostics.append(o, &mut self.alerts, &mut self.console);
+        self.absorb_requests_and_errors(o);
+    }
+
+    fn absorb_requests_and_errors(&mut self, o: &Outcome) {
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
         // button's may show or hide a side panel, or open Save As.
         for r in &o.requests {
@@ -167,6 +179,8 @@ pub struct JsRunner {
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
     /// A reset must fail atomically when document scripts make its event unrestorable.
     reset_restore_error: Option<String>,
+    /// Only bootstrap messages, remembered for one ResetForm, never for ordinary field edits.
+    reset_diagnostics: ResetDiagnostics,
 }
 
 impl JsRunner {
@@ -189,6 +203,7 @@ impl JsRunner {
             cos: cos.clone(),
             displays: std::collections::HashMap::new(),
             reset_restore_error: None,
+            reset_diagnostics: ResetDiagnostics::default(),
         }
     }
 }
@@ -239,6 +254,7 @@ impl Scripts for ResetScripts<'_> {
 impl JsRunner {
     pub(crate) fn for_reset(&mut self) -> ResetScripts<'_> {
         self.reset_restore_error = None;
+        self.reset_diagnostics.clear();
         ResetScripts(self)
     }
 
@@ -288,7 +304,11 @@ impl JsRunner {
             self.reset_restore_error = o.error.clone();
         }
         if flags.log {
-            self.output.absorb(&o);
+            if flags.reset {
+                self.output.absorb_reset(&o, &mut self.reset_diagnostics);
+            } else {
+                self.output.absorb(&o);
+            }
         }
         if o.error.is_some() {
             return None;

@@ -147,7 +147,7 @@ fn reset_bootstrap_keeps_document_helpers_and_real_calculate_effects() {
         (vec!["17".into()], vec!["34".into()], vec!["Calculate:total:true".into()])
     );
     let output = session.take_js_output(id);
-    assert_eq!(output.console, ["bootstrap", "calculate", "bootstrap", "format"]);
+    assert_eq!(output.console, ["bootstrap", "calculate", "format"]);
     assert!(output.requests.is_empty(), "bootstrap reset requests are not applied or reported: {output:?}");
 }
 
@@ -336,7 +336,7 @@ fn invalid_real_calculate_write_rolls_back_the_entire_reset() {
 }
 
 #[test]
-fn format_runs_once_after_calculate_but_document_console_bootstrap_repeats() {
+fn format_runs_once_and_reset_bootstrap_diagnostics_are_not_repeated() {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
     pdfcraft_forms::set_document_script(&mut doc, "init", Some("console.println('doc-run'); app.alert('doc-alert'); this.print();")).unwrap();
     pdfcraft_forms::set_field_script(
@@ -358,8 +358,9 @@ fn format_runs_once_after_calculate_but_document_console_bootstrap_repeats() {
             assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["43".into()], vec!["86".into()]));
         }
         let output = session.take_js_output(id);
-        assert_eq!(output.console, ["doc-run", "lf003-calculate", "doc-run", "format"]);
-        assert_eq!(output.alerts.len(), 2, "document bootstrap alerts remain visible for both events");
+        let expected: &[&str] = if reset { &["doc-run", "lf003-calculate", "format"] } else { &["doc-run", "lf003-calculate", "doc-run", "format"] };
+        assert_eq!(output.console, expected);
+        assert_eq!(output.alerts.len(), if reset { 1 } else { 2 }, "bootstrap is deduplicated only within the reset");
         assert!(output.alerts.iter().all(|alert| alert.text == "doc-alert"));
         if reset {
             assert_eq!(output.requests, [js::Request::Reset(vec!["price".into()])], "only the true Format request is logged");
@@ -522,4 +523,213 @@ fn reset_lexical_alias_preserves_calculate_format_and_save() {
         assert_eq!((value(&reopened, id, "price"), value(&reopened, id, "total")), (vec!["17".into()], vec!["34".into()]));
         assert_eq!(normal_appearance_text(reopened.save_bytes(id).unwrap(), "total"), "34!");
     }
+}
+
+struct CountScripts<'a> {
+    inner: &'a mut dyn pdfcraft_forms::Scripts,
+    events: Vec<(pdfcraft_forms::FieldEvent, String)>,
+    english: Vec<String>,
+}
+
+impl pdfcraft_forms::Scripts for CountScripts<'_> {
+    fn run(
+        &mut self,
+        event: pdfcraft_forms::FieldEvent,
+        script: &str,
+        target: &pdfcraft_forms::Field,
+        value: &str,
+        fields: &[pdfcraft_forms::Field],
+    ) -> pdfcraft_forms::ScriptResult {
+        self.events.push((event, target.name.clone()));
+        self.inner.run(event, script, target, value, fields)
+    }
+
+    fn rerun_with_english_dates(
+        &mut self,
+        event: pdfcraft_forms::FieldEvent,
+        script: &str,
+        target: &pdfcraft_forms::Field,
+        value: &str,
+        fields: &[pdfcraft_forms::Field],
+    ) -> Option<pdfcraft_forms::ScriptResult> {
+        let result = self.inner.rerun_with_english_dates(event, script, target, value, fields);
+        self.english.push(result.as_ref().map(|r| r.value.clone()).unwrap_or_default());
+        result
+    }
+}
+
+fn diagnostic_form(format: bool, multiple: bool, bootstrap: &str) -> Vec<u8> {
+    let bytes = if multiple { form_with_dependent(&["total", "tax"]) } else { form(false, false) };
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    for (name, expression) in [("total", "Number(getField('price').value) * 2"), ("tax", "Number(getField('total').value) + 1")]
+        .into_iter()
+        .take(if multiple { 2 } else { 1 })
+    {
+        pdfcraft_forms::set_field_script(
+            &mut doc,
+            name,
+            "calculate",
+            Some(&format!("console.println('same'); app.alert('same'); event.value = {expression};")),
+        )
+        .unwrap();
+        if format {
+            pdfcraft_forms::set_field_script(
+                &mut doc,
+                name,
+                "format",
+                Some("console.println('same'); app.alert('same'); event.value = String(event.value) + '!';"),
+            )
+            .unwrap();
+        }
+    }
+    pdfcraft_forms::set_document_script(&mut doc, "init", Some(bootstrap)).unwrap();
+    pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+}
+
+fn counted_reset(doc: &mut pdfcraft_cos::Document, runner: &mut js::JsRunner) -> (Vec<(pdfcraft_forms::FieldEvent, String)>, Vec<String>) {
+    let mut reset = runner.for_reset();
+    let mut counted = CountScripts { inner: &mut reset, events: Vec::new(), english: Vec::new() };
+    pdfcraft_forms::reset_with(doc, Some(&["price".into()]), &mut counted).unwrap();
+    (counted.events, counted.english)
+}
+
+#[test]
+fn reset_bootstrap_diagnostics_keep_real_duplicates_and_event_counts() {
+    use pdfcraft_forms::FieldEvent::{Calculate, Format};
+    for format in [false, true] {
+        for multiple in [false, true] {
+            let bytes = diagnostic_form(format, multiple, "console.println('same'); app.alert('same');");
+            let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+            let mut runner = js::JsRunner::new(&doc, "diagnostics.pdf");
+            let (events, english) = counted_reset(&mut doc, &mut runner);
+            let calculated = if multiple { 2 } else { 1 };
+            assert_eq!(events.iter().filter(|(e, _)| *e == Calculate).count(), calculated);
+            assert_eq!(events.iter().filter(|(e, _)| *e == Format).count(), if format { calculated } else { 0 });
+            assert!(english.is_empty());
+            let expected = 1 + events.len();
+            assert_eq!(runner.output.console, vec!["same"; expected], "format={format}, multiple={multiple}");
+            assert_eq!(runner.output.alerts, vec![js::Message::plain("same"); expected]);
+            assert!(runner.output.errors.is_empty());
+            let saved = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+            assert_eq!(normal_appearance_text(saved.clone(), "total"), if format { "34!" } else { "34" });
+            let (reopened, id) = open(saved.as_ref().clone());
+            assert_eq!(value(&reopened, id, "total"), ["34"]);
+            assert_eq!(normal_appearance_text(reopened.save_bytes(id).unwrap(), "total"), if format { "34!" } else { "34" });
+        }
+    }
+}
+
+#[test]
+fn reset_bootstrap_diagnostics_keep_new_messages_and_occurrences() {
+    for (bootstrap, multiple, expected) in [
+        ("console.println('bootstrap:' + event.target.name); app.alert({cMsg:'same', cTitle:event.target.name});", true, 6),
+        ("var n = event.name === 'Format' ? 3 : 2; for (var i=0; i<n; i++) { console.println('same'); app.alert('same'); }", false, 5),
+    ] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(diagnostic_form(true, multiple, bootstrap))).unwrap();
+        let mut runner = js::JsRunner::new(&doc, "new-diagnostics.pdf");
+        counted_reset(&mut doc, &mut runner);
+        assert_eq!(runner.output.console.len(), expected, "{bootstrap}: {:?}", runner.output.console);
+        assert_eq!(runner.output.alerts.len(), expected);
+        if multiple {
+            assert_eq!(runner.output.console, ["bootstrap:total", "same", "same", "bootstrap:tax", "same", "same"]);
+            assert_eq!(runner.output.alerts.iter().filter_map(|a| a.title.as_deref()).collect::<Vec<_>>(), ["total", "tax"]);
+        }
+    }
+}
+
+#[test]
+fn reset_bootstrap_diagnostics_do_not_leak_between_resets_or_into_ordinary_edits() {
+    for ordinary in [false, true] {
+        let (mut session, id) = open(diagnostic_form(true, false, "console.println('same'); app.alert('same');"));
+        let _ = session.take_js_output(id);
+        session
+            .apply(
+                id,
+                Edit::Batch {
+                    label: "Reset diagnostics".into(),
+                    edits: vec![
+                        Edit::ResetForm { names: Some(vec!["price".into()]) },
+                        if ordinary {
+                            Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("43".into()) }
+                        } else {
+                            Edit::ResetForm { names: Some(vec!["price".into()]) }
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        // Reset #1: one bootstrap, Calculate, Format. Reset #2: bootstrap and Calculate
+        // (unchanged result); an ordinary edit keeps both of its bootstrap invocations.
+        let expected = if ordinary { 7 } else { 5 };
+        let output = session.take_js_output(id);
+        assert_eq!(output.console, vec!["same"; expected]);
+        assert_eq!(output.alerts, vec![js::Message::plain("same"); expected]);
+        let expected_total = if ordinary { "86!" } else { "34!" };
+        assert_eq!(normal_appearance_text(session.save_bytes(id).unwrap(), "total"), expected_total);
+        let _ = session.take_js_output(id);
+        session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("42".into()) }).unwrap();
+        let _ = session.take_js_output(id);
+        session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+        assert_eq!(session.take_js_output(id).console, ["same", "same", "same"], "a subsequent ResetForm has its own diagnostic scope");
+    }
+}
+
+#[test]
+fn reset_bootstrap_diagnostics_preserve_document_and_real_script_errors() {
+    let bytes = diagnostic_form(true, true, "console.println('bootstrap'); throw new Error('shared error');");
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    pdfcraft_forms::set_calculation_order(&mut doc, &["tax".into(), "total".into()]).unwrap();
+    pdfcraft_forms::set_field_script(&mut doc, "tax", "calculate", Some("console.println('same'); throw new Error('shared error');")).unwrap();
+    pdfcraft_forms::set_field_script(&mut doc, "total", "format", Some("console.println('same'); throw new Error('shared error');")).unwrap();
+    let mut runner = js::JsRunner::new(&doc, "errors.pdf");
+    let (events, english) = counted_reset(&mut doc, &mut runner);
+    assert_eq!(events.len(), 3);
+    assert!(english.is_empty());
+    assert_eq!(runner.output.console, ["bootstrap", "same", "same", "same"]);
+    assert_eq!(runner.output.doc_errors.len(), 1);
+    assert_eq!(runner.output.errors.len(), 3, "two real failures remain distinct from the document failure");
+    assert!(runner.output.errors.iter().all(|e| e.contains("shared error")));
+    assert_eq!(normal_appearance_text(Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()), "total"), "34");
+}
+
+#[test]
+fn reset_bootstrap_diagnostics_preserve_the_actual_english_format_rerun() {
+    let bytes = diagnostic_form(true, false, "console.println('bootstrap'); app.alert('bootstrap');");
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    // Literal characters unavailable to this fixture's Helvetica force an English retry,
+    // without changing process-wide date names while the other tests run.
+    pdfcraft_forms::set_field_script(
+        &mut doc,
+        "total",
+        "format",
+        Some("console.println('format'); app.alert('format'); event.value=util.printd('yyyy年mm月dd日', new Date(2026,9,18));"),
+    )
+    .unwrap();
+    let mut runner = js::JsRunner::new(&doc, "english.pdf");
+    let (events, english) = counted_reset(&mut doc, &mut runner);
+    assert_eq!(events.len(), 2, "one Calculate and the first Format");
+    assert_eq!(english, ["2026年10月18日"], "the unlogged English run still executes the real Format");
+    assert_eq!(runner.output.console, ["bootstrap", "same", "format"]);
+    assert_eq!(runner.output.alerts, [js::Message::plain("bootstrap"), js::Message::plain("same"), js::Message::plain("format")]);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(normal_appearance_text(Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()), "total"), "2026?10?18?");
+}
+
+#[test]
+fn reset_bootstrap_diagnostics_do_not_hide_real_messages_after_console_clear() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(diagnostic_form(true, false, "console.println('same'); app.alert('same');"))).unwrap();
+    pdfcraft_forms::set_field_script(
+        &mut doc,
+        "total",
+        "format",
+        Some("console.clear(); console.println('same'); app.alert('same'); event.value=String(event.value)+'!';"),
+    )
+    .unwrap();
+    let mut runner = js::JsRunner::new(&doc, "clear.pdf");
+    let (events, english) = counted_reset(&mut doc, &mut runner);
+    assert_eq!(events.len(), 2);
+    assert!(english.is_empty());
+    assert_eq!(runner.output.console, ["same", "same", "same"]);
+    assert_eq!(runner.output.alerts, [js::Message::plain("same"), js::Message::plain("same"), js::Message::plain("same")]);
+    assert_eq!(normal_appearance_text(Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()), "total"), "34!");
 }

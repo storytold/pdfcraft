@@ -360,6 +360,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
+        bootstrap: BootstrapDiagnostics::default(),
         requests: Vec::new(),
         doc: doc(),
         kept: 0,
@@ -2286,4 +2287,49 @@ fn reset_accepts_lexical_aliases_of_the_canonical_event() {
     assert_eq!(o.error, None);
     assert!(!o.event_restore_failed);
     assert_eq!(o.value, "84");
+}
+
+#[test]
+fn reset_reports_bootstrap_diagnostic_prefixes_without_filtering_real_messages() {
+    let scripts = ["console.println('same'); app.alert('same'); throw new Error('bootstrap');".into()];
+    let script = "console.println('same'); app.alert('same'); event.value='34';";
+    let event = Event::field("Calculate", "total", "84");
+    let o = run_shared_for_reset(script, &event, &doc(), Arc::new(fields()), &scripts, Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "34");
+    assert_eq!(o.console, ["same", "same"]);
+    assert_eq!(o.alerts, [Message::plain("same"), Message::plain("same")]);
+    assert_eq!(o.bootstrap, BootstrapDiagnostics { alerts: 1, console: 1 });
+    assert_eq!(o.doc_errors.len(), 1);
+    let ordinary = run(script, &event, &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(ordinary.console, o.console);
+    assert_eq!(ordinary.alerts, o.alerts);
+    assert_eq!(ordinary.bootstrap, BootstrapDiagnostics::default());
+}
+
+#[test]
+fn reset_bootstrap_provenance_keeps_the_existing_message_limits() {
+    let scripts = ["for (var i=0;i<1005;i++) console.println('bootstrap');".into()];
+    let o =
+        run_shared_for_reset("event.value='34';", &Event::field("Calculate", "total", "84"), &doc(), Arc::new(fields()), &scripts, Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "34");
+    assert_eq!(o.bootstrap.console, xfa::MAX_CONSOLE);
+    assert_eq!(o.console.len(), xfa::MAX_CONSOLE + 1);
+    assert!(o.console.last().unwrap().contains("5 more were left out"));
+}
+
+#[test]
+fn reset_bootstrap_provenance_survives_console_clear_in_the_real_script() {
+    let o = run_shared_for_reset(
+        "console.clear(); console.println('real'); event.value='34';",
+        &Event::field("Format", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &["console.println('bootstrap'); app.alert('bootstrap');".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.console, ["real"]);
+    assert_eq!(o.bootstrap, BootstrapDiagnostics { alerts: 1, console: 0 });
 }

@@ -1,6 +1,6 @@
 use super::globals::{event_object, install};
 use super::host::{Host, Shared, error, host, text};
-use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
+use super::model::{BootstrapDiagnostics, DocInfo, Event, FieldState, Limits, Outcome};
 use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsObject, JsResult, JsString, Realm, RefCell, Source, js_string};
 use boa_engine::property::PropertyDescriptor;
 
@@ -242,6 +242,7 @@ fn run_here(
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
+        bootstrap: BootstrapDiagnostics::default(),
         requests: Vec::new(),
         doc: doc.clone(),
         kept: 0,
@@ -260,6 +261,10 @@ fn run_here(
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
                 doc_errors.push((i, doc_error(i, &e)));
             }
+        }
+        if !config.bootstrap_effects {
+            let mut h = host(&ctx)?.try_borrow_mut().map_err(|_| error("the script host is already in use"))?;
+            h.bootstrap = BootstrapDiagnostics { alerts: h.alerts.len(), console: h.console.len() };
         }
         if !config.bootstrap_effects
             && let Err(e) = restore_reset_event(&mut ctx, &ev, event)
@@ -294,6 +299,7 @@ fn run_here(
         out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
         out.alerts = h.alerts;
         out.console = h.console;
+        out.bootstrap = h.bootstrap;
         out.requests = h.requests;
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));

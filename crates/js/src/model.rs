@@ -268,6 +268,14 @@ impl Panel {
     }
 }
 
+/// Prefixes of a reset outcome's messages produced by document bootstrap, before the real
+/// field script. Counts refer to the existing vectors, so provenance duplicates no payload.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BootstrapDiagnostics {
+    pub alerts: usize,
+    pub console: usize,
+}
+
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
@@ -281,6 +289,8 @@ pub struct Outcome {
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
     pub console: Vec<String>,
+    /// Reset-only provenance; ordinary runs keep their existing output and zero prefixes.
+    pub bootstrap: BootstrapDiagnostics,
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.
     pub error: Option<String>,

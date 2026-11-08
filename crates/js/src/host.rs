@@ -1,4 +1,4 @@
-use super::model::{DocInfo, FieldState, FieldType, Request};
+use super::model::{BootstrapDiagnostics, DocInfo, FieldState, FieldType, Request};
 use super::run::MAX_ARRAY_LENGTH;
 use super::{
     Arc, BTreeSet, Context, FunctionObjectBuilder, JsArray, JsError, JsFunction, JsNativeError, JsResult, JsString, JsValue, Message, NativeFunction,
@@ -12,6 +12,8 @@ pub(crate) struct Host {
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
+    /// Reset bootstrap prefixes; console.clear can invalidate the console prefix later.
+    pub(crate) bootstrap: BootstrapDiagnostics,
     pub(crate) requests: Vec<Request>,
     pub(crate) doc: DocInfo,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
