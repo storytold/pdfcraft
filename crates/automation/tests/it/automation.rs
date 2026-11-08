@@ -2544,6 +2544,7 @@ fn protecting_through_tools() {
     // Copying wasn't allowed either (#568): no text or images come out, though search works.
     for (tool, args) in [
         ("text_extract", json!({ "doc": re })),
+        ("text_extract", json!({ "doc": re, "format": "html" })),
         ("text_word_count", json!({ "doc": re })),
         ("text_paragraphs", json!({ "doc": re, "page": 1 })),
         ("doc_export_text", json!({ "doc": re, "path": "out.txt" })),
@@ -5220,6 +5221,83 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// #6440: `page_add_text` paints text in CMYK or gray for a print file, so its black is 100 K
+/// (`0 0 0 1 k`) rather than DeviceRGB; `content_update` restyles it either way.
+#[test]
+fn added_text_takes_a_cmyk_or_gray_ink_through_tools() {
+    let dir = workdir("content-ink");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "PROOF", "at": [20, 20], "cmyk": [0, 0, 0, 1] }));
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Note", "at": [20, 80], "gray": 0.5 }));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    assert_eq!((&items[0]["cmyk"], &items[1]["gray"]), (&json!([0.0, 0.0, 0.0, 1.0]), &json!(0.5)));
+    // The item streams of the saved file.
+    let saved_items = |a: &mut Automation, name: &str| -> Vec<String> {
+        ok(a, "doc_save", json!({ "doc": doc, "path": name }));
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let page = &pdfcraft_model::pages(&saved)[0];
+        let list = saved.resolve(page.dict.get(b"Contents").unwrap()).as_array().cloned().unwrap();
+        list.iter()
+            .filter_map(|c| match &*saved.resolve(c) {
+                pdfcraft_cos::Object::Stream(s) if s.dict.name(b"PCMark") == Some(&b"Added"[..]) => {
+                    Some(String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let streams = saved_items(&mut a, "ink.pdf");
+    assert!(streams[0].contains("0 0 0 1 k") && !streams[0].contains("rg"), "{}", streams[0]);
+    assert!(streams[1].contains("0.5 g") && !streams[1].contains("rg"), "{}", streams[1]);
+    // Restyled: to RGB with color, and back to CMYK.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "color": "#000000" }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "cmyk": [1, 0, 0, 0] }));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    assert_eq!((&items[0]["cmyk"], items[1].get("gray")), (&json!([1.0, 0.0, 0.0, 0.0]), None));
+    let streams = saved_items(&mut a, "restyled.pdf");
+    assert!(streams[0].contains("1 0 0 0 k") && streams[1].contains("0 0 0 rg"), "{streams:?}");
+    // One colour at a time, four numbers from 0 to 1.
+    for bad in [
+        json!({ "color": "red", "cmyk": [0, 0, 0, 1] }),
+        json!({ "gray": 0.5, "cmyk": [0, 0, 0, 1] }),
+        json!({ "gray": 1.5 }),
+        json!({ "cmyk": [0, 0, 1] }),
+        json!({ "cmyk": [0, 0, 0, 1, 0] }),
+        json!({ "cmyk": [0, "x", 0, 1] }),
+        json!({ "cmyk": [0, 0, 0, -0.1] }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "text": "x", "at": [20, 200] });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(matches!(a.call("page_add_text", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 2, "nothing refused was added");
+    // content_update refuses them too, an image takes no ink, and a refused update changes nothing.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    let before = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    for (index, bad) in [
+        (1, json!({ "gray": 0.5, "cmyk": [0, 0, 0, 1] })),
+        (2, json!({ "color": "red", "gray": 0.5 })),
+        (1, json!({ "size": 30, "cmyk": [0, 0, 0, 2] })),
+        (2, json!({ "bold": true, "gray": -1 })),
+        (3, json!({ "gray": 0.5 })),
+        (3, json!({ "cmyk": [0, 0, 0, 1] })),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "index": index });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(matches!(a.call("content_update", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"], before, "a refused update changed nothing");
+}
+
 /// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
 /// page beside it, onto a point, and into another document.
 #[test]
@@ -6828,6 +6906,43 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
 }
 
 #[test]
+fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Lexer, ObjRef, Object, SaveOptions, Stream};
+    let dir = workdir("named-layer-verdict");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let dict = |text: &str| Lexer::new(text.as_bytes(), 0).object().unwrap().as_dict().unwrap().clone();
+    let form = |resources: Dict, ops: &str| {
+        let mut d = dict("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] >>");
+        d.set(b"Resources".to_vec(), resources);
+        Stream::from_raw(d, ops.as_bytes().to_vec())
+    };
+    let blank = cos.add(form(Dict::new(), ""));
+    let layers = dict(&format!("<< /XObject << /n1 {blank} /n3 {blank} >> >>"));
+    let layer_form = cos.add(form(layers, "/n1 Do /n3 Do"));
+    let normal = cos.add(form(dict(&format!("<< /XObject << /FRM {layer_form} >> >>")), "/FRM Do"));
+    // Deliberately malformed CMS: an invalid signature still gets the redrawn invalid state.
+    let value = cos.add(dict("<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 0 0 0] /Contents <00> >>"));
+    let widget = cos
+        .add(dict(&format!("<< /FT /Sig /T (Signature1) /Subtype /Widget /F 4 /Rect [50 50 150 150] /P 4 0 R /V {value} /AP << /N {normal} >> >>")));
+    cos.update_dict(ObjRef::new(4, 0), |p| p.set(b"Annots".to_vec(), vec![Object::Ref(widget)])).unwrap();
+    cos.update_dict(cos.root().unwrap(), |root| root.set(b"AcroForm".to_vec(), dict(&format!("<< /Fields [{widget}] >>")))).unwrap();
+    let original = pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap();
+    std::fs::write(dir.join("named.pdf"), &original).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "named.pdf"}))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "sign_list", json!({"doc": doc}));
+    assert_eq!(list["signatures"][0]["status"], "invalid");
+    assert_eq!(list["signatures"][0]["verdict_shown"], true);
+    let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
+    let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
+    let pixels = image::load_from_memory_with_format(data, image::ImageFormat::Png).unwrap().to_rgba8();
+    let red = pixels.pixels().filter(|p| p.0.iter().zip([0xD7, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
+    assert!(red > 100, "the invalid state is drawn: {red} red pixels");
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
+    assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
+}
+
+#[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
     let mut a = auto(&dir);
@@ -6885,6 +7000,8 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     assert_eq!(t["trusted"].as_array().unwrap().len(), 1);
     let list = ok(a, "sign_list", json!({ "doc": doc }));
     assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")));
+    // PdfCraft's own appearance has no status layers to draw into: only the page badge shows it.
+    assert_eq!(list["signatures"][0]["verdict_shown"], false);
     ok(a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "ok" }));
     let s = &ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0];
     assert_eq!((s["status"].as_str(), s["modification"].as_str()), (Some("valid"), Some("allowed")));
@@ -9432,27 +9549,15 @@ fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
 /// page is turned with /Rotate 90.
 fn table_pdf() -> Vec<u8> {
     let body = "BT /F1 12 Tf 20 250 Td (Name) Tj 130 0 Td (Qty) Tj -130 -20 Td (Apple) Tj 130 0 Td (12) Tj -130 -20 Td (Pear) Tj 130 0 Td (7) Tj ET";
-    let objs = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>".to_string(),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
-    ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        &stream,
+    ])
 }
 
 /// Issue #740: `text_extract` with `rect` takes what Column select takes, in the displayed-page
@@ -9491,6 +9596,56 @@ fn text_extract_with_a_rect_takes_one_column() {
         let e = a.call("text_extract", &json!({ "doc": doc, "rect": bad })).unwrap_err();
         assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
     }
+}
+
+/// Copy with formatting, headless: `format: "html"` adds each page's text as the HTML fragment
+/// Copy puts on the clipboard, for the whole page or only what `rect` takes.
+#[test]
+fn text_extract_as_html_keeps_the_formatting() {
+    let dir = workdir("rich-copy");
+    std::fs::write(dir.join("table.pdf"), table_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "format": "html" }))["pages"][0];
+    let html = page["html"].as_str().unwrap();
+    assert!(html.starts_with("<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:12pt\">Name"), "{html}");
+    assert!(html.contains("Pear") && html.contains("Qty"), "{html}");
+    assert_eq!(page["text"], "Name\nApple\nPear\nQty\n12\n7", "the plain text is unchanged");
+    assert_eq!(page["styles_incomplete"], false);
+    // Plain text by default: no html key.
+    assert!(ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1] }))["pages"][0].get("html").is_none());
+    // Only what the rect takes; nothing inside gives empty HTML.
+    let column = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [120, 0, 300, 300], "format": "html" }));
+    let html = column["pages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Qty") && !html.contains("Name"), "{html}");
+    let none = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [0, 0, 5, 5], "format": "html" }));
+    assert_eq!(none["pages"][0]["html"], "");
+    // An unknown format is refused.
+    for bad in [json!("rtf"), json!(1)] {
+        let e = a.call("text_extract", &json!({ "doc": doc, "format": bad })).unwrap_err();
+        assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
+    }
+    // Bold, italic, colour and size come through end to end.
+    let body = "BT /F1 18 Tf 20 250 Td (Big) Tj ET BT /F2 12 Tf 20 200 Td (Strong) Tj ET \
+        BT /F3 12 Tf 20 150 Td (Slanted) Tj ET BT 0 0 1 rg /F1 12 Tf 20 100 Td (Blue) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let styled = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>",
+        &stream,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+    ]);
+    std::fs::write(dir.join("styled.pdf"), styled).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }))["pages"][0];
+    let html = page["html"].as_str().unwrap();
+    assert!(html.contains("font-size:18pt\">Big"), "{html}");
+    assert!(html.contains("<strong>Strong</strong>"), "{html}");
+    assert!(html.contains("<em>Slanted</em>"), "{html}");
+    assert!(html.contains("color:#0000FF\">Blue"), "{html}");
 }
 
 #[test]
