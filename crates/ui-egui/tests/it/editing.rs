@@ -5569,6 +5569,28 @@ fn check_paragraph_overlap_drag(identical: bool, reopen_between: bool) {
     assert_eq!(paragraph_drag_content(&reopened), current);
 }
 
+/// A list item from Word draws its tab in an ActualText span. Dragging the item in Edit text &
+/// images moves it in one step, as any paragraph; the drag used to be refused ("These objects could
+/// not be moved") until the item was edited or resized, which rewrote the span away (#6145).
+#[test]
+fn a_list_item_whose_tab_is_an_actual_text_span_drags_like_any_paragraph() {
+    let content = "BT /F1 12 Tf 60 320 Td (\\267) Tj /Span << /ActualText <feff0009> >> BDC ( ) Tj EMC (Listed item) Tj ET BT /F1 12 Tf 60 220 Td (Stays) Tj ET";
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture(content, 0, 1), 0);
+    let before = dragged_paragraphs(&h);
+    let item = before.iter().find(|b| b.text.contains("Listed item")).unwrap().text.clone();
+    assert!(item.contains('\t'), "the span gives the tab: {item:?}");
+    let mut moved = before.clone();
+    let index = moved.iter().position(|b| b.text == item).unwrap();
+    for i in [1, 3] {
+        moved[index].rect[i] -= 60.0;
+    }
+    drag_paragraph(&mut h, &item, [0.0, -60.0]);
+    assert_eq!(h.state().toast, None, "no refusal");
+    assert_dragged_paragraphs(&dragged_paragraphs(&h), &moved);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
+    assert!(paragraph_drag_content(&h).contains("/ActualText"), "the span is moved, not rewritten");
+}
+
 #[test]
 fn ordinary_paragraph_drags_preserve_overlapping_text_and_history() {
     check_paragraph_overlap_drag(false, false);

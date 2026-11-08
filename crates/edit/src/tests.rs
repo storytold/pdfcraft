@@ -6376,6 +6376,33 @@ fn group_moves_handle_added_content_under_inherited_graphics_state() {
     }
 }
 
+/// Word writes a list item's tab as a glyph in an ActualText span, so the item's line also lists
+/// the span's `BDC` and `EMC`. Those show nothing and need no patch, and a move of the item used
+/// to be refused for them ("a selected text operation cannot be moved", #6145).
+#[test]
+fn a_list_item_whose_tab_is_an_actual_text_span_moves() {
+    for span in ["/Span << /ActualText <feff0009> >> BDC", "/Span << /ActualText <feff0009> >> BDC /Span << /MCID 0 >> BDC EMC"] {
+        let data = format!("BT /F1 12 Tf 40 400 Td (\\225) Tj {span} ( ) Tj EMC (Moved item) Tj ET BT /F1 12 Tf 40 300 Td (Still) Tj ET");
+        let mut doc = text_page(&data);
+        let before = text::text_lines(&doc, 0).unwrap();
+        let item = before.iter().position(|l| l.text.contains("Moved item")).unwrap();
+        assert!(before[item].text.contains('\t'), "the span gives the tab: {:?}", before[item].text);
+        let objects = editable_objects(&doc, 0).unwrap();
+        let target = objects.iter().find(|o| o.text.as_deref().is_some_and(|t| t.contains("Moved item"))).unwrap().target;
+        move_objects(&mut doc, 0, &[target], [25.0, -15.0]).unwrap();
+        let after = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(after.len(), before.len());
+        for (old, new) in before.iter().zip(&after) {
+            assert_eq!(old.text, new.text, "the text reads the same, its tab too");
+            let delta = if old.text.contains("Moved item") { [25.0, -15.0] } else { [0.0, 0.0] };
+            let expected = [old.rect[0] + delta[0], old.rect[1] + delta[1], old.rect[2] + delta[0], old.rect[3] + delta[1]];
+            assert!(new.rect.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-3), "{:?} moved to {:?}", old.rect, new.rect);
+        }
+        let content = String::from_utf8(page_content_bytes(&doc, 0)).unwrap();
+        assert!(content.contains("/ActualText"), "the span stays: {content}");
+    }
+}
+
 #[test]
 fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     for data in [
