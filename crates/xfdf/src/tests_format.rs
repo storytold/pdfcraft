@@ -397,6 +397,50 @@ fn file_export_carries_only_stamp_appearances_and_copies_carry_every_one() {
 }
 
 #[test]
+fn fdf_carries_only_stamp_appearances() {
+    let mut src = pages(1);
+    image_stamp(&mut src, "sq", "Square");
+    let mut ft = formatted_freetext();
+    ft.set(b"NM".to_vec(), PdfString::text("box"));
+    let ft = put(&mut src, ft);
+    let n = sub_dict(&src, &named(&src, "sq"), b"AP");
+    src.update_dict(ft, |d| d.set(b"AP".to_vec(), Object::Dict(n.clone()))).unwrap();
+    let fdf = export_fdf(&src, true, false, "src.pdf").unwrap();
+    assert!(!fdf.windows(3).any(|w| w == b"/AP"), "a text box and a square carry their formatting, not their appearance");
+    let mut dst = pages(1);
+    import(&mut dst, &fdf).unwrap();
+    let ft = named(&dst, "box");
+    assert_eq!((ft.int(b"Q"), ft.int(b"Rotate")), (Some(2), Some(90)));
+    assert_eq!(text(&dst, &ft, b"DS").as_deref(), text(&src, &formatted_freetext(), b"DS").as_deref());
+    let mut stamp = pages(1);
+    image_stamp(&mut stamp, "st", "Stamp");
+    assert!(export_fdf(&stamp, true, false, "src.pdf").unwrap().windows(3).any(|w| w == b"/AP"));
+}
+
+/// The intent (/IT) goes out under both spellings XFDF files use, and either comes back.
+#[test]
+fn the_intent_is_written_and_read_as_intent_or_it() {
+    let mut src = pages(1);
+    let mut d = annot("FreeText", "tw", [10.0, 10.0, 90.0, 30.0]);
+    d.set(b"IT".to_vec(), Object::name("FreeTextTypewriter"));
+    put(&mut src, d);
+    let xml = export_xfdf(&src, true, false, "src.pdf");
+    assert!(xml.contains(r#"intent="FreeTextTypewriter" IT="FreeTextTypewriter""#), "{xml}");
+    let only_it = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><annots>
+<freetext opacity="1" flags="print" IT="FreeTextTypewriter" name="a" page="0" justification="left" rect="71.000400,737.255000,138.977000,747.299000" rotation="0" subject="Typewriter"><defaultappearance> /Helvetica 9 Tf</defaultappearance><defaultstyle>font: Helvetica ,sans-serif 9.00pt;color:#FF0000</defaultstyle></freetext>
+<freetext IT="FreeTextCallout" name="b" page="0" rect="10,10,90,30" callout="5,5,20,20,10,10"/>
+</annots></xfdf>"#;
+    let mut dst = pages(1);
+    import(&mut dst, only_it.as_bytes()).unwrap();
+    let a = named(&dst, "a");
+    assert_eq!(a.name(b"IT"), Some(b"FreeTextTypewriter".as_slice()));
+    assert_eq!((a.int(b"Q"), a.int(b"Rotate"), text(&dst, &a, b"Subj").as_deref()), (Some(0), Some(0), Some("Typewriter")));
+    assert_eq!(f64s(&dst, a.get(b"Rect")), vec![71.0004, 737.255, 138.977, 747.299]);
+    assert_eq!(named(&dst, "b").name(b"IT"), Some(b"FreeTextCallout".as_slice()));
+}
+
+#[test]
 fn a_stamp_without_area_exports_no_appearance() {
     let mut src = pages(1);
     image_stamp(&mut src, "flat", "Stamp");

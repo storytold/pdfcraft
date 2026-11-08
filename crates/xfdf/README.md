@@ -21,6 +21,7 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   `left`/`centered`/`right`, redaction `0`–`2`), `fringe` (`/RD`) on every type, line leaders and
   captions (`leaderLength`, `leaderExtend`, `leader-offset`, `caption`, `caption-style`,
   `caption-offset-h`/`-v`), the caret `symbol` and redaction `overlay-text`/`overlay-text-repeat`.
+  The intent (`/IT`) is written as both `intent` and `IT`, and either is read.
 - **Appearances** (`<appearance>`, `appearance.rs`): a stamp's `/AP`, as XFDF 3.0 defines it for
   stamps, base 64 of the dictionary written as `DICT`/`STREAM`/`ARRAY`/`NAME`/`INT`/`FIXED`/`BOOL`/
   `STRING`/`NULL` elements with stream data in `DATA` (XFDF 3.0 "Stream encoding": `filtered`/`ascii`
@@ -30,9 +31,9 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   `Report::skipped`; it refuses one over 16 MiB, 64 MiB per import, 64 nesting levels or 100,000
   values. Export leaves out one past those limits or whose rect has no area.
 - **FDF**: fields (with `/Kids` hierarchies) and indirect comments. Nested annotation values
-  are copied under FDF object numbers; shared references and cycles remain shared. Appearances
-  (`/AP`, with the forms and images they draw) are copied and come back on import as objects of
-  the document (a stream shared by several comments once); document links are excluded. Source `/Page` and `/Pages` dictionaries become null
+  are copied under FDF object numbers; shared references and cycles remain shared. A stamp's appearance
+  (`/AP`, with the forms and images it draws) is copied, as in XFDF, and an `/AP` in the file comes
+  back on import as objects of the document (a stream shared by several comments once); document links are excluded. Source `/Page` and `/Pages` dictionaries become null
   at every copy depth, so nested destination actions cannot carry the source page tree or content.
   Type names may be indirect; lookup checks each reference generation, is iterative, stops at
   cycles and refuses chains beyond

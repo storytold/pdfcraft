@@ -86,14 +86,16 @@ impl<'a> FdfCopy<'a> {
         Ok(())
     }
 
-    /// Skip source-document links without cloning their values. The appearance (`/AP`) is
-    /// copied with its streams and resources, so the comment looks the same where it is imported.
+    /// Skip source-document links without cloning their values. A stamp's appearance (`/AP`) is
+    /// copied with its streams and resources, so the stamp looks the same where it is imported;
+    /// other comments carry their formatting entries and leave the appearance out, as XFDF does.
     /// The dictionary and every retained entry are charged before any owned copy is made.
     fn annotation_dict(&mut self, dict: &Dict) -> Result<Dict, DataError> {
         self.charge_value(0)?;
+        let stamp = dict.name(b"Subtype") == Some(b"Stamp".as_slice());
         let mut out = Dict::new();
         for (key, value) in dict.iter() {
-            if matches!(key.as_slice(), b"P" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") {
+            if matches!(key.as_slice(), b"P" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") || (key.as_slice() == b"AP" && !stamp) {
                 continue;
             }
             self.dict_entry(&mut out, key, value, 1)?;
@@ -203,7 +205,7 @@ impl<'a> FdfCopy<'a> {
     }
 }
 
-/// FDF with field values and/or comments, each with its appearance. Each comment is an
+/// FDF with field values and/or comments, a stamp with its appearance. Each comment is an
 /// indirect object of the FDF, so a reply's `/IRT` can point at its parent's object there
 /// (§12.7.8.3.1). Nested values are copied and renumbered, including shared or cyclic graphs.
 /// Source `/Page` and `/Pages` dictionaries become null at every copy depth.

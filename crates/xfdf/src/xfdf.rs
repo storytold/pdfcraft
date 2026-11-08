@@ -496,8 +496,9 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
                 }
             }
             // What the comment is meant as (/IT): typewriter text, a callout, a cloud, an arrow.
+            // Written under both spellings XFDF files use for it, `intent` and `IT`.
             if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
-                let _ = write!(attrs, " intent=\"{}\"", esc(&it));
+                let _ = write!(attrs, " intent=\"{0}\" IT=\"{0}\"", esc(&it));
             }
             if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
                 let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
@@ -902,12 +903,14 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
         );
     }
-    if let Some(it) = node.attribute("intent").filter(|it| !it.is_empty()) {
+    // The intent (/IT), spelt `intent` or `IT`.
+    let intent = node.attribute("intent").filter(|it| !it.is_empty()).or_else(|| node.attribute("IT").filter(|it| !it.is_empty()));
+    if let Some(it) = intent {
         d.set(b"IT".to_vec(), Object::name(it));
     }
     if let Some(cl) = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
         d.set(b"CL".to_vec(), arr(&cl));
-        d.set(b"IT".to_vec(), Object::name(node.attribute("intent").unwrap_or("FreeTextCallout")));
+        d.set(b"IT".to_vec(), Object::name(intent.unwrap_or("FreeTextCallout")));
         // A callout's /LE is one name, not the head/tail pair of a line.
         match node.attribute("head") {
             Some(h) => d.set(b"LE".to_vec(), Object::name(h)),
