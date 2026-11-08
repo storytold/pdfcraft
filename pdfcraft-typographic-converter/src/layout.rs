@@ -19,7 +19,7 @@ pub struct TextRun {
     pub is_italic: bool,
     pub script: ScriptType,
     pub has_leading_tab: bool,
-    pub tracking_delta: f32, // exact extra spacing in pt
+    pub tracking_delta: f32,          // exact extra spacing in pt
     pub bounds: (f32, f32, f32, f32), // (min_x, min_y, max_x, max_y)
 }
 
@@ -63,25 +63,13 @@ pub struct ExtractedPageData {
 
 impl From<(usize, f32, f32, Vec<RawGlyph>)> for ExtractedPageData {
     fn from((page_index, width, height, glyphs): (usize, f32, f32, Vec<RawGlyph>)) -> Self {
-        Self {
-            page_index,
-            width,
-            height,
-            glyphs,
-            images: Vec::new(),
-        }
+        Self { page_index, width, height, glyphs, images: Vec::new() }
     }
 }
 
 impl From<(usize, f32, f32, Vec<RawGlyph>, Vec<PageImage>)> for ExtractedPageData {
     fn from((page_index, width, height, glyphs, images): (usize, f32, f32, Vec<RawGlyph>, Vec<PageImage>)) -> Self {
-        Self {
-            page_index,
-            width,
-            height,
-            glyphs,
-            images,
-        }
+        Self { page_index, width, height, glyphs, images }
     }
 }
 
@@ -119,16 +107,23 @@ where
     for item in page_data {
         let p: ExtractedPageData = item.into();
         let lines = build_page_lines(p.glyphs);
-        pages.push(PageLayout {
-            page_index: p.page_index,
-            width: p.width,
-            height: p.height,
-            lines,
-            images: p.images,
-        });
+        pages.push(PageLayout { page_index: p.page_index, width: p.width, height: p.height, lines, images: p.images });
     }
 
     DocumentLayout { pages }
+}
+
+fn is_rtl_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0590}'..='\u{05FF}'
+        | '\u{0600}'..='\u{06FF}'
+        | '\u{0750}'..='\u{077F}'
+        | '\u{08A0}'..='\u{08FF}'
+        | '\u{FB1D}'..='\u{FB4F}'
+        | '\u{FB50}'..='\u{FDFF}'
+        | '\u{FE70}'..='\u{FEFF}'
+    )
 }
 
 /// Clusters glyphs on a single page into structured lines and runs.
@@ -140,18 +135,15 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
     // 1. Line Clustering:
     // Sort glyphs by origin_y descending (top-to-bottom in PDF coordinate space).
     let mut sorted_by_y = glyphs;
-    sorted_by_y.sort_by(|a, b| {
-        b.origin_y
-            .partial_cmp(&a.origin_y)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted_by_y.sort_by(|a, b| b.origin_y.partial_cmp(&a.origin_y).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Cluster glyphs into the same line if |glyph_a.origin_y - glyph_b.origin_y| <= 2.0 pt.
+    // Cluster glyphs into the same line if |cluster_baseline - glyph.origin_y| <= 2.0 pt.
+    // Validate against the first glyph's origin_y to avoid chaining drift across lines.
     let mut line_clusters: Vec<Vec<RawGlyph>> = Vec::new();
     for glyph in sorted_by_y {
         if let Some(current_cluster) = line_clusters.last_mut() {
-            let prev = current_cluster.last().unwrap();
-            if (prev.origin_y - glyph.origin_y).abs() <= 2.0 {
+            let base_y = current_cluster.first().map(|g| g.origin_y).unwrap_or(glyph.origin_y);
+            if (base_y - glyph.origin_y).abs() <= 2.0 {
                 current_cluster.push(glyph);
                 continue;
             }
@@ -173,29 +165,54 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
         let baseline_y = calculate_median(&origin_ys);
         let baseline_size = calculate_median(&font_sizes);
 
-        // Sort glyphs left-to-right (ascending by origin_x, tie-breaking by left bounds)
-        let mut line_glyphs = cluster;
-        line_glyphs.sort_by(|a, b| {
-            a.origin_x
-                .partial_cmp(&b.origin_x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a.bounds
-                        .0
-                        .partial_cmp(&b.bounds.0)
+        // Partition cluster into directional segments to preserve Hebrew/RTL logical order
+        let mut segments: Vec<(bool, Vec<RawGlyph>)> = Vec::new();
+        for g in cluster {
+            let is_rtl = is_rtl_char(g.char_code);
+            if let Some(last_seg) = segments.last_mut() {
+                if last_seg.0 == is_rtl {
+                    last_seg.1.push(g);
+                    continue;
+                }
+            }
+            segments.push((is_rtl, vec![g]));
+        }
+
+        for (is_rtl, seg_glyphs) in &mut segments {
+            if *is_rtl {
+                if seg_glyphs.len() > 1 {
+                    let first_x = seg_glyphs.first().map(|g| g.origin_x).unwrap_or(0.0);
+                    let last_x = seg_glyphs.last().map(|g| g.origin_x).unwrap_or(0.0);
+                    if first_x < last_x {
+                        seg_glyphs.reverse();
+                    }
+                }
+            } else {
+                seg_glyphs.sort_by(|a, b| {
+                    a.origin_x
+                        .partial_cmp(&b.origin_x)
                         .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                        .then_with(|| a.bounds.0.partial_cmp(&b.bounds.0).unwrap_or(std::cmp::Ordering::Equal))
+                });
+            }
+        }
+
+        segments.sort_by(|(_, a), (_, b)| {
+            let min_a = a.iter().map(|g| g.bounds.0.min(g.origin_x)).fold(f32::INFINITY, f32::min);
+            let min_b = b.iter().map(|g| g.bounds.0.min(g.origin_x)).fold(f32::INFINITY, f32::min);
+            min_a.partial_cmp(&min_b).unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        let mut line_glyphs = Vec::new();
+        for (_, seg_glyphs) in segments {
+            line_glyphs.extend(seg_glyphs);
+        }
 
         // Determine script type for each glyph
         let glyph_scripts: Vec<ScriptType> = line_glyphs
             .iter()
             .map(|g| {
-                let ratio = if baseline_size > 0.0 {
-                    g.font_size / baseline_size
-                } else {
-                    1.0
-                };
+                let ratio = if baseline_size > 0.0 { g.font_size / baseline_size } else { 1.0 };
                 if ratio < 0.78 && g.origin_y > baseline_y + 1.0 {
                     ScriptType::Superscript
                 } else if ratio < 0.78 && g.origin_y < baseline_y - 0.5 {
@@ -213,36 +230,15 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
         }
 
         // Calculate line bounding box enclosing all runs
-        let line_min_x = runs
-            .iter()
-            .map(|r| r.bounds.0)
-            .fold(f32::INFINITY, f32::min);
-        let line_min_y = runs
-            .iter()
-            .map(|r| r.bounds.1)
-            .fold(f32::INFINITY, f32::min);
-        let line_max_x = runs
-            .iter()
-            .map(|r| r.bounds.2)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let line_max_y = runs
-            .iter()
-            .map(|r| r.bounds.3)
-            .fold(f32::NEG_INFINITY, f32::max);
+        let line_min_x = runs.iter().map(|r| r.bounds.0).fold(f32::INFINITY, f32::min);
+        let line_min_y = runs.iter().map(|r| r.bounds.1).fold(f32::INFINITY, f32::min);
+        let line_max_x = runs.iter().map(|r| r.bounds.2).fold(f32::NEG_INFINITY, f32::max);
+        let line_max_y = runs.iter().map(|r| r.bounds.3).fold(f32::NEG_INFINITY, f32::max);
 
         let line_bounds = (line_min_x, line_min_y, line_max_x, line_max_y);
-        let line_height = if line_max_y > line_min_y {
-            (line_max_y - line_min_y).max(baseline_size)
-        } else {
-            baseline_size
-        };
+        let line_height = if line_max_y > line_min_y { (line_max_y - line_min_y).max(baseline_size) } else { baseline_size };
 
-        lines.push(TextLine {
-            baseline_y,
-            runs,
-            line_height,
-            bounds: line_bounds,
-        });
+        lines.push(TextLine { baseline_y, runs, line_height, bounds: line_bounds });
     }
 
     // Sort lines top-to-bottom (descending by baseline Y, tie-breaking left-to-right)
@@ -250,12 +246,7 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
         b.baseline_y
             .partial_cmp(&a.baseline_y)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                a.bounds
-                    .0
-                    .partial_cmp(&b.bounds.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .then_with(|| a.bounds.0.partial_cmp(&b.bounds.0).unwrap_or(std::cmp::Ordering::Equal))
     });
 
     lines
@@ -279,45 +270,19 @@ fn flush_run(
         return;
     }
 
-    let tracking_delta = if inter_char_gaps.is_empty() {
-        0.0
-    } else {
-        inter_char_gaps.iter().sum::<f32>() / inter_char_gaps.len() as f32
-    };
+    let tracking_delta = if inter_char_gaps.is_empty() { 0.0 } else { inter_char_gaps.iter().sum::<f32>() / inter_char_gaps.len() as f32 };
 
     let bounds = if glyph_bounds.is_empty() {
         (0.0, 0.0, 0.0, 0.0)
     } else {
-        let min_x = glyph_bounds
-            .iter()
-            .map(|b| b.0)
-            .fold(f32::INFINITY, f32::min);
-        let min_y = glyph_bounds
-            .iter()
-            .map(|b| b.1)
-            .fold(f32::INFINITY, f32::min);
-        let max_x = glyph_bounds
-            .iter()
-            .map(|b| b.2)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let max_y = glyph_bounds
-            .iter()
-            .map(|b| b.3)
-            .fold(f32::NEG_INFINITY, f32::max);
+        let min_x = glyph_bounds.iter().map(|b| b.0).fold(f32::INFINITY, f32::min);
+        let min_y = glyph_bounds.iter().map(|b| b.1).fold(f32::INFINITY, f32::min);
+        let max_x = glyph_bounds.iter().map(|b| b.2).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = glyph_bounds.iter().map(|b| b.3).fold(f32::NEG_INFINITY, f32::max);
         (min_x, min_y, max_x, max_y)
     };
 
-    runs.push(TextRun {
-        text,
-        font_name: font_name.to_string(),
-        font_size,
-        is_bold,
-        is_italic,
-        script,
-        has_leading_tab,
-        tracking_delta,
-        bounds,
-    });
+    runs.push(TextRun { text, font_name: font_name.to_string(), font_size, is_bold, is_italic, script, has_leading_tab, tracking_delta, bounds });
 }
 
 /// Groups sorted line glyphs into `TextRun`s based on style changes, word spaces, and tabs.

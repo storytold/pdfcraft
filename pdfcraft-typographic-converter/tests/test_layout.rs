@@ -1,5 +1,5 @@
-use pdf_typographic_converter::layout::{build_layout, ScriptType};
 use pdf_typographic_converter::extract::RawGlyph;
+use pdf_typographic_converter::layout::{build_layout, ScriptType};
 
 #[allow(clippy::too_many_arguments)]
 fn make_glyph(
@@ -16,16 +16,7 @@ fn make_glyph(
     // top is baseline + 0.8 * font_size, bottom is baseline - 0.2 * font_size
     let top = origin_y + font_size * 0.8;
     let bottom = origin_y - font_size * 0.2;
-    RawGlyph {
-        char_code,
-        font_name: font_name.to_string(),
-        font_size,
-        is_bold,
-        is_italic,
-        bounds: (left, top, right, bottom),
-        origin_x,
-        origin_y,
-    }
+    RawGlyph { char_code, font_name: font_name.to_string(), font_size, is_bold, is_italic, bounds: (left, top, right, bottom), origin_x, origin_y }
 }
 
 #[test]
@@ -176,4 +167,39 @@ fn test_overlapping_accents_kerning() {
     assert_eq!(line.runs.len(), 1);
     assert_eq!(line.runs[0].text, "e´s");
     assert!(!line.runs[0].text.contains(' '));
+}
+
+#[test]
+fn test_hebrew_rtl_logical_ordering() {
+    // Hebrew word: 'ש' (Shin), 'ל' (Lamed), 'ו' (Vav), 'ם' (Mem)
+    // Extracted in logical order from right to left (decreasing x)
+    let glyphs = vec![
+        make_glyph('ש', "David", 12.0, false, false, 80.0, 90.0, 80.0, 500.0),
+        make_glyph('ל', "David", 12.0, false, false, 70.0, 80.0, 70.0, 500.0),
+        make_glyph('ו', "David", 12.0, false, false, 60.0, 70.0, 60.0, 500.0),
+        make_glyph('ם', "David", 12.0, false, false, 50.0, 60.0, 50.0, 500.0),
+    ];
+
+    let layout = build_layout(vec![(0, 595.0, 842.0, glyphs)]);
+    let line = &layout.pages[0].lines[0];
+    assert_eq!(line.runs.len(), 1);
+    assert_eq!(line.runs[0].text, "שלום");
+}
+
+#[test]
+fn test_baseline_clustering_no_chain_drift() {
+    // 5 glyphs each 1.5 pt lower than the previous one:
+    // y=500.0, y=498.5, y=497.0, y=495.5, y=494.0.
+    // If pairwise chaining occurred, they would all join 1 cluster.
+    // With stable baseline clustering anchored at 500.0, glyphs beyond 2.0pt drift (497.0, etc.) split!
+    let glyphs = vec![
+        make_glyph('A', "Helvetica", 12.0, false, false, 50.0, 60.0, 50.0, 500.0),
+        make_glyph('B', "Helvetica", 12.0, false, false, 60.0, 70.0, 60.0, 498.5),
+        make_glyph('C', "Helvetica", 12.0, false, false, 70.0, 80.0, 70.0, 497.0),
+        make_glyph('D', "Helvetica", 12.0, false, false, 80.0, 90.0, 80.0, 495.5),
+        make_glyph('E', "Helvetica", 12.0, false, false, 90.0, 100.0, 90.0, 494.0),
+    ];
+
+    let layout = build_layout(vec![(0, 595.0, 842.0, glyphs)]);
+    assert!(layout.pages[0].lines.len() >= 2, "Chained glyphs must split across lines when drifting beyond tolerance");
 }

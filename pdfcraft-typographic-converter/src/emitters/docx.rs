@@ -84,12 +84,9 @@ pub fn export_docx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
         }
     }
 
-    let file = File::create(output_path)
-        .with_context(|| format!("Failed to create DOCX output file at {}", output_path.display()))?;
+    let file = File::create(output_path).with_context(|| format!("Failed to create DOCX output file at {}", output_path.display()))?;
 
-    docx.build()
-        .pack(file)
-        .with_context(|| format!("Failed to pack DOCX document to {}", output_path.display()))?;
+    docx.build().pack(file).with_context(|| format!("Failed to pack DOCX document to {}", output_path.display()))?;
 
     Ok(())
 }

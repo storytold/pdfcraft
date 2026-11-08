@@ -74,6 +74,7 @@ impl BarcodeHudState {
 
     /// Populate or update scanned codes for a page with explicit open control.
     pub fn update_codes_conditional(&mut self, codes: Vec<ScannedCode>, keep_open: bool) {
+        let prev_payload = self.active_code().map(|c| c.text.clone());
         let target_rect = self.target_rect.take().or_else(|| self.active_code().map(|c| c.rect));
         self.scanned_codes = codes;
         if let Some(target) = target_rect {
@@ -84,6 +85,13 @@ impl BarcodeHudState {
             }
         } else if self.active_index >= self.scanned_codes.len() {
             self.active_index = 0;
+        }
+        let new_payload = self.active_code().map(|c| c.text.clone());
+        if prev_payload != new_payload {
+            self.edit_buffer = None;
+            if let Some(active) = self.active_code() {
+                self.reembed_kind = Some(active.kind);
+            }
         }
         self.open = keep_open;
         self.panel_open = keep_open;
@@ -185,7 +193,17 @@ fn safe_rect_and_pixels(
     }
 
     // Exact normalized safe rect without inflation for re-embedding new code
-    let new_image_rect = [min_x, min_y, max_x, max_y];
+    // Center a square inside original rect for QR code kind, preserving rectangular footprint for 1D barcodes.
+    let new_image_rect = if kind == pdfcraft_engine::barcode_scan::CodeKind::QrCode {
+        let w = (max_x - min_x).abs();
+        let h = (max_y - min_y).abs();
+        let side = w.min(h);
+        let cx = (min_x + max_x) / 2.0;
+        let cy = (min_y + max_y) / 2.0;
+        [cx - side / 2.0, cy - side / 2.0, cx + side / 2.0, cy + side / 2.0]
+    } else {
+        [min_x, min_y, max_x, max_y]
+    };
 
     // Inflate whiteout_rect by 3 PDF points on all sides to completely cover anti-aliased edges
     let min_x = (min_x - 3.0).max(0.0);
@@ -247,8 +265,10 @@ fn render_floating_menu(
         && let Some(xf) = page_xf
     {
         let code_rect = xf.user_rect(info, current_page, active.rect.map(|v| v as f32));
+        let min_x = viewport.left() + 10.0;
+        let max_x = (viewport.right() - 150.0).max(min_x);
         let menu_pos = pos2(
-            (code_rect.center().x - 70.0).clamp(viewport.left() + 10.0, viewport.right() - 150.0),
+            (code_rect.center().x - 70.0).clamp(min_x, max_x),
             if code_rect.bottom() + 38.0 <= viewport.bottom() {
                 code_rect.bottom() + 4.0
             } else {
@@ -271,9 +291,7 @@ fn render_floating_menu(
                             if can_modify
                                 && ui
                                     .add(egui::Button::new(
-                                        egui::RichText::new("🗑 Delete")
-                                            .font(theme::medium(11.0))
-                                            .color(Color32::from_rgb(0xEF, 0x44, 0x44)),
+                                        egui::RichText::new("🗑 Delete").font(theme::medium(11.0)).color(Color32::from_rgb(0xEF, 0x44, 0x44)),
                                     ))
                                     .on_hover_text("Delete barcode and whiteout region")
                                     .clicked()
@@ -282,9 +300,7 @@ fn render_floating_menu(
                             }
                             if ui
                                 .add(egui::Button::new(
-                                    egui::RichText::new("⬇ Download")
-                                        .font(theme::medium(11.0))
-                                        .color(Color32::from_rgb(0x60, 0xA5, 0xFA)),
+                                    egui::RichText::new("⬇ Download").font(theme::medium(11.0)).color(Color32::from_rgb(0x60, 0xA5, 0xFA)),
                                 ))
                                 .on_hover_text("Export barcode PNG to Downloads folder")
                                 .clicked()
@@ -555,9 +571,7 @@ impl BarcodeScannerHud {
 
                                         // Payload View or Edit Mode
                                         if let Some(buf) = &mut state.edit_buffer {
-                                            ui.label(
-                                                egui::RichText::new("EDIT PAYLOAD & SYMBOLOGY").font(theme::semibold(9.5)).color(text_muted),
-                                            );
+                                            ui.label(egui::RichText::new("EDIT PAYLOAD & SYMBOLOGY").font(theme::semibold(9.5)).color(text_muted));
                                             ui.add_space(3.0);
                                             ui.add(egui::TextEdit::multiline(buf).desired_width(ui.available_width()).desired_rows(3));
                                             ui.add_space(4.0);
@@ -570,10 +584,26 @@ impl BarcodeScannerHud {
                                                     .selected_text(selected_kind.label())
                                                     .width(180.0)
                                                     .show_ui(ui, |ui| {
-                                                        ui.selectable_value(&mut selected_kind, pdfcraft_engine::barcode_scan::CodeKind::QrCode, "QR Code");
-                                                        ui.selectable_value(&mut selected_kind, pdfcraft_engine::barcode_scan::CodeKind::Code39, "Code 39 Barcode (139)");
-                                                        ui.selectable_value(&mut selected_kind, pdfcraft_engine::barcode_scan::CodeKind::Code128, "Code 128 Barcode");
-                                                        ui.selectable_value(&mut selected_kind, pdfcraft_engine::barcode_scan::CodeKind::Ean13, "EAN-13 Barcode");
+                                                        ui.selectable_value(
+                                                            &mut selected_kind,
+                                                            pdfcraft_engine::barcode_scan::CodeKind::QrCode,
+                                                            "QR Code",
+                                                        );
+                                                        ui.selectable_value(
+                                                            &mut selected_kind,
+                                                            pdfcraft_engine::barcode_scan::CodeKind::Code39,
+                                                            "Code 39 Barcode (139)",
+                                                        );
+                                                        ui.selectable_value(
+                                                            &mut selected_kind,
+                                                            pdfcraft_engine::barcode_scan::CodeKind::Code128,
+                                                            "Code 128 Barcode",
+                                                        );
+                                                        ui.selectable_value(
+                                                            &mut selected_kind,
+                                                            pdfcraft_engine::barcode_scan::CodeKind::Ean13,
+                                                            "EAN-13 Barcode",
+                                                        );
                                                     });
                                             });
                                             state.reembed_kind = Some(selected_kind);
@@ -645,10 +675,7 @@ impl BarcodeScannerHud {
                                 _ => "Enter code payload...",
                             };
                             ui.add(
-                                egui::TextEdit::multiline(&mut state.qr_input)
-                                    .desired_width(ui.available_width())
-                                    .desired_rows(2)
-                                    .hint_text(hint),
+                                egui::TextEdit::multiline(&mut state.qr_input).desired_width(ui.available_width()).desired_rows(2).hint_text(hint),
                             );
                             ui.add_space(6.0);
                             let can_gen = can_modify && !state.qr_input.trim().is_empty();
@@ -668,8 +695,7 @@ impl BarcodeScannerHud {
                                 ui.label(egui::RichText::new(msg).font(theme::medium(11.0)).color(emerald_green));
                             }
                         });
-                },
-            );
+                });
         }
 
         if trigger_rescan {
@@ -687,8 +713,7 @@ impl BarcodeScannerHud {
             state.reembed_kind = Some(kind);
         }
         if let Some((active, buf, kind)) = apply_code {
-            let (whiteout_rect, new_image_rect, pw, ph) =
-                safe_rect_and_pixels(active.rect, active.pixel_size, kind, Some(&active.text), Some(&buf));
+            let (whiteout_rect, new_image_rect, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, kind, Some(&active.text), Some(&buf));
             let (edit_whiteout, edit_image) =
                 (display_rect(whiteout_rect, Some(info), current_page), display_rect(new_image_rect, Some(info), current_page));
 
@@ -699,10 +724,7 @@ impl BarcodeScannerHud {
                         pending_edit = Some(Edit::EditPageImage {
                             page: current_page,
                             index: image_idx,
-                            change: pdfcraft_engine::ImageEdit::Replace {
-                                name: "UpdatedCode.png".into(),
-                                bytes: Arc::new(png_bytes),
-                            },
+                            change: pdfcraft_engine::ImageEdit::Replace { name: "UpdatedCode.png".into(), bytes: Arc::new(png_bytes) },
                         });
                     } else {
                         // Two-step overlay: first whiteout the old code, then place new code over active.rect
@@ -747,11 +769,7 @@ impl BarcodeScannerHud {
         if let Some(active) = delete_code {
             if let Some(image_idx) = active.image_index {
                 // Perform actual removal of the embedded image object so no data remains.
-                pending_edit = Some(Edit::EditPageImage {
-                    page: current_page,
-                    index: image_idx,
-                    change: pdfcraft_engine::ImageEdit::Delete,
-                });
+                pending_edit = Some(Edit::EditPageImage { page: current_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete });
                 state.target_rect = None;
                 state.last_scanned_page = None;
                 state.edit_buffer = None;
@@ -853,8 +871,7 @@ impl BarcodeScannerHud {
                         _ => "Barcode.png",
                     };
 
-                    pending_edit =
-                        Some(Edit::AddImage { page: current_page, rect: Some(rect), name: filename.into(), bytes: Arc::new(png_bytes) });
+                    pending_edit = Some(Edit::AddImage { page: current_page, rect: Some(rect), name: filename.into(), bytes: Arc::new(png_bytes) });
                     state.last_scanned_page = None;
                     state.show_toast(format!("{} placed on page!", kind.label()), now);
                 }
@@ -971,8 +988,7 @@ mod tests {
     fn test_safe_rect_and_pixels_payload_expansion() {
         let rect = [10.0, 20.0, 110.0, 50.0];
         let pixel_size = [100, 30];
-        let (w_rect, img_rect, pw, _ph) =
-            safe_rect_and_pixels(rect, pixel_size, CodeKind::Code128, Some("1234"), Some("12345"));
+        let (w_rect, img_rect, pw, _ph) = safe_rect_and_pixels(rect, pixel_size, CodeKind::Code128, Some("1234"), Some("12345"));
         assert_eq!(img_rect[0], 10.0, "left must stay anchored");
         assert!(img_rect[2] > 110.0, "right must expand to accommodate 5th digit");
         assert!(pw > 100, "pixel width must scale to keep module thickness");

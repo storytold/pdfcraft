@@ -526,7 +526,9 @@ fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
     let mut edits: Vec<Edit> = targets
         .into_iter()
         .filter_map(|t| match t.kind {
-            ObjectKind::Text => Some(Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() }),
+            ObjectKind::Text => {
+                Some(Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() })
+            }
             ObjectKind::Image => Some(Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete }),
             ObjectKind::Added => Some(Edit::DeleteContent { page, index: t.index }),
             ObjectKind::VectorLine => None,

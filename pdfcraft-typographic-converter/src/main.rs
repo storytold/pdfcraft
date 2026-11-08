@@ -124,11 +124,7 @@ fn main() {
             }
             arg => {
                 if let Some(existing) = &pdf_path {
-                    eprintln!(
-                        "Error: Multiple file paths specified ('{}' and '{}').",
-                        existing.display(),
-                        arg
-                    );
+                    eprintln!("Error: Multiple file paths specified ('{}' and '{}').", existing.display(), arg);
                     process::exit(1);
                 } else {
                     pdf_path = Some(PathBuf::from(arg));
@@ -155,19 +151,12 @@ fn main() {
     // Ensure output directory exists
     if !output_dir.exists() {
         if let Err(err) = fs::create_dir_all(&output_dir) {
-            eprintln!(
-                "Error: Failed to create output directory '{}': {:#}",
-                output_dir.display(),
-                err
-            );
+            eprintln!("Error: Failed to create output directory '{}': {:#}", output_dir.display(), err);
             process::exit(1);
         }
     }
 
-    let file_stem = input_file
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "document".to_string());
+    let file_stem = input_file.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "document".to_string());
 
     println!("Converting: {}", input_file.display());
 
@@ -185,11 +174,7 @@ fn main() {
     let page_glyphs = match extract::extract_pages_with_pdfium(&pdfium, &input_file) {
         Ok(pages) => pages,
         Err(err) => {
-            eprintln!(
-                "Error extracting glyphs from '{}': {:#}",
-                input_file.display(),
-                err
-            );
+            eprintln!("Error extracting glyphs from '{}': {:#}", input_file.display(), err);
             process::exit(1);
         }
     };
@@ -205,28 +190,13 @@ fn main() {
     // Calculate layout statistics
     let total_pages = layout.pages.len();
     let total_lines: usize = layout.pages.iter().map(|p| p.lines.len()).sum();
-    let total_runs: usize = layout
-        .pages
-        .iter()
-        .flat_map(|p| &p.lines)
-        .map(|l| l.runs.len())
-        .sum();
+    let total_runs: usize = layout.pages.iter().flat_map(|p| &p.lines).map(|l| l.runs.len()).sum();
 
-    let total_superscripts: usize = layout
-        .pages
-        .iter()
-        .flat_map(|p| &p.lines)
-        .flat_map(|l| &l.runs)
-        .filter(|r| r.script == ScriptType::Superscript)
-        .count();
+    let total_superscripts: usize =
+        layout.pages.iter().flat_map(|p| &p.lines).flat_map(|l| &l.runs).filter(|r| r.script == ScriptType::Superscript).count();
 
-    let total_subscripts: usize = layout
-        .pages
-        .iter()
-        .flat_map(|p| &p.lines)
-        .flat_map(|l| &l.runs)
-        .filter(|r| r.script == ScriptType::Subscript)
-        .count();
+    let total_subscripts: usize =
+        layout.pages.iter().flat_map(|p| &p.lines).flat_map(|l| &l.runs).filter(|r| r.script == ScriptType::Subscript).count();
 
     // Save layout_debug.json
     let debug_path = output_dir.join(format!("{}_layout_debug.json", file_stem));

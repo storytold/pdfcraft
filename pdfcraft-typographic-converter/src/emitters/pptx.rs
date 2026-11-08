@@ -7,10 +7,20 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
-/// Escapes special XML characters.
+fn is_xml_valid_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}' | '\u{000A}' | '\u{000D}' | '\u{0020}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+    )
+}
+
+/// Escapes special XML characters and discards XML-forbidden control characters.
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
+        if !is_xml_valid_char(c) {
+            continue;
+        }
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
@@ -25,8 +35,7 @@ fn escape_xml(s: &str) -> String {
 
 /// Exports a `DocumentLayout` to a Microsoft PowerPoint presentation (.pptx).
 pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
-    let file = File::create(output_path)
-        .with_context(|| format!("Failed to create PPTX output file at {}", output_path.display()))?;
+    let file = File::create(output_path).with_context(|| format!("Failed to create PPTX output file at {}", output_path.display()))?;
 
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -40,6 +49,8 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
 "#,
     );
@@ -86,12 +97,8 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
 
     // Determine presentation dimensions in EMUs (1 pt = 12700 EMUs)
     let first_page = doc.pages.first();
-    let width_emu = first_page
-        .map(|p| (p.width * 12700.0).round() as i64)
-        .unwrap_or(9144000);
-    let height_emu = first_page
-        .map(|p| (p.height * 12700.0).round() as i64)
-        .unwrap_or(6858000);
+    let width_emu = first_page.map(|p| (p.width * 12700.0).round() as i64).unwrap_or(9144000);
+    let height_emu = first_page.map(|p| (p.height * 12700.0).round() as i64).unwrap_or(6858000);
 
     // 4. ppt/presentation.xml
     let mut pres_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -122,13 +129,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     // 5. ppt/slides/slide{N}.xml
     let pages_to_emit: Vec<_> = if doc.pages.is_empty() {
         // Fallback for empty document layout: emit a single blank slide
-        vec![crate::layout::PageLayout {
-            page_index: 0,
-            width: 792.0,
-            height: 612.0,
-            lines: Vec::new(),
-            images: Vec::new(),
-        }]
+        vec![crate::layout::PageLayout { page_index: 0, width: 792.0, height: 612.0, lines: Vec::new(), images: Vec::new() }]
     } else {
         doc.pages.clone()
     };
@@ -145,7 +146,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
       <p:nvGrpSpPr>
         <p:cNvPr id="1" name=""/>
         <p:cNvGrpSpPr/>
-        <p:grpSpPr/>
+        <p:nvPr/>
       </p:nvGrpSpPr>
       <p:grpSpPr>
         <a:xfrm>
@@ -165,12 +166,8 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
             let x = (line.bounds.0 * 12700.0).round() as i64;
             // Flip PDF bottom-up Y-axis to top-down
             let y = ((page.height - line.bounds.3) * 12700.0).round() as i64;
-            let cx = ((line.bounds.2 - line.bounds.0) * 12700.0)
-                .max(100000.0)
-                .round() as i64;
-            let cy = ((line.bounds.3 - line.bounds.1) * 12700.0)
-                .max(100000.0)
-                .round() as i64;
+            let cx = ((line.bounds.2 - line.bounds.0) * 12700.0).max(100000.0).round() as i64;
+            let cy = ((line.bounds.3 - line.bounds.1) * 12700.0).max(100000.0).round() as i64;
 
             slide_xml.push_str(&format!(
                 r#"      <p:sp>
@@ -245,10 +242,12 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
             );
 
             for (img_idx, img) in page.images.iter().enumerate() {
-                let img_filename = format!("image_{}_{}.png", slide_num, img_idx + 1);
+                let is_jpeg = img.bytes.starts_with(&[0xFF, 0xD8]);
+                let ext = if is_jpeg { "jpeg" } else { "png" };
+                let img_filename = format!("image_{}_{}.{}", slide_num, img_idx + 1, ext);
                 let media_path = format!("ppt/media/{}", img_filename);
 
-                // Write PNG image bytes to archive
+                // Write image bytes to archive
                 zip.start_file(&media_path, options)?;
                 zip.write_all(&img.bytes)?;
 
@@ -262,12 +261,8 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
                 let shape_id = page.lines.len() + 2 + img_idx;
                 let x = (img.bounds.0 * 12700.0).round() as i64;
                 let y = ((page.height - img.bounds.3) * 12700.0).round() as i64;
-                let cx = ((img.bounds.2 - img.bounds.0) * 12700.0)
-                    .max(100000.0)
-                    .round() as i64;
-                let cy = ((img.bounds.3 - img.bounds.1) * 12700.0)
-                    .max(100000.0)
-                    .round() as i64;
+                let cx = ((img.bounds.2 - img.bounds.0) * 12700.0).max(100000.0).round() as i64;
+                let cy = ((img.bounds.3 - img.bounds.1) * 12700.0).max(100000.0).round() as i64;
 
                 slide_xml.push_str(&format!(
                     r#"      <p:pic>
@@ -314,8 +309,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
         zip.write_all(slide_xml.as_bytes())?;
     }
 
-    zip.finish()
-        .with_context(|| format!("Failed to finalize PPTX zip archive at {}", output_path.display()))?;
+    zip.finish().with_context(|| format!("Failed to finalize PPTX zip archive at {}", output_path.display()))?;
 
     Ok(())
 }

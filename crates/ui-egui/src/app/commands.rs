@@ -130,6 +130,7 @@ impl PdfCraftApp {
     /// applied, as clicking away from it does; left open, its page would keep showing the
     /// paragraph's text removed with no editor over it.
     pub(crate) fn put_down_edit_text(&mut self) {
+        let prev_tool = self.quick_tool;
         self.quick_tool = QuickTool::Select;
         if let Some(i) = self.active
             && let Some(view) = self.views.get_mut(i)
@@ -137,8 +138,14 @@ impl PdfCraftApp {
         {
             let reflow = view.reflow_paragraphs;
             let blocks = view.edit_lines.get(&ed.page).map(|(_, b)| b.as_slice());
-            if let Some(edit) = edit_text_ui::finished_edit_with_reflow(ed, reflow, blocks) {
-                self.apply_edit(edit);
+            let backup_ed = ed.clone();
+            if let Some(edit) = edit_text_ui::finished_edit_with_reflow(ed, reflow, blocks)
+                && !self.apply_edit(edit)
+            {
+                if let Some(view) = self.views.get_mut(i) {
+                    view.line_editor = Some(backup_ed);
+                }
+                self.quick_tool = prev_tool;
             }
         }
     }

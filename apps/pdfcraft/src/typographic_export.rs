@@ -29,16 +29,12 @@ impl ExportFormat {
 }
 
 /// Convert a PDF file at `pdf_path` into the requested format and write to `output_path`.
-pub fn export_pdf<P: AsRef<Path>, Q: AsRef<Path>>(
-    pdf_path: P,
-    output_path: Q,
-    format: ExportFormat,
-) -> Result<(), String> {
+pub fn export_pdf<P: AsRef<Path>, Q: AsRef<Path>>(pdf_path: P, output_path: Q, format: ExportFormat) -> Result<(), String> {
     let pdf_path_ref = pdf_path.as_ref();
     let output_path_ref = output_path.as_ref();
 
-    let page_data = extract::extract_pages_full(pdf_path_ref)
-        .map_err(|e| format!("Failed to extract pages from PDF at {}: {e:#}", pdf_path_ref.display()))?;
+    let page_data =
+        extract::extract_pages_full(pdf_path_ref).map_err(|e| format!("Failed to extract pages from PDF at {}: {e:#}", pdf_path_ref.display()))?;
 
     let document_layout = layout::build_layout(page_data);
 
@@ -53,23 +49,15 @@ pub fn export_pdf<P: AsRef<Path>, Q: AsRef<Path>>(
 }
 
 /// Convert PDF bytes in memory into the requested format and write to `output_path`.
-pub fn export_pdf_bytes<Q: AsRef<Path>>(
-    pdf_bytes: &[u8],
-    output_path: Q,
-    format: ExportFormat,
-) -> Result<(), String> {
+pub fn export_pdf_bytes<Q: AsRef<Path>>(pdf_bytes: &[u8], output_path: Q, format: ExportFormat) -> Result<(), String> {
     let temp_dir = std::env::temp_dir();
     let temp_file_path = temp_dir.join(format!(
         "pdfcraft_export_{}_{}.pdf",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
     ));
 
-    std::fs::write(&temp_file_path, pdf_bytes)
-        .map_err(|e| format!("Failed to write temporary PDF to {}: {e}", temp_file_path.display()))?;
+    std::fs::write(&temp_file_path, pdf_bytes).map_err(|e| format!("Failed to write temporary PDF to {}: {e}", temp_file_path.display()))?;
 
     let result = export_pdf(&temp_file_path, output_path, format);
     let _ = std::fs::remove_file(&temp_file_path);
@@ -95,4 +83,3 @@ mod tests {
         assert!(res.is_err(), "exporting non-existent PDF should return Err");
     }
 }
-

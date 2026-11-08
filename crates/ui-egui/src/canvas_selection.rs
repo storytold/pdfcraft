@@ -286,6 +286,9 @@ impl SelectionLayoutEngine {
     ///
     /// Returns the engine `Edit` command to execute, clearing the selection on dispatch.
     pub fn handle_delete_key(state: &mut SelectionState) -> Option<Edit> {
+        if state.selected.as_ref()?.kind == SelectableKind::VectorLine {
+            return None;
+        }
         let el = state.selected.take()?;
         match el.kind {
             SelectableKind::TextLine => {
@@ -427,34 +430,20 @@ impl SelectionLayoutEngine {
                 match sel.kind {
                     SelectableKind::TextBlock => {
                         let new_w = (sel.user_rect[2] - sel.user_rect[0]).max(10.0);
-                        let mut edits = Vec::new();
-                        if offset[0].abs() > 0.001 || offset[1].abs() > 0.001 {
-                            edits.push(Edit::MoveObjects {
-                                page: sel.page,
-                                objects: vec![pdfcraft_engine::ObjectTarget {
-                                    kind: pdfcraft_engine::ObjectKind::Text,
-                                    index: sel.index,
-                                }],
-                                offset,
-                            });
-                        }
+                        let offset = if offset[0].abs() > 0.001 || offset[1].abs() > 0.001 { Some(offset) } else { None };
                         let text = if let Some(ed) = line_editor.as_deref()
-                            && ed.page == sel.page && ed.block == sel.index
+                            && ed.page == sel.page
+                            && ed.block == sel.index
                         {
                             ed.text.clone()
                         } else {
                             sel.text.clone().unwrap_or_default()
                         };
-                        edits.push(Edit::EditTextBlock {
+                        pending_edit = Some(Edit::EditTextBlock {
                             page: sel.page,
                             block: sel.index,
                             text,
-                            style: pdfcraft_engine::BlockStyle { width: Some(new_w), ..Default::default() },
-                        });
-                        pending_edit = Some(if edits.len() == 1 {
-                            edits.remove(0)
-                        } else {
-                            Edit::Batch { label: "Resize text box".into(), edits }
+                            style: pdfcraft_engine::BlockStyle { width: Some(new_w), offset, ..Default::default() },
                         });
                     }
                     SelectableKind::Image => {
@@ -462,7 +451,8 @@ impl SelectionLayoutEngine {
                     }
                     SelectableKind::TextLine => {
                         let text = if let Some(ed) = line_editor.as_deref()
-                            && ed.page == sel.page && ed.block == sel.index
+                            && ed.page == sel.page
+                            && ed.block == sel.index
                         {
                             ed.text.clone()
                         } else {
@@ -649,14 +639,20 @@ impl FloatingContextMenu {
                         .fill(t.card)
                         .stroke(Stroke::new(1.0, t.border))
                         .corner_radius(CornerRadius::same(8))
-                        .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }) })
+                        .shadow(egui::Shadow {
+                            offset: [0, 4],
+                            blur: 14,
+                            spread: 0,
+                            color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }),
+                        })
                         .inner_margin(egui::Margin::symmetric(6, 4))
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             ui.horizontal(|ui| {
                                 // 1. Color Swatch & Quick Palette
                                 let cur_color = view.line_properties.color;
-                                let color_32 = Color32::from_rgb((cur_color[0] * 255.0) as u8, (cur_color[1] * 255.0) as u8, (cur_color[2] * 255.0) as u8);
+                                let color_32 =
+                                    Color32::from_rgb((cur_color[0] * 255.0) as u8, (cur_color[1] * 255.0) as u8, (cur_color[2] * 255.0) as u8);
                                 let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
                                 ui.painter().rect_filled(rect, 4.0, color_32);
                                 ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
@@ -675,7 +671,12 @@ impl FloatingContextMenu {
                                             let col = Color32::from_rgb((rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8);
                                             let (cr, cresp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
                                             ui.painter().rect_filled(cr, 3.0, col);
-                                            ui.painter().rect_stroke(cr, CornerRadius::same(3), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                                            ui.painter().rect_stroke(
+                                                cr,
+                                                CornerRadius::same(3),
+                                                Stroke::new(1.0, t.border),
+                                                egui::StrokeKind::Outside,
+                                            );
                                             if cresp.on_hover_text(name).clicked() {
                                                 action = Some(FloatingMenuAction::SetStrokeColor(rgb));
                                                 ui.close();
@@ -701,16 +702,13 @@ impl FloatingContextMenu {
                                 // 3. Dash Type (Solid, Dotted, Dashed)
                                 let dash_names = ["Solid ──", "Dotted ··", "Dashed --", "DashDot -·-"];
                                 let cur_dash = dash_names.get(view.line_properties.dash_idx).copied().unwrap_or(dash_names[0]);
-                                craft_ui::ComboBox::from_id_salt("floating_line_dash")
-                                    .selected_text(cur_dash)
-                                    .width(72.0)
-                                    .show_ui(ui, |ui| {
-                                        for (idx, name) in dash_names.iter().enumerate() {
-                                            if ui.selectable_label(view.line_properties.dash_idx == idx, *name).clicked() {
-                                                action = Some(FloatingMenuAction::SetDash(idx));
-                                            }
+                                craft_ui::ComboBox::from_id_salt("floating_line_dash").selected_text(cur_dash).width(72.0).show_ui(ui, |ui| {
+                                    for (idx, name) in dash_names.iter().enumerate() {
+                                        if ui.selectable_label(view.line_properties.dash_idx == idx, *name).clicked() {
+                                            action = Some(FloatingMenuAction::SetDash(idx));
                                         }
-                                    });
+                                    }
+                                });
 
                                 ui.separator();
 
@@ -791,15 +789,7 @@ impl FloatingContextMenu {
                             if is_text && can_modify {
                                 let has_format = view.canvas_selection.format_painter.is_some();
                                 let format_tip = if has_format { "Apply formatting (Format Painter)" } else { "Pick up formatting (Format Painter)" };
-                                if crate::icons::button(
-                                    ui,
-                                    "brush",
-                                    26.0,
-                                    has_format,
-                                    format_tip,
-                                )
-                                .clicked()
-                                {
+                                if crate::icons::button(ui, "brush", 26.0, has_format, format_tip).clicked() {
                                     action = Some(FloatingMenuAction::FormatPainter);
                                 }
                             }
@@ -821,9 +811,7 @@ impl FloatingContextMenu {
                                 if crate::icons::button(ui, "strikethrough", 26.0, false, tl!("Strikethrough")).clicked() {
                                     action = Some(FloatingMenuAction::ToggleStrikethrough);
                                 }
-                                if crate::icons::button(ui, "sparkles", 26.0, view.canvas_selection.symbol_palette_open, "Insert symbol")
-                                    .clicked()
-                                {
+                                if crate::icons::button(ui, "sparkles", 26.0, view.canvas_selection.symbol_palette_open, "Insert symbol").clicked() {
                                     action = Some(FloatingMenuAction::OpenSymbolPalette);
                                 }
                                 let reflow_on = view.reflow_paragraphs;
@@ -1032,10 +1020,7 @@ pub fn compute_connected_perpendicular_line_updates(
                     if len > 0.5 {
                         updates.push(LineUpdate {
                             index: line.index,
-                            target: pdfcraft_engine::ObjectTarget {
-                                kind: pdfcraft_engine::ObjectKind::VectorLine,
-                                index: line.index,
-                            },
+                            target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index },
                             new_start: updated_start,
                             new_end: updated_end,
                         });
@@ -1067,10 +1052,7 @@ pub fn compute_connected_perpendicular_line_updates(
                     if len > 0.5 {
                         updates.push(LineUpdate {
                             index: line.index,
-                            target: pdfcraft_engine::ObjectTarget {
-                                kind: pdfcraft_engine::ObjectKind::VectorLine,
-                                index: line.index,
-                            },
+                            target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index },
                             new_start: updated_start,
                             new_end: updated_end,
                         });
@@ -1218,37 +1200,13 @@ mod tests {
     #[test]
     fn test_connected_perpendicular_lines_grid_adjustment() {
         // Vertical column line at x = 100
-        let col = LineSegment {
-            page: 0,
-            index: 0,
-            start: [100.0, 50.0],
-            end: [100.0, 150.0],
-            thickness: 1.0,
-        };
+        let col = LineSegment { page: 0, index: 0, start: [100.0, 50.0], end: [100.0, 150.0], thickness: 1.0 };
         // Horizontal row line touching col from left: end at (100, 80)
-        let row_left = LineSegment {
-            page: 0,
-            index: 1,
-            start: [50.0, 80.0],
-            end: [100.0, 80.0],
-            thickness: 1.0,
-        };
+        let row_left = LineSegment { page: 0, index: 1, start: [50.0, 80.0], end: [100.0, 80.0], thickness: 1.0 };
         // Horizontal row line touching col from right: start at (100, 80)
-        let row_right = LineSegment {
-            page: 0,
-            index: 2,
-            start: [100.0, 80.0],
-            end: [180.0, 80.0],
-            thickness: 1.0,
-        };
+        let row_right = LineSegment { page: 0, index: 2, start: [100.0, 80.0], end: [180.0, 80.0], thickness: 1.0 };
         // An unrelated line far away
-        let row_far = LineSegment {
-            page: 0,
-            index: 3,
-            start: [20.0, 20.0],
-            end: [40.0, 20.0],
-            thickness: 1.0,
-        };
+        let row_far = LineSegment { page: 0, index: 3, start: [20.0, 20.0], end: [40.0, 20.0], thickness: 1.0 };
 
         let lines = vec![col.clone(), row_left, row_right, row_far];
 
@@ -1271,13 +1229,7 @@ mod tests {
 
     #[test]
     fn test_selectable_element_vector_line_and_bbox() {
-        let seg = LineSegment {
-            page: 1,
-            index: 4,
-            start: [10.0, 50.0],
-            end: [110.0, 50.0],
-            thickness: 2.0,
-        };
+        let seg = LineSegment { page: 1, index: 4, start: [10.0, 50.0], end: [110.0, 50.0], thickness: 2.0 };
         let el = SelectableElement::new_line_vector(1, seg);
         assert_eq!(el.page, 1);
         assert_eq!(el.kind, SelectableKind::VectorLine);

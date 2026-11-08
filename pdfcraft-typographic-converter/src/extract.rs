@@ -43,14 +43,9 @@ pub fn init_pdfium_with_path(custom_path: Option<&Path>) -> Result<Pdfium> {
         }
     }
 
-    // 3. Check local candidate paths (current working directory, ./lib, next to exe)
+    // 3. Check candidate paths next to executable
     let lib_name = Pdfium::pdfium_platform_library_name();
-    let mut candidate_paths: Vec<PathBuf> = vec![
-        PathBuf::from(&lib_name),
-        PathBuf::from(".").join(&lib_name),
-        PathBuf::from("lib").join(&lib_name),
-        PathBuf::from("..").join("lib").join(&lib_name),
-    ];
+    let mut candidate_paths: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -93,9 +88,7 @@ pub fn extract_glyphs<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<RawGlyph>> {
 
 /// Extracts glyphs grouped by page from a PDF file located at `pdf_path`.
 /// Extracts full page data (glyphs + embedded images like barcodes/QRs) grouped by page.
-pub fn extract_pages_full<P: AsRef<Path>>(
-    pdf_path: P,
-) -> Result<Vec<ExtractedPageData>> {
+pub fn extract_pages_full<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<ExtractedPageData>> {
     let pdfium = init_pdfium()?;
     extract_pages_full_with_pdfium(&pdfium, pdf_path)
 }
@@ -103,18 +96,13 @@ pub fn extract_pages_full<P: AsRef<Path>>(
 /// Extracts glyphs grouped by page from a PDF file located at `pdf_path`.
 /// Returns `Vec<(page_index, width, height, Vec<RawGlyph>)>`.
 #[allow(clippy::type_complexity)]
-pub fn extract_pages<P: AsRef<Path>>(
-    pdf_path: P,
-) -> Result<Vec<(usize, f32, f32, Vec<RawGlyph>)>> {
+pub fn extract_pages<P: AsRef<Path>>(pdf_path: P) -> Result<Vec<(usize, f32, f32, Vec<RawGlyph>)>> {
     let pdfium = init_pdfium()?;
     extract_pages_with_pdfium(&pdfium, pdf_path)
 }
 
 /// Extracts glyphs from a PDF file using an existing `Pdfium` instance.
-pub fn extract_glyphs_with_pdfium<P: AsRef<Path>>(
-    pdfium: &Pdfium,
-    pdf_path: P,
-) -> Result<Vec<RawGlyph>> {
+pub fn extract_glyphs_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path: P) -> Result<Vec<RawGlyph>> {
     let pages = extract_pages_with_pdfium(pdfium, pdf_path)?;
     Ok(pages.into_iter().flat_map(|(_, _, _, glyphs)| glyphs).collect())
 }
@@ -122,30 +110,85 @@ pub fn extract_glyphs_with_pdfium<P: AsRef<Path>>(
 /// Extracts glyphs grouped by page using an existing `Pdfium` instance.
 /// Returns `Vec<(page_index, width, height, Vec<RawGlyph>)>`.
 #[allow(clippy::type_complexity)]
-pub fn extract_pages_with_pdfium<P: AsRef<Path>>(
-    pdfium: &Pdfium,
-    pdf_path: P,
-) -> Result<Vec<(usize, f32, f32, Vec<RawGlyph>)>> {
+pub fn extract_pages_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path: P) -> Result<Vec<(usize, f32, f32, Vec<RawGlyph>)>> {
     let pages = extract_pages_full_with_pdfium(pdfium, pdf_path)?;
-    Ok(pages
-        .into_iter()
-        .map(|p| (p.page_index, p.width, p.height, p.glyphs))
-        .collect())
+    Ok(pages.into_iter().map(|p| (p.page_index, p.width, p.height, p.glyphs)).collect())
+}
+
+fn is_xml_valid_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}' | '\u{000A}' | '\u{000D}' | '\u{0020}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+    )
+}
+
+fn extract_object_content(
+    object: &pdfium_render::prelude::PdfPageObject<'_>,
+    text_page_opt: Option<&pdfium_render::prelude::PdfPageText<'_>>,
+    document: &pdfium_render::prelude::PdfDocument<'_>,
+    page_glyphs: &mut Vec<RawGlyph>,
+    page_images: &mut Vec<PageImage>,
+    found_text_object: &mut bool,
+) {
+    if let Some(text_object) = object.as_text_object() {
+        *found_text_object = true;
+        if let Some(text_page) = text_page_opt {
+            if let Ok(chars) = text_page.chars_for_object(text_object) {
+                for ch in chars.iter() {
+                    let glyph = extract_single_glyph(&ch, Some(text_object));
+                    if is_xml_valid_char(glyph.char_code) {
+                        page_glyphs.push(glyph);
+                    }
+                }
+            }
+        }
+    } else if let Some(image_object) = object.as_image_object() {
+        let raw_data = image_object.get_raw_image_data().unwrap_or_default();
+        let (left, top, right, bottom) = match object.bounds() {
+            Ok(quad) => {
+                let r = quad.to_rect();
+                (r.left().value, r.top().value, r.right().value, r.bottom().value)
+            }
+            Err(_) => (0.0, 0.0, 0.0, 0.0),
+        };
+        let width_pt = (right - left).abs();
+        let height_pt = (top - bottom).abs();
+
+        let mut bytes = raw_data;
+        let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+        let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
+
+        if !is_png && !is_jpeg {
+            if let Ok(bitmap) = image_object.get_processed_bitmap(document) {
+                let w = bitmap.width() as u32;
+                let h = bitmap.height() as u32;
+                if w > 0 && h > 0 {
+                    let rgba = bitmap.as_rgba_bytes();
+                    if let Ok(png_data) = encode_png_exact(w, h, &rgba) {
+                        bytes = png_data;
+                    }
+                }
+            }
+        }
+
+        if !bytes.is_empty() {
+            page_images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
+        }
+    } else if let Some(form_object) = object.as_x_object_form_object() {
+        for child in form_object.iter() {
+            extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object);
+        }
+    }
 }
 
 /// Extracts full page data (glyphs + images) grouped by page using an existing `Pdfium` instance.
-pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(
-    pdfium: &Pdfium,
-    pdf_path: P,
-) -> Result<Vec<ExtractedPageData>> {
+pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path: P) -> Result<Vec<ExtractedPageData>> {
     let path_ref = pdf_path.as_ref();
     if !path_ref.exists() {
         anyhow::bail!("Input PDF file not found: {}", path_ref.display());
     }
 
-    let document = pdfium
-        .load_pdf_from_file(path_ref, None)
-        .with_context(|| format!("Failed to load PDF document from {}", path_ref.display()))?;
+    let document = pdfium.load_pdf_from_file(path_ref, None).with_context(|| format!("Failed to load PDF document from {}", path_ref.display()))?;
 
     let mut pages_result = Vec::new();
 
@@ -163,56 +206,7 @@ pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(
         let text_page_opt = page.text().ok();
 
         for object in page_objects.iter() {
-            if let Some(text_object) = object.as_text_object() {
-                found_text_object = true;
-
-                if let Some(ref text_page) = text_page_opt {
-                    if let Ok(chars) = text_page.chars_for_object(text_object) {
-                        for ch in chars.iter() {
-                            let glyph = extract_single_glyph(&ch, Some(text_object));
-                            page_glyphs.push(glyph);
-                        }
-                    }
-                }
-            } else if let Some(image_object) = object.as_image_object() {
-                // Extract image object (barcodes, QR codes, illustrations, etc.)
-                let raw_data = image_object.get_raw_image_data().unwrap_or_default();
-                let (left, top, right, bottom) = match object.bounds() {
-                    Ok(quad) => {
-                        let r = quad.to_rect();
-                        (r.left().value, r.top().value, r.right().value, r.bottom().value)
-                    }
-                    Err(_) => (0.0, 0.0, 0.0, 0.0),
-                };
-                let width_pt = (right - left).abs();
-                let height_pt = (top - bottom).abs();
-
-                let mut bytes = raw_data;
-                let is_png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
-                let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
-
-                if !is_png && !is_jpeg {
-                    if let Ok(bitmap) = image_object.get_processed_bitmap(&document) {
-                        let w = bitmap.width() as u32;
-                        let h = bitmap.height() as u32;
-                        if w > 0 && h > 0 {
-                            let rgba = bitmap.as_rgba_bytes();
-                            if let Ok(png_data) = encode_png_exact(w, h, &rgba) {
-                                bytes = png_data;
-                            }
-                        }
-                    }
-                }
-
-                if !bytes.is_empty() {
-                    page_images.push(PageImage {
-                        bytes,
-                        bounds: (left, top, right, bottom),
-                        width_pt,
-                        height_pt,
-                    });
-                }
-            }
+            extract_object_content(&object, text_page_opt.as_ref(), &document, &mut page_glyphs, &mut page_images, &mut found_text_object);
         }
 
         // Fallback: If no text objects were found on the page, or if text objects
@@ -222,19 +216,15 @@ pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(
                 if !text_page.is_empty() {
                     for ch in text_page.chars().iter() {
                         let glyph = extract_single_glyph(&ch, None);
-                        page_glyphs.push(glyph);
+                        if is_xml_valid_char(glyph.char_code) {
+                            page_glyphs.push(glyph);
+                        }
                     }
                 }
             }
         }
 
-        pages_result.push(ExtractedPageData {
-            page_index,
-            width,
-            height,
-            glyphs: page_glyphs,
-            images: page_images,
-        });
+        pages_result.push(ExtractedPageData { page_index, width, height, glyphs: page_glyphs, images: page_images });
     }
 
     Ok(pages_result)
@@ -253,14 +243,9 @@ fn encode_png_exact(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Str
 }
 
 /// Extracts all required typographic attributes for a single character glyph.
-fn extract_single_glyph(
-    ch: &PdfPageTextChar,
-    text_object: Option<&PdfPageTextObject>,
-) -> RawGlyph {
+fn extract_single_glyph(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>) -> RawGlyph {
     // 1. Character code
-    let char_code = ch.unicode_char().unwrap_or_else(|| {
-        char::from_u32(ch.unicode_value()).unwrap_or('\0')
-    });
+    let char_code = ch.unicode_char().unwrap_or_else(|| char::from_u32(ch.unicode_value()).unwrap_or('\0'));
 
     // 2. Font name (with fallback to parent text object and default)
     let mut font_name = ch.font_name();
@@ -303,19 +288,10 @@ fn extract_single_glyph(
     let bounds = ch
         .tight_bounds()
         .or_else(|_| ch.loose_bounds())
-        .map(|rect| {
-            (
-                rect.left().value,
-                rect.top().value,
-                rect.right().value,
-                rect.bottom().value,
-            )
-        })
+        .map(|rect| (rect.left().value, rect.top().value, rect.right().value, rect.bottom().value))
         .unwrap_or_else(|_| {
             if let Some(obj) = text_object {
-                obj.bounds()
-                    .map(|r| (r.left().value, r.top().value, r.right().value, r.bottom().value))
-                    .unwrap_or((0.0, 0.0, 0.0, 0.0))
+                obj.bounds().map(|r| (r.left().value, r.top().value, r.right().value, r.bottom().value)).unwrap_or((0.0, 0.0, 0.0, 0.0))
             } else {
                 (0.0, 0.0, 0.0, 0.0)
             }
@@ -331,32 +307,16 @@ fn extract_single_glyph(
         }
     };
 
-    RawGlyph {
-        char_code,
-        font_name,
-        font_size,
-        is_bold,
-        is_italic,
-        bounds,
-        origin_x,
-        origin_y,
-    }
+    RawGlyph { char_code, font_name, font_size, is_bold, is_italic, bounds, origin_x, origin_y }
 }
 
 /// Determines whether a glyph has a bold typeface using character properties,
 /// font descriptor flags, font weight, parent text object, and font name heuristics.
-fn determine_is_bold(
-    ch: &PdfPageTextChar,
-    text_object: Option<&PdfPageTextObject>,
-    font_name: &str,
-) -> bool {
+fn determine_is_bold(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>, font_name: &str) -> bool {
     // Check character font weight
     if let Some(weight) = ch.font_weight() {
         match weight {
-            PdfFontWeight::Weight600
-            | PdfFontWeight::Weight700Bold
-            | PdfFontWeight::Weight800
-            | PdfFontWeight::Weight900 => return true,
+            PdfFontWeight::Weight600 | PdfFontWeight::Weight700Bold | PdfFontWeight::Weight800 | PdfFontWeight::Weight900 => return true,
             PdfFontWeight::Custom(w) if w >= 600 => return true,
             _ => {}
         }
@@ -372,10 +332,7 @@ fn determine_is_bold(
         let font = obj.font();
         if let Ok(weight) = font.weight() {
             match weight {
-                PdfFontWeight::Weight600
-                | PdfFontWeight::Weight700Bold
-                | PdfFontWeight::Weight800
-                | PdfFontWeight::Weight900 => return true,
+                PdfFontWeight::Weight600 | PdfFontWeight::Weight700Bold | PdfFontWeight::Weight800 | PdfFontWeight::Weight900 => return true,
                 PdfFontWeight::Custom(w) if w >= 600 => return true,
                 _ => {}
             }
@@ -396,11 +353,7 @@ fn determine_is_bold(
 
 /// Determines whether a glyph has an italic/slanted typeface using character properties,
 /// font flags, parent text object font angles, and font name heuristics.
-fn determine_is_italic(
-    ch: &PdfPageTextChar,
-    text_object: Option<&PdfPageTextObject>,
-    font_name: &str,
-) -> bool {
+fn determine_is_italic(ch: &PdfPageTextChar, text_object: Option<&PdfPageTextObject>, font_name: &str) -> bool {
     // Check character italic flag
     if ch.font_is_italic() {
         return true;

@@ -194,10 +194,33 @@ pub fn set_line_properties(
     }
 
     // Check if there are subsequent path construction operators after target_line before stroke_op.
-    let has_subsequent_path = ((last_l_idx + 1)..target_line.stroke_op_idx).any(|idx| {
-        let op = &ops[idx];
-        matches!(op.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")
-    });
+    let mut has_subsequent_path = false;
+    let mut subsequent_starts_with_m = false;
+    if let Some(sub_slice) = ops.get((last_l_idx + 1)..target_line.stroke_op_idx) {
+        for op in sub_slice {
+            match op.op.as_slice() {
+                b"m" => {
+                    if !has_subsequent_path {
+                        subsequent_starts_with_m = true;
+                    }
+                    has_subsequent_path = true;
+                }
+                b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => {
+                    has_subsequent_path = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let is_simple_stroke = matches!(stroke_op.op.as_slice(), b"S" | b"s");
+    if (has_preceding_path || has_subsequent_path) && !is_simple_stroke {
+        return Err(EditError::Invalid("changing properties of a line within a filled or compound path is not supported".into()));
+    }
+    if has_subsequent_path && !subsequent_starts_with_m {
+        return Err(EditError::Invalid("changing properties of a connected multi-segment path is not supported".into()));
+    }
 
     let mut prefix_bytes = Vec::new();
     if has_preceding_path {
@@ -608,12 +631,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
         dash: (Vec<f64>, f64),
     }
 
-    let mut state = GState {
-        matrix: Matrix::IDENTITY,
-        width: 1.0,
-        color: [0.0, 0.0, 0.0],
-        dash: (Vec::new(), 0.0),
-    };
+    let mut state = GState { matrix: Matrix::IDENTITY, width: 1.0, color: [0.0, 0.0, 0.0], dash: (Vec::new(), 0.0) };
     let mut stack: Vec<GState> = Vec::new();
 
     struct PendingSeg {
@@ -653,7 +671,8 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
             }
             b"w" => {
                 if let Some(w) = op.num(0)
-                    && w.is_finite() && w >= 0.0
+                    && w.is_finite()
+                    && w >= 0.0
                 {
                     state.width = w;
                 }
@@ -667,7 +686,8 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
             }
             b"G" => {
                 if let Some(g) = op.num(0)
-                    && g.is_finite() && (0.0..=1.0).contains(&g)
+                    && g.is_finite()
+                    && (0.0..=1.0).contains(&g)
                 {
                     state.color = [g, g, g];
                 }
@@ -815,6 +835,7 @@ fn merge_collinear_parsed(raw: Vec<ParsedLine>) -> Vec<ParsedLine> {
                 && collinear(ls, le, item.end)
                 && last.matrix == item.matrix
                 && last.stroke_op_idx == item.stroke_op_idx
+                && last.m_op_idx == item.m_op_idx
             {
                 last.end = item.end;
                 last.l_op_indices.extend(item.l_op_indices);
@@ -838,13 +859,7 @@ pub fn editable_lines(doc: &Document, page: usize) -> Result<Vec<LineSegment>, E
     Ok(parsed_lines
         .into_iter()
         .enumerate()
-        .map(|(index, pl)| LineSegment {
-            page,
-            index,
-            start: pl.start,
-            end: pl.end,
-            thickness: pl.thickness,
-        })
+        .map(|(index, pl)| LineSegment { page, index, start: pl.start, end: pl.end, thickness: pl.thickness })
         .collect())
 }
 

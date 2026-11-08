@@ -8,6 +8,7 @@ Adds vector line selection, property editing, and endpoint resizing to the Edit 
 
 ### What is fully working
 - **Line Primitives & Geometry:** `LineSegment` struct, bounding box computation, Euclidean length, and point-to-segment distance calculations (`crates/edit/src/objects.rs`).
+- **Line Segment Enumeration:** `editable_lines()` enumerates stroked line segments on a page from real PDF content streams via `checked_streams()` and `parse_page_lines()`, bounded by `MAX_PAGE_LINES`.
 - **Collinear Segment Merging:** Collinear reduction algorithm joining adjacent segments sharing width and slope within angular/distance thresholds.
 - **Selection & Interaction:** `vector_edit_mode` toggle in the Edit a PDF toolbar, line hover (yellow) and selection (blue) highlights on canvas (`crates/ui-egui/src/canvas.rs`).
 - **Endpoint Resize Handles:** Two endpoint handles render at segment start/end (`paint_line_endpoint_handles`), with crosshair cursor on hover/drag (`crates/ui-egui/src/canvas_selection.rs`).
@@ -16,13 +17,11 @@ Adds vector line selection, property editing, and endpoint resizing to the Edit 
 - **Strict Input Validation:** Both `set_line_properties` and `update_line_endpoints` validate coordinate bounds (`abs <= 1e9`), finite numbers, valid stroke widths, dash lengths (`<= 8`), target kinds, and zero-length prevention.
 
 ### What is deferred
-- **Content Stream Mutation Path:** Both `set_line_properties()` (line 171) and `update_line_endpoints()` (line 211) in `crates/edit/src/objects.rs` are safely stubbed with `Err(EditError::Invalid(...))` because the `edit` crate currently lacks a content-stream operator splice helper for vector stroke graphics state.
-- **Line Segment Enumeration on Real PDFs:** `editable_lines()` currently returns `Vec::new()` (stubbed at line 506 with `TODO(session-1)`) pending content-stream parser stroke operator walking.
+- **Content Stream Mutation Path:** Both `set_line_properties()` (line 171) and `update_line_endpoints()` (line 211) in `crates/edit/src/objects.rs` are safely guarded with `Err(EditError::Invalid(...))` because the `edit` crate currently lacks an in-place content-stream operator splice helper for compound stroked paths.
 
 ### Known limitations
-- `editable_lines()` returns empty on real documents until the operator walker is connected; the selection and handle infrastructure is architecturally and visually complete and tested via synthetic line segments.
 - `set_line_properties()` and `update_line_endpoints()` return descriptive errors (`"the content stream mutation path is not implemented"`), safely surfaced in the sidebar UI rather than modifying PDF bytes.
-- i18n: German translations added in `crates/ui-egui/src/i18n/de.tsv`; other language catalogs remain pending.
+- i18n: Translations belong in `storytold/craft-i18n` under `locales/<lang>/pdfcraft.tsv` per project standard; no local catalogs are committed in this repository.
 
 ### Relationship to PR #1990
 This branch overlaps in scope with PR #1990 (*M7: select and edit vector paths*). It should **NOT** be merged while #1990 is open and actively landing. Recommendation:
@@ -44,7 +43,6 @@ This branch overlaps in scope with PR #1990 (*M7: select and edit vector paths*)
 - `crates/ui-egui/src/canvas.rs`
 - `crates/ui-egui/src/canvas_selection.rs`
 - `crates/ui-egui/src/editing.rs`
-- `crates/ui-egui/src/i18n/de.tsv`
 - `crates/ui-egui/src/panels.rs`
 - `crates/ui-egui/tests/vector_line_selection.rs`
 

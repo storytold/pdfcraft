@@ -1053,6 +1053,28 @@ fn is_block_below(rot: i32, ed_source: [f32; 4], b_rect: [f64; 4]) -> bool {
     }
 }
 
+fn is_block_in_flow(rot: i32, ed_source: [f32; 4], b_rect: [f64; 4]) -> bool {
+    let (ed_min, ed_max, b_min, b_max) = if rot % 180 == 90 {
+        let y0 = (ed_source[1] as f64).min(ed_source[3] as f64);
+        let y1 = (ed_source[1] as f64).max(ed_source[3] as f64);
+        let by0 = b_rect[1].min(b_rect[3]);
+        let by1 = b_rect[1].max(b_rect[3]);
+        (y0, y1, by0, by1)
+    } else {
+        let x0 = (ed_source[0] as f64).min(ed_source[2] as f64);
+        let x1 = (ed_source[0] as f64).max(ed_source[2] as f64);
+        let bx0 = b_rect[0].min(b_rect[2]);
+        let bx1 = b_rect[0].max(b_rect[2]);
+        (x0, x1, bx0, bx1)
+    };
+    let overlap = (ed_max.min(b_max) - ed_min.max(b_min)).max(0.0);
+    let ed_len = (ed_max - ed_min).max(1.0);
+    let b_len = (b_max - b_min).max(1.0);
+    let overlaps = overlap > 8.0 && (overlap / ed_len.min(b_len)) > 0.25;
+    let page_wide = b_len > ed_len * 1.6 && (b_min < ed_min - 20.0 || b_max > ed_max + 20.0);
+    overlaps && !page_wide
+}
+
 /// The edit a closed paragraph editor applies, or `None` when nothing in it changed.
 pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
     finished_edit_with_reflow(ed, false, None)
@@ -1062,7 +1084,8 @@ pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
 pub(crate) fn finished_edit_with_reflow(ed: LineEditor, reflow: bool, page_blocks: Option<&[pdfcraft_engine::TextBlock]>) -> Option<Edit> {
     let mut style = ed.style();
     let current_user_w = (ed.source_rect[2] - ed.source_rect[0]).abs() as f64;
-    if current_user_w > 1.0 && style.width.is_none()
+    if current_user_w > 1.0
+        && style.width.is_none()
         && let Some((block, _)) = &ed.source
     {
         let orig_w = (block.rect[2] - block.rect[0]).abs();
@@ -1076,12 +1099,7 @@ pub(crate) fn finished_edit_with_reflow(ed: LineEditor, reflow: bool, page_block
         return None;
     }
 
-    let edit = Edit::EditTextBlock {
-        page: ed.page,
-        block: ed.block,
-        text: ed.text,
-        style,
-    };
+    let edit = Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text, style };
 
     if reflow && let Some(blocks) = page_blocks {
         let delta_h = (ed.measured_h - ed.rect.height()) as f64;
@@ -1101,24 +1119,14 @@ pub(crate) fn finished_edit_with_reflow(ed: LineEditor, reflow: bool, page_block
             };
             let mut targets = Vec::new();
             for (idx, b) in blocks.iter().enumerate() {
-                if idx != ed.block && is_block_below(rot, ed.source_rect, b.rect) {
-                    targets.push(pdfcraft_engine::ObjectTarget {
-                        kind: pdfcraft_engine::ObjectKind::Text,
-                        index: idx,
-                    });
+                if idx != ed.block && is_block_below(rot, ed.source_rect, b.rect) && is_block_in_flow(rot, ed.source_rect, b.rect) {
+                    targets.push(pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::Text, index: idx });
                 }
             }
             if !targets.is_empty() {
                 return Some(Edit::Batch {
                     label: "Edit text and reflow paragraphs".into(),
-                    edits: vec![
-                        edit,
-                        Edit::MoveObjects {
-                            page: ed.page,
-                            objects: targets,
-                            offset,
-                        },
-                    ],
+                    edits: vec![edit, Edit::MoveObjects { page: ed.page, objects: targets, offset }],
                 });
             }
         }
@@ -1633,6 +1641,70 @@ C", &picked
     }
 
     #[test]
+    fn test_finished_edit_reflow_excludes_other_column_and_footer() {
+        let (_app, mut ed) = preview_app();
+        ed.text = "Expanded line 1\nLine 2\nLine 3".into();
+        ed.rect = Rect::from_min_max(Pos2::new(50.0, 100.0), Pos2::new(200.0, 150.0));
+        ed.source_rect = [50.0, 100.0, 200.0, 150.0];
+        ed.measured_h = 90.0;
+
+        let edited_block = pdfcraft_engine::TextBlock {
+            text: "Original text".into(),
+            rect: [50.0, 100.0, 200.0, 150.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Original text".into(),
+            reflow_text: "Original text".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        // Another column to the right (x=280..450), also vertically below (y=20..80)
+        let other_column = pdfcraft_engine::TextBlock {
+            text: "Column 2".into(),
+            rect: [280.0, 20.0, 450.0, 80.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Column 2".into(),
+            reflow_text: "Column 2".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        // A page-wide footer spanning across the whole page (x=40..550), at y=10..30
+        let page_footer = pdfcraft_engine::TextBlock {
+            text: "Page Footer".into(),
+            rect: [40.0, 10.0, 550.0, 30.0],
+            base_font: "Helvetica".into(),
+            size: 10.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Page Footer".into(),
+            reflow_text: "Page Footer".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let page_blocks = vec![edited_block, other_column, page_footer];
+        let reflow_edit = finished_edit_with_reflow(ed, true, Some(&page_blocks));
+        // Neither other_column nor page_footer should be targeted by reflow
+        assert!(matches!(reflow_edit, Some(Edit::EditTextBlock { .. })));
+    }
+
+    #[test]
     fn test_finished_edit_reflow_quarter_turn() {
         let (_app, mut ed) = preview_app();
         ed.rotation = 90;
@@ -1677,7 +1749,9 @@ C", &picked
         let reflow_edit = finished_edit_with_reflow(ed, true, Some(&page_blocks));
         assert!(matches!(reflow_edit, Some(Edit::Batch { ref edits, .. }) if edits.len() == 2));
         if let Some(Edit::Batch { edits, .. }) = reflow_edit {
-            assert!(matches!(&edits[1], Edit::MoveObjects { objects, offset, .. } if objects.len() == 1 && objects[0].index == 1 && offset[0] > 0.0 && offset[1] == 0.0));
+            assert!(
+                matches!(&edits[1], Edit::MoveObjects { objects, offset, .. } if objects.len() == 1 && objects[0].index == 1 && offset[0] > 0.0 && offset[1] == 0.0)
+            );
         }
     }
 }

@@ -3071,11 +3071,7 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
-fn handle_symbol_palette(
-    ui: &mut egui::Ui,
-    view: &mut DocView,
-    info: &DocInfo,
-) {
+fn handle_symbol_palette(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo) {
     let anchor = view
         .canvas_selection
         .selected
@@ -3089,7 +3085,8 @@ fn handle_symbol_palette(
         } else if let Some(sel) = &view.canvas_selection.selected {
             let new_text = format!("{}{}", sel.text.as_deref().unwrap_or(""), sym);
             if sel.kind == crate::canvas_selection::SelectableKind::TextBlock {
-                view.pending_edit = Some(pdfcraft_engine::Edit::EditTextBlock { page: sel.page, block: sel.index, text: new_text, style: Default::default() });
+                view.pending_edit =
+                    Some(pdfcraft_engine::Edit::EditTextBlock { page: sel.page, block: sel.index, text: new_text, style: Default::default() });
             } else if sel.kind == crate::canvas_selection::SelectableKind::TextLine {
                 view.pending_edit = Some(pdfcraft_engine::Edit::EditTextLine { page: sel.page, line: sel.index, text: new_text });
             }
@@ -3098,13 +3095,7 @@ fn handle_symbol_palette(
     }
 }
 
-fn handle_symbol_palette_and_hud(
-    ui: &mut egui::Ui,
-    view: &mut DocView,
-    doc: &pdfcraft_engine::Document,
-    info: &DocInfo,
-    can_modify: bool,
-) {
+fn handle_symbol_palette_and_hud(ui: &mut egui::Ui, view: &mut DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, can_modify: bool) {
     if let Some(hud_edit) = crate::barcode_hud::BarcodeScannerHud::show(ui, view, doc, info, can_modify) {
         view.pending_edit = Some(hud_edit);
     }

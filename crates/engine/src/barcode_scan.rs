@@ -887,7 +887,11 @@ impl Document {
                         sub_max_x.clamp(crop_min_x as f64, crop_max_x as f64),
                         sub_max_y.clamp(crop_min_y as f64, crop_max_y as f64),
                     ];
-                    scanned.push(code);
+                    let w = code.rect[2] - code.rect[0];
+                    let h = code.rect[3] - code.rect[1];
+                    if w > 0.5 && h > 0.5 {
+                        scanned.push(code);
+                    }
                 }
             }
         }
@@ -940,15 +944,20 @@ impl Document {
                     code.rect = [min_x as f64, min_y as f64, max_x as f64, max_y as f64];
 
                     // If this visible rendered code overlaps a code from Pass 1,
-                    // the visible rendered code takes precedence (covers/replaces it)
+                    // preserve the embedded detection's image_index and let the visible rendered code take precedence
+                    let mut matched_image_index = None;
                     scanned.retain(|c| {
                         let overlap_x = (c.rect[0].max(code.rect[0])) <= (c.rect[2].min(code.rect[2]) + 15.0);
                         let overlap_y = (c.rect[1].max(code.rect[1])) <= (c.rect[3].min(code.rect[3]) + 15.0);
-                        !(overlap_x && overlap_y)
+                        let matches = overlap_x && overlap_y;
+                        if matches && c.image_index.is_some() {
+                            matched_image_index = c.image_index;
+                        }
+                        !matches
                     });
 
                     code.id = scanned.len();
-                    code.image_index = None;
+                    code.image_index = matched_image_index;
                     scanned.push(code);
                     found_any = true;
                 }

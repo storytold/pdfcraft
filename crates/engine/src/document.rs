@@ -7,9 +7,9 @@ use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
-    CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, LineSegment, MarkKind, SecuritySummary,
-    SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password,
-    signatures_of, unrestricted,
+    CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, LineSegment, MarkKind,
+    SecuritySummary, SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize,
+    renderer_password, signatures_of, unrestricted,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};

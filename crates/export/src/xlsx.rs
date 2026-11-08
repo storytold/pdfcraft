@@ -4,7 +4,7 @@
 //! (invoices, shipping labels, financial tables, forms) into clean, properly merged
 //! worksheet cells with data-type awareness (numbers vs. text), column widths, and borders.
 
-use crate::{Block, Page, Table, Zip, esc};
+use crate::{Block, Cell, Page, Table, Zip, esc};
 
 /// Format index for cell styles in `styles.xml`
 const STYLE_DEFAULT: u32 = 0;
@@ -40,10 +40,13 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
         return None;
     }
     let unsigned = trimmed.trim_start_matches(['+', '-', '$', '€', '£', '¥']);
+    // Reject non-leading currency symbols in the middle of a string (e.g. "5$3")
+    if unsigned.contains(['$', '€', '£', '¥']) {
+        return None;
+    }
     // Identifiers (ZIP codes, part numbers) keep their leading zero, and f64 cannot hold
     // more than 15 exact digits: both stay text.
-    if unsigned.chars().filter(char::is_ascii_digit).count() > 15
-        || (unsigned.len() > 1 && unsigned.starts_with('0') && !unsigned.starts_with("0."))
+    if unsigned.chars().filter(char::is_ascii_digit).count() > 15 || (unsigned.len() > 1 && unsigned.starts_with('0') && !unsigned.starts_with("0."))
     {
         return None;
     }
@@ -62,17 +65,20 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
             return None;
         }
     }
-    // Clean currency and percentage signs
-    let mut cleaned = String::with_capacity(trimmed.len());
+    // Clean thousands commas and preserve sign
+    let is_negative = trimmed.starts_with('-') || trimmed.starts_with("$-") || trimmed.starts_with("€-");
+    let mut cleaned = String::with_capacity(unsigned.len() + 1);
+    if is_negative {
+        cleaned.push('-');
+    }
     let mut has_digit = false;
-    for c in trimmed.chars() {
-        if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' {
+    for c in unsigned.chars() {
+        if c.is_ascii_digit() || c == '.' {
             if c.is_ascii_digit() {
                 has_digit = true;
             }
             cleaned.push(c);
-        } else if c == ',' || c == '$' || c == '€' || c == '£' || c == '¥' || c == '%' {
-            // Ignored formatting characters
+        } else if c == ',' {
             continue;
         } else {
             return None;
@@ -160,11 +166,7 @@ fn process_header_blocks(
 
             let text = b.text.trim().to_string();
             let num = parse_numeric(&text);
-            let style = if b.size >= 14.0 || b.bold {
-                STYLE_TITLE
-            } else {
-                STYLE_DEFAULT
-            };
+            let style = if b.size >= 14.0 || b.bold { STYLE_TITLE } else { STYLE_DEFAULT };
             let len = text.len();
             if col_max_len.len() < col {
                 col_max_len.resize(col, 10);
@@ -180,6 +182,28 @@ fn process_header_blocks(
             *current_row += 1;
         }
     }
+}
+
+fn is_table_header_row(rows: &[Vec<Cell>], row_idx: usize) -> bool {
+    if row_idx != 0 || rows.len() < 2 {
+        return false;
+    }
+    let row0 = match rows.first() {
+        Some(r) => r,
+        None => return false,
+    };
+    let non_empty: Vec<&Cell> = row0.iter().filter(|c| !c.text.trim().is_empty()).collect();
+    if non_empty.is_empty() {
+        return false;
+    }
+    // If every cell in row 0 is numeric, it is almost certainly a data row, not a header
+    if non_empty.iter().all(|c| parse_numeric(&c.text).is_some()) {
+        return false;
+    }
+    let row0_bold = non_empty.iter().any(|c| c.bold);
+    let row0_has_span = non_empty.iter().any(|c| c.span > 1);
+    let next_row_has_numeric = rows.get(1).is_some_and(|r1| r1.iter().any(|c| parse_numeric(&c.text).is_some()));
+    row0_bold || row0_has_span || next_row_has_numeric || non_empty.iter().all(|c| parse_numeric(&c.text).is_none())
 }
 
 fn process_tables(
@@ -201,7 +225,7 @@ fn process_tables(
         for (row_idx, row) in t.rows.iter().enumerate() {
             let row_top_y = t.rect[3] - (row_idx as f64) * row_h;
             let row_top_pt = if p.height > 0.0 { (p.height - row_top_y).max(0.0) } else { 0.0 };
-            let is_header = row_idx == 0;
+            let is_header = is_table_header_row(&t.rows, row_idx);
             let is_last = row_idx + 1 == t.rows.len();
             let mut col_cursor = 1usize;
             let mut cells = Vec::new();
@@ -249,11 +273,7 @@ fn process_tables(
     }
 }
 
-fn compute_image_anchor(
-    top_pt: f64,
-    row_tops: &[(f64, usize)],
-    current_row: usize,
-) -> (usize, i64) {
+fn compute_image_anchor(top_pt: f64, row_tops: &[(f64, usize)], current_row: usize) -> (usize, i64) {
     if row_tops.is_empty() {
         let r = (top_pt / 20.0).floor().clamp(0.0, 500.0) as usize;
         let off = ((top_pt % 20.0) * 12700.0).round() as i64;
@@ -271,11 +291,7 @@ fn compute_image_anchor(
             let (pt_a, r_a) = row_tops[i];
             let (pt_b, r_b) = row_tops[i + 1];
             if top_pt >= pt_a && top_pt <= pt_b {
-                let frac = if (pt_b - pt_a) > 0.1 {
-                    (top_pt - pt_a) / (pt_b - pt_a)
-                } else {
-                    0.0
-                };
+                let frac = if (pt_b - pt_a) > 0.1 { (top_pt - pt_a) / (pt_b - pt_a) } else { 0.0 };
                 let row_span = r_b.saturating_sub(r_a) as f64;
                 let target_r = (r_a as f64) + frac * row_span;
                 let mapped_row = target_r.floor() as usize;
@@ -300,8 +316,12 @@ fn build_page_drawings(
     if p.images.is_empty() {
         return None;
     }
-    let mut drw_xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">");
-    let mut drw_rels = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    let mut drw_xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">",
+    );
+    let mut drw_rels = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+    );
 
     for (local_idx, im) in p.images.iter().enumerate() {
         *global_image_counter += 1;
@@ -317,11 +337,7 @@ fn build_page_drawings(
         };
         let cx = (w * 12700.0).round() as i64;
         let cy = (h * 12700.0).round() as i64;
-        let rot_attr = if rotated {
-            format!(" rot=\"{}\"", ((-im.rotation).rem_euclid(360.0) * 60000.0).round() as i64)
-        } else {
-            String::new()
-        };
+        let rot_attr = if rotated { format!(" rot=\"{}\"", ((-im.rotation).rem_euclid(360.0) * 60000.0).round() as i64) } else { String::new() };
 
         let natural_col = col_edges.iter().position(|&e| (im.rect[0] - e).abs() <= 16.0);
         let col = natural_col.unwrap_or_else(|| (im.rect[0] / 64.0).floor().clamp(0.0, 50.0) as usize);
@@ -343,13 +359,7 @@ fn build_page_drawings(
     Some((drw_xml, drw_rels))
 }
 
-fn build_sheet_xml(
-    page_index: usize,
-    rows: &[XlsxRow],
-    merges: &[String],
-    col_max_len: &[usize],
-    has_drawing: bool,
-) -> String {
+fn build_sheet_xml(page_index: usize, rows: &[XlsxRow], merges: &[String], col_max_len: &[usize], has_drawing: bool) -> String {
     let mut cols_xml = String::new();
     if !col_max_len.is_empty() {
         cols_xml.push_str("<cols>");
@@ -577,6 +587,7 @@ mod tests {
         assert_eq!(parse_numeric("123"), Some(123.0));
         assert_eq!(parse_numeric("  $1,234.56  "), Some(1234.56));
         assert_eq!(parse_numeric("€99.95"), Some(99.95));
+        assert_eq!(parse_numeric("5$3"), None);
         assert_eq!(parse_numeric("45%"), None);
         assert_eq!(parse_numeric("02134"), None);
         assert_eq!(parse_numeric("1,5"), None);
@@ -586,6 +597,21 @@ mod tests {
         assert_eq!(parse_numeric(",123"), None);
         assert_eq!(parse_numeric("NotANumber"), None);
         assert_eq!(parse_numeric(""), None);
+    }
+
+    #[test]
+    fn test_table_header_detection() {
+        let dummy_cell = |text: &str, bold: bool| Cell { text: text.to_string(), size: 10.0, bold, italic: false, color: [0.0; 3], span: 1 };
+        // Table with string header and numeric data
+        let rows_with_header =
+            vec![vec![dummy_cell("Item", true), dummy_cell("Price", true)], vec![dummy_cell("Widget", false), dummy_cell("19.99", false)]];
+        assert!(is_table_header_row(&rows_with_header, 0));
+        assert!(!is_table_header_row(&rows_with_header, 1));
+
+        // Table with pure numeric data in row 0
+        let rows_all_numeric =
+            vec![vec![dummy_cell("100", false), dummy_cell("200", false)], vec![dummy_cell("300", false), dummy_cell("400", false)]];
+        assert!(!is_table_header_row(&rows_all_numeric, 0));
     }
 
     #[test]

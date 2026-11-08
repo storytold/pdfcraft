@@ -267,10 +267,8 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
     // Reading Eye-Strain Background Tint
     let bg_mode = app.reading_bg.mode;
     let bg_active = bg_mode != crate::canvas::PageBackground::Default;
-    let bg_tip = crate::i18n::fmt(
-        tl!("Eye strain background: {mode} (click to cycle, right-click for tint settings)"),
-        &[("mode", tl!(bg_mode.label()))],
-    );
+    let bg_tip =
+        crate::i18n::fmt(tl!("Eye strain background: {mode} (click to cycle, right-click for tint settings)"), &[("mode", tl!(bg_mode.label()))]);
     let bg_resp = icons::button(ui, bg_mode.icon(), cell, bg_active, &bg_tip);
     if bg_resp.clicked() {
         app.reading_bg.mode = app.reading_bg.mode.next();
