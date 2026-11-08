@@ -23,8 +23,17 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
     let mut chars: Vec<(char, usize, bool)> = Vec::new();
     let mut after_zwsp = false;
     for (i, glyph) in page.glyphs.iter().enumerate() {
-        // A line that ends in a soft hyphen runs on to the next.
-        let line_break = i > 0 && page.line_of[i] != page.line_of[i - 1] && !page.glyphs[i - 1].text.ends_with('\u{AD}');
+        // A line that ends in a soft hyphen, past any empty or other invisible glyphs and
+        // characters after it on that line, runs on to the next.
+        let ends_in_soft_hyphen = |end: usize| {
+            (0..=end)
+                .rev()
+                .take_while(|&k| page.line_of[k] == page.line_of[end])
+                .flat_map(|k| page.glyphs[k].text.chars().rev())
+                .find(|&c| c == '\u{AD}' || !visible(c.to_string()).is_empty())
+                == Some('\u{AD}')
+        };
+        let line_break = i > 0 && page.line_of[i] != page.line_of[i - 1] && !ends_in_soft_hyphen(i - 1);
         if i > 0 && (page.space_before[i] || line_break) && chars.last().is_some_and(|&(c, ..)| c != ' ') {
             chars.push((' ', i, false));
             after_zwsp = false;
@@ -590,4 +599,14 @@ fn a_line_end_after_many_invisible_glyphs_still_joins() {
         g.quad = [[x, y]; 4];
     }
     assert_eq!(text.find("検知機構"), vec![0..44]);
+}
+
+/// The reference search and `find` agree on a soft hyphen followed, before the line end, by an
+/// empty glyph and an invisible one: both join the word.
+#[test]
+fn reference_and_find_join_past_empty_and_invisible_glyphs_after_a_soft_hyphen() {
+    let mut text = page(&["Mitar\u{AD}", "", "\u{200B}", "beiterinnen"]);
+    text.line_of = vec![0, 0, 0, 1];
+    assert_eq!(text.find("Mitarbeiterinnen"), vec![0..4]);
+    assert_eq!(reference(&text, "Mitarbeiterinnen", false, false, usize::MAX), vec![0..4]);
 }
