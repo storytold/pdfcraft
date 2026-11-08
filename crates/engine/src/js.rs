@@ -11,6 +11,9 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+mod reset_diagnostics;
+use reset_diagnostics::ResetDiagnostics;
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -38,6 +41,15 @@ impl JsOutput {
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
+        self.absorb_requests_and_errors(o);
+    }
+
+    fn absorb_reset(&mut self, o: &Outcome, diagnostics: &mut ResetDiagnostics) {
+        diagnostics.append(o, &mut self.alerts, &mut self.console);
+        self.absorb_requests_and_errors(o);
+    }
+
+    fn absorb_requests_and_errors(&mut self, o: &Outcome) {
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
         // button's may show or hide a side panel, or open Save As.
         for r in &o.requests {
@@ -165,6 +177,10 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    /// A reset must fail atomically when document scripts make its event unrestorable.
+    reset_restore_error: Option<String>,
+    /// Only bootstrap messages, remembered for one ResetForm, never for ordinary field edits.
+    reset_diagnostics: ResetDiagnostics,
 }
 
 impl JsRunner {
@@ -180,7 +196,15 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner {
+            doc,
+            doc_scripts,
+            output: JsOutput::default(),
+            cos: cos.clone(),
+            displays: std::collections::HashMap::new(),
+            reset_restore_error: None,
+            reset_diagnostics: ResetDiagnostics::default(),
+        }
     }
 }
 
@@ -199,8 +223,48 @@ impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        self.run_event(event, script, target, value, fields, false)
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, RunFlags { log: false, reset: false }))
+    }
+}
+
+/// Only a reset's post-default Calculate/Format uses a read-only document bootstrap. Other
+/// field edits retain the upstream script policy, including later edits in the same batch.
+pub(crate) struct ResetScripts<'a>(&'a mut JsRunner);
+
+#[derive(Clone, Copy)]
+struct RunFlags {
+    log: bool,
+    reset: bool,
+}
+
+impl Scripts for ResetScripts<'_> {
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        self.0.run_event(event, script, target, value, fields, true)
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.0.run_logged(event, script, target, value, fields, RunFlags { log: false, reset: true }))
+    }
+}
+
+impl JsRunner {
+    pub(crate) fn for_reset(&mut self) -> ResetScripts<'_> {
+        self.reset_restore_error = None;
+        self.reset_diagnostics.clear();
+        ResetScripts(self)
+    }
+
+    pub(crate) fn take_reset_restore_error(&mut self) -> Option<String> {
+        self.reset_restore_error.take()
+    }
+
+    fn run_event(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], reset: bool) -> ScriptResult {
         // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-        self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
+        self.run_logged(event, script, target, value, fields, RunFlags { log: true, reset }).unwrap_or_else(|| ScriptResult {
             rc: true,
             value: value.to_string(),
             changes: Vec::new(),
@@ -208,15 +272,17 @@ impl Scripts for JsRunner {
         })
     }
 
-    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
-        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false))
-    }
-}
-
-impl JsRunner {
     /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
     /// when the script failed.
-    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
+    fn run_logged(
+        &mut self,
+        event: FieldEvent,
+        script: &str,
+        target: &Field,
+        value: &str,
+        fields: &[Field],
+        flags: RunFlags,
+    ) -> Option<ScriptResult> {
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -229,9 +295,20 @@ impl JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
-        if log {
-            self.output.absorb(&o);
+        let o = if flags.reset {
+            pdfcraft_js::run_shared_for_reset(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default())
+        } else {
+            pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default())
+        };
+        if flags.reset && o.event_restore_failed {
+            self.reset_restore_error = o.error.clone();
+        }
+        if flags.log {
+            if flags.reset {
+                self.output.absorb_reset(&o, &mut self.reset_diagnostics);
+            } else {
+                self.output.absorb(&o);
+            }
         }
         if o.error.is_some() {
             return None;
@@ -245,6 +322,15 @@ impl JsRunner {
     }
 }
 
+/// Recalculate AcroForm actions after an XFA reset, returning output in event order.
+pub(crate) fn recalculate_xfa_reset(doc: &mut pdfcraft_cos::Document, runner: &mut Option<JsRunner>) -> Result<JsOutput, String> {
+    let Some(js) = runner.as_mut() else { return Ok(JsOutput::default()) };
+    pdfcraft_forms::recalculate_with(doc, &mut js.for_reset()).map_err(|e| e.to_string())?;
+    if let Some(reason) = js.take_reset_restore_error() {
+        return Err(format!("form reset could not finish JavaScript recalculation: {reason}"));
+    }
+    Ok(std::mem::take(&mut js.output))
+}
 /// A document-level JavaScript: its name and source.
 pub fn document_scripts(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     pdfcraft_forms::document_scripts_named(cos)

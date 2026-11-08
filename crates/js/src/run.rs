@@ -1,7 +1,8 @@
 use super::globals::{event_object, install};
-use super::host::{Host, Shared, text};
-use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
+use super::host::{Host, Shared, error, host, text};
+use super::model::{BootstrapDiagnostics, DocInfo, Event, FieldState, Limits, Outcome};
+use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsObject, JsResult, JsString, Realm, RefCell, Source, js_string};
+use boa_engine::property::PropertyDescriptor;
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -28,6 +29,12 @@ const MAX_CONDITIONALS: usize = 4096;
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
+
+#[derive(Clone, Copy)]
+struct RunConfig {
+    limits: Limits,
+    bootstrap_effects: bool,
+}
 
 /// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
 /// and comments are skipped; brackets in regular expressions and templates count, which only
@@ -108,6 +115,32 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared_inner(script, event, doc, fields, doc_scripts, limits, true)
+}
+
+/// Run a reset's field event with document globals but without applying bootstrap field writes
+/// or host requests. The actual Calculate/Format script runs with effects enabled.
+pub fn run_shared_for_reset(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    limits: Limits,
+) -> Outcome {
+    run_shared_inner(script, event, doc, fields, doc_scripts, limits, false)
+}
+
+fn run_shared_inner(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    limits: Limits,
+    bootstrap_effects: bool,
+) -> Outcome {
+    let config = RunConfig { limits, bootstrap_effects };
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
         return failed(why);
@@ -135,7 +168,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, limits)));
+                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, config)));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -143,7 +176,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, kept, skipped, limits)
+    run_here(script, event, doc, fields, kept, skipped, config)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -192,7 +225,7 @@ fn run_here(
     fields: Arc<Vec<FieldState>>,
     doc_scripts: &[(usize, &str)],
     skipped: &[(usize, String)],
-    limits: Limits,
+    config: RunConfig,
 ) -> Outcome {
     let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
         Ok(ctx) => ctx,
@@ -201,13 +234,15 @@ fn run_here(
             return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
         }
     };
-    ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
-    ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    ctx.runtime_limits_mut().set_loop_iteration_limit(config.limits.loop_iterations);
+    ctx.runtime_limits_mut().set_recursion_limit(config.limits.recursion);
     ctx.insert_data(RefCell::new(Host {
         fields,
+        effects_enabled: config.bootstrap_effects,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
+        bootstrap: BootstrapDiagnostics::default(),
         requests: Vec::new(),
         doc: doc.clone(),
         kept: 0,
@@ -227,6 +262,21 @@ fn run_here(
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
+        if !config.bootstrap_effects {
+            let mut h = host(&ctx)?.try_borrow_mut().map_err(|_| error("the script host is already in use"))?;
+            h.bootstrap = BootstrapDiagnostics { alerts: h.alerts.len(), console: h.console.len() };
+        }
+        if !config.bootstrap_effects
+            && let Err(e) = restore_reset_event(&mut ctx, &ev, event)
+        {
+            // A non-configurable descriptor or frozen event can make restoration impossible.
+            // The engine must abort this reset, rather than silently leave Calculate undone.
+            out.event_restore_failed = true;
+            return Err(error(format!("the reset event could not be restored after document scripts: {e}")));
+        }
+        // A fresh context is used for each field event. Restore effects before the actual
+        // script, even when a document initializer threw after defining useful globals.
+        host(&ctx)?.try_borrow_mut().map_err(|_| error("the script host is already in use"))?.effects_enabled = true;
         let r = ctx.eval(Source::from_bytes(script))?;
         if !r.is_undefined() {
             out.result = Some(text(&r, &mut ctx)?);
@@ -249,10 +299,39 @@ fn run_here(
         out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
         out.alerts = h.alerts;
         out.console = h.console;
+        out.bootstrap = h.bootstrap;
         out.requests = h.requests;
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
         }
     }
     out
+}
+
+/// The bootstrap and the actual field script share a realm so document helpers stay usable.
+/// Restore core fields on the original object: closures holding `event` then see the same
+/// values as the direct global. Extra properties installed by a document script remain intact.
+fn restore_reset_event(ctx: &mut Context, ev: &JsObject, event: &Event) -> JsResult<()> {
+    let fresh = event_object(ctx, event);
+    for key in fresh.own_property_keys(ctx)? {
+        let value = fresh.get(key.clone(), ctx)?;
+        ev.define_property_or_throw(key, PropertyDescriptor::builder().value(value).writable(true).enumerable(true).configurable(true), ctx)?;
+    }
+    let global = ctx.global_object();
+    let full = PropertyDescriptor::builder().value(ev.clone()).writable(true).enumerable(true).configurable(true);
+    if global.define_property_or_throw(js_string!("event"), full, ctx).is_err() {
+        // A frozen global may keep a non-writable `event` that already refers to `ev`.
+        // Defining the same value without changing its descriptor is legal; a different
+        // non-configurable value or accessor still fails, and the caller aborts the edit.
+        global.define_property_or_throw(js_string!("event"), PropertyDescriptor::builder().value(ev.clone()), ctx)?;
+    }
+    // A global lexical `let`/`const event` is not a property of the global object. Verify the
+    // binding the field script actually reads, including helpers that close over it. A lexical
+    // alias of `ev` is valid; a different object, primitive or uninitialized binding must abort
+    // this reset before a script can write somewhere other than the object we extract below.
+    let resolved = ctx.eval(Source::from_bytes("event"))?;
+    if !resolved.as_object().is_some_and(|value| JsObject::equals(&value, ev)) {
+        return Err(error("the event identifier does not refer to the canonical reset event"));
+    }
+    Ok(())
 }

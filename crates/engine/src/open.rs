@@ -203,6 +203,7 @@ impl Session {
                             out: &mut script_output,
                             datasets: None,
                             ran_away: false,
+                            reset_touched: false,
                             time_scale: context.xfa_time_scale,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);

@@ -128,6 +128,8 @@ pub(crate) struct XfaRun<'a> {
     pub datasets: Option<pdfcraft_cos::ObjRef>,
     /// A script ran past its time limit and was abandoned: the form's scripts should stay off.
     pub ran_away: bool,
+    /// A reset was attempted; failures later in this XFA edit must roll back.
+    pub reset_touched: bool,
     /// What every time limit of the scripts is multiplied by (the event's budget, the engine's
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
@@ -244,6 +246,9 @@ fn data_text(info: &FieldInfo) -> String {
     }
 }
 
+/// AcroForm recalculation after an XFA reset, borrowing the caller's runner.
+type ResetCallback<'a> = &'a mut dyn FnMut(&mut pdfcraft_cos::Document) -> Result<JsOutput, String>;
+
 /// Runs the scripts of one event (opening, a change, a click) against one document: what
 /// they change is kept in memory (data, field values, overrides) and written once, when the
 /// event ends or the form has to be laid out again.
@@ -274,6 +279,7 @@ struct Runner<'a, 'b> {
     /// context on the form as it is then (`cached`, kept up to date in place for values and
     /// rebuilt when the structure changed).
     session: Option<XfaSession>,
+    reset_data: bool,
     changes: Changes,
 }
 
@@ -303,6 +309,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             fields: None,
             cached: None,
             session: None,
+            reset_data: false,
             changes: Changes::default(),
         }
     }
@@ -534,6 +541,7 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// `xfa.host.resetData`: the fields back to their defaults, in the form and the data.
     fn reset(&mut self, names: &[String]) -> Result<(), String> {
+        self.run.reset_touched = true;
         self.flush()?;
         let by_som = self.by_som().clone();
         let listed: Option<Vec<String>> = if names.is_empty() {
@@ -545,6 +553,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             return Ok(());
         }
         pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
+        self.reset_data = true;
         self.fields = None;
         let infos = self.fields().clone();
         for (som, name) in &by_som {
@@ -566,6 +575,25 @@ impl<'a, 'b> Runner<'a, 'b> {
         Ok(())
     }
 
+    /// Complete a reset before the next XFA script; XFA calculations retain precedence.
+    fn after_reset(&mut self, on_reset: ResetCallback<'_>) -> Result<(), String> {
+        if !self.reset_data {
+            return Ok(());
+        }
+        self.reset_data = false;
+        if !pdfcraft_forms::fields(self.doc).iter().any(|f| f.actions.scripts.calculate.is_some()) {
+            return Ok(());
+        }
+        self.flush()?;
+        let output = on_reset(self.doc)?;
+        self.run.out.append(output);
+        let warnings = crate::xfa_sync_datasets(self.doc, Some(self.tpl), &mut self.run.datasets)?;
+        self.console(warnings);
+        self.data = pdfcraft_xfa::data_of(self.doc);
+        self.fields = None;
+        self.invalidate();
+        Ok(())
+    }
     /// Apply what a script of `ev` did. Returns whether the form has to be laid out again.
     fn apply_effects(&mut self, ev: &ScriptEvent, effects: &[XfaEffect]) -> Result<bool, String> {
         let mut relayout = false;
@@ -696,10 +724,13 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// Every calculate script, in document order: the field takes the script's result unless
     /// the script set a value itself.
-    fn calculates(&mut self) -> Result<(), String> {
+    fn calculates(&mut self, mut on_reset: Option<ResetCallback<'_>>) -> Result<(), String> {
         let events: Vec<ScriptEvent> = self.live().events.iter().filter(|e| e.activity == "calculate").cloned().collect();
         for ev in &events {
             let Some(o) = self.run(ev, "")? else { continue };
+            if let Some(callback) = on_reset.as_mut() {
+                self.after_reset(*callback)?;
+            }
             if o.error.is_some() || o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { som, .. } if *som == ev.som)) {
                 continue;
             }
@@ -829,7 +860,7 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     for ev in &events {
         r.run(ev, "")?;
     }
-    r.calculates()?;
+    r.calculates(None)?;
     r.finish()
 }
 
@@ -837,7 +868,13 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
 /// the calculations once (or only those, after a reset). A validate script that answers false,
 /// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
 /// than reverting it.
-pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names: &[String], run: &mut XfaRun) -> Result<(), String> {
+pub(crate) fn on_changes(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    names: &[String],
+    run: &mut XfaRun,
+    on_reset: ResetCallback<'_>,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
@@ -845,15 +882,18 @@ pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
         for ev in r.events_of(&som, "change").into_iter().chain(r.events_of(&som, "exit")) {
             r.run(&ev, &value)?;
+            r.after_reset(on_reset)?;
         }
         for ev in r.events_of(&som, "validate") {
-            let Some(o) = r.run(&ev, &value)? else { continue };
+            let outcome = r.run(&ev, &value)?;
+            r.after_reset(on_reset)?;
+            let Some(o) = outcome else { continue };
             if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
                 r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
             }
         }
     }
-    r.calculates()?;
+    r.calculates(Some(on_reset))?;
     r.finish().map(|_| ())
 }
 
@@ -863,7 +903,7 @@ pub(crate) fn on_data_replaced(doc: &mut pdfcraft_cos::Document, tpl: &Template,
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     r.relayout()?;
     if calculate {
-        r.calculates()?;
+        r.calculates(None)?;
     }
     r.finish().map(|_| ())
 }
@@ -891,7 +931,14 @@ pub(crate) fn typed_date(
 }
 
 /// A button's click script (or any event, by SOM path and activity), then calculations.
-pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<(), String> {
+pub(crate) fn on_event(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    som: &str,
+    activity: &str,
+    run: &mut XfaRun,
+    on_reset: ResetCallback<'_>,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
     let events = r.events_of(som, activity);
     if events.is_empty() {
@@ -899,10 +946,11 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     }
     for ev in events {
         r.run(&ev, "")?;
+        r.after_reset(on_reset)?;
     }
     // The calculations that follow get a budget of their own.
     r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
-    r.calculates()?;
+    r.calculates(Some(on_reset))?;
     r.finish().map(|_| ())
 }
 

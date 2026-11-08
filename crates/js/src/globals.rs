@@ -1,6 +1,6 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, function, host, s, text, text_line};
+use super::host::{arg, error, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
     Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
@@ -139,7 +139,10 @@ fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue
 }
 
 fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().console.clear();
+    let mut h = host(ctx)?.try_borrow_mut().map_err(|_| error("the script host is already in use"))?;
+    h.console.clear();
+    // New lines now belong to the real script, not to the removed bootstrap prefix.
+    h.bootstrap.console = 0;
     Ok(JsValue::undefined())
 }
 

@@ -38,7 +38,12 @@ pub(crate) enum Scope {
 /// Edits during which field scripts run.
 pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::XfaEvent { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::SetFieldScript { .. }
+        | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
         _ => false,
     }

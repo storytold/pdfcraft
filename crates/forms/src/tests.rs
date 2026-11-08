@@ -1179,6 +1179,29 @@ fn reset_restores_defaults() {
 }
 
 #[test]
+fn reset_with_scripts_calculates_once_after_restoring_the_default() {
+    struct CalculateOnce(usize);
+
+    impl Scripts for CalculateOnce {
+        fn run(&mut self, event: FieldEvent, _: &str, target: &Field, value: &str, _: &[Field]) -> ScriptResult {
+            assert_eq!(event, FieldEvent::Calculate);
+            assert_eq!(target.name, "name");
+            assert_eq!(value, "Ada", "the reset has restored /DV before Calculate runs");
+            self.0 += 1;
+            ScriptResult { rc: true, value: "Ada!".into(), changes: Vec::new(), message: None }
+        }
+    }
+
+    let mut doc = fixture();
+    set_value(&mut doc, "name", &FieldValue::Text("Grace".into())).unwrap();
+    set_field_script(&mut doc, "name", "calculate", Some("event.value = event.value + '!';")).unwrap();
+    let mut scripts = CalculateOnce(0);
+    assert_eq!(reset_with(&mut doc, Some(&["name".into()]), &mut scripts).unwrap(), 1);
+    assert_eq!(scripts.0, 1);
+    assert_eq!(field(&fields(&reopen(&doc)), "name").value, ["Ada!"]);
+}
+
+#[test]
 fn documents_without_forms_say_so() {
     let mut doc = Document::new_empty();
     assert_combined_matches_legacy(&doc, 0);

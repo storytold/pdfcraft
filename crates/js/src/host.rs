@@ -1,4 +1,4 @@
-use super::model::{DocInfo, FieldState, FieldType, Request};
+use super::model::{BootstrapDiagnostics, DocInfo, FieldState, FieldType, Request};
 use super::run::MAX_ARRAY_LENGTH;
 use super::{
     Arc, BTreeSet, Context, FunctionObjectBuilder, JsArray, JsError, JsFunction, JsNativeError, JsResult, JsString, JsValue, Message, NativeFunction,
@@ -7,9 +7,13 @@ use super::{
 
 pub(crate) struct Host {
     pub(crate) fields: Arc<Vec<FieldState>>,
+    /// Document bootstrap may define globals without changing the form before a reset Calculate.
+    pub(crate) effects_enabled: bool,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
+    /// Reset bootstrap prefixes; console.clear can invalidate the console prefix later.
+    pub(crate) bootstrap: BootstrapDiagnostics,
     pub(crate) requests: Vec<Request>,
     pub(crate) doc: DocInfo,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
@@ -54,6 +58,9 @@ impl Host {
     /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
     /// requests and the run's byte budget.
     pub(crate) fn request(&mut self, r: Request) {
+        if !self.effects_enabled {
+            return;
+        }
         if self.requests.len() >= xfa::MAX_EFFECTS {
             self.dropped = self.dropped.saturating_add(1);
             return;
@@ -173,6 +180,9 @@ pub(crate) fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
 pub(crate) fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
+    if !h.effects_enabled {
+        return Ok(());
+    }
     let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
     change(field);
     h.changed.insert(i);

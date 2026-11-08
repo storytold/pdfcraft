@@ -356,9 +356,11 @@ fn app_alert_titles_are_clipped_and_charged() {
     // has no room for is left out and counted.
     let mut h = Host {
         fields: Arc::new(Vec::new()),
+        effects_enabled: true,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
+        bootstrap: BootstrapDiagnostics::default(),
         requests: Vec::new(),
         doc: doc(),
         kept: 0,
@@ -393,6 +395,61 @@ fn document_level_functions_are_available() {
         Limits::default(),
     );
     assert_eq!(o.value, "8");
+}
+
+#[test]
+fn reset_bootstrap_defines_helpers_without_changing_fields_or_requesting_resets() {
+    let fields = Arc::new(vec![
+        FieldState::new("price", FieldType::Text, vec!["17".into()]),
+        FieldState::new("total", FieldType::Text, vec!["84".into()]),
+        FieldState::new("note", FieldType::Text, vec![]),
+    ]);
+    let docs = vec!["var factor = 2; function totalForPrice() { return Number(getField('price').value) * factor; } getField('price').value = '0'; this.pageNum = 2; this.resetForm(['price']); console.println('bootstrap');".into()];
+    let script = "getField('note').value = event.name + ':' + event.target.name + ':' + this.pageNum; event.value = totalForPrice(); console.println('calculate');";
+    let event = Event::field("Calculate", "total", "84");
+    let protected = run_shared_for_reset(script, &event, &doc(), Arc::clone(&fields), &docs, Limits::default());
+    assert_eq!((protected.error.as_deref(), protected.value.as_str()), (None, "34"));
+    assert_eq!(protected.changed.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["note"]);
+    assert_eq!(protected.changed[0].value, ["Calculate:total:0"]);
+    assert!(protected.requests.is_empty());
+    assert_eq!(protected.console, ["bootstrap", "calculate"]);
+
+    // Ordinary field runs keep their existing bootstrap policy.
+    let ordinary = run_shared(script, &event, &doc(), fields, &docs, Limits::default());
+    assert_eq!(ordinary.value, "0");
+    assert!(ordinary.changed.iter().any(|f| f.name == "price"));
+    assert_eq!(ordinary.requests, [Request::GoToPage(2), Request::Reset(vec!["price".into()])]);
+}
+
+#[test]
+fn reset_bootstrap_error_still_runs_the_real_field_script_with_effects() {
+    let fields = Arc::new(vec![FieldState::new("price", FieldType::Text, vec!["17".into()]), FieldState::new("note", FieldType::Text, vec![])]);
+    let docs = vec!["function helper() { return getField('price').value; } getField('price').value = '0'; throw new Error('init failed');".into()];
+    let outcome = run_shared_for_reset(
+        "getField('note').value = helper(); event.value = helper();",
+        &Event::field("Calculate", "note", ""),
+        &doc(),
+        fields,
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((outcome.error.as_deref(), outcome.value.as_str()), (None, "17"));
+    assert!(outcome.doc_errors.iter().any(|error| error.contains("init failed")), "{outcome:?}");
+    assert_eq!(outcome.changed.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["note"]);
+}
+
+#[test]
+fn reset_field_event_is_fresh_after_document_bootstrap() {
+    let docs = vec!["event.name = 'Wrong'; event.value = '0'; event.rc = false; event.targetName = 'wrong';".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = event.name + ':' + event.rc + ':' + event.target.name + ':' + event.targetName;",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((outcome.error.as_deref(), outcome.value.as_str()), (None, "Calculate:true:total:total"));
 }
 
 /// #3940: a document script that throws after defining a helper (here calling an Acrobat method
@@ -2071,4 +2128,208 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+#[test]
+fn reset_captured_event_reference_reads_the_restored_event() {
+    let docs = vec!["var savedEvent = event; savedEvent.name = 'Wrong'; function savedName() { return savedEvent.name; }".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = savedName() + ':' + event.name;",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.value, "Calculate:Calculate");
+}
+
+#[test]
+fn reset_event_global_descriptor_variants_run_the_real_script() {
+    for initializer in [
+        "event = 'blocked';",
+        "delete this.event;",
+        "Object.defineProperty(this, 'event', { value: 'blocked', writable: false, configurable: true });",
+        "Object.defineProperty(this, 'event', { get() { console.println('getter'); return 'blocked'; }, set(_) { console.println('setter'); }, configurable: true });",
+        "Object.freeze(this);",
+    ] {
+        let outcome = run_shared_for_reset(
+            "event.value = event.name + ':' + event.targetName;",
+            &Event::field("Calculate", "total", "84"),
+            &doc(),
+            Arc::new(fields()),
+            &[initializer.into()],
+            Limits::default(),
+        );
+        assert_eq!(outcome.error, None, "{initializer}: {outcome:?}");
+        assert!(!outcome.event_restore_failed, "{initializer}: {outcome:?}");
+        assert!(outcome.doc_errors.is_empty(), "{initializer}: {outcome:?}");
+        assert_eq!(outcome.value, "Calculate:total", "{initializer}");
+        assert!(outcome.console.is_empty(), "a bootstrap accessor must not run during restoration: {initializer}: {outcome:?}");
+    }
+}
+
+#[test]
+fn reset_event_impossible_descriptors_fail_before_the_real_script() {
+    for initializer in [
+        "Object.defineProperty(this, 'event', { value: 'blocked', writable: false, configurable: false });",
+        "Object.defineProperty(this, 'event', { get() { console.println('getter'); return 'blocked'; }, configurable: false });",
+        "Object.freeze(event);",
+        "event.name = 'Wrong'; Object.defineProperty(event, 'name', { writable: false, configurable: false });",
+        "delete this.event; Object.preventExtensions(this);",
+    ] {
+        let outcome = run_shared_for_reset(
+            "console.println('real script ran'); event.value = '34';",
+            &Event::field("Calculate", "total", "84"),
+            &doc(),
+            Arc::new(fields()),
+            &[initializer.into()],
+            Limits::default(),
+        );
+        assert!(outcome.event_restore_failed, "{initializer}: {outcome:?}");
+        assert!(outcome.error.as_deref().is_some_and(|e| e.contains("reset event could not be restored")), "{initializer}: {outcome:?}");
+        assert!(!outcome.console.iter().any(|s| s == "real script ran"), "{initializer}: {outcome:?}");
+    }
+}
+
+#[test]
+fn reset_captured_event_keeps_extra_properties_and_survives_document_error() {
+    let docs = vec!["var saved = event; saved.name = 'Wrong'; saved.extra = 'kept'; function savedName() { return saved.name + ':' + saved.extra; } throw new Error('bootstrap failed');".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = savedName() + ':' + event.name;",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.value, "Calculate:kept:Calculate");
+    assert!(outcome.doc_errors.iter().any(|e| e.contains("bootstrap failed")));
+}
+
+#[test]
+fn reset_captured_event_shares_value_rc_and_change_with_the_real_event() {
+    let docs = vec!["var saved = event; saved.value = '0'; saved.rc = false; saved.change = 'wrong'; function savedState() { return [saved === event, saved.value, saved.rc, saved.change].join(':'); }".into()];
+    let outcome = run_shared_for_reset(
+        "event.value = savedState(); event.change = 'real';",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.value, "true:84:true:");
+    assert_eq!(outcome.change, "real");
+}
+
+#[test]
+fn reset_rejects_incompatible_lexical_event_before_calculate_or_format() {
+    for name in ["Calculate", "Format"] {
+        for initializer in [
+            "let event = { value: '0', name: 'Wrong' };",
+            "const event = { value: '0', name: 'Wrong' };",
+            "let event = 7;",
+            "const event = 7;",
+            "let event;",
+            "throw new Error('before initialization'); let event;",
+            "let event = { value: '0' }; function assign(v) { event.value = v; }",
+            "let event = Object.freeze({ value: '0' });",
+        ] {
+            let o = run_shared_for_reset(
+                "console.println('real script'); event.value = '34'; event.rc = false; event.change = 'real';",
+                &Event::field(name, "total", "84"),
+                &doc(),
+                Arc::new(fields()),
+                &[initializer.into()],
+                Limits::default(),
+            );
+            assert!(o.event_restore_failed, "{name}: {initializer}: {o:?}");
+            assert!(o.error.as_deref().is_some_and(|e| e.contains("reset event could not be restored")), "{o:?}");
+            assert!(!o.console.iter().any(|line| line == "real script"), "{o:?}");
+            assert_eq!((o.value.as_str(), o.rc, o.change.as_str()), ("84", true, ""));
+        }
+    }
+}
+
+#[test]
+fn reset_accepts_lexical_aliases_of_the_canonical_event() {
+    for initializer in [
+        "const event = globalThis.event;",
+        "let event = globalThis.event;",
+        "var event = { value: '0' };",
+        "{ let event = { value: '0' }; }",
+        "function initialize() { let event = { value: '0' }; } initialize();",
+    ] {
+        let o = run_shared_for_reset(
+            "event.value = '34'; event.rc = false; event.change = 'real';",
+            &Event::field("Calculate", "total", "84"),
+            &doc(),
+            Arc::new(fields()),
+            &[initializer.into()],
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{initializer}: {o:?}");
+        assert!(!o.event_restore_failed);
+        assert_eq!((o.value.as_str(), o.rc, o.change.as_str()), ("34", false, "real"));
+    }
+    // Only ResetForm gets the identity guard; an ordinary event retains its existing policy.
+    let o = run(
+        "event.value = '34';",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        &fields(),
+        &["let event = { value: '0' };".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert!(!o.event_restore_failed);
+    assert_eq!(o.value, "84");
+}
+
+#[test]
+fn reset_reports_bootstrap_diagnostic_prefixes_without_filtering_real_messages() {
+    let scripts = ["console.println('same'); app.alert('same'); throw new Error('bootstrap');".into()];
+    let script = "console.println('same'); app.alert('same'); event.value='34';";
+    let event = Event::field("Calculate", "total", "84");
+    let o = run_shared_for_reset(script, &event, &doc(), Arc::new(fields()), &scripts, Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "34");
+    assert_eq!(o.console, ["same", "same"]);
+    assert_eq!(o.alerts, [Message::plain("same"), Message::plain("same")]);
+    assert_eq!(o.bootstrap, BootstrapDiagnostics { alerts: 1, console: 1 });
+    assert_eq!(o.doc_errors.len(), 1);
+    let ordinary = run(script, &event, &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(ordinary.console, o.console);
+    assert_eq!(ordinary.alerts, o.alerts);
+    assert_eq!(ordinary.bootstrap, BootstrapDiagnostics::default());
+}
+
+#[test]
+fn reset_bootstrap_provenance_keeps_the_existing_message_limits() {
+    let scripts = ["for (var i=0;i<1005;i++) console.println('bootstrap');".into()];
+    let o =
+        run_shared_for_reset("event.value='34';", &Event::field("Calculate", "total", "84"), &doc(), Arc::new(fields()), &scripts, Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "34");
+    assert_eq!(o.bootstrap.console, xfa::MAX_CONSOLE);
+    assert_eq!(o.console.len(), xfa::MAX_CONSOLE + 1);
+    assert!(o.console.last().unwrap().contains("5 more were left out"));
+}
+
+#[test]
+fn reset_bootstrap_provenance_survives_console_clear_in_the_real_script() {
+    let o = run_shared_for_reset(
+        "console.clear(); console.println('real'); event.value='34';",
+        &Event::field("Format", "total", "84"),
+        &doc(),
+        Arc::new(fields()),
+        &["console.println('bootstrap'); app.alert('bootstrap');".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.console, ["real"]);
+    assert_eq!(o.bootstrap, BootstrapDiagnostics { alerts: 1, console: 0 });
 }
