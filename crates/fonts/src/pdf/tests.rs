@@ -927,4 +927,10 @@ fn the_mac_roman_reading_needs_no_base_encoding_and_no_symbolic_builtin() {
     diffs.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x8E), Object::name("ecircumflex")]));
     assert_eq!(read(vec![("Encoding", Object::Dict(diffs))]), ["à", "ê"], "/Differences without a base encoding");
     assert_eq!(read(vec![("BaseFont", Object::name("Symbol"))]), ["", ""], "Symbol");
+    assert_eq!(read(vec![("BaseFont", Object::name("ZapfDingbats"))]), ["", ""], "ZapfDingbats");
+    // A name it can't read clears the Mac OS Roman reading for its code, as it clears a base
+    // encoding's.
+    let mut notdef = Dict::new();
+    notdef.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x8E), Object::name(".notdef")]));
+    assert_eq!(read(vec![("Encoding", Object::Dict(notdef))]), ["à", ""], "/Differences naming .notdef");
 }
