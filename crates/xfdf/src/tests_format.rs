@@ -568,6 +568,23 @@ fn appearance_cycles_and_strings_survive_export() {
 }
 
 #[test]
+fn an_appearance_that_names_its_page_does_not_carry_the_page_along() {
+    let mut src = pages(1);
+    image_stamp(&mut src, "pg", "Stamp");
+    let d = named(&src, "pg");
+    let n = sub_dict(&src, &d, b"AP").get(b"N").and_then(Object::as_ref).unwrap();
+    let page = page_ref(&src, 0);
+    let Object::Stream(mut form) = (*src.get(n)).clone() else { panic!("no form") };
+    form.dict.set(b"PieceInfo".to_vec(), Object::Ref(page));
+    src.set(n, Object::Stream(form));
+    let xml = export_xfdf(&src, true, false, "src.pdf");
+    let b64: String = xml.split("<appearance>").nth(1).unwrap().split("</appearance>").next().unwrap().split_whitespace().collect();
+    let inner = String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap();
+    assert!(inner.contains(r#"<NULL KEY="PieceInfo"/>"#), "{inner}");
+    assert!(!inner.contains("Kids") && !inner.contains("MediaBox"));
+}
+
+#[test]
 fn fdf_carries_appearances_with_their_resources() {
     let mut src = pages(1);
     let (content, pixels) = image_stamp(&mut src, "logo", "Stamp");

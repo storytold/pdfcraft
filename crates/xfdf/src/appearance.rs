@@ -120,6 +120,12 @@ impl Writer<'_> {
                 }
                 self.out.push_str("</ARRAY>\n");
             }
+            // A page (or the page tree) reached from the appearance is the source document's, not
+            // the comment's: written in place it would carry every page along.
+            Object::Dict(d) if matches!(d.name(b"Type"), Some(b"Page" | b"Pages")) => self.out.push_str(&format!(
+                "<NULL{k}/>
+"
+            )),
             Object::Dict(d) => self.dict(key, d, depth)?,
             Object::Stream(s) => {
                 // The data plus its hexadecimal form must fit what is left of the budget.
