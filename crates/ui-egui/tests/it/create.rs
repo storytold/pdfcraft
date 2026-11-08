@@ -55,6 +55,7 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
 #[test]
 fn opening_images_and_text_converts_them_to_new_pdfs() {
     let mut app = PdfCraftApp::new();
+    app.system_clipboard = false;
     app.set_option("language", "en").unwrap();
     app.open_bytes("photo.png", Some("/tmp/photo.png".into()), png()).unwrap();
     app.open_bytes("notes.txt", None, b"first line\nsecond line".to_vec()).unwrap();
@@ -155,6 +156,7 @@ fn reduce_file_size_saves_nothing_when_the_file_is_already_small() {
 fn clipboard_images_and_text_become_new_pdfs() {
     use pdfcraft_ui_egui::Clip;
     let mut app = PdfCraftApp::new();
+    app.system_clipboard = false;
     app.set_option("language", "en").unwrap();
     app.create_from_clip(Clip::Image { width: 40, height: 20, rgba: [10u8, 20, 30, 255].repeat(40 * 20) }).unwrap();
     app.create_from_clip(Clip::Text("Pasted\nlines".into())).unwrap();
@@ -165,6 +167,61 @@ fn clipboard_images_and_text_become_new_pdfs() {
     let p = &docs[0].info.pages[0];
     assert!((p.width / p.height - 2.0).abs() < 0.01, "{} × {}", p.width, p.height);
     assert!(app.create_from_clip(Clip::Image { width: 4, height: 4, rgba: vec![0; 3] }).is_err(), "malformed images are refused");
+}
+
+/// Test inserting pages from clipboard into an existing document:
+/// converts image, text, or copied pages and supports undo/redo.
+#[test]
+fn insert_from_clipboard_image_text_and_copied_pages() {
+    let mut app = PdfCraftApp::new();
+    app.system_clipboard = false;
+    app.set_option("language", "en").unwrap();
+
+    // 1. Open a baseline 2-page document.
+    let pdf = app.session.create_blank(612.0, 792.0, 2).unwrap();
+    app.open_bytes("base.pdf", None, pdf.to_vec()).unwrap();
+    assert_eq!(app.session.docs()[0].info.pages.len(), 2);
+
+    // 2. When the clipboard has neither image nor text, trying to insert reports a toast.
+    app.clipboard_override = None;
+    app.page_clipboard = None;
+    app.insert_from_clipboard();
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("The clipboard has no image or text"));
+    app.toast = None;
+
+    // 3. Insert Clip::Image via clipboard_override and execute("page.insert_clipboard").
+    app.views[0].select_pages(&[1]);
+    let img_clip = pdfcraft_ui_egui::Clip::Image { width: 16, height: 16, rgba: [200u8, 50, 50, 255].repeat(16 * 16) };
+    app.clipboard_override = Some(img_clip);
+    assert!(app.execute("page.insert_clipboard"));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 3);
+    assert_eq!(app.views[0].target_pages(), vec![2]);
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Insert pages from Clipboard"));
+
+    // 4. Insert Clip::Text at specific gap (gap 0 = before the first page).
+    let text_clip = pdfcraft_ui_egui::Clip::Text("Prepended page from text".into());
+    app.insert_from_clip(text_clip, Some(0)).unwrap();
+    assert_eq!(app.session.docs()[0].info.pages.len(), 4);
+    assert_eq!(app.views[0].target_pages(), vec![0]);
+
+    // 5. Insert copied pages from internal page_clipboard.
+    app.views[0].select_pages(&[0]);
+    app.copy_pages(false);
+    assert!(app.page_clipboard.is_some());
+    app.clipboard_override = None;
+    app.insert_from_clipboard_at(Some(2));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 5);
+    assert_eq!(app.views[0].target_pages(), vec![2]);
+
+    // 6. Test Undo & Redo.
+    assert!(app.execute("edit.undo"));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 4);
+    assert!(app.execute("edit.redo"));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 5);
+
+    // 7. Negative case: malformed or empty image returns clean Err.
+    let bad_img = pdfcraft_ui_egui::Clip::Image { width: 0, height: 0, rgba: vec![] };
+    assert!(app.insert_from_clip(bad_img, None).is_err());
 }
 
 #[test]
@@ -279,6 +336,7 @@ fn separate_batch_creates_one_pdf_per_source_without_replacing_existing_files() 
     std::fs::write(dir.join("notes.pdf"), b"keep this file").unwrap();
 
     let mut app = PdfCraftApp::new();
+    app.system_clipboard = false;
     app.set_option("language", "en").unwrap();
     app.export_dir_override = Some(dir.to_string_lossy().into_owned());
     let mut files = mixed_files(&app);
@@ -363,6 +421,7 @@ fn multiple_files_open_as_one_document_in_the_page_grid() {
 #[test]
 fn multiple_files_that_cannot_be_converted_open_nothing() {
     let mut app = PdfCraftApp::new();
+    app.system_clipboard = false;
     app.set_option("language", "en").unwrap();
     app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
     assert!(app.views.is_empty());
@@ -372,6 +431,7 @@ fn multiple_files_that_cannot_be_converted_open_nothing() {
 #[test]
 fn multiple_files_past_a_thousand_are_all_used() {
     let mut app = PdfCraftApp::new();
+    app.system_clipboard = false;
     app.set_option("language", "en").unwrap();
     let pdf = app.session.create_from_text("a", "from a pdf").unwrap();
     let files: Vec<(String, Vec<u8>)> = (0..1001).map(|i| (format!("f{i}.pdf"), pdf.to_vec())).collect();

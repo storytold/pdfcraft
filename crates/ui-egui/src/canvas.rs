@@ -808,6 +808,8 @@ pub enum ViewAction {
     },
     /// Paste copied pages after the selection.
     PastePages,
+    /// Insert pages from clipboard (image, text, or copied pages).
+    InsertFromClipboard,
     /// Enhance ▸ Camera image: straighten what the corners enclose.
     EnhanceCamera,
     /// Leave Enhance ▸ Camera image (Cancel before Enhance page, Done after it).
