@@ -14,16 +14,17 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
-use crate::page_router::{Hit, Owner, ParagraphPart};
+use crate::page_router::{Hit, Owner, PagePress, ParagraphPart};
 
 mod background;
 mod image;
 mod layout;
 
 pub(crate) use background::TextBackground;
-pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection, image_menu_id};
+pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection};
 pub(crate) use image::{
-    ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, quad_contains, user_to_screen,
+    ImageCx, Matrix, body_hit as picture_hit, crop_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, picture_context,
+    picture_keys, quad_contains, user_to_screen,
 };
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees, turn_degrees_delta};
@@ -658,10 +659,26 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
     });
 }
 
-/// Lines and their screen boxes for a page; hover outlines, click opens the editor. Returns
-/// `true` when the pointer was used.
-pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], view: &mut DocView, allow_interaction: bool) -> bool {
+/// What Edit text's paragraphs are told on one page.
+#[derive(Clone, Copy)]
+pub(crate) struct ParagraphCx<'a> {
+    /// What the press the pages hold is to this page.
+    pub press: PagePress,
+    /// Edit text's input is open: no dialog, palette, other window or other tab has it.
+    pub gate: bool,
+    /// What a press under the pointer would take (the top hit there): the paragraph outlined.
+    pub hover: Option<&'a Hit>,
+    /// With Add text, the page's added content: a click on a paragraph finishes the text being
+    /// typed before it opens the paragraph.
+    pub adding: Option<&'a [pdfcraft_engine::Added]>,
+}
+
+/// Lines and their screen boxes for a page: the paragraph under the pointer is outlined, and the
+/// press that is a paragraph's (`press`) moves it, rewraps it or, a click, opens it in the editor.
+/// Returns `true` when the pointer was used.
+pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], pcx: ParagraphCx<'_>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
+    let ParagraphCx { press, gate, hover, adding } = pcx;
     let info = &doc.info;
     if view.block_drag.is_some_and(|d| d.generation != doc.edit_generation()) {
         view.block_drag = None;
@@ -678,7 +695,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     }
     // A box a switching click asked for opens now, once the edit queued with that click has
     // applied and `lines`/`boxes` are the document's new inventory (#2022).
-    if allow_interaction
+    if gate
         && active.is_none()
         && let Some((open_page, key)) = view.pending_text_open.clone()
         && open_page == page
@@ -690,7 +707,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             None => view.pending_text_open = None,
         }
     }
-    if !allow_interaction {
+    if !gate {
         return false;
     }
     let upright = has_edges(info, page);
@@ -749,12 +766,15 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     // What it grabs is what the press was on ([`hit`]), not what is under the pointer now: egui
     // only calls it a drag once the pointer has moved a few pixels (or been held a moment), and a
     // quick flick has left the edge by then.
-    let owner = match view.router.owner(page) {
-        Some(Owner::Paragraph { block, part }) => Some((block, part)),
+    let owner = match press {
+        PagePress::Mine(Owner::Paragraph { block, part }) => Some((block, part)),
         _ => None,
     };
-    if resp.drag_started()
+    // Add text holds text that can't be drawn where it is being typed (#125).
+    let held_draft = adding.is_some() && view.content.blocked().is_some();
+    if ptr.drag_started
         && active.is_none()
+        && !held_draft
         && let Some(o) = ptr.origin
         && let Some((block, part)) = owner
     {
@@ -766,18 +786,35 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
-    let Some(p) = ptr.within(xf.rect) else { return false };
-    // The paragraph under the pointer: outlined, with its width handles when closed.
-    let Some((hovered, _)) = grab_at(&boxes, p, upright) else { return false };
-    if active != Some(hovered) {
-        painter.rect_stroke(boxes[hovered], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-    }
-    if upright && active.is_none() {
-        draw_handles(boxes[hovered]);
+    // The paragraph under the pointer, where a press would take it: outlined, with its width
+    // handles when closed. Not while the objects selected together or added content being moved
+    // hold the page.
+    let hovered = match hover.map(|h| h.owner) {
+        Some(Owner::Paragraph { block, .. }) => Some(block),
+        _ => None,
+    };
+    if let Some(b) = hovered.filter(|_| !view.objects.holds(page) && !view.content.moving_on(page)).and_then(|h| boxes.get(h).map(|b| (h, *b))) {
+        if active != Some(b.0) {
+            painter.rect_stroke(b.1, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+        }
+        if upright && active.is_none() {
+            draw_handles(b.1);
+        }
     }
     // A click opens the paragraph the press was on.
-    let Some((hit, _)) = owner else { return true };
+    let Some((hit, _)) = owner else { return hovered.is_some() };
     if resp.clicked() {
+        // Add text: text that can't be drawn stays where it is being typed (#125), and text being
+        // typed is finished first.
+        if let Some(added) = adding {
+            if view.content.hold_blocked() {
+                return true;
+            }
+            if let Some(edit) = view.content.finish_draft(added) {
+                view.pending_edit = Some(edit);
+            }
+            view.content.selected = None;
+        }
         view.image_selection = None;
         // A click that moves the editor to another paragraph applies the open one first, so its
         // typed text is not dropped with the switched-away editor (#2022). A click on the open
