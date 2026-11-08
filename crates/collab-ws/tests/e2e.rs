@@ -11,8 +11,8 @@ use pdfcraft_collab_client_pdf::{
 };
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
-use pdfcraft_collab_proto::{ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Role, ServerMessage, Target};
-use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, RoomConfig};
+use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, ServerMessage, Target, Viewport};
+use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Publication, PublishOutcome, RoomConfig};
 use pdfcraft_collab_ws::{Claims, Config, ServerHandle, TokenError, Verifier, WsServer};
 use pdfcraft_engine::Session;
 use serde_json::json;
@@ -48,12 +48,16 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-/// Tokens are `role:name`; the real verifier is unit-tested in the crate.
+/// Tokens are `role:name` (document `file-1`) or `role:name:doc`; the real
+/// verifier is unit-tested in the crate.
 struct TestVerifier;
 
 impl Verifier for TestVerifier {
     fn verify(&self, token: &str) -> Result<Claims, TokenError> {
-        let (role, name) = token.split_once(':').ok_or(TokenError::Invalid)?;
+        let mut parts = token.split(':');
+        let role = parts.next().ok_or(TokenError::Invalid)?;
+        let name = parts.next().ok_or(TokenError::Invalid)?;
+        let file = parts.next().unwrap_or("file-1");
         let role = match role {
             "editor" => Role::Editor,
             "commenter" => Role::Commenter,
@@ -63,7 +67,7 @@ impl Verifier for TestVerifier {
         Ok(Claims {
             subject: name.to_owned(),
             audience: "lzmkm".into(),
-            file_id: "file-1".into(),
+            file_id: file.to_owned(),
             app: "pdfcraft".into(),
             role,
             session_id: "session-1".into(),
@@ -91,6 +95,10 @@ struct Peer {
 
 impl Peer {
     fn join(addr: std::net::SocketAddr, token: &str, name: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::join_doc(addr, token, name, "file-1")
+    }
+
+    fn join_doc(addr: std::net::SocketAddr, token: &str, name: &str, doc: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/"))?;
         if let MaybeTlsStream::Plain(stream) = ws.get_mut() {
             stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -100,7 +108,7 @@ impl Peer {
                 "type": "hello",
                 "v": 1,
                 "app": "pdfcraft",
-                "doc": "file-1",
+                "doc": doc,
                 "jwt": token,
                 "client": {"name": name, "version": "0"},
             })
@@ -376,6 +384,112 @@ fn a_commit_over_the_wire_produces_a_readable_pdf() -> Result<(), Box<dyn std::e
     assert_eq!(result.version, editor.version);
     assert!(!result.sha256.is_empty());
     assert!(result.bytes > 0);
+    Ok(())
+}
+
+/// RFC §16, limitation 9: the cabinet call of a commit runs outside the hub
+/// lock. A cabinet that does not answer for one document must not freeze
+/// presence in another.
+#[test]
+fn a_commit_does_not_block_presence_in_another_room() -> Result<(), Box<dyn std::error::Error>> {
+    /// Holds the publication until the test opens it, and says when it started.
+    #[derive(Clone)]
+    struct Gate {
+        started: std::sync::mpsc::Sender<()>,
+        release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    struct GatePublication(Gate);
+
+    impl Publication for GatePublication {
+        fn run(self: Box<Self>) -> PublishOutcome {
+            let _ = self.0.started.send(());
+            let (lock, condvar) = &*self.0.release;
+            let mut released = lock.lock().expect("the gate is not poisoned");
+            while !*released {
+                released = condvar.wait(released).expect("the gate is not poisoned");
+            }
+            Ok(None)
+        }
+    }
+
+    struct Slow {
+        inner: PdfAdapter,
+        gate: Gate,
+    }
+
+    impl Adapter for Slow {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+            Some(Box::new(GatePublication(self.gate.clone())))
+        }
+        fn finish_publish(&mut self, _version: u64, _outcome: PublishOutcome) -> Result<(), AdapterError> {
+            Ok(())
+        }
+    }
+
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let gate = Gate { started: started_tx, release: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())) };
+    let doc_a = DocKey::new("file-1")?;
+    let doc_b = DocKey::new("file-2")?;
+    let mut hub = Hub::new(RoomConfig::default());
+    hub.open_room(doc_a.clone(), Slow { inner: PdfAdapter::open("a.pdf", fixture(1).into())?, gate: gate.clone() })?;
+    hub.open_room(doc_b.clone(), Slow { inner: PdfAdapter::open("b.pdf", fixture(1).into())?, gate: gate.clone() })?;
+    let handle = WsServer::new(hub, Arc::new(TestVerifier), Config::default()).bind("127.0.0.1:0")?;
+    let addr = handle.local_addr();
+
+    let mut ada = Peer::join_doc(addr, "editor:ada:file-1", "ada", "file-1")?;
+    let mut bo = Peer::join_doc(addr, "editor:bo:file-2", "bo", "file-2")?;
+    let mut cy = Peer::join_doc(addr, "editor:cy:file-2", "cy", "file-2")?;
+
+    let add = merge_op(doc_a.clone(), OpId::new("op-add")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "kept", "ada"));
+    ada.send(add)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Applied(_)));
+
+    // Ada commits; the cabinet call blocks until this test opens the gate.
+    ada.ws.send(Message::text(serde_json::to_string(&ClientMessage::Commit(pdfcraft_collab_proto::CommitRequest {
+        expected_version: ada.version,
+        message: None,
+    }))?))?;
+    started_rx.recv_timeout(Duration::from_secs(5))?;
+
+    // While room A is inside its cabinet call, room B still exchanges presence.
+    let presence = Presence {
+        actor_id: ActorId::new("bo")?,
+        role: Role::Editor,
+        page: PageRef { index: 0, epoch: 0 },
+        viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
+        cursor: Some([5, 6]),
+        selection: None,
+        color: "#112233".into(),
+    };
+    bo.ws.send(Message::text(serde_json::to_string(&ClientMessage::Presence(presence))?))?;
+    match cy.next()? {
+        ServerMessage::Presence(presence) => assert_eq!(presence.actor_id.as_str(), "bo"),
+        other => return Err(format!("presence in the other room was blocked by the commit: {other:?}").into()),
+    }
+
+    // The commit still answers its author once the cabinet did.
+    let (lock, condvar) = &*gate.release;
+    *lock.lock().expect("the gate is not poisoned") = true;
+    condvar.notify_all();
+    let result = loop {
+        match ada.next()? {
+            ServerMessage::CommitResult(result) => break result,
+            ServerMessage::Presence(_) => {}
+            other => return Err(format!("expected a commit result, got {other:?}").into()),
+        }
+    };
+    assert_eq!(result.version, 1);
+    assert!(!result.conflict);
     Ok(())
 }
 

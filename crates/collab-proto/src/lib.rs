@@ -366,6 +366,10 @@ pub enum ErrorCode {
     Invalid,
     Limit,
     Unsupported,
+    /// The document is busy with a call the server must finish first (a commit
+    /// being published to the cabinet). The request is retryable: nothing was
+    /// changed by it.
+    Busy,
     /// The server could not complete an operation for a reason the client
     /// cannot fix: the request is not retryable and repeating it will not help.
     Internal,

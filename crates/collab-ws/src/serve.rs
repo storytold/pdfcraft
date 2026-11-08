@@ -7,7 +7,7 @@
 //! disconnected instead of growing memory (RFC §5).
 
 use crate::token::{TokenError, Verifier};
-use pdfcraft_collab_hub::{ClientId, Hub};
+use pdfcraft_collab_hub::{ClientId, Hub, Pending};
 use pdfcraft_collab_proto::{ActorId, ClientMessage, ErrorCode, Hello, MAX_MESSAGE_BYTES, ServerError, ServerMessage};
 use pdfcraft_collab_server::Adapter;
 use std::collections::HashMap;
@@ -62,6 +62,9 @@ pub struct WsServer<A: Adapter> {
 struct Shared<A: Adapter> {
     hub: Hub<A>,
     sinks: HashMap<ClientId, SyncSender<ServerMessage>>,
+    /// Commits that have written their base and wait for the cabinet call.
+    /// The lock is released before they run (RFC §16, limitation 9).
+    pending: Vec<Pending>,
 }
 
 impl<A: Adapter> Shared<A> {
@@ -89,16 +92,37 @@ impl<A: Adapter> Shared<A> {
                     && self.hub.members(&doc) == 0
                 {
                     // A client that fell too far behind still leaves its work on disk.
-                    let _ = self.hub.commit_if_dirty(&doc);
+                    if let Some(pending) = self.hub.commit_if_dirty(&doc) {
+                        self.pending.push(pending);
+                    }
                 }
             }
         }
+    }
+
+    /// Take the commits whose publication has to run outside the lock.
+    fn take_pending(&mut self) -> Vec<Pending> {
+        std::mem::take(&mut self.pending)
     }
 }
 
 impl<A: Adapter> WsServer<A> {
     pub fn new(hub: Hub<A>, verifier: Arc<dyn Verifier>, config: Config) -> Self {
-        Self { shared: Arc::new(Mutex::new(Shared { hub, sinks: HashMap::new() })), verifier, config }
+        Self { shared: Arc::new(Mutex::new(Shared { hub, sinks: HashMap::new(), pending: Vec::new() })), verifier, config }
+    }
+
+    /// Run the cabinet calls of commits that were prepared under the lock, and
+    /// record their outcomes. The hub lock is released for every call: a
+    /// cabinet that does not answer delays this connection, not the other
+    /// documents in the process (RFC §16).
+    fn run_pending(&self, mut pending: Vec<Pending>) {
+        while let Some(mut item) = pending.pop() {
+            let outcome = item.publish();
+            let Ok(mut shared) = lock(&self.shared) else { return };
+            shared.hub.finish(item, outcome);
+            shared.pump();
+            pending.extend(shared.take_pending());
+        }
     }
 
     /// Open a room before clients connect. The adapter owns the authoritative
@@ -210,6 +234,9 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
                 Ok(id) => {
                     shared.sinks.insert(id, sink);
                     shared.pump();
+                    let pending = shared.take_pending();
+                    drop(shared);
+                    self.run_pending(pending);
                     Ok(id)
                 }
                 Err(e) => Err(e),
@@ -222,15 +249,18 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
 
         ws.get_ref().set_read_timeout(Some(self.config.poll_interval)).map_err(TransportError::Io)?;
         let outcome = self.pump_loop(&mut ws, id, &outbox);
-        {
+        let pending = {
             let mut shared = lock(&self.shared)?;
             shared.sinks.remove(&id);
             shared.hub.disconnect(id);
             if shared.hub.members(&doc) == 0 {
                 // Last participant out: the server commits so the cabinet has the work (RFC §8).
-                let _ = shared.hub.commit_if_dirty(&doc);
+                shared.hub.commit_if_dirty(&doc).into_iter().collect()
+            } else {
+                Vec::new()
             }
-        }
+        };
+        self.run_pending(pending);
         let _ = ws.close(None);
         let _ = ws.flush();
         outcome
@@ -282,11 +312,22 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
         if let Err(e) = message.validate() {
             return send_error(ws, ErrorCode::Invalid, e.to_string());
         }
-        let mut shared = lock(&self.shared)?;
-        if let Err(e) = shared.hub.send(id, message, now_ms()) {
-            shared.deliver(id, ServerMessage::Error(e));
-        }
-        shared.pump();
+        let pending = {
+            let mut shared = lock(&self.shared)?;
+            let mut pending = match shared.hub.send(id, message, now_ms()) {
+                Ok(pending) => pending.into_iter().collect::<Vec<_>>(),
+                Err(e) => {
+                    shared.deliver(id, ServerMessage::Error(e));
+                    Vec::new()
+                }
+            };
+            shared.pump();
+            pending.extend(shared.take_pending());
+            pending
+        };
+        // A commit answers only after its publication ran, and it runs here,
+        // outside the hub lock.
+        self.run_pending(pending);
         Ok(())
     }
 }
@@ -586,10 +627,15 @@ mod tests {
     #[test]
     fn a_second_editor_joins_and_gets_a_zero_lease() -> Result<(), Box<dyn std::error::Error>> {
         let handle = start()?;
+        // The lease goes to the first join the server processes, so the second
+        // client is joined only after the first one was welcomed.
         let mut first = Client::join(handle.local_addr(), "editor:a", "a")?;
+        let ServerMessage::Welcome(one) = first.next()? else {
+            return Err("expected a welcome".into());
+        };
         let mut second = Client::join(handle.local_addr(), "editor:b", "b")?;
-        let (ServerMessage::Welcome(one), ServerMessage::Welcome(two)) = (first.next()?, second.next()?) else {
-            return Err("expected two welcomes".into());
+        let ServerMessage::Welcome(two) = second.next()? else {
+            return Err("expected a welcome".into());
         };
         assert!(one.lease.ttl_secs > 0);
         assert_eq!(two.lease.ttl_secs, 0);

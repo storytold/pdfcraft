@@ -344,7 +344,9 @@ mod tests {
             let room = hub.room_mut(&doc).ok_or("no room")?;
             room.hello(editor.clone(), Role::Editor, &hello, 0)?;
             room.apply(&editor, &add("a1", "committed-note", 0)?, 0)?;
-            room.commit(&editor, 1)?;
+            let mut commit = room.commit(&editor, 1)?;
+            let outcome = commit.publish();
+            room.finish(commit, outcome)?;
             // Accepted after the commit: the journal, not the base, holds it.
             room.apply(&editor, &add("a2", "journal-note", 1)?, 0)?;
         }

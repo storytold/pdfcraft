@@ -12,7 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Hello, Role, ServerError, ServerMessage, SessionId};
-use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
+use pdfcraft_collab_server::{Adapter, Commit, PublishOutcome, Room, RoomConfig};
 use std::collections::{HashMap, VecDeque};
 
 pub type ClientId = u64;
@@ -34,6 +34,26 @@ pub struct Hub<A: Adapter> {
     config: RoomConfig,
     clients: HashMap<ClientId, Client>,
     rooms: HashMap<DocKey, RoomEntry<A>>,
+}
+
+/// A commit whose base is written but whose publication has not run yet.
+///
+/// The hub never runs it: the transport takes the pending commit out, releases
+/// the hub lock, calls [`Self::publish`], and reports back with [`Hub::finish`].
+/// That is what keeps a slow cabinet from freezing the other documents.
+pub struct Pending {
+    doc: DocKey,
+    /// Who asked for the commit. `None` for the server-initiated commit when
+    /// the last participant leaves: there is nobody to answer.
+    client: Option<ClientId>,
+    commit: Commit,
+}
+
+impl Pending {
+    /// Run the cabinet call. Must be called without the hub lock held.
+    pub fn publish(&mut self) -> PublishOutcome {
+        self.commit.publish()
+    }
 }
 
 impl<A: Adapter> Hub<A> {
@@ -85,7 +105,11 @@ impl<A: Adapter> Hub<A> {
     /// Turn one client message into room actions and delivered messages.
     /// Rejections are delivered to the sender; applied operations are broadcast
     /// to every member, including the author.
-    pub fn send(&mut self, id: ClientId, message: ClientMessage, now_ms: u64) -> Result<(), ServerError> {
+    ///
+    /// A commit comes back as [`Pending`]: its publication must run without the
+    /// hub lock, so the caller takes it out and reports back with
+    /// [`Self::finish`].
+    pub fn send(&mut self, id: ClientId, message: ClientMessage, now_ms: u64) -> Result<Option<Pending>, ServerError> {
         let (actor, doc) = {
             let client = self.clients.get(&id).ok_or_else(|| error(ErrorCode::Forbidden, "not connected", false))?;
             (client.actor.clone(), client.doc.clone())
@@ -94,34 +118,63 @@ impl<A: Adapter> Hub<A> {
             return Err(error(ErrorCode::Invalid, "no such document session", false));
         };
         let members = entry.members.clone();
-        match message {
-            ClientMessage::Op(op) => match entry.room.apply(&actor, &op, now_ms) {
-                Ok(applied) => broadcast(&mut self.clients, &members, &ServerMessage::Applied(applied)),
-                Err(rejected) => deliver(&mut self.clients, id, ServerMessage::Rejected(rejected)),
-            },
-            ClientMessage::Presence(presence) => match entry.room.presence(&actor, &presence, now_ms) {
-                Ok(true) => broadcast_except(&mut self.clients, &members, id, &ServerMessage::Presence(presence)),
-                Ok(false) => {}
-                Err(e) => deliver(&mut self.clients, id, ServerMessage::Error(e)),
-            },
-            ClientMessage::Resync(req) => match entry.room.resync(&actor, &req) {
-                Ok(snapshot) => deliver(&mut self.clients, id, ServerMessage::Snapshot(snapshot)),
-                Err(e) => deliver(&mut self.clients, id, ServerMessage::Error(e)),
-            },
+        let pending = match message {
+            ClientMessage::Op(op) => {
+                match entry.room.apply(&actor, &op, now_ms) {
+                    Ok(applied) => broadcast(&mut self.clients, &members, &ServerMessage::Applied(applied)),
+                    Err(rejected) => deliver(&mut self.clients, id, ServerMessage::Rejected(rejected)),
+                }
+                None
+            }
+            ClientMessage::Presence(presence) => {
+                match entry.room.presence(&actor, &presence, now_ms) {
+                    Ok(true) => broadcast_except(&mut self.clients, &members, id, &ServerMessage::Presence(presence)),
+                    Ok(false) => {}
+                    Err(e) => deliver(&mut self.clients, id, ServerMessage::Error(e)),
+                }
+                None
+            }
+            ClientMessage::Resync(req) => {
+                match entry.room.resync(&actor, &req) {
+                    Ok(snapshot) => deliver(&mut self.clients, id, ServerMessage::Snapshot(snapshot)),
+                    Err(e) => deliver(&mut self.clients, id, ServerMessage::Error(e)),
+                }
+                None
+            }
             ClientMessage::Commit(req) => match entry.room.commit(&actor, req.expected_version) {
-                Ok(result) => deliver(&mut self.clients, id, ServerMessage::CommitResult(result)),
-                Err(e) => deliver(&mut self.clients, id, ServerMessage::Error(e)),
+                Ok(commit) => Some(Pending { doc: doc.clone(), client: Some(id), commit }),
+                Err(e) => {
+                    deliver(&mut self.clients, id, ServerMessage::Error(e));
+                    None
+                }
             },
             ClientMessage::Ping(ping) => {
                 // A ping is the heartbeat that keeps the writing lease alive.
                 entry.room.heartbeat(&actor, now_ms);
-                deliver(&mut self.clients, id, ServerMessage::Pong(ping))
+                deliver(&mut self.clients, id, ServerMessage::Pong(ping));
+                None
             }
             ClientMessage::Hello(_) => {
-                deliver(&mut self.clients, id, ServerMessage::Error(error(ErrorCode::Invalid, "this connection is already joined", false)))
+                deliver(&mut self.clients, id, ServerMessage::Error(error(ErrorCode::Invalid, "this connection is already joined", false)));
+                None
             }
+        };
+        Ok(pending)
+    }
+
+    /// Record the outcome of a [`Pending`] publication and answer whoever asked.
+    /// Called under the hub lock again; the room stays dirty when the
+    /// publication failed.
+    pub fn finish(&mut self, pending: Pending, outcome: PublishOutcome) {
+        let Pending { doc, client, commit } = pending;
+        let Some(entry) = self.rooms.get_mut(&doc) else { return };
+        let answer = match entry.room.finish(commit, outcome) {
+            Ok(result) => ServerMessage::CommitResult(result),
+            Err(e) => ServerMessage::Error(e),
+        };
+        if let Some(client) = client {
+            deliver(&mut self.clients, client, answer);
         }
-        Ok(())
     }
 
     /// Drain the messages waiting for `id`.
@@ -167,13 +220,19 @@ impl<A: Adapter> Hub<A> {
     }
 
     /// Write the session's head to its file when it changed and nobody reconnected.
-    /// Returns the commit result, or `None` when the room is clean or unknown.
-    pub fn commit_if_dirty(&mut self, doc: &DocKey) -> Option<Result<pdfcraft_collab_proto::CommitResult, ServerError>> {
+    /// Returns the commit whose publication the caller still has to run, or
+    /// `None` when the room is clean or unknown.
+    pub fn commit_if_dirty(&mut self, doc: &DocKey) -> Option<Pending> {
         let entry = self.rooms.get_mut(doc)?;
         if !entry.room.is_dirty() {
             return None;
         }
-        Some(entry.room.commit_now())
+        match entry.room.commit_now() {
+            Ok(commit) => Some(Pending { doc: doc.clone(), client: None, commit }),
+            // Nobody to answer: a failed commit leaves the room dirty and the
+            // next commit (or the next last-client-leave) retries it.
+            Err(_) => None,
+        }
     }
 }
 
@@ -353,7 +412,14 @@ mod tests {
         hub.send(editor, ClientMessage::Resync(pdfcraft_collab_proto::Resync { last_version: 0 }), 0)?;
         assert!(matches!(hub.receive(editor).as_slice(), [ServerMessage::Snapshot(s)] if s.version == 1));
 
-        hub.send(editor, ClientMessage::Commit(pdfcraft_collab_proto::CommitRequest { expected_version: 1, message: None }), 0)?;
+        let mut pending = hub
+            .send(editor, ClientMessage::Commit(pdfcraft_collab_proto::CommitRequest { expected_version: 1, message: None }), 0)?
+            .ok_or("a commit is pending publication")?;
+        // The hub never runs the publication itself; the transport does, and
+        // the answer is delivered only after the outcome is recorded.
+        assert!(hub.receive(editor).is_empty());
+        let outcome = pending.publish();
+        hub.finish(pending, outcome);
         assert!(matches!(hub.receive(editor).as_slice(), [ServerMessage::CommitResult(r)] if r.sha256 == "abc"));
         Ok(())
     }

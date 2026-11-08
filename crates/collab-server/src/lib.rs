@@ -68,7 +68,23 @@ pub trait Adapter {
     }
     /// Write the document as it stands at `version`/`epoch` and make it the
     /// new recovery base. Called after the room has acknowledged the head.
+    /// Work that talks to another service (the cabinet POST) is not done here:
+    /// the adapter hands it out through [`Adapter::take_publication`], so the
+    /// room is not held while it runs.
     fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError>;
+    /// The publication the last `commit` left for outside the room lock. The
+    /// caller runs it after releasing the lock and reports the result with
+    /// [`Room::finish`]. An adapter with nothing to publish returns `None`.
+    fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+        None
+    }
+    /// Record what the publication did, under the room lock again: advance the
+    /// cabinet marker or leave it alone. A failure here is reported to the
+    /// committer; the room stays dirty.
+    fn finish_publish(&mut self, version: u64, outcome: PublishOutcome) -> Result<(), AdapterError> {
+        let _ = (version, outcome);
+        Ok(())
+    }
     /// The current base bytes, when the journal no longer covers a resync.
     fn base(&self) -> Option<BlobRef>;
     /// What the cabinet holds for this file, as last agreed (RFC §8). `None`
@@ -89,6 +105,42 @@ pub trait Adapter {
 pub struct Published {
     pub version: u64,
     pub etag: String,
+}
+
+/// What a publication did: the cabinet's copy after the call, or why it
+/// failed. `Ok(None)` means the adapter had nothing to publish (dev mode, an
+/// in-memory session): the commit is already the publication.
+pub type PublishOutcome = Result<Option<Published>, AdapterError>;
+
+/// Work a commit leaves for after the room lock is released: today the POST to
+/// the cabinet. `Adapter::commit` has already written the base, so running this
+/// never changes the document; it only talks to another service. It must not
+/// run under the hub lock — a cabinet that does not answer would freeze every
+/// other document in the process (RFC §16, limitation 9).
+pub trait Publication: Send {
+    fn run(self: Box<Self>) -> PublishOutcome;
+}
+
+/// A commit that has written its base and still has a publication to run.
+/// [`Room::commit`] returns it; [`Room::finish`] records the outcome.
+pub struct Commit {
+    result: CommitResult,
+    publication: Option<Box<dyn Publication>>,
+}
+
+impl Commit {
+    pub fn result(&self) -> &CommitResult {
+        &self.result
+    }
+
+    /// Run the part that must not hold the room lock. Calling it twice is a
+    /// no-op the second time.
+    pub fn publish(&mut self) -> PublishOutcome {
+        match self.publication.take() {
+            Some(publication) => publication.run(),
+            None => Ok(None),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +204,11 @@ pub struct Room<A: Adapter> {
     /// outside the session. Writes continue (the journal keeps them), commits
     /// stay refused until an operator re-seeds the room, and `/health` says so.
     conflict: Option<String>,
+    /// A commit has written its base and its publication is running outside
+    /// the room lock. A second commit is refused with `busy` until
+    /// [`Self::finish`], so two publications cannot reach the cabinet out of
+    /// order.
+    publishing: bool,
 }
 
 impl<A: Adapter> Room<A> {
@@ -179,6 +236,7 @@ impl<A: Adapter> Room<A> {
             applied: HashMap::new(),
             poisoned: None,
             conflict: None,
+            publishing: false,
         }
     }
 
@@ -460,7 +518,11 @@ impl<A: Adapter> Room<A> {
 
     /// Commit the authoritative state to the cabinet. The version is not bumped:
     /// the file is a new cabinet version, not a document edit.
-    pub fn commit(&mut self, actor: &ActorId, expected_version: u64) -> Result<CommitResult, ServerError> {
+    ///
+    /// The returned [`Commit`] has already written the base; its publication
+    /// (the cabinet POST) must be run by the caller **without** the room lock
+    /// and reported back through [`Self::finish`].
+    pub fn commit(&mut self, actor: &ActorId, expected_version: u64) -> Result<Commit, ServerError> {
         let Some(participant) = self.participants.get(actor) else {
             return Err(server_error(ErrorCode::Forbidden, "not in this session", false));
         };
@@ -489,15 +551,49 @@ impl<A: Adapter> Room<A> {
 
     /// The server commits on its own (last participant leaving, RFC §8). No
     /// actor or expected version: the room's head is what is written.
-    pub fn commit_now(&mut self) -> Result<CommitResult, ServerError> {
+    pub fn commit_now(&mut self) -> Result<Commit, ServerError> {
         self.write_commit()
     }
 
-    /// One code path for both commits. An adapter that refuses because the
-    /// cabinet's copy changed leaves the room dirty and flags it, so `/health`
-    /// can report a session nobody can save.
-    fn write_commit(&mut self) -> Result<CommitResult, ServerError> {
-        let outcome = match self.adapter.commit(self.version, self.epoch) {
+    /// Record the result of a [`Commit`]'s publication. The room lock is held
+    /// again here; nothing is sent to another service.
+    pub fn finish(&mut self, commit: Commit, outcome: PublishOutcome) -> Result<CommitResult, ServerError> {
+        self.publishing = false;
+        let version = commit.result.version;
+        let recorded = match outcome {
+            Ok(published) => self.adapter.finish_publish(version, Ok(published)),
+            Err(error) => {
+                // A refused or failed publication never advances the marker;
+                // the adapter may still want to see it, so it is told.
+                let _ = self.adapter.finish_publish(version, Err(error.clone()));
+                Err(error)
+            }
+        };
+        match recorded {
+            Ok(()) => {
+                self.conflict = None;
+                self.committed_version = self.committed_version.max(version);
+                Ok(commit.result)
+            }
+            Err(e) => {
+                if e.code == ErrorCode::Conflict {
+                    self.conflict = Some(e.message.clone());
+                }
+                Err(server_error(e.code, e.message, e.retryable))
+            }
+        }
+    }
+
+    /// One code path for both commits: write the base and take the publication
+    /// out of the adapter. An adapter that refuses because the cabinet's copy
+    /// changed leaves the room dirty and flags it, so `/health` can report a
+    /// session nobody can save.
+    fn write_commit(&mut self) -> Result<Commit, ServerError> {
+        if self.publishing {
+            return Err(server_error(ErrorCode::Busy, "another commit of this document is being published; try again", true));
+        }
+        let version = self.version;
+        let outcome = match self.adapter.commit(version, self.epoch) {
             Ok(outcome) => outcome,
             Err(e) => {
                 if e.code == ErrorCode::Conflict {
@@ -506,9 +602,11 @@ impl<A: Adapter> Room<A> {
                 return Err(server_error(e.code, e.message, e.retryable));
             }
         };
-        self.conflict = None;
-        self.committed_version = self.version;
-        Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
+        self.publishing = true;
+        Ok(Commit {
+            result: CommitResult { version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict },
+            publication: self.adapter.take_publication(),
+        })
     }
 
     /// A participant left: release the lease if they held it.
@@ -544,10 +642,12 @@ fn server_error(code: ErrorCode, message: impl Into<String>, retryable: bool) ->
 mod tests {
     use super::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Room, RoomConfig};
     use pdfcraft_collab_proto::{
-        ActorId, BlobRef, ClientInfo, ConflictClass, DocKey, ErrorCode, Hello, Limits, Op, OpId, OpKind, PageRef, Presence, Role, Selection,
-        SessionId, Target, Viewport,
+        ActorId, BlobRef, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Limits, Op, OpId, OpKind, PageRef, Presence, Role,
+        Selection, SessionId, Target, Viewport,
     };
     use serde_json::json;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Fake {
         epoch: u64,
@@ -596,8 +696,61 @@ mod tests {
         Ok(Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), RoomConfig { journal_len: 2, ..RoomConfig::default() }))
     }
 
+    /// A room whose adapter leaves a publication for the transport, the way
+    /// the cabinet adapter does.
+    struct Publishing {
+        inner: Fake,
+        runs: Arc<AtomicUsize>,
+        /// What the publication answers: `None` is a successful, empty one.
+        failure: Option<AdapterError>,
+    }
+
+    struct Counting {
+        runs: Arc<AtomicUsize>,
+        failure: Option<AdapterError>,
+    }
+
+    impl super::Publication for Counting {
+        fn run(self: Box<Self>) -> super::PublishOutcome {
+            self.runs.fetch_add(1, Ordering::Relaxed);
+            match self.failure {
+                Some(error) => Err(error),
+                None => Ok(None),
+            }
+        }
+    }
+
+    impl Adapter for Publishing {
+        fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            self.inner.commit(version, epoch)
+        }
+        fn base(&self) -> Option<BlobRef> {
+            self.inner.base()
+        }
+        fn take_publication(&mut self) -> Option<Box<dyn super::Publication>> {
+            Some(Box::new(Counting { runs: self.runs.clone(), failure: self.failure.clone() }))
+        }
+    }
+
+    fn publishing_room(failure: Option<AdapterError>) -> Result<(Room<Publishing>, Arc<AtomicUsize>), Box<dyn std::error::Error>> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let adapter = Publishing { inner: Fake::new(), runs: runs.clone(), failure };
+        Ok((Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default()), runs))
+    }
+
     fn actor(name: &str) -> Result<ActorId, Box<dyn std::error::Error>> {
         Ok(ActorId::new(name)?)
+    }
+
+    /// A commit the way the transport runs it: prepare under the lock, publish
+    /// (nothing to do for these adapters), record.
+    fn commit_and_publish<A: Adapter>(room: &mut Room<A>, actor: &ActorId, expected: u64) -> Result<CommitResult, super::ServerError> {
+        let mut commit = room.commit(actor, expected)?;
+        let outcome = commit.publish();
+        room.finish(commit, outcome)
     }
 
     fn hello() -> Result<Hello, Box<dyn std::error::Error>> {
@@ -798,10 +951,54 @@ mod tests {
         let viewer = actor("viewer")?;
         let editor = actor("editor")?;
         room.hello(viewer.clone(), Role::Viewer, &hello, 0)?;
-        assert_eq!(room.commit(&viewer, 0).map(|_| ()), Err(super::server_error(ErrorCode::Forbidden, "this role cannot commit the file", false)));
+        assert_eq!(
+            commit_and_publish(&mut room, &viewer, 0).map(|_| ()),
+            Err(super::server_error(ErrorCode::Forbidden, "this role cannot commit the file", false))
+        );
         room.hello(editor.clone(), Role::Editor, &hello, 0)?;
-        assert!(room.commit(&editor, 0).is_ok());
-        assert!(matches!(room.commit(&editor, 7), Err(e) if e.code == ErrorCode::Stale && e.retryable));
+        assert!(commit_and_publish(&mut room, &editor, 0).is_ok());
+        assert!(matches!(commit_and_publish(&mut room, &editor, 7), Err(e) if e.code == ErrorCode::Stale && e.retryable));
+        Ok(())
+    }
+
+    #[test]
+    fn a_commit_publishes_after_the_room_is_released() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, runs) = publishing_room(None)?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+
+        let mut commit = room.commit(&editor, 1)?;
+        assert_eq!(runs.load(Ordering::Relaxed), 0, "the cabinet call is not made while the room is held");
+        assert!(room.is_dirty(), "the base is written but the publication is not done");
+        // Two versions must not reach the cabinet out of order: a second commit
+        // waits for the first publication.
+        assert!(matches!(room.commit(&editor, 1), Err(e) if e.code == ErrorCode::Busy && e.retryable));
+
+        let outcome = commit.publish();
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        let result = room.finish(commit, outcome)?;
+        assert_eq!(result.version, 1);
+        assert!(!room.is_dirty(), "the publication advanced what the cabinet holds");
+        assert!(commit_and_publish(&mut room, &editor, 1).is_ok(), "the room is free again");
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_publication_leaves_the_room_dirty_and_flags_it() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, runs) = publishing_room(Some(AdapterError::new(ErrorCode::Conflict, "the cabinet holds another version", false)))?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+
+        let mut commit = room.commit(&editor, 1)?;
+        let outcome = commit.publish();
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        assert!(matches!(room.finish(commit, outcome), Err(e) if e.code == ErrorCode::Conflict && !e.retryable));
+        assert!(room.is_dirty(), "a refused publication leaves the room dirty so the next commit retries it");
+        assert_eq!(room.conflict(), Some("the cabinet holds another version"));
         Ok(())
     }
 
@@ -854,7 +1051,7 @@ mod tests {
         assert_eq!(room.version(), 1);
         // Committing writes the base at the current head, which is how an
         // operator rescues what the journal lost.
-        assert!(room.commit(&editor, 1).is_ok());
+        assert!(commit_and_publish(&mut room, &editor, 1).is_ok());
         Ok(())
     }
 
@@ -879,7 +1076,7 @@ mod tests {
         room.hello(editor.clone(), Role::Editor, &hello, 0)?;
         room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
         assert_eq!(room.conflict(), None, "no conflict before a commit is refused");
-        assert!(matches!(room.commit(&editor, 1), Err(e) if e.code == ErrorCode::Conflict && !e.retryable));
+        assert!(matches!(commit_and_publish(&mut room, &editor, 1), Err(e) if e.code == ErrorCode::Conflict && !e.retryable));
         assert_eq!(room.conflict(), Some("the file changed outside the session"));
         assert!(room.is_dirty(), "a refused commit did not publish the head");
         assert_eq!(room.version(), 1, "the edits are still accepted and journalled");

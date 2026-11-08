@@ -17,7 +17,7 @@ use crate::http::{Client, HttpError};
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::{CabinetCopy, PdfAdapter, Store};
 use pdfcraft_collab_proto::{ActorId, BlobRef, DocKey, ErrorCode};
-use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
+use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Publication, PublishOutcome, Published};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,6 +90,31 @@ pub struct CabinetAdapter {
     mirror: Option<PathBuf>,
     publisher: Option<Arc<Publisher>>,
     expected_version: u64,
+    /// The publication the last `commit` left for the transport to run outside
+    /// the hub lock.
+    publication: Option<Box<dyn Publication>>,
+}
+
+/// The cabinet POST, taken out of the room so it runs without the hub lock.
+struct CabinetPublication {
+    publisher: Arc<Publisher>,
+    file_id: String,
+    version: u64,
+    expected_version: u64,
+    bytes: Arc<Vec<u8>>,
+    sha256: String,
+}
+
+impl Publication for CabinetPublication {
+    fn run(self: Box<Self>) -> PublishOutcome {
+        match self.publisher.publish(&self.file_id, self.version, self.expected_version, self.bytes.as_slice(), &self.sha256) {
+            Ok(()) => Ok(Some(Published { version: self.version, etag: format!("sha256:{}", self.sha256) })),
+            Err(PublishError::Conflict(message)) => Err(AdapterError::new(ErrorCode::Conflict, message, false)),
+            Err(PublishError::Failed(message)) => {
+                Err(AdapterError::new(ErrorCode::Internal, format!("the commit is saved locally but not published: {message}"), false))
+            }
+        }
+    }
 }
 
 impl CabinetAdapter {
@@ -100,7 +125,7 @@ impl CabinetAdapter {
         publisher: Option<Arc<Publisher>>,
         expected_version: u64,
     ) -> Self {
-        Self { pdf, file_id: file_id.into(), mirror, publisher, expected_version }
+        Self { pdf, file_id: file_id.into(), mirror, publisher, expected_version, publication: None }
     }
 
     /// The PDF adapter underneath, for inspection by tests.
@@ -138,35 +163,47 @@ impl Adapter for CabinetAdapter {
     fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
         self.check_mirror()?;
         let outcome = self.pdf.commit(version, epoch)?;
-        let published_etag = match &self.publisher {
+        // The cabinet call is not made here: it is handed to the transport,
+        // which runs it after releasing the hub lock (RFC §16).
+        self.publication = match &self.publisher {
             Some(publisher) => {
                 let bytes = self
                     .pdf
                     .last_commit()
                     .cloned()
                     .ok_or_else(|| AdapterError::new(ErrorCode::Internal, "the committed file is not available for publication", false))?;
-                match publisher.publish(&self.file_id, version, self.expected_version, bytes.as_slice(), &outcome.sha256) {
-                    // The cabinet now holds the committed bytes. In dev mode the
-                    // mirror file is still the reference for the etag, so it is
-                    // kept: the source is not something this daemon writes.
-                    Ok(()) if self.mirror.is_none() => Some(format!("sha256:{}", outcome.sha256)),
-                    Ok(()) => None,
-                    Err(PublishError::Conflict(message)) => return Err(AdapterError::new(ErrorCode::Conflict, message, false)),
-                    Err(PublishError::Failed(message)) => {
-                        return Err(AdapterError::new(
-                            ErrorCode::Internal,
-                            format!("the commit is saved locally but not published: {message}"),
-                            false,
-                        ));
-                    }
-                }
+                Some(Box::new(CabinetPublication {
+                    publisher: publisher.clone(),
+                    file_id: self.file_id.clone(),
+                    version,
+                    expected_version: self.expected_version,
+                    bytes,
+                    sha256: outcome.sha256.clone(),
+                }))
             }
             None => None,
         };
-        let etag = published_etag.or_else(|| Adapter::published(self).map(|published| published.etag)).unwrap_or_default();
+        Ok(outcome)
+    }
+
+    fn take_publication(&mut self) -> Option<Box<dyn Publication>> {
+        self.publication.take()
+    }
+
+    fn finish_publish(&mut self, version: u64, outcome: PublishOutcome) -> Result<(), AdapterError> {
+        let etag = match outcome {
+            // The cabinet took the bytes: that etag is what it holds.
+            Ok(Some(published)) if self.mirror.is_none() => published.etag,
+            // Dev mode keeps the mirror file as the etag's reference, and with
+            // no publisher the local commit is all the publication there is.
+            Ok(_) => Adapter::published(self).map(|published| published.etag).unwrap_or_default(),
+            // A refused or failed publication leaves the marker alone; the
+            // room stays dirty so the next commit retries it.
+            Err(_) => return Ok(()),
+        };
         self.pdf.set_published(Some(Published { version, etag }))?;
         self.expected_version = version;
-        Ok(outcome)
+        Ok(())
     }
 
     fn base(&self) -> Option<BlobRef> {
@@ -454,6 +491,18 @@ mod tests {
         })
     }
 
+    /// Commit the way the transport does: the base under the lock, the cabinet
+    /// call outside it, the outcome recorded after.
+    fn commit(
+        room: &mut Room<CabinetAdapter>,
+        actor: &ActorId,
+        expected: u64,
+    ) -> Result<pdfcraft_collab_proto::CommitResult, pdfcraft_collab_proto::ServerError> {
+        let mut commit = room.commit(actor, expected)?;
+        let outcome = commit.publish();
+        room.finish(commit, outcome)
+    }
+
     fn edit(room: &mut Room<CabinetAdapter>, nm: &str) -> Result<(), Box<dyn std::error::Error>> {
         let actor = ActorId::new("editor")?;
         let op = pdfcraft_collab_proto::Op {
@@ -509,12 +558,12 @@ mod tests {
         let editor = ActorId::new("editor")?;
         room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
         edit(room, "n0")?;
-        assert!(room.commit(&editor, 1).is_ok(), "the seeded file is unchanged");
+        assert!(commit(room, &editor, 1).is_ok(), "the seeded file is unchanged");
 
         // The cabinet uploaded a new version while the session was live.
         std::fs::write(&source, fixture("two"))?;
         edit(room, "n1")?;
-        let refused = room.commit(&editor, 2).map(|_| ()).expect_err("the source changed");
+        let refused = commit(room, &editor, 2).map(|_| ()).expect_err("the source changed");
         assert_eq!(refused.code, ErrorCode::Conflict);
         assert!(room.conflict().is_some());
         assert!(room.is_dirty(), "nothing was published");
@@ -579,7 +628,7 @@ mod tests {
         let editor = ActorId::new("editor")?;
         room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
         edit(room, "n0")?;
-        let result = room.commit(&editor, 1)?;
+        let result = commit(room, &editor, 1)?;
         assert_eq!(result.version, 1);
 
         let body = requests.recv_timeout(Duration::from_secs(5))?;
@@ -592,7 +641,7 @@ mod tests {
 
         // The next commit expects the version the cabinet just took.
         edit(room, "n1")?;
-        let second = room.commit(&editor, 2)?;
+        let second = commit(room, &editor, 2)?;
         let body = requests.recv_timeout(Duration::from_secs(5))?;
         assert_eq!((body["version"].as_u64(), body["expectedVersion"].as_u64()), (Some(2), Some(1)));
         let published = Adapter::published(room.adapter()).ok_or("no cabinet marker")?;
@@ -616,7 +665,7 @@ mod tests {
         let editor = ActorId::new("editor")?;
         room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
         edit(room, "n0")?;
-        let refused = room.commit(&editor, 1).map(|_| ()).expect_err("the cabinet refused the version");
+        let refused = commit(room, &editor, 1).map(|_| ()).expect_err("the cabinet refused the version");
         assert_eq!(refused.code, ErrorCode::Conflict);
         assert!(room.is_dirty());
         assert!(room.conflict().is_some(), "/health has to say a session cannot be saved");

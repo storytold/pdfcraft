@@ -730,6 +730,14 @@ mod tests {
     use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
     use serde_json::json;
 
+    /// Commit the way the transport does: the base under the room lock, the
+    /// publication outside it (this adapter has none), the outcome after.
+    fn commit(room: &mut Room<impl Adapter>, actor: &ActorId, expected: u64) -> Result<CommitResult, pdfcraft_collab_proto::ServerError> {
+        let mut commit = room.commit(actor, expected)?;
+        let outcome = commit.publish();
+        room.finish(commit, outcome)
+    }
+
     fn op(
         id: &str,
         class: ConflictClass,
@@ -812,7 +820,7 @@ mod tests {
         assert!(room.apply(&editor, &stale, 0).is_err(), "an old epoch must be refused");
 
         let version = room.version();
-        let committed = room.commit(&editor, version)?;
+        let committed = commit(&mut room, &editor, version)?;
         assert!(!committed.sha256.is_empty());
         assert!(committed.bytes > 0);
         Ok(())
@@ -929,7 +937,7 @@ mod tests {
         let rotate =
             op("r1", ConflictClass::Structural, Target::Page(PageRef { index: 0, epoch: 0 }), 1, 0, json!({"action": "page.rotate", "degrees": 90}))?;
         room.apply(&editor, &rotate, 0)?;
-        let committed = room.commit(&editor, 2)?;
+        let committed = commit(&mut room, &editor, 2)?;
         assert!(!committed.sha256.is_empty());
         assert!(committed.bytes > 0);
         println!("500 pages: {:?}", started.elapsed());
@@ -1168,7 +1176,8 @@ mod tests {
         assert!(restored.op.payload["bytes"].is_string(), "the accepted operation carries the page");
         let document = room.adapter().document().ok_or("gone")?;
         assert_eq!(document.info.pages.len(), 3, "the page is back where it was");
-        let committed = room.commit(&editor, room.version())?;
+        let version = room.version();
+        let committed = commit(&mut room, &editor, version)?;
         let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
         assert!(bytes.windows(6).any(|w| w == b"Page 2"), "the page's content came back");
         assert!(committed.bytes > 0);

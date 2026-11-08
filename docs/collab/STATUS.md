@@ -1,8 +1,11 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
-- State: implemented behind the `collab` feature (off by default), not pushed,
-  no PR opened
+- State: implemented behind the `collab` feature (off by default); published as
+  PR #6622 (not a draft) through the chair's fork at head `0f286ed9`, CI green.
+  The slice after that head (commit publication outside the hub lock, §6.4) is
+  committed locally and **not pushed**; the PR body draft is
+  `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -126,6 +129,13 @@ are wasm-safe (`cargo check --target wasm32-unknown-unknown` was run for
     says `conflict:["file-N"]`, and the cabinet decides (a new session over its
     version, or "save a copy"). Blocking writes would lose the work anyway and
     make the editor look broken.
+18. **A commit's cabinet call runs outside the hub lock.** `Room::commit` writes
+    the base and returns a `Commit`; the transport runs its publication after
+    releasing the lock and reports back with `Room::finish`. A second commit of
+    the same document while one is publishing gets `busy` (retryable), so two
+    versions cannot reach the cabinet out of order. Moving the call back inside
+    `with_hub` makes one slow cabinet freeze every document in the process —
+    `a_commit_does_not_block_presence_in_another_room` is the guard.
 
 ## 3. Running it
 
@@ -220,8 +230,30 @@ cargo test -p pdfcraft-ui-egui --features collab
   touched neither `ui-egui` nor the client crates (`cargo check -p pdfcraft
   --features collab` was green then, as now).
 
-Counts: proto 12, server 16, hub 4, client 12, client-pdf 13, session 2,
-ws 6 unit + 5 e2e, pdf 20, annot 10, daemon 27.
+Counts: proto 12, server 18, hub 4, client 12, client-pdf 13, session 2,
+ws 6 unit + 6 e2e, pdf 20, annot 10, daemon 27.
+
+- `crates/collab-server` `a_commit_publishes_after_the_room_is_released` —
+  `commit` writes the base but does not run the publication and the room stays
+  dirty; a second commit is `busy` until `finish`; `finish` advances what the
+  cabinet holds. `a_failed_publication_leaves_the_room_dirty_and_flags_it` —
+  a `409` from the publication leaves the room dirty and `conflict`.
+- `crates/collab-hub` `resync_and_commit_answer_the_requester` now asserts the
+  commit answers only after `publish` + `finish`, never from `send` alone.
+- `crates/collab-ws/tests/e2e.rs` `a_commit_does_not_block_presence_in_another_room`
+  is the lock proof: two rooms, room A's cabinet call held open on a gate, a
+  presence in room B still reaches its member; with the call inside the lock
+  the test fails on the 5 s read timeout.
+  `serve::tests::a_second_editor_joins_and_gets_a_zero_lease` was made
+  deterministic (the lease goes to the first *processed* join, so the second
+  client now connects after the first welcome) — it was a parallel-run flake,
+  not a regression.
+- The `ui-egui` suite was **not** re-run for this slice: the only UI change is
+  one arm in `code_name` for the new `busy` code, and
+  `cargo check -p pdfcraft --features collab` plus
+  `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -D warnings`
+  are green on it. The last full run (1493 passed, 1 known font failure) is
+  recorded above.
 
 - `apps/pdfcraft-collab-server` tests (27) cover the cabinet contract end to
   end over real sockets:
@@ -358,10 +390,14 @@ Ordered by the risk they pose to production.
     manual button are the only compaction. A size-based forced commit is not
     implemented. Bases are pruned to the one `CURRENT` names, so disk is one
     PDF plus the journal, not one PDF per commit.
-12. **The callback is synchronous inside the hub lock.** A cabinet that does not
-    answer costs every commit up to the 10 s timeout. Commits are rare (button,
-    last client leaving) and edits are not blocked, but this is why a queue is
-    on the list above.
+12. ~~The callback is synchronous inside the hub lock~~ — the base is written
+    under the lock and the cabinet POST runs after it is released (§8.2): a
+    cabinet that does not answer delays the committer's connection, not the
+    other documents. A second commit of the same document while one is
+    publishing gets `busy` (retryable), so two versions cannot reach the
+    cabinet out of order. What is still missing is a publication *queue*: a
+    failed POST is retried by the next commit or the last-client-leave commit,
+    not in the background.
 13. **The legacy annotation payload lives until the flag ships.** A payload
     without `shape` is read as a sticky note; RFC §16 p. 10 sets the deadline —
     the first release with `collab` on by default makes `shape` mandatory.
@@ -459,8 +495,21 @@ would need the blob channel).
   `collab-server::tests::a_commit_refused_by_the_adapter_flags_the_room_and_stays_dirty`.
   A live smoke test is described in §4 (real HTTP control plane, real WebSocket
   commit, callback received, `409` after replacing the source file).
+- **The publication runs outside the hub lock** (the chair's fourth condition to
+  close before the PR): `Room::commit` writes the base under the lock and
+  returns a `Commit`; `WsServer::run_pending` releases the lock, runs
+  `Commit::publish` (the cabinet POST) and then calls `Room::finish` under the
+  lock again, which advances the `CABINET` marker or leaves the room dirty.
+  `Hub::send` hands a commit out as `Pending`, so the transport cannot run it by
+  accident under the lock; the last-client-leave commit takes the same path.
+  A second commit of the same document while one is publishing is refused with
+  the new `busy` error code (`retryable`): two versions must not reach the
+  cabinet out of order. Test: `collab-ws` e2e
+  `a_commit_does_not_block_presence_in_another_room` (two rooms, the cabinet
+  call held open on a gate, presence in the other room still arrives; fails on
+  the 5 s read timeout when the call is put back under the lock).
 - Still open here: publication retry/queue, an endpoint to resolve a conflict
-  room, `https` without a proxy (limitations 7–8, 12).
+  room, `https` without a proxy (limitations 7–8).
 
 ### 6.5 Presence cursors and undo — done in this branch
 
@@ -534,7 +583,8 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 
 ### 6.6 Cleanup and submission
 
-- Update `docs/collab/RFC.md` §16 as items close — done for §6.4 and §6.5.
+- Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
+  limitation 12 (§8.2, §9, §16 p. 9).
 - Add an automation/parity entry once the feature is user-facing.
 - Re-run the full gates, open the PR, no CI changes in the feature PR. The PR
   body is not in this tree: the cabinet-office checkout keeps the draft at
@@ -543,13 +593,15 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 - RFC v1 was proposed on the bus (`20261108T115119Z-pdfcraft-9830`). Approvals
   on record: cadcraft (`20261108T124137Z-cadcraft-60aa`), deckcraft
   (`20261108T130802Z-deckcraft-2885`), chair (`20261108T115818Z-craft-05ab`),
-  all with non-blocking remarks. Chair's four conditions to close before the PR:
-  epoch wording (`RFC §8.1`), lease wording (`RFC §7`), undo CAS (§6.5) — all
-  done in this branch; the commit callback still runs under the hub lock
-  (limitation 12), which is the one left open. Quorum is 4 of 5 projects
-  (`AGENDA.md` §4): wordcraft or gridcraft still has to approve; both were asked
-  in `rfc/pdfcraft`. PdfCraft voted on deckcraft's RFC
-  (`20261108T135623Z-pdfcraft-2aad`, A with the unified lease wording).
+  wordcraft (`20261108T142201Z-wordcraft-5893`, vote A), all with non-blocking
+  remarks; chair recorded the decision as `20261108T143416Z-craft-2403`
+  (ADR-0015). **Quorum is 5 of 5** (`AGENDA.md` §4).
+- Chair's four conditions to close before the PR: epoch wording (`RFC §8.1`),
+  lease wording (`RFC §7`), undo CAS (§6.5), commit callback outside the hub
+  lock (limitation 12) — all four are closed in this branch; the last one in
+  §6.4. Nothing blocks the PR from this list.
+- PdfCraft voted on deckcraft's RFC (`20261108T135623Z-pdfcraft-2aad`, A with
+  the unified lease wording).
 
 ## 7. Gotchas for the next session
 
@@ -574,6 +626,14 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   Provisioning parses a PDF, so two cabinets creating different rooms wait for
   each other; do not call back into the server from inside that closure (it
   would deadlock).
+- A commit's publication runs on the committer's connection thread **after** the
+  hub lock is released (`WsServer::run_pending`). Do not run `Commit::publish`
+  inside `with_hub` or under `lock(&self.shared)`: one cabinet that does not
+  answer would then freeze every document, and
+  `a_commit_does_not_block_presence_in_another_room` fails on its 5 s timeout.
+  `Hub::send` returns a `Pending` commit; a caller that drops it without
+  `Hub::finish` leaves the room `publishing` and every later commit answers
+  `busy`.
 - The daemon's HTTP client is plain `http://` only and refuses redirects,
   chunked responses and `https`. If the cabinet endpoint needs any of those,
   fix the daemon, do not "just use curl".
