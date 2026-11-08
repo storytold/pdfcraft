@@ -13112,6 +13112,25 @@ fn editing_legacy_thai_shapes_a_run_across_subsets_of_the_same_face() {
     assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
 }
 
+/// A space no subset of the face encodes is the gap the source font's text-space fallback gives
+/// (`source_space`, a third of an em here), as wrapping measures it everywhere else.
+#[test]
+fn an_unencoded_space_in_legacy_thai_takes_the_source_space_fallback() {
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("ก ก"), &style).unwrap();
+    // After the first ก (500 units), the second starts 330 units further: the gap.
+    let gaps: Vec<f64> = pdfcraft_content::parse(&page_content_bytes(&doc, 0))
+        .ops
+        .iter()
+        .filter(|op| op.is("TJ"))
+        .flat_map(|op| op.operands.first().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_f64))
+        .collect();
+    assert!(gaps.iter().any(|g| (g + 330.0).abs() < 0.01), "{gaps:?}");
+}
+
 /// Every resource name of one THSarabunPSK font object shares its program, decoded once. Distinct
 /// subsets of the face are read within one budget for the edit: past it the edit is refused with
 /// the reason, and the document is unchanged.

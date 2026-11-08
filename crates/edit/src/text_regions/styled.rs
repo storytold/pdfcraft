@@ -112,6 +112,8 @@ struct LegacyFace {
     style: FontStyle,
     /// The font object the resource names, when it is given by reference.
     object: Option<pdfcraft_cos::ObjRef>,
+    /// Its text-space fallback ([`source_space`]), in ems.
+    space: f64,
 }
 
 /// What one edit may decode, and so keep, of the font programs of its THSarabunPSK subsets
@@ -860,15 +862,13 @@ fn legacy_thai_font(
         let Some(font) = doc.dict(resource) else { continue };
         let object = resource.as_ref();
         let face = match object.and_then(|o| cache.values().find(|face| face.object == Some(o))) {
-            Some(alias) => LegacyFace { glyphs: alias.glyphs.clone(), metrics: alias.metrics.clone(), style: alias.style, object },
+            Some(alias) => LegacyFace { glyphs: alias.glyphs.clone(), metrics: alias.metrics.clone(), object, ..*alias },
             None => {
                 let metrics = Metrics::from_dict(doc, &font);
-                let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, source_space(doc, fonts, &metrics), budget)
-                    .ok()
-                    .flatten()
-                    .map(std::rc::Rc::new);
+                let space = source_space(doc, fonts, &metrics);
+                let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new);
                 let style = FontStyle::of(doc, &font, &metrics);
-                LegacyFace { glyphs, metrics, style, object }
+                LegacyFace { glyphs, metrics, style, object, space }
             }
         };
         cache.insert(name, face);
@@ -996,7 +996,7 @@ fn shape_existing_thai(cache: &HashMap<String, LegacyFace>, primary: &str, text:
                         let code = f.metrics.encode(" ")?;
                         Some(f.metrics.width(f.metrics.codes(&code).first()?.0))
                     })
-                    .unwrap_or(0.25);
+                    .unwrap_or(first.space);
                 (primary, Vec::new(), width)
             } else {
                 return Err(EditError::Invalid(format!(
