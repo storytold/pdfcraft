@@ -343,6 +343,7 @@ mod tests {
                 })
                 .collect(),
             images: Vec::new(),
+            rules: Vec::new(),
             background: None,
         }
     }
