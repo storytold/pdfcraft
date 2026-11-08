@@ -92,16 +92,16 @@ fn tags_map_to_languages() {
 
 #[test]
 fn candidates_walk_from_specific_to_general() {
-    assert_eq!(candidates("pt_BR.UTF-8"), ["pt-br", "pt"]);
-    assert_eq!(candidates("pt_PT.UTF-8"), ["pt-pt", "pt-br", "pt"]);
-    assert_eq!(candidates("pt"), ["pt-br", "pt"]);
-    assert_eq!(candidates("zh_TW"), ["zh-tw", "zh-hant", "zh"]);
-    assert_eq!(candidates("zh-CN"), ["zh-cn", "zh-hans", "zh"]);
-    assert_eq!(candidates("zh-Hant-HK"), ["zh-hant-hk", "zh-hant", "zh"]);
-    assert_eq!(candidates("lo_LA.UTF-8"), ["lo-la", "lo"]);
-    assert_eq!(candidates("nb_NO.UTF-8"), ["nb-no", "nb"]);
-    assert_eq!(candidates("no_NO.UTF-8"), ["no-no", "no", "nb"]);
-    assert_eq!(candidates("nn-NO"), ["nn-no", "nn", "nb"]);
+    assert_eq!(candidates("pt_BR.UTF-8", &I18N), ["pt-br", "pt"]);
+    assert_eq!(candidates("pt_PT.UTF-8", &I18N), ["pt-pt", "pt-br", "pt"]);
+    assert_eq!(candidates("pt", &I18N), ["pt-br", "pt"]);
+    assert_eq!(candidates("zh_TW", &I18N), ["zh-tw", "zh-hant", "zh"]);
+    assert_eq!(candidates("zh-CN", &I18N), ["zh-cn", "zh-hans", "zh"]);
+    assert_eq!(candidates("zh-Hant-HK", &I18N), ["zh-hant-hk", "zh-hant", "zh"]);
+    assert_eq!(candidates("lo_LA.UTF-8", &I18N), ["lo-la", "lo"]);
+    assert_eq!(candidates("nb_NO.UTF-8", &I18N), ["nb-no", "nb"]);
+    assert_eq!(candidates("no_NO.UTF-8", &I18N), ["no-no", "no", "nb"]);
+    assert_eq!(candidates("nn-NO", &I18N), ["nn-no", "nn", "nb"]);
 }
 
 /// The locale variables, the first detection step: `LC_ALL` over `LC_MESSAGES` over `LANG`, an
@@ -1575,11 +1575,11 @@ fn image_paste_and_home_notifications_are_translated() {
 fn punjabi_routing_keeps_scripts_separate() {
     let lang = Lang::from_code("pa");
     for tag in ["pa", "pa-Guru", "pa-Guru-IN", "pa-IN", "pa_IN.UTF-8", "pa-Guru-PK"] {
-        assert_eq!(candidates(tag).iter().any(|c| c == "pa"), lang.is_some(), "{tag}");
+        assert_eq!(candidates(tag, &I18N).iter().any(|c| c == "pa"), lang.is_some(), "{tag}");
         assert_eq!(lang_from_tag(tag), lang, "{tag}");
     }
     for tag in ["pa-Arab", "pa-Arab-PK", "pa-PK", "pa-Latn-IN", "pa_Arab_IN.UTF-8"] {
-        assert!(!candidates(tag).iter().any(|c| c == "pa"), "{tag}");
+        assert!(!candidates(tag, &I18N).iter().any(|c| c == "pa"), "{tag}");
         assert_eq!(lang_from_tag(tag), None, "{tag}");
     }
 }
@@ -1680,7 +1680,7 @@ fn canonical_punjabi_routing_matches_runtime() {
         assert_eq!(lang_from_tag(tag).map(Lang::code), reference.match_tag(tag).map(|l| reference.code(l)), "{tag}");
     }
     for tag in ["pa-PK", "pa_PK.UTF-8", "pa-Arab", "pa-Arab-PK", "pa-Arab-IN", "pa-Latn", "pa-Latn-IN", "pa-Cyrl"] {
-        assert!(!candidates(tag).iter().any(|c| c == "pa"), "{tag}");
+        assert!(!candidates(tag, &I18N).iter().any(|c| c == "pa"), "{tag}");
         assert_eq!(lang_from_tag(tag), None, "{tag}");
     }
     assert_eq!(lang_from_tag("en-US"), Some(Lang::EN));
@@ -1714,4 +1714,124 @@ fn canonical_punjabi_legacy_preference_restoration() {
             assert!(app.set_option("language", input).is_err());
         }
     }
+}
+
+/// This always-present synthetic catalog makes an empty Punjabi routing result a real failure.
+#[test]
+fn third_review_positive_punjabi_routing_fixture() {
+    static EMBEDDED: &craft_i18n::Embedded = &[("pa", "@id\tlanguage.name\tਪੰਜਾਬੀ\n\tSynthetic label\tPA_FIXTURE\n", "")];
+    let (catalogs, problems) = I18n::new(EMBEDDED, &["pa"]);
+    assert!(problems.is_empty());
+    let pa = catalogs.from_code("pa").expect("synthetic Punjabi catalog must be offered");
+    assert_eq!(catalogs.code(pa), "pa");
+    for tag in ["pa", "pa-IN", "pa_IN.UTF-8", "pa-Guru", "pa-Guru-IN", "pa-Guru-PK"] {
+        let actual = lang_from_tag_with(tag, &catalogs).expect("Punjabi match, not None == None");
+        assert_eq!(actual, pa, "{tag}");
+    }
+    for tag in ["pa-PK", "pa-Arab", "pa-Arab-PK", "pa-Latn-IN"] {
+        assert_eq!(lang_from_tag_with(tag, &catalogs), None, "{tag}");
+    }
+    let (empty, problems) = I18n::new(&[], &["pa"]);
+    assert!(problems.is_empty());
+    assert_eq!(lang_from_tag_with("pa-IN", &empty), None);
+    assert_eq!(lang_from_tag_with("en", &empty), Some(craft_i18n::Lang::EN));
+}
+
+/// Run with system fallback disabled: a catalog is not permission to draw unreadable controls.
+#[test]
+fn third_review_missing_font_keeps_real_interface_english() {
+    if Lang::from_code("pa").is_none() {
+        eprintln!("skipped catalog-present app observation: canonical Punjabi not embedded");
+        return;
+    }
+    if std::env::var("PDFCRAFT_SYSTEM_FONTS").as_deref() != Ok("0") {
+        eprintln!("skipped disabled-system-font observation: run with PDFCRAFT_SYSTEM_FONTS=0");
+        return;
+    }
+    set_current(Lang::EN);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = crate::PdfCraftApp::default();
+        app.restore(r#"{"language":"pa-guru"}"#);
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(current(), Lang::EN, "missing coverage must not activate Punjabi");
+    assert_eq!(h.state().language, "pa", "keep the desired canonical preference");
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["language"], "pa");
+    assert!(
+        !h.ctx.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.0), "ਪੰਜਾਬੀ")),
+        "negative font control needs genuinely missing glyphs"
+    );
+}
+
+/// The font gate is nonvacuous even without embedded catalogs and cannot disable other languages.
+#[test]
+fn third_review_font_gate_is_punjabi_only_and_bounded() {
+    let pa = fixture_lang("pa", "@id\tlanguage.name\tਪੰਜਾਬੀ\n");
+    assert_eq!(
+        pa.for_display(|probe| {
+            assert!(!probe.is_empty());
+            assert!(probe.chars().count() <= 128);
+            assert!(probe.chars().all(|c| ('\u{0a00}'..='\u{0a7f}').contains(&c)));
+            false
+        }),
+        Lang::EN
+    );
+    assert_eq!(pa.for_display(|_| true), pa);
+    for other in [Lang::EN, fixture_lang("fr", "@id\tlanguage.name\tFrançais\n")] {
+        assert_eq!(other.for_display(|_| panic!("other languages must not consult Punjabi coverage")), other);
+    }
+    let app = crate::PdfCraftApp { language: "pa".to_owned(), ..Default::default() };
+    // No initialized font context: startup must not query egui's panicking fonts accessor.
+    assert_eq!(app.display_language(&egui::Context::default()), Lang::EN);
+}
+
+/// Actual installed fonts keep Punjabi usable; removal/restoration is detected without losing the preference.
+#[cfg(target_os = "windows")]
+#[test]
+fn third_review_installed_font_changes_preserve_preference() {
+    let Some(pa) = Lang::from_code("pa") else {
+        eprintln!("skipped installed-font app observation: Punjabi catalog absent");
+        return;
+    };
+    let definitions = crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default);
+    let ctx = egui::Context::default();
+    ctx.set_fonts(definitions.clone());
+    let mut available = false;
+    let mut output =
+        ctx.run_ui(egui::RawInput::default(), |ui| available = pa.for_display(|text| crate::theme::punjabi_text_is_drawable(ui.ctx(), text)) == pa);
+    output.textures_delta.clear();
+    if !available {
+        eprintln!("skipped covering-font app observation: no known face covers the required Gurmukhi glyphs");
+        return;
+    }
+    set_current(Lang::EN);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = crate::PdfCraftApp::default();
+        app.restore(r#"{"language":"pa"}"#);
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(current(), pa);
+    let start = std::time::Instant::now();
+    for _ in 0..1000 {
+        assert_eq!(h.state().display_language(&h.ctx), pa);
+    }
+    eprintln!("1000 warm font coverage gates: {} microseconds", start.elapsed().as_micros());
+    let mut latin_only = crate::theme::font_definitions();
+    let latin = ["Inter", "Inter-Medium", "Inter-SemiBold", "JetBrainsMono"];
+    latin_only.font_data.retain(|name, _| latin.contains(&name.as_str()));
+    for stack in latin_only.families.values_mut() {
+        stack.retain(|name| latin.contains(&name.as_str()));
+    }
+    h.ctx.set_fonts(latin_only);
+    h.run_steps(3);
+    assert_eq!(current(), Lang::EN, "font removal must change the effective language");
+    assert_eq!(h.state().language, "pa");
+    h.ctx.set_fonts(definitions);
+    h.run_steps(3);
+    assert_eq!(current(), pa, "covering fonts restore the saved language");
+    assert_eq!(h.state().language, "pa");
 }

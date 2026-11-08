@@ -305,6 +305,17 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     fonts
 }
 
+/// Coverage in the active stacks used by interface labels, code and emphasized controls.
+/// Call only after egui has initialized fonts. Browser rasterizer-only coverage is unproven,
+/// so wasm conservatively keeps English unless the font definitions themselves cover the text.
+pub(crate) fn punjabi_text_is_drawable(ctx: &egui::Context, text: &str) -> bool {
+    ctx.fonts_mut(|fonts| {
+        [regular(13.0), FontId::monospace(13.0), medium(13.0), semibold(13.0)]
+            .iter()
+            .all(|id| fonts.definitions().families.contains_key(&id.family) && fonts.has_glyphs(id, text))
+    })
+}
+
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
 /// the CJK, Arabic, Telugu, Hebrew and Thai faces of the optional craft-fonts build input as the
 /// last fallback in every family. Without craft-fonts there is no Japanese, Chinese, Arabic,

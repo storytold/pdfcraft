@@ -51,6 +51,17 @@ static I18N: LazyLock<I18n> = LazyLock::new(|| {
     i18n
 });
 
+/// At most 128 Gurmukhi codepoints, collected once from the embedded catalog plus a nonempty probe.
+static PUNJABI_GLYPHS: LazyLock<String> = LazyLock::new(|| {
+    "ਪੰਜਾਬੀ ਭਾਸ਼ਾ ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਸਿੱਖਿਆ ਅੱਖਰ ਫ਼ਾਈਲ"
+        .chars()
+        .chain(CRAFT_I18N.iter().filter(|(code, ..)| *code == "pa").flat_map(|(_, shared, app)| shared.chars().chain(app.chars())))
+        .filter(|c| ('\u{0a00}'..='\u{0a7f}').contains(c))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+});
+
 /// The `language` preference value that follows the system locale.
 pub const AUTO: &str = "auto";
 
@@ -210,6 +221,13 @@ impl Lang {
         Lang::from_code(pref).unwrap_or_else(system_lang)
     }
 
+    /// Keep a configured Punjabi preference, but display English unless the active UI fonts
+    /// cover its Gurmukhi characters. Other languages never consult this Punjabi-only predicate.
+    /// Glyph coverage is necessary for readable labels; it does not establish correct shaping.
+    pub(crate) fn for_display(self, drawable: impl FnOnce(&str) -> bool) -> Lang {
+        if self.code() == "pa" && !drawable(&PUNJABI_GLYPHS) { Lang::EN } else { self }
+    }
+
     /// Every language the interface can be shown in: [`LANGUAGES`] in order, those whose catalogs
     /// are embedded (English alone in a build without craft-i18n).
     pub fn all() -> impl Iterator<Item = Lang> {
@@ -351,14 +369,14 @@ pub fn normalize_pref(pref: &str) -> Option<&'static str> {
 
 /// Candidate language codes for a locale tag, most specific first: `zh_TW.UTF-8` →
 /// `zh-tw`, `zh-hant`, `zh`. Punjabi uses the runtime matcher and available catalogs.
-fn candidates(tag: &str) -> Vec<String> {
+fn candidates(tag: &str, catalogs: &I18n) -> Vec<String> {
     let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-").to_ascii_lowercase();
     let parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
     let Some(&primary) = parts.first() else { return Vec::new() };
     if primary == "pa" {
         // The runtime excludes Arabic/other scripts and infers Shahmukhi for Pakistan; a generic
         // base-language fallback here would incorrectly offer Gurmukhi for those users.
-        return I18N.match_tag(tag).map_or_else(Vec::new, |lang| vec![I18N.code(lang).to_string()]);
+        return catalogs.match_tag(tag).map_or_else(Vec::new, |lang| vec![catalogs.code(lang).to_string()]);
     }
     let mut out = Vec::new();
     for n in (1..=parts.len()).rev() {
@@ -384,11 +402,16 @@ fn candidates(tag: &str) -> Vec<String> {
 /// The registered language for a locale tag such as `ja_JP.UTF-8`, `ja-JP`; `None` if the
 /// language isn't supported. `C`/`POSIX` mean English.
 pub fn lang_from_tag(tag: &str) -> Option<Lang> {
-    let cands = candidates(tag);
+    lang_from_tag_with(tag, &I18N).map(|lang| Lang { lang, catalogs: None })
+}
+
+/// Route through the registered language list and the supplied runtime, including fixture catalogs.
+fn lang_from_tag_with(tag: &str, catalogs: &I18n) -> Option<craft_i18n::Lang> {
+    let cands = candidates(tag, catalogs);
     if matches!(cands.first().map(String::as_str), Some("c" | "posix")) {
-        return Some(Lang::EN);
+        return Some(craft_i18n::Lang::EN);
     }
-    cands.iter().find_map(|c| Lang::from_code(c))
+    cands.iter().filter(|code| LANGUAGES.iter().any(|l| l.code.eq_ignore_ascii_case(code))).find_map(|code| catalogs.from_code(code))
 }
 
 /// The system language (cached). English when it can't be determined.
@@ -436,7 +459,7 @@ fn env_lang(var: impl Fn(&str) -> Option<String>) -> Option<Lang> {
 #[cfg(not(target_arch = "wasm32"))]
 fn language_override(tag: &str) -> Option<Lang> {
     let tag = tag.trim();
-    if cfg!(target_os = "windows") && matches!(candidates(tag).first().map(String::as_str), Some("c" | "posix")) {
+    if cfg!(target_os = "windows") && matches!(candidates(tag, &I18N).first().map(String::as_str), Some("c" | "posix")) {
         return None;
     }
     lang_from_tag(tag)

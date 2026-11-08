@@ -576,12 +576,14 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
         let label = ctx.label_primary(ui, tl!("Interface language"), t);
         let (selected, picker) = {
             let drawable = |text: &str| picker_text_is_drawable(ui, text);
-            let selected = crate::i18n::Lang::from_code(&app.language)
-                .map_or_else(|| tl!("Auto").to_owned(), |language| language.picker_name(drawable).to_owned());
-            let picker = crate::i18n::Lang::for_picker_by(|language| language.picker_name(drawable))
-                .into_iter()
-                .map(|language| (language, language.picker_name(drawable)))
-                .collect::<Vec<_>>();
+            let choice = |language: crate::i18n::Lang| {
+                let available = language.for_display(|text| theme::punjabi_text_is_drawable(ui.ctx(), text)) == language;
+                let name = if available { language.picker_name(drawable) } else { language.english_name() };
+                (language, name, available)
+            };
+            let selected =
+                crate::i18n::Lang::from_code(&app.language).map_or_else(|| tl!("Auto").to_owned(), |language| choice(language).1.to_owned());
+            let picker = crate::i18n::Lang::for_picker_by(|language| choice(language).1).into_iter().map(choice).collect::<Vec<_>>();
             (selected, picker)
         };
         let before = app.language.clone();
@@ -592,8 +594,10 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
                 if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                     ui.close();
                 }
-                for (language, name) in &picker {
-                    if ui.selectable_value(&mut app.language, language.code().to_string(), *name).clicked() {
+                for (language, name, available) in &picker {
+                    let response =
+                        ui.add_enabled_ui(*available, |ui| ui.selectable_value(&mut app.language, language.code().to_string(), *name)).inner;
+                    if response.on_disabled_hover_text(tl!("Punjabi requires a font that can display Gurmukhi.")).clicked() {
                         ui.close();
                     }
                 }
@@ -601,7 +605,7 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
             .response
             .labelled_by(label.id);
         if app.language != before {
-            crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
+            crate::i18n::set_current(app.display_language(ui.ctx()));
         }
 
         ui.add_space(16.0);
