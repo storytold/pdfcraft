@@ -1519,7 +1519,7 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
         fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
-            ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
+            ScriptResult { rc: true, value: "ran".into(), value_set: true, changes: Vec::new(), message: None }
         }
     }
     let mut doc = one_page();
@@ -2933,6 +2933,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                 ScriptResult {
                     rc: true,
                     value: "calc1".into(),
+                    value_set: true,
                     changes: vec![FieldChange {
                         name: "agree".into(),
                         value: Some(vec!["Yes".into()]),
@@ -2944,9 +2945,9 @@ fn recalc_chain_where_script_changes_checkbox() {
                 }
             } else if script == "read_box" {
                 let box_val = fields.iter().find(|f| f.name == "agree").and_then(|f| f.value.first()).cloned().unwrap_or_default();
-                ScriptResult { rc: true, value: format!("box_was_{box_val}"), changes: Vec::new(), message: None }
+                ScriptResult { rc: true, value: format!("box_was_{box_val}"), value_set: true, changes: Vec::new(), message: None }
             } else {
-                ScriptResult { rc: true, value: String::new(), changes: Vec::new(), message: None }
+                ScriptResult { rc: true, value: String::new(), value_set: false, changes: Vec::new(), message: None }
             }
         }
     }

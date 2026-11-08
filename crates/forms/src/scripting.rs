@@ -51,6 +51,8 @@ pub struct ScriptResult {
     pub rc: bool,
     /// `event.value` afterwards.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub changes: Vec<FieldChange>,
     /// Why it rejected the value (its alert), for the error shown.
     pub message: Option<String>,
@@ -82,7 +84,7 @@ pub struct NoScripts;
 
 impl Scripts for NoScripts {
     fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
-        ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+        ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None }
     }
 }
 

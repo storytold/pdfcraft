@@ -31,6 +31,21 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert!(o.rc);
 }
 
+/// `event.value` reads and writes as a plain value, numbers included, and the outcome says whether
+/// the script assigned it, even to the value it already had.
+#[test]
+fn the_outcome_says_whether_the_script_assigned_event_value() {
+    let ev = Event::field("Calculate", "total", "7");
+    let o = go("event.value = event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", true));
+    let o = go("event.value = 2; event.value += 3; typeof event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set, o.result.as_deref()), ("5", true, Some("number")));
+    let o = go("var v = event.value; this.getField('price').value = 3;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", false));
+    let o = go("Object.keys(event).indexOf('value') >= 0;", &ev);
+    assert_eq!(o.result.as_deref(), Some("true"), "value stays an enumerable property of event");
+}
+
 #[test]
 fn numbers_with_leading_zeros_stay_text() {
     let o = go("event.value = typeof getField('zip').value + ':' + typeof getField('qty').value;", &Event::field("Calculate", "total", ""));

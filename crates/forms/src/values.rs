@@ -165,7 +165,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
             // A script may set its own field through the field object (`getField("Total").value
             // = …`) rather than through `event.value`. `apply_changes` leaves the event's own
-            // field to the event, so that value is the result unless `event.value` changed too.
+            // field to the event, so that value is the result unless the script also assigned
+            // `event.value`, even the value it already had.
             let own = r.changes.iter().find(|c| c.name == f.name).and_then(|c| c.value.as_ref()).map(|v| v.first().cloned().unwrap_or_default());
             scripting::apply_changes(doc, &r.changes, &f.name)?;
             if !r.changes.is_empty() {
@@ -175,7 +176,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
                 continue;
             }
             match own {
-                Some(v) if r.value == current => v,
+                Some(v) if !r.value_set => v,
                 _ => r.value,
             }
         } else {
@@ -183,7 +184,20 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             v
         };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
+            // A combo box's /I (its option indices, ISO 32000-2 Table 231) follows the value, as
+            // `write_value` keeps it, so the selection kept never disagrees with the value.
+            let combo = f.kind == FieldKind::Combo;
+            let picked = f.options.iter().position(|(e, d)| *e == v || *d == v).and_then(|i| i64::try_from(i).ok());
+            doc.update_dict(f.obj, |d| {
+                d.set(b"V".to_vec(), PdfString::text(&v));
+                match picked {
+                    Some(i) if combo => d.set(b"I".to_vec(), Object::Array(vec![Object::Int(i)])),
+                    _ if combo => {
+                        d.remove(b"I");
+                    }
+                    _ => {}
+                }
+            })?;
             redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];

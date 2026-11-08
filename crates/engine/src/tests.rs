@@ -3021,6 +3021,44 @@ fn a_calculate_script_setting_its_own_field_object_keeps_the_value() {
     assert_eq!(value(&s, "copy").as_deref(), Some("12"));
 }
 
+/// A Calculate script that assigns `event.value` the value its field already holds keeps it, even
+/// after writing another value through its field object; and a combo box a script moves to
+/// another option selects that option in `/I` too.
+#[test]
+fn a_calculate_script_assigning_event_value_wins_and_a_combo_keeps_its_selection() {
+    let (mut s, id) = session_with(1);
+    s.apply(
+        id,
+        Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: NewField::Text { multiline: false }, name: Some("origin".into()) },
+    )
+    .unwrap();
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: NewField::Text { multiline: false }, name: Some("kept".into()) })
+        .unwrap();
+    let kind = NewField::Combo { options: vec!["Small".into(), "Large".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 170.0, 180.0, 192.0], kind, name: Some("size".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "size".into(), value: FieldValue::Choice(vec!["Small".into()]) }).unwrap();
+    let script = |name: &str, js: &str| Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(js.into()) };
+    s.apply(
+        id,
+        script(
+            "kept",
+            "var v = event.value;
+this.getField(\"kept\").value = \"field\";
+event.value = v;",
+        ),
+    )
+    .unwrap();
+    s.apply(id, script("size", "event.value = this.getField(\"origin\").value > 5 ? \"Large\" : \"Small\";")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    let doc = s.get(id).unwrap();
+    let value = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
+    assert_eq!(value("kept").as_deref(), None, "event.value, set to the field's own value, decides");
+    assert_eq!(value("size").as_deref(), Some("Large"));
+    let size = doc.form.iter().find(|f| f.name == "size").map(|f| f.obj).unwrap();
+    let selected = doc.editor.as_ref().unwrap().cos.get(size).as_dict().and_then(|d| d.get(b"I")).cloned();
+    assert_eq!(selected, Some(pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Int(1)])));
+}
+
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {
