@@ -398,3 +398,147 @@ fn a_soft_hyphen_and_a_chinese_or_japanese_line_end_combine() {
     assert_eq!(text.find("abc def"), vec![32..38]);
     assert!(text.find("abcdef").is_empty());
 }
+
+/// Glyphs of `size` points as [`laid_out`] sets them, each line `lead` below the last, with the
+/// writing direction turned to `direction` about the first glyph's corner (a unit vector in
+/// y-down view space; `[1, 0]` is [`laid_out`]).
+fn turned(lines: &[&str], size: f32, lead: f32, direction: [f32; 2]) -> PageText {
+    let [dx, dy] = direction;
+    // Towards the next line: the writing direction turned a quarter clockwise in view space.
+    let [nx, ny] = [-dy, dx];
+    let at = |along: f32, across: f32| [100.0 + along * dx + across * nx, 100.0 + along * dy + across * ny];
+    let mut glyphs = Vec::new();
+    for (l, line) in lines.iter().enumerate() {
+        for (k, c) in line.chars().enumerate() {
+            let (a, b) = (size * k as f32, lead * l as f32);
+            // Baseline edge first, in the writing direction; then the far edge back.
+            let quad = [at(a, b + size), at(a + size, b + size), at(a + size, b), at(a, b)];
+            let xs = quad.map(|p| p[0]);
+            let ys = quad.map(|p| p[1]);
+            let rect = [
+                xs.iter().copied().fold(f32::MAX, f32::min),
+                ys.iter().copied().fold(f32::MAX, f32::min),
+                xs.iter().copied().fold(f32::MIN, f32::max),
+                ys.iter().copied().fold(f32::MIN, f32::max),
+            ];
+            glyphs.push(TextGlyph { text: c.into(), rect, quad, direction });
+        }
+    }
+    let mut text = PageText::default();
+    for (l, line) in (0u32..).zip(lines) {
+        for _ in line.chars() {
+            text.line_of.push(l);
+            text.space_before.push(false);
+        }
+    }
+    text.glyphs = glyphs;
+    text
+}
+
+/// Text turned a quarter either way, or upside down, runs on between lines as horizontal text
+/// does: the line after is the next one across the turned lines, starting back at the turned
+/// line's head.
+#[test]
+fn a_chinese_or_japanese_word_divided_in_turned_text_is_found_on_both_lines() {
+    for direction in [[0.0, -1.0], [0.0, 1.0], [-1.0, 0.0]] {
+        let text = turned(&["装置の検知", "機構です"], 10.0, 15.0, direction);
+        assert_eq!(text.find("検知機構"), vec![3..7], "{direction:?}");
+        assert!(text.find("検知 機構").is_empty(), "{direction:?}");
+    }
+}
+
+/// The line end after a soft hyphen is found past other invisible characters that follow it, in
+/// the same glyph or in glyphs of their own.
+#[test]
+fn a_soft_hyphen_line_end_joins_past_invisible_characters() {
+    let hyphen = laid_out(&[(10.0, 10.0, "Mitar\u{AD}\u{200B}"), (10.0, 25.0, "beiterinnen")], 10.0);
+    assert_eq!(hyphen.find("Mitarbeiterinnen"), vec![0..18]);
+    let mut text = page(&["Mitar\u{AD}", "\u{2060}", "beiterinnen"]);
+    text.line_of = vec![0, 0, 1];
+    assert_eq!(text.find("Mitarbeiterinnen"), vec![0..3]);
+}
+
+/// A variation selector after the last Chinese or Japanese character of a line only picks its
+/// glyph: the line still runs on to the next.
+#[test]
+fn a_variation_selector_at_a_line_end_keeps_the_line_running_on() {
+    let selector = laid_out(&[(10.0, 10.0, "葛\u{E0100}"), (10.0, 25.0, "飾区")], 10.0);
+    assert_eq!(selector.find("葛\u{E0100}飾区"), vec![0..4]);
+    assert!(selector.find("葛\u{E0100} 飾区").is_empty());
+}
+
+/// A wrapped line is near the one before: a block far down the page keeps its word break.
+#[test]
+fn a_line_end_does_not_join_a_block_far_below() {
+    let far = laid_out(&[(10.0, 10.0, "検知"), (10.0, 200.0, "機構")], 10.0);
+    assert!(far.find("検知機構").is_empty());
+    assert_eq!(far.find("検知 機構"), vec![0..4]);
+}
+
+/// A wrapped line runs the same way as the one before: a line in another writing direction keeps
+/// its word break, wherever it sits.
+#[test]
+fn a_line_end_does_not_join_a_line_in_another_direction() {
+    let mut across = laid_out(&[(10.0, 10.0, "検知"), (10.0, 25.0, "機構")], 10.0);
+    for g in across.glyphs.iter_mut().skip(2) {
+        g.direction = [0.0, 1.0];
+    }
+    assert!(across.find("検知機構").is_empty());
+    assert_eq!(across.find("検知 機構"), vec![0..4]);
+}
+
+/// A line of one character starts level with the one before, not behind it, and still runs on.
+#[test]
+fn lines_of_one_character_run_on() {
+    let single = laid_out(&[(10.0, 10.0, "検"), (10.0, 25.0, "知"), (10.0, 40.0, "機")], 10.0);
+    assert_eq!(single.find("検知機"), vec![0..3]);
+}
+
+/// A minimal PDF of `objects` (numbered from 1), each with its xref entry.
+fn pdf(objects: &[String]) -> Vec<u8> {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+/// The same vertical Japanese as [`a_word_divided_between_vertical_columns_is_found_in_both`],
+/// drawn by a page in an Identity-V font: extracted text runs on from the foot of the right
+/// column to the head of the left one.
+#[test]
+fn a_word_divided_between_vertical_columns_of_a_page_is_found_in_both() {
+    use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
+    let chars: Vec<char> = "装置の検知機構です".chars().collect();
+    let pairs: String = (1u32..).zip(&chars).map(|(code, c)| format!("<{code:04X}> <{:04X}> ", *c as u32)).collect();
+    let to_unicode = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {} beginbfchar {pairs}endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+        chars.len()
+    );
+    let content = "BT /F1 10 Tf 1 0 0 1 300 700 Tm <0001000200030004 0005> Tj 1 0 0 1 285 700 Tm <0006000700080009> Tj ET";
+    let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    let bytes = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 800] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /TestMincho /Encoding /Identity-V /DescendantFonts [5 0 R] /ToUnicode 6 0 R >>".into(),
+        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /TestMincho /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 /CIDToGIDMap /Identity >>".into(),
+        stream("", &to_unicode),
+        stream("", content),
+    ]);
+    let mut renderer = PageRenderer::new(std::sync::Arc::new(bytes), RenderConfig::default());
+    let result = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let text = result.text.expect("text");
+    assert_eq!(text.find("検知機構"), vec![3..7], "{:?}", text.plain_text());
+    assert_eq!(text.line_rects(3..7).len(), 2, "one highlight per column");
+    assert!(text.find("検知 機構").is_empty());
+}

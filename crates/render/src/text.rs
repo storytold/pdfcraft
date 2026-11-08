@@ -129,7 +129,8 @@ impl PageText {
 
     /// Case-insensitive search. Returns glyph ranges of every match (words may span line breaks,
     /// which count as a single space, or as nothing where the line runs on between two Chinese or
-    /// Japanese characters).
+    /// Japanese characters or ends in a soft hyphen: there a query with a space across the break
+    /// doesn't match, and one without does).
     pub fn find(&self, needle: &str) -> Vec<std::ops::Range<usize>> {
         self.find_opts(needle, false, false)
     }

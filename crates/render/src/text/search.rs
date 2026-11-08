@@ -27,11 +27,13 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
         // A soft hyphen marks where a word may be divided at a line end (ISO 32000-2 §14.8.2.3), so
         // a line that ends in one runs on to the next with no word break between them.
-        let soft_break = line_break && i.checked_sub(1).and_then(|previous| page.glyphs.get(previous)).is_some_and(|g| g.text.ends_with('\u{AD}'));
+        // Other invisible characters after the soft hyphen don't hide it.
+        let soft_break = line_break && last_kept(page, i) == Some('\u{AD}');
         // So does a line of Chinese or Japanese that runs on to the next. The characters on both
-        // sides of the break are the visible ones: invisible characters are skipped below.
-        let joined =
-            line_break && chars.last().is_some_and(|before| unspaced(before.0)) && first_visible(page, i).is_some_and(unspaced) && wraps(page, i);
+        // sides of the break are the visible ones: invisible characters are skipped below, and a
+        // variation selector after the last one only picks its glyph.
+        let before = chars.iter().rev().map(|c| c.0).find(|&c| !is_variation_selector(c));
+        let joined = line_break && before.is_some_and(unspaced) && first_visible(page, i).is_some_and(unspaced) && wraps(page, i);
         let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !(joined || soft_break));
         if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
             chars.push((' ', i));
@@ -106,6 +108,27 @@ fn is_invisible(c: char) -> bool {
     matches!(c, '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
 }
 
+/// A variation selector (VS1-VS16 and VS17-VS256): it picks a variant glyph of the character
+/// before it and is no character of its own.
+fn is_variation_selector(c: char) -> bool {
+    matches!(c as u32, 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+}
+
+/// The last character before glyph `i` on the line that glyph `i - 1` ends, other than the
+/// invisible characters find skips; a soft hyphen counts, since it marks a divided word. Looks
+/// back at most 16 glyphs.
+fn last_kept(page: &PageText, i: usize) -> Option<char> {
+    let end = i.checked_sub(1)?;
+    let line = page.line_of.get(end)?;
+    (0..=end)
+        .rev()
+        .take(16)
+        .take_while(|&k| page.line_of.get(k) == Some(line))
+        .filter_map(|k| page.glyphs.get(k))
+        .flat_map(|g| g.text.chars().rev())
+        .find(|&c| c == '\u{AD}' || !is_invisible(c))
+}
+
 /// Whether `c` is set solid, with no spaces between words, in text that a line break may divide
 /// anywhere: East Asian Width Wide, Fullwidth or Halfwidth (Unicode Standard Annex #11) Han,
 /// kana, bopomofo, CJK symbols and punctuation and fullwidth forms other than Latin letters and
@@ -132,13 +155,17 @@ fn unspaced(c: char) -> bool {
     ) && !matches!(c as u32, 0x3200..=0x321E | 0x3260..=0x327E) // parenthesised and circled Hangul
 }
 
-/// Whether glyph `i` starts the line that the text of glyph `i - 1` runs on to: it sits past that
-/// glyph across the lines, by more than half the glyph's line height, and starts back behind it
-/// along the line, as a wrapped line does. Text set side by side on one line (table cells, labels),
-/// a cell set lower and further along the row, and a column that starts back at the top keep their
-/// word break.
+/// Whether glyph `i` starts the line that the text of glyph `i - 1` runs on to: both run the same
+/// way, it sits past that glyph across the lines, by more than half the glyph's line height and
+/// at most three, and starts no further along the line than half a line height past it, as a
+/// wrapped line does (a line of one character starts level with the one before). Text set side by
+/// side on one line (table cells, labels), a cell set lower and further along the row, a column
+/// that starts back at the top, a block further down the page and a flow in another direction
+/// keep their word break.
 fn wraps(page: &PageText, i: usize) -> bool {
     let Some((before, after)) = i.checked_sub(1).and_then(|p| page.glyphs.get(p)).zip(page.glyphs.get(i)) else { return false };
+    // Unit directions: the same flow has a dot product of 1.
+    let same_flow = before.direction[0] * after.direction[0] + before.direction[1] * after.direction[1] > 0.99;
     let centre = |q: &[[f32; 2]; 4]| [q.iter().map(|p| p[0]).sum::<f32>() / 4.0, q.iter().map(|p| p[1]).sum::<f32>() / 4.0];
     let (a, b) = (centre(&before.quad), centre(&after.quad));
     // Towards the next line: the writing direction turned a quarter clockwise in y-down view space.
@@ -148,7 +175,7 @@ fn wraps(page: &PageText, i: usize) -> bool {
     let [near, far] = [before.quad[0], before.quad[3]];
     let height = (near[0] - far[0]).hypot(near[1] - far[1]);
     // NaN compares false: no join.
-    across > height * 0.5 && along < 0.0
+    same_flow && across > height * 0.5 && across <= height * 3.0 && along < height * 0.5
 }
 
 /// The first visible character on the line that glyph `i` starts, skipping the invisible characters
