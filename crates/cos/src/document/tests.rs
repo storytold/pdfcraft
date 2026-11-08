@@ -2215,7 +2215,11 @@ fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
 
     let saved = crate::write_incremental(&doc, &crate::SaveOptions::default()).expect("saves");
     let reopened = Document::open(Arc::new(saved)).expect("the saved file opens");
-    assert_eq!(page_tree_pages(&reopened).len(), 3);
+    let pages = page_tree_pages(&reopened);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page is saved: {pages:?}");
+    let catalog = reopened.get(reopened.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog is saved");
     assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
 
     // The same file with `/Prev` reads through its chain, as before.
@@ -2231,11 +2235,17 @@ fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
 #[test]
 fn a_hybrid_update_without_prev_is_rebuilt_too() {
     let doc = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false))).expect("the unlinked file opens");
-    assert_eq!(page_tree_pages(&doc).len(), 3);
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
     assert!(doc.rebuilt_unlinked_update(), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
     let linked = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true))).expect("the linked file opens");
     assert_eq!(page_tree_pages(&linked).len(), 3);
     assert!(!linked.rebuilt_unlinked_update() && linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+    assert_eq!(linked.revisions().len(), 2);
 }
 
 #[test]
