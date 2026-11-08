@@ -407,7 +407,7 @@ fn guarded_dispatch(method: &str, f: impl FnOnce() -> Result<Value, (i64, String
 }
 
 fn tool_content(name: &str, content: Vec<Content>) -> Value {
-    let failed = matches!(name, "command_batch" | "doc_batch")
+    let failed = matches!(name, "command_batch" | "doc_batch" | "sign_batch")
         && content.iter().any(|c| match c {
             Content::Json(v) => v.get("failed").and_then(Value::as_u64).is_some_and(|n| n > 0),
             _ => false,
