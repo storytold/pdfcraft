@@ -35,6 +35,7 @@ pub struct TextLine {
 /// An extracted embedded image (such as a barcode, QR code, or picture).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PageImage {
+    #[serde(skip)]
     pub bytes: Vec<u8>,
     pub bounds: (f32, f32, f32, f32), // (left, top, right, bottom)
     pub width_pt: f32,

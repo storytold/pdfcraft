@@ -234,6 +234,9 @@ pub fn set_line_properties(
     if has_connected_preceding || (has_subsequent_path && !subsequent_starts_with_m) {
         return Err(EditError::Invalid("changing properties of a connected multi-segment path is not supported".into()));
     }
+    if target_line.re_info.is_some() {
+        return Err(EditError::Invalid("changing properties of one edge of a rectangle is not supported".into()));
+    }
 
     let mut prefix_bytes = Vec::new();
     if has_preceding_path {
@@ -682,6 +685,8 @@ pub struct LineSegment {
     pub end: [f64; 2],
     /// Stroke width in user-space points.
     pub thickness: f64,
+    /// Stroke color `[r, g, b]` in 0.0..=1.0 if determined from content stream.
+    pub stroke_color: Option<[f64; 3]>,
 }
 
 impl LineSegment {
@@ -1046,7 +1051,7 @@ pub fn editable_lines(doc: &Document, page: usize) -> Result<Vec<LineSegment>, E
                 && pl.thickness.is_finite()
                 && pl.thickness > 0.0
         })
-        .map(|(index, pl)| LineSegment { page, index, start: pl.start, end: pl.end, thickness: pl.thickness })
+        .map(|(index, pl)| LineSegment { page, index, start: pl.start, end: pl.end, thickness: pl.thickness, stroke_color: Some(pl.color) })
         .collect())
 }
 
@@ -1085,13 +1090,13 @@ mod line_tests {
 
     #[test]
     fn bbox_is_normalised() {
-        let l = LineSegment { page: 0, index: 0, start: [10.0, 20.0], end: [5.0, 8.0], thickness: 1.0 };
+        let l = LineSegment { page: 0, index: 0, start: [10.0, 20.0], end: [5.0, 8.0], thickness: 1.0, stroke_color: None };
         assert_eq!(l.bbox(), [5.0, 8.0, 10.0, 20.0]);
     }
 
     #[test]
     fn distance_to_segment_endpoints_and_middle() {
-        let l = LineSegment { page: 0, index: 0, start: [0.0, 0.0], end: [10.0, 0.0], thickness: 1.0 };
+        let l = LineSegment { page: 0, index: 0, start: [0.0, 0.0], end: [10.0, 0.0], thickness: 1.0, stroke_color: None };
         assert!(l.distance_sq_to([5.0, 0.0]) < 1e-9);
         assert!((l.distance_sq_to([5.0, 3.0]) - 9.0).abs() < 1e-9);
         assert!((l.distance_sq_to([13.0, 0.0]) - 9.0).abs() < 1e-9);

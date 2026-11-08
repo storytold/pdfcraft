@@ -54,18 +54,11 @@ pub fn export_pdf<P: AsRef<Path>, Q: AsRef<Path>>(pdf_path: P, output_path: Q, f
 
 /// Convert PDF bytes in memory into the requested format and write to `output_path`.
 pub fn export_pdf_bytes<Q: AsRef<Path>>(pdf_bytes: &[u8], output_path: Q, format: ExportFormat) -> Result<(), String> {
-    let temp_dir = std::env::temp_dir();
-    let temp_file_path = temp_dir.join(format!(
-        "pdfcraft_export_{}_{}.pdf",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
-    ));
-
-    std::fs::write(&temp_file_path, pdf_bytes).map_err(|e| format!("Failed to write temporary PDF to {}: {e}", temp_file_path.display()))?;
-
-    let result = export_pdf(&temp_file_path, output_path, format);
-    let _ = std::fs::remove_file(&temp_file_path);
-    result
+    use std::io::Write;
+    let mut tmp =
+        tempfile::Builder::new().prefix("pdfcraft_export_").suffix(".pdf").tempfile().map_err(|e| format!("Failed to create temporary PDF: {e}"))?;
+    tmp.write_all(pdf_bytes).map_err(|e| format!("Failed to write temporary PDF: {e}"))?;
+    export_pdf(tmp.path(), output_path, format)
 }
 
 #[cfg(test)]

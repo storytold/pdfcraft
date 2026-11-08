@@ -41,6 +41,7 @@ fn print_usage(program_name: &str) {
     eprintln!("  --format <FMT>           Output format: docx, xlsx, pptx, or all (default: all)");
     eprintln!("  --out <DIR>              Target output directory (default: .)");
     eprintln!("  --pdfium-path <PATH>     Explicit path to the PDFium dynamic library (pdfium.dll / libpdfium.so / libpdfium.dylib)");
+    eprintln!("  --debug-json             Emit layout debug JSON file");
     eprintln!("  -h, --help               Print help information");
 }
 
@@ -58,6 +59,7 @@ fn main() {
     let mut custom_pdfium_path: Option<PathBuf> = None;
     let mut output_dir = PathBuf::from(".");
     let mut output_format = OutputFormat::All;
+    let mut debug_json = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -65,6 +67,9 @@ fn main() {
             "-h" | "--help" => {
                 print_usage(program_name);
                 process::exit(0);
+            }
+            "--debug-json" => {
+                debug_json = true;
             }
             "--format" => {
                 i += 1;
@@ -198,20 +203,18 @@ fn main() {
     let total_subscripts: usize =
         layout.pages.iter().flat_map(|p| &p.lines).flat_map(|l| &l.runs).filter(|r| r.script == ScriptType::Subscript).count();
 
-    // Save layout_debug.json
-    let debug_path = output_dir.join(format!("{}_layout_debug.json", file_stem));
-    // Also save standard layout_debug.json in current directory or output directory
-    let default_debug_path = output_dir.join("layout_debug.json");
-    if let Ok(json_str) = serde_json::to_string_pretty(&layout) {
-        let _ = fs::write(&default_debug_path, &json_str);
-        if debug_path != default_debug_path {
-            let _ = fs::write(&debug_path, &json_str);
-        }
-    }
-
     // 4. Emit requested formats
     let t_emit = Instant::now();
     let mut generated_files = Vec::new();
+
+    // Save layout_debug.json only when requested
+    if debug_json {
+        let debug_path = output_dir.join(format!("{file_stem}_layout_debug.json"));
+        if let Ok(json_str) = serde_json::to_string_pretty(&layout) {
+            let _ = fs::write(&debug_path, &json_str);
+            generated_files.push(debug_path);
+        }
+    }
 
     if output_format == OutputFormat::Docx || output_format == OutputFormat::All {
         let docx_path = output_dir.join(format!("{}.docx", file_stem));
@@ -258,5 +261,4 @@ fn main() {
     for f in &generated_files {
         println!("  - {}", f.display());
     }
-    println!("  - {}", default_debug_path.display());
 }

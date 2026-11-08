@@ -1167,7 +1167,7 @@ pub fn line_properties_panel(ui: &mut egui::Ui, view: &mut crate::canvas::DocVie
         });
         ui.add_space(4.0);
 
-        let dash_labels = ["Solid", "Dotted", "Dashed"];
+        let dash_labels = ["Solid", "Dotted", "Dashed", "DashDot"];
         let current_dash = dash_labels.get(view.line_properties.dash_idx).copied().unwrap_or(dash_labels[0]);
         craft_ui::ComboBox::from_id_salt("line-dash").selected_text(current_dash).show_ui(ui, |ui| {
             for (idx, label) in dash_labels.iter().enumerate() {
@@ -1179,14 +1179,21 @@ pub fn line_properties_panel(ui: &mut egui::Ui, view: &mut crate::canvas::DocVie
         ui.add_space(6.0);
 
         if ui.button(tl!("Apply")).clicked() {
-            let color = Some([view.line_properties.color[0] as f64, view.line_properties.color[1] as f64, view.line_properties.color[2] as f64]);
-            let width = Some(view.line_properties.width);
-            let dash = match view.line_properties.dash_idx {
-                1 => Some(vec![3.0, 3.0]),
-                2 => Some(vec![6.0, 3.0]),
-                _ => Some(vec![]),
+            let color = if (view.line_properties.color[0] - view.line_properties.initial_color[0]).abs() > 1e-4
+                || (view.line_properties.color[1] - view.line_properties.initial_color[1]).abs() > 1e-4
+                || (view.line_properties.color[2] - view.line_properties.initial_color[2]).abs() > 1e-4
+            {
+                Some([view.line_properties.color[0] as f64, view.line_properties.color[1] as f64, view.line_properties.color[2] as f64])
+            } else {
+                None
             };
-            view.pending_edit = Some(pdfcraft_engine::Edit::SetLineProperties { page, target, color, width, dash });
+            let width =
+                if (view.line_properties.width - view.line_properties.initial_width).abs() > 1e-4 { Some(view.line_properties.width) } else { None };
+            let dash =
+                if view.line_properties.dash_idx != view.line_properties.initial_dash_idx { Some(view.line_properties.dash_pattern()) } else { None };
+            if color.is_some() || width.is_some() || dash.is_some() {
+                view.pending_edit = Some(pdfcraft_engine::Edit::SetLineProperties { page, target, color, width, dash });
+            }
             view.line_properties.last_error = None;
             ui.ctx().request_repaint();
         }

@@ -396,7 +396,7 @@ impl BarcodeScannerHud {
     /// Render the unified interactive HUD and canvas highlight overlays.
     ///
     /// Returns a pending replacement `Edit` if the user modified and applied a code.
-    pub fn show(ui: &mut egui::Ui, view: &mut DocView, _doc: &Document, info: &DocInfo, can_modify: bool) -> Option<Edit> {
+    pub fn show(ui: &mut egui::Ui, view: &mut DocView, doc: &Document, info: &DocInfo, can_modify: bool) -> Option<Edit> {
         if !view.barcode_hud.open || !view.barcode_hud.panel_open {
             return None;
         }
@@ -733,7 +733,9 @@ impl BarcodeScannerHud {
 
             match Document::generate_replacement_code(kind, &buf, pw, ph) {
                 Ok(png_bytes) => {
-                    if let Some(image_idx) = active.image_index {
+                    let whole_image_idx =
+                        active.image_index.filter(|i| doc.page_images(current_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
+                    if let Some(image_idx) = whole_image_idx {
                         // Replace the embedded raster image directly so no old payload remains underneath.
                         pending_edit = Some(Edit::EditPageImage {
                             page: current_page,
@@ -781,7 +783,7 @@ impl BarcodeScannerHud {
             }
         }
         if let Some(active) = delete_code
-            && let Some(edit) = handle_barcode_delete(state, active, current_page, info, now)
+            && let Some(edit) = handle_barcode_delete(state, active, current_page, doc, info, now)
         {
             pending_edit = Some(edit);
         }
@@ -842,12 +844,27 @@ impl BarcodeScannerHud {
     }
 }
 
-fn handle_barcode_delete(state: &mut BarcodeHudState, active: ScannedCode, current_page: usize, info: &DocInfo, now: f64) -> Option<Edit> {
+fn code_is_whole_image(code: &ScannedCode, img_rect: [f64; 4]) -> bool {
+    let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).abs();
+    area(img_rect) > 0.0 && area(code.rect) / area(img_rect) > 0.9
+}
+
+fn handle_barcode_delete(
+    state: &mut BarcodeHudState,
+    active: ScannedCode,
+    current_page: usize,
+    doc: &Document,
+    info: &DocInfo,
+    now: f64,
+) -> Option<Edit> {
     state.target_rect = None;
     state.last_scanned_page = None;
     state.edit_buffer = None;
 
-    if let Some(image_idx) = active.image_index {
+    let whole_image_idx =
+        active.image_index.filter(|i| doc.page_images(current_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
+
+    if let Some(image_idx) = whole_image_idx {
         state.show_toast("Image code deleted from page!".into(), now);
         Some(Edit::EditPageImage { page: current_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete })
     } else {

@@ -690,7 +690,7 @@ impl FloatingContextMenu {
             if !can_modify {
                 return None;
             }
-            let menu_width = 280.0;
+            let menu_width = 240.0;
             let menu_height = 36.0;
             let anchor = Self::compute_anchor(screen_rect, viewport, menu_width, menu_height)?;
             let t = crate::theme::Tokens::get(ui.ctx());
@@ -761,24 +761,6 @@ impl FloatingContextMenu {
                                     }
                                 }
                             });
-
-                            ui.separator();
-
-                            // 4. Excel Grid Toggle
-                            let extend = view.extend_perpendicular_lines;
-                            let grid_tip = if extend {
-                                "Connected Grid Mode: ON (drag extends perpendicular lines)"
-                            } else {
-                                "Connected Grid Mode: OFF (click to extend perpendicular lines)"
-                            };
-                            if crate::icons::button(ui, "grid-3x3", 24.0, extend, grid_tip).clicked() {
-                                action = Some(FloatingMenuAction::ToggleGridMode);
-                            }
-
-                            // 5. Delete
-                            if crate::icons::button(ui, "trash-2", 24.0, false, tl!("Delete")).clicked() {
-                                action = Some(FloatingMenuAction::Delete);
-                            }
                         });
                     });
             });
@@ -786,13 +768,7 @@ impl FloatingContextMenu {
             return action;
         }
 
-        let menu_width = if is_text {
-            if is_line_editor { 160.0 } else { 330.0 }
-        } else if is_image {
-            190.0
-        } else {
-            150.0
-        };
+        let menu_width = if is_text { if is_line_editor { 70.0 } else { 180.0 } } else { 110.0 };
         let menu_height = 36.0;
 
         let anchor = Self::compute_anchor(screen_rect, viewport, menu_width, menu_height)?;
@@ -812,7 +788,6 @@ impl FloatingContextMenu {
                     let shortcut = |key: &'static str| crate::commands::shortcut_label(ui.ctx(), pdfcraft_engine::commands::Shortcut::cmd(key));
                     let cut_tip = format!("Cut ({})", shortcut("X"));
                     let copy_tip = format!("Copy ({})", shortcut("C"));
-                    let paste_tip = format!("Paste ({})", shortcut("V"));
                     ui.horizontal(|ui| {
                         if !is_line_editor {
                             // Cut (Ctrl+X)
@@ -830,19 +805,6 @@ impl FloatingContextMenu {
                             {
                                 action = Some(FloatingMenuAction::Copy);
                             }
-                            // Paste (Ctrl+V)
-                            if can_modify && crate::icons::button(ui, "clipboard-paste", 26.0, false, &paste_tip).clicked() {
-                                action = Some(FloatingMenuAction::Paste);
-                            }
-
-                            // Format Painter (for text elements)
-                            if is_text && can_modify {
-                                let has_format = view.canvas_selection.format_painter.is_some();
-                                let format_tip = if has_format { "Apply formatting (Format Painter)" } else { "Pick up formatting (Format Painter)" };
-                                if crate::icons::button(ui, "brush", 26.0, has_format, format_tip).clicked() {
-                                    action = Some(FloatingMenuAction::FormatPainter);
-                                }
-                            }
 
                             // Edit Text (for text elements)
                             if is_text && can_modify && crate::icons::button(ui, "text-cursor-input", 26.0, false, tl!("Edit text")).clicked() {
@@ -852,18 +814,6 @@ impl FloatingContextMenu {
 
                         // Quick Text Styles
                         if is_text && can_modify {
-                            if !is_line_editor {
-                                ui.separator();
-                            }
-                            if crate::icons::button(ui, "bold", 26.0, false, tl!("Bold")).clicked() {
-                                action = Some(FloatingMenuAction::ToggleBold);
-                            }
-                            if crate::icons::button(ui, "italic", 26.0, false, tl!("Italic")).clicked() {
-                                action = Some(FloatingMenuAction::ToggleItalic);
-                            }
-                            if crate::icons::button(ui, "strikethrough", 26.0, false, tl!("Strikethrough")).clicked() {
-                                action = Some(FloatingMenuAction::ToggleStrikethrough);
-                            }
                             if crate::icons::button(ui, "sparkles", 26.0, view.canvas_selection.symbol_palette_open, "Insert symbol").clicked() {
                                 action = Some(FloatingMenuAction::OpenSymbolPalette);
                             }
@@ -880,23 +830,18 @@ impl FloatingContextMenu {
                             }
                         }
 
-                        // Recognize Text & Duplicate for images
-                        if is_image && can_modify {
-                            if let Some(sel) = view.canvas_selection.selected.as_ref() {
-                                let w = (sel.user_rect[2] - sel.user_rect[0]).abs();
-                                let h = (sel.user_rect[3] - sel.user_rect[1]).abs();
-                                ui.label(format!("{:.0}×{:.0}pt", w, h));
-                            }
-                            if crate::icons::button(ui, "copy-plus", 26.0, false, "Duplicate (Ctrl+D)").clicked() {
-                                action = Some(FloatingMenuAction::Duplicate);
-                            }
-                            if crate::icons::button(ui, "scan-text", 26.0, false, "Recognize text (OCR)").clicked() {
-                                action = Some(FloatingMenuAction::RecognizeOcr);
-                            }
+                        // Image dimensions
+                        if is_image
+                            && can_modify
+                            && let Some(sel) = view.canvas_selection.selected.as_ref()
+                        {
+                            let w = (sel.user_rect[2] - sel.user_rect[0]).abs();
+                            let h = (sel.user_rect[3] - sel.user_rect[1]).abs();
+                            ui.label(format!("{:.0}×{:.0}pt", w, h));
                         }
 
                         // Separator before Delete
-                        if can_modify && !is_line_editor {
+                        if can_modify && !is_line_editor && (is_text || is_image) {
                             ui.separator();
                             if crate::icons::button(ui, "trash-2", 26.0, false, "Delete (Del)").clicked() {
                                 action = Some(FloatingMenuAction::Delete);
@@ -1278,13 +1223,13 @@ mod tests {
     #[test]
     fn test_connected_perpendicular_lines_grid_adjustment() {
         // Vertical column line at x = 100
-        let col = LineSegment { page: 0, index: 0, start: [100.0, 50.0], end: [100.0, 150.0], thickness: 1.0 };
+        let col = LineSegment { page: 0, index: 0, start: [100.0, 50.0], end: [100.0, 150.0], thickness: 1.0, stroke_color: None };
         // Horizontal row line touching col from left: end at (100, 80)
-        let row_left = LineSegment { page: 0, index: 1, start: [50.0, 80.0], end: [100.0, 80.0], thickness: 1.0 };
+        let row_left = LineSegment { page: 0, index: 1, start: [50.0, 80.0], end: [100.0, 80.0], thickness: 1.0, stroke_color: None };
         // Horizontal row line touching col from right: start at (100, 80)
-        let row_right = LineSegment { page: 0, index: 2, start: [100.0, 80.0], end: [180.0, 80.0], thickness: 1.0 };
+        let row_right = LineSegment { page: 0, index: 2, start: [100.0, 80.0], end: [180.0, 80.0], thickness: 1.0, stroke_color: None };
         // An unrelated line far away
-        let row_far = LineSegment { page: 0, index: 3, start: [20.0, 20.0], end: [40.0, 20.0], thickness: 1.0 };
+        let row_far = LineSegment { page: 0, index: 3, start: [20.0, 20.0], end: [40.0, 20.0], thickness: 1.0, stroke_color: None };
 
         let lines = vec![col.clone(), row_left, row_right, row_far];
 
@@ -1307,7 +1252,7 @@ mod tests {
 
     #[test]
     fn test_selectable_element_vector_line_and_bbox() {
-        let seg = LineSegment { page: 1, index: 4, start: [10.0, 50.0], end: [110.0, 50.0], thickness: 2.0 };
+        let seg = LineSegment { page: 1, index: 4, start: [10.0, 50.0], end: [110.0, 50.0], thickness: 2.0, stroke_color: None };
         let el = SelectableElement::new_line_vector(1, seg);
         assert_eq!(el.page, 1);
         assert_eq!(el.kind, SelectableKind::VectorLine);

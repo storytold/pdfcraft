@@ -75,7 +75,9 @@ impl PdfCraftApp {
     /// Select the workspace and its matching tool panel, just like the mode bar. The tool goes
     /// with the workspace as [`Self::enter_mode`] sets it.
     pub(crate) fn select_mode(&mut self, mode: Mode) {
-        self.enter_mode(mode);
+        if !self.enter_mode(mode) {
+            return;
+        }
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
             view.organize = false;
@@ -93,7 +95,10 @@ impl PdfCraftApp {
     /// here, so they leave Edit alike. Edit turns on Edit text & images at once, as Acrobat does:
     /// every paragraph and image on the page gets its box and is editable with one click. Leaving
     /// Edit puts the editing tools down again and applies a paragraph still open in the editor.
-    pub(crate) fn enter_mode(&mut self, mode: Mode) {
+    pub(crate) fn enter_mode(&mut self, mode: Mode) -> bool {
+        if mode != Mode::Edit && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) && !self.put_down_edit_text() {
+            return false;
+        }
         self.mode = mode;
         // Another workspace puts the expanded All tools view away.
         if mode != Mode::AllTools {
@@ -101,14 +106,13 @@ impl PdfCraftApp {
         }
         if mode == Mode::Edit {
             self.quick_tool = QuickTool::EditText;
-        } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) && !self.put_down_edit_text() {
-            return;
         }
         // Read mode hides the quick toolbar, so no other tool may stay active there. Opening a
         // document with Read as the default mode comes here without `switch_mode`.
         if mode == Mode::Read {
             self.quick_tool = QuickTool::Select;
         }
+        true
     }
 
     /// Fill the workspace with the expanded All tools view, entering All tools the way the mode

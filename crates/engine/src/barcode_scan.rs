@@ -985,7 +985,9 @@ impl Document {
 
             for mut code in img_codes {
                 code.id = scanned.len();
-                code.image_index = Some(idx);
+                let code_area = ((code.rect[2] - code.rect[0]) * (code.rect[3] - code.rect[1])).abs();
+                let img_area = (w as f64) * (h as f64);
+                code.image_index = if img_area > 0.0 && (code_area / img_area) > 0.9 { Some(idx) } else { None };
 
                 let [ma, mb, mc, md, me, mf] = img.matrix;
                 let apply = |u: f64, v: f64| -> (f64, f64) { (ma * u + mc * v + me, mb * u + md * v + mf) };

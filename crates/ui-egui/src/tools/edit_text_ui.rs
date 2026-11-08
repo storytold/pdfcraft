@@ -1143,10 +1143,11 @@ pub(crate) fn finished_edit_with_reflow(ed: LineEditor, reflow: bool, page_block
                 }
             }
             if !targets.is_empty() {
-                let mut edits = vec![edit];
+                let mut edits = Vec::new();
                 for chunk in targets.chunks(1000) {
                     edits.push(Edit::MoveObjects { page: ed.page, objects: chunk.to_vec(), offset });
                 }
+                edits.push(edit);
                 return Some(Edit::Batch { label: "Edit text and reflow paragraphs".into(), edits });
             }
         }

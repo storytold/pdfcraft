@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 log = { workspace = true }
 # The log timestamp goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
+tempfile = "3.27"
 pdf-typographic-converter = { version = "0.1.0", path = "../../pdfcraft-typographic-converter" }
 
 [target.'cfg(target_os = "macos")'.dependencies]

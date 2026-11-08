@@ -166,32 +166,37 @@ fn extract_object_content(
         let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
 
         if !is_png && !is_jpeg {
-            let bitmap = image_object.get_processed_bitmap(document).with_context(|| "Failed to process image bitmap from PDF")?;
-            let w = bitmap.width() as u32;
-            let h = bitmap.height() as u32;
-            if w > 0 && h > 0 {
-                let rgba = bitmap.as_rgba_bytes();
-                let png_data = encode_png_exact(w, h, &rgba).map_err(|e| anyhow::anyhow!("Failed to encode image to PNG: {e}"))?;
-                bytes = png_data;
+            if let Ok(bitmap) = image_object.get_processed_bitmap(document) {
+                let w = bitmap.width() as u32;
+                let h = bitmap.height() as u32;
+                if w > 0 && h > 0 {
+                    let rgba = bitmap.as_rgba_bytes();
+                    if let Ok(png_data) = encode_png_exact(w, h, &rgba) {
+                        bytes = png_data;
+                    } else {
+                        bytes.clear();
+                    }
+                } else {
+                    bytes.clear();
+                }
             } else {
                 bytes.clear();
             }
         }
 
         if !bytes.is_empty() {
-            budget.image_bytes = budget.image_bytes.saturating_add(bytes.len());
-            if budget.image_bytes > 128 * 1024 * 1024 {
-                anyhow::bail!("Exceeded maximum image byte limit (128MB) during extraction");
+            let next_total = budget.image_bytes.saturating_add(bytes.len());
+            if next_total <= 128 * 1024 * 1024 {
+                budget.image_bytes = next_total;
+                page_images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
             }
-            page_images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
         }
     } else if let Some(form_object) = object.as_x_object_form_object() {
         budget.form_visits = budget.form_visits.saturating_add(1);
-        if budget.form_visits > 1_000 {
-            anyhow::bail!("Exceeded form recursion limit of 1,000 visits");
-        }
-        for child in form_object.iter() {
-            extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object, budget)?;
+        if budget.form_visits <= 1_000 {
+            for child in form_object.iter() {
+                let _ = extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object, budget);
+            }
         }
     }
     Ok(())

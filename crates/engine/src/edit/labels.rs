@@ -272,7 +272,7 @@ impl Edit {
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::UpdateLineEndpoints { .. } => Label::of("Move object"),
-            Edit::SetLineProperties { .. } => Label::of("Change comment properties"),
+            Edit::SetLineProperties { .. } => Label::of("Edit content"),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
                 ImageEdit::Transform(_) => "Transform image",

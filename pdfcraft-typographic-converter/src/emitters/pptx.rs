@@ -52,6 +52,9 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
   <Default Extension="jpeg" ContentType="image/jpeg"/>
   <Default Extension="jpg" ContentType="image/jpeg"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
 "#,
     );
 
@@ -80,6 +83,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     let mut pres_rels = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdMaster1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
 "#,
     );
 
@@ -95,6 +99,105 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     zip.start_file("ppt/_rels/presentation.xml.rels", options)?;
     zip.write_all(pres_rels.as_bytes())?;
 
+    // Minimal Slide Master, Layout, and Theme
+    let theme_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
+  <a:themeElements>
+    <a:clrScheme name="Office">
+      <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+      <a:dk2><a:srgbClr val="1F497D"/></a:dk2>
+      <a:lt2><a:srgbClr val="EEECE1"/></a:lt2>
+      <a:accent1><a:srgbClr val="4F81BD"/></a:accent1>
+      <a:accent2><a:srgbClr val="C0504D"/></a:accent2>
+      <a:accent3><a:srgbClr val="9BBB59"/></a:accent3>
+      <a:accent4><a:srgbClr val="8064A2"/></a:accent4>
+      <a:accent5><a:srgbClr val="4BACC6"/></a:accent5>
+      <a:accent6><a:srgbClr val="F79646"/></a:accent6>
+      <a:hlink><a:srgbClr val="0000FF"/></a:hlink>
+      <a:folHlink><a:srgbClr val="800080"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="Office">
+      <a:majorFont><a:latin typeface="Calibri"/></a:majorFont>
+      <a:minorFont><a:latin typeface="Calibri"/></a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name="Office">
+      <a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>
+      <a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst>
+      <a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>
+      <a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+</a:theme>"#;
+    zip.start_file("ppt/theme/theme1.xml", options)?;
+    zip.write_all(theme_xml.as_bytes())?;
+
+    let slide_master_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+  <p:sldLayoutIdLst>
+    <p:sldLayoutId id="2147483649" r:id="rId1"/>
+  </p:sldLayoutIdLst>
+</p:sldMaster>"#;
+    zip.start_file("ppt/slideMasters/slideMaster1.xml", options)?;
+    zip.write_all(slide_master_xml.as_bytes())?;
+
+    let slide_master_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>"#;
+    zip.start_file("ppt/slideMasters/_rels/slideMaster1.xml.rels", options)?;
+    zip.write_all(slide_master_rels.as_bytes())?;
+
+    let slide_layout_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>"#;
+    zip.start_file("ppt/slideLayouts/slideLayout1.xml", options)?;
+    zip.write_all(slide_layout_xml.as_bytes())?;
+
+    let slide_layout_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>"#;
+    zip.start_file("ppt/slideLayouts/_rels/slideLayout1.xml.rels", options)?;
+    zip.write_all(slide_layout_rels.as_bytes())?;
+
     // Determine presentation dimensions in EMUs (1 pt = 12700 EMUs), accommodating every page
     let max_width = doc.pages.iter().map(|p| p.width as f64).fold(0.0, f64::max);
     let max_height = doc.pages.iter().map(|p| p.height as f64).fold(0.0, f64::max);
@@ -104,6 +207,9 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     // 4. ppt/presentation.xml
     let mut pres_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldMasterIdLst>
+    <p:sldMasterId id="2147483648" r:id="rIdMaster1"/>
+  </p:sldMasterIdLst>
   <p:sldIdLst>
 "#.to_string();
 
@@ -203,7 +309,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
             ));
 
             for run in &line.runs {
-                let sz = ((run.font_size as f64 * scale) * 100.0).round() as i32;
+                let sz = (((run.font_size as f64 * scale) * 100.0).round() as i32).clamp(100, 400000);
                 let b_attr = if run.is_bold { r#" b="1""# } else { "" };
                 let i_attr = if run.is_italic { r#" i="1""# } else { "" };
                 let baseline_attr = match run.script {
@@ -214,17 +320,14 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
 
                 let escaped_font = escape_xml(&run.font_name);
                 let escaped_text = escape_xml(&run.text);
-
-                if run.has_leading_tab {
-                    slide_xml.push_str("            <a:tab/>\n");
-                }
+                let text_content = if run.has_leading_tab { format!("\t{}", escaped_text) } else { escaped_text };
 
                 slide_xml.push_str(&format!(
                     r#"            <a:r>
               <a:rPr sz="{sz}"{b_attr}{i_attr}{baseline_attr}>
                 <a:latin typeface="{escaped_font}"/>
               </a:rPr>
-              <a:t>{escaped_text}</a:t>
+              <a:t>{text_content}</a:t>
             </a:r>
 "#
                 ));
@@ -242,77 +345,76 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
             );
         }
 
-        // Emit images (including barcodes and QR codes)
-        if !page.images.is_empty() {
-            // Write slide relationships file
-            let rels_path = format!("ppt/slides/_rels/slide{}.xml.rels", slide_num);
-            let mut rels_xml = String::from(
-                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        // Slide relationships file (referencing slideLayout1 and any embedded images)
+        let rels_path = format!("ppt/slides/_rels/slide{}.xml.rels", slide_num);
+        let mut rels_xml = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdLayout1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
 "#,
-            );
+        );
 
-            for (img_idx, img) in page.images.iter().enumerate() {
-                let is_jpeg = img.bytes.starts_with(&[0xFF, 0xD8]);
-                let ext = if is_jpeg { "jpeg" } else { "png" };
-                let img_filename = format!("image_{}_{}.{}", slide_num, img_idx + 1, ext);
-                let media_path = format!("ppt/media/{}", img_filename);
+        // Emit images (including barcodes and QR codes)
+        for (img_idx, img) in page.images.iter().enumerate() {
+            let is_jpeg = img.bytes.starts_with(&[0xFF, 0xD8]);
+            let ext = if is_jpeg { "jpeg" } else { "png" };
+            let img_filename = format!("image_{}_{}.{}", slide_num, img_idx + 1, ext);
+            let media_path = format!("ppt/media/{}", img_filename);
 
-                // Write image bytes to archive
-                zip.start_file(&media_path, options)?;
-                zip.write_all(&img.bytes)?;
+            // Write image bytes to archive
+            zip.start_file(&media_path, options)?;
+            zip.write_all(&img.bytes)?;
 
-                rels_xml.push_str(&format!(
-                    r#"  <Relationship Id="rIdImg{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{}"/>
+            rels_xml.push_str(&format!(
+                r#"  <Relationship Id="rIdImg{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{}"/>
 "#,
-                    img_idx + 1,
-                    img_filename
-                ));
+                img_idx + 1,
+                img_filename
+            ));
 
-                let shape_id = page.lines.len() + 2 + img_idx;
-                let min_x = img.bounds.0.min(img.bounds.2);
-                let max_x = img.bounds.0.max(img.bounds.2);
-                let min_y = img.bounds.1.min(img.bounds.3);
-                let max_y = img.bounds.1.max(img.bounds.3);
-                let x = (min_x as f64 * scale * 12700.0).round() as i64;
-                let y = ((max_height - max_y as f64 * scale) * 12700.0).round() as i64;
-                let cx = ((max_x - min_x) as f64 * scale * 12700.0).max(100000.0).round() as i64;
-                let cy = ((max_y - min_y) as f64 * scale * 12700.0).max(100000.0).round() as i64;
+            let shape_id = page.lines.len() + 2 + img_idx;
+            let min_x = img.bounds.0.min(img.bounds.2);
+            let max_x = img.bounds.0.max(img.bounds.2);
+            let min_y = img.bounds.1.min(img.bounds.3);
+            let max_y = img.bounds.1.max(img.bounds.3);
+            let x = (min_x as f64 * scale * 12700.0).round() as i64;
+            let y = ((max_height - max_y as f64 * scale) * 12700.0).round() as i64;
+            let cx = ((max_x - min_x) as f64 * scale * 12700.0).max(100000.0).round() as i64;
+            let cy = ((max_y - min_y) as f64 * scale * 12700.0).max(100000.0).round() as i64;
 
-                slide_xml.push_str(&format!(
-                    r#"      <p:pic>
-        <p:nvPicPr>
-          <p:cNvPr id="{shape_id}" name="Picture {shape_id}"/>
-          <p:cNvPicPr>
-            <a:picLocks noChangeAspect="1"/>
-          </p:cNvPicPr>
-          <p:nvPr/>
-        </p:nvPicPr>
-        <p:blipFill>
-          <a:blip r:embed="rIdImg{}"/>
-          <a:stretch>
-            <a:fillRect/>
-          </a:stretch>
-        </p:blipFill>
-        <p:spPr>
-          <a:xfrm>
-            <a:off x="{x}" y="{y}"/>
-            <a:ext cx="{cx}" cy="{cy}"/>
-          </a:xfrm>
-          <a:prstGeom prst="rect">
-            <a:avLst/>
-          </a:prstGeom>
-        </p:spPr>
-      </p:pic>
+            slide_xml.push_str(&format!(
+                r#"      <p:pic>
+    <p:nvPicPr>
+      <p:cNvPr id="{shape_id}" name="Picture {shape_id}"/>
+      <p:cNvPicPr>
+        <a:picLocks noChangeAspect="1"/>
+      </p:cNvPicPr>
+      <p:nvPr/>
+    </p:nvPicPr>
+    <p:blipFill>
+      <a:blip r:embed="rIdImg{}"/>
+      <a:stretch>
+        <a:fillRect/>
+      </a:stretch>
+    </p:blipFill>
+    <p:spPr>
+      <a:xfrm>
+        <a:off x="{x}" y="{y}"/>
+        <a:ext cx="{cx}" cy="{cy}"/>
+      </a:xfrm>
+      <a:prstGeom prst="rect">
+        <a:avLst/>
+      </a:prstGeom>
+    </p:spPr>
+  </p:pic>
 "#,
-                    img_idx + 1
-                ));
-            }
-
-            rels_xml.push_str("</Relationships>");
-            zip.start_file(rels_path, options)?;
-            zip.write_all(rels_xml.as_bytes())?;
+                img_idx + 1
+            ));
         }
+
+        rels_xml.push_str("</Relationships>");
+        zip.start_file(rels_path, options)?;
+        zip.write_all(rels_xml.as_bytes())?;
 
         slide_xml.push_str(
             r#"    </p:spTree>

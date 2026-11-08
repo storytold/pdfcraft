@@ -242,19 +242,20 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     {
         view.links.context = Some((i, index));
     }
-    handle_barcode_and_vector_clicks(&cx, tool, view, can_modify);
     // Comments, every frame: their own presses, a commenting tool's, and a click elsewhere that
     // leaves them unselected. A press nobody holds that another tool took this frame (Prepare's
     // selection rectangle, added content) is not also a commenting tool's, as before.
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
+    handle_barcode_and_vector_clicks(&cx, tool, view, can_modify, consumed);
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
     PageInput { press, text_drag: !view.router.keeps_drag(), consumed, area_tool, hover, released_over }
 }
 
-fn handle_barcode_and_vector_clicks(cx: &PageToolContext<'_>, tool: QuickTool, view: &mut DocView, can_modify: bool) {
-    if tool == QuickTool::QrBarcode
+fn handle_barcode_and_vector_clicks(cx: &PageToolContext<'_>, tool: QuickTool, view: &mut DocView, can_modify: bool, consumed: bool) {
+    if !consumed
+        && tool == QuickTool::QrBarcode
         && cx.resp.clicked()
         && let Some(pos) = cx.resp.interact_pointer_pos()
     {
@@ -272,7 +273,8 @@ fn handle_barcode_and_vector_clicks(cx: &PageToolContext<'_>, tool: QuickTool, v
             }
         }
     }
-    if (view.vector_edit_mode || tool == QuickTool::EditText)
+    if !consumed
+        && (view.vector_edit_mode || tool == QuickTool::EditText)
         && can_modify
         && cx.resp.clicked()
         && let Some(pos) = cx.resp.interact_pointer_pos()
@@ -281,8 +283,7 @@ fn handle_barcode_and_vector_clicks(cx: &PageToolContext<'_>, tool: QuickTool, v
         for line in &lines {
             if crate::canvas_selection::hit_test_line(pos, line, cx.xf, cx.info, 5.0) {
                 view.canvas_selection.selected = Some(crate::canvas_selection::SelectableElement::new_line_vector(cx.page, line.clone()));
-                view.line_properties.color = [0.0, 0.0, 0.0];
-                view.line_properties.width = line.thickness;
+                view.line_properties.reset_to_line(line);
                 cx.ui.ctx().request_repaint();
                 break;
             }

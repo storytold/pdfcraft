@@ -188,33 +188,19 @@ impl<'a> FlexArrayIter<'a> {
     #[allow(clippy::should_implement_trait)]
     /// Try reading the next item as a specific object from the array.
     pub fn next<T: ObjectLike<'a>>(&mut self) -> Option<T> {
-        if T::GROUP {
-            self.reader.skip_white_spaces_and_comments();
-            return self.reader.read_with_context::<T>(&self.ctx);
-        }
+        self.reader.skip_white_spaces_and_comments();
 
-        // PdfCraft patch: (#2660) Skip unresolvable or mismatched array elements rather than
-        // aborting iteration early (which truncated /Kids, /Contents, and annotation arrays).
-        while !self.reader.at_end() {
-            self.reader.skip_white_spaces_and_comments();
-            if self.reader.at_end() {
-                break;
+        if !self.reader.at_end() {
+            // PdfCraft patch (32): its items each follow a reference. Read as one that might be, a
+            // reference at the start was taken for the whole group, which it can't be, and lost.
+            if T::GROUP {
+                return self.reader.read_with_context::<T>(&self.ctx);
             }
-            let prev_offset = self.reader.offset;
-            if let Some(item) = self.reader.read_with_context::<MaybeRef<T>>(&self.ctx) {
-                let resolved = match item {
-                    MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
-                    MaybeRef::NotRef(i) => Some(i),
-                };
-                if let Some(val) = resolved {
-                    return Some(val);
-                }
-            }
-            if self.reader.offset == prev_offset {
-                if self.reader.read_with_context::<MaybeRef<Object<'a>>>(&self.ctx).is_none() {
-                    let _ = self.reader.read_byte();
-                }
-            }
+
+            return match self.reader.read_with_context::<MaybeRef<T>>(&self.ctx)? {
+                MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
+                MaybeRef::NotRef(i) => Some(i),
+            };
         }
 
         None
