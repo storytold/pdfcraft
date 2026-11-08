@@ -819,6 +819,11 @@ impl PdfCraftApp {
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;
             }
+            // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
+            // and previous word to review), so they don't show or hide the interface there.
+            if spec.id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
+                continue;
+            }
             // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
             // Redo only while it holds typing the page doesn't have, or Redo has typing to put
             // back; then they reach the document. ⌘⇧Z is also ⌘Z to the Undo shortcut, so a
