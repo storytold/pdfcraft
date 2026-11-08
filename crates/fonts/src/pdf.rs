@@ -113,7 +113,11 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
         }
-        if face.charmap().mappings().next().is_some() {
+        let own_cmap = face.charmap().mappings().next().is_some();
+        // A legacy THSarabunPSK subset may keep a Latin-only cmap beside its Thai glyphs, which
+        // only the PDF's verified maps reach (`composite_glyph_maps`); other programs keep theirs.
+        let base_font = font.name(b"BaseFont").map(String::from_utf8_lossy).unwrap_or_default();
+        if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
             return Some(bytes);
         }
         // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
@@ -124,6 +128,20 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
             if let Some((map, _)) = composite_glyph_maps(doc, font, &bytes, &metrics, budget) {
                 mappings = map;
             }
+            if own_cmap {
+                let charmap = face.charmap();
+                if mappings.keys().all(|&u| char::from_u32(u).is_some_and(|c| charmap.map(c).is_some())) {
+                    return Some(bytes);
+                }
+                // The program's own mappings stay; the PDF's fill only what they lack.
+                mappings.extend(charmap.mappings().filter(|(_, g)| g.to_u32() != 0).take(65_537).map(|(u, g)| (u, g.to_u32())));
+                let mut merged = bytes.clone();
+                let usable = append_editor_cmap(&mut merged, &mappings).is_some()
+                    && skrifa::FontRef::new(&merged).is_ok_and(|font| font.charmap().mappings().next().is_some());
+                return Some(if usable { merged } else { bytes });
+            }
+        } else if own_cmap {
+            return Some(bytes);
         } else if let Ok(cmap) = face.cmap() {
             for code in 0..=255 {
                 let Some(text) = metrics.unicode.text(code) else { continue };

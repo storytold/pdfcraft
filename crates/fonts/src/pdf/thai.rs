@@ -583,6 +583,21 @@ mod tests {
         assert_eq!(shaped.shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [214, 352]);
     }
 
+    /// A legacy subset that kept a Latin-only cmap of its own still reaches its Thai glyphs through
+    /// the PDF's verified maps, and keeps its own mappings.
+    #[test]
+    fn a_latin_only_cmap_does_not_hide_a_legacy_subsets_thai_glyphs() {
+        use skrifa::MetadataProvider as _;
+        let program = without_tables(&thai_ordered_program(), &[b"GSUB", b"GPOS"]);
+        let latin = skrifa::FontRef::new(&program).unwrap().charmap().map('A').unwrap();
+        let mut doc = Document::new_empty();
+        let font = thai_font(&mut doc, &program, INTACT);
+        let shaped = LegacyThaiFont::from_pdf(&doc, &font, 0.25).unwrap().expect("a legacy subset").shape("ก่").unwrap();
+        assert_eq!(shaped.shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [214, 352]);
+        let editor = crate::pdf::embedded_sfnt(&doc, &font).unwrap();
+        assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('A'), Some(latin), "the program's own mappings stay");
+    }
+
     /// A THSarabunPSK program with its own Thai mark positioning is shaped by that layout; one
     /// without it only if every Thai glyph it keeps is where the legacy order has that character
     /// (the legacy shaper skips the positioning check). A subset needs no particular glyph.

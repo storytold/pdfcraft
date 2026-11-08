@@ -88,7 +88,8 @@ exact program preservation, Unicode/CID/GID mapping and full-face subset complet
 never exported. See [existing-text editing](../../docs/editing-existing-text.md).
 
 `pdf::embedded_sfnt_within` reconstructs a missing Unicode cmap for Identity-H TrueType
-subsets from the PDF's ToUnicode and CID-to-glyph maps. Only the in-memory editor copy changes;
+subsets from the PDF's ToUnicode and CID-to-glyph maps, and completes a THSarabunPSK subset's
+Latin-only one with them. Only the in-memory editor copy changes;
 the PDF's font program stays intact. `pdf::LegacyThaiFont` shapes verified THSarabunPSK
 positional glyphs into their original PDF codes, retaining the source face and weight. Missing
 contextual glyphs are refused. `pdf::recovered_thai_map` recognizes narrowly fingerprinted
