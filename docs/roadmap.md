@@ -1,5 +1,9 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M12 #5899: cover Drawing scale label and ratio-field clipping alongside Common scales in every UI language; sizing and estimates unchanged)
+
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M12 #5899: the Measure panel reserves enough width for the translated Common scales row; scale semantics and tool placement unchanged; estimates unchanged)
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
@@ -312,6 +316,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M12 #5899: the Measure panel reserves enough width for the translated Common scales row; scale semantics and tool placement unchanged; estimates unchanged. |
 | 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |

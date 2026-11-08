@@ -1949,3 +1949,96 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
+
+#[test]
+fn measure_common_scales_fits_in_every_ui_language() {
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+    let shots = std::env::var_os("PDFCRAFT_MEASURE_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    let mut h = harness(|app| app.open_bytes("measure.pdf", None, FIXTURE.to_vec()).unwrap());
+    assert!(h.state_mut().execute("measure.scale"));
+    // Optional craft-fonts checkouts may lack a script; this checks layout, not glyph coverage.
+    h.ctx.set_missing_glyph_policy(egui::epaint::text::MissingGlyphPolicy::Tofu);
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    let mut check = |lang: Lang, text_size: Option<f32>| {
+        checked += 1;
+        // Report the whole language matrix so an early Common scales failure cannot hide
+        // a Drawing scale or ratio-field regression in another language.
+        let mut require = |condition: bool, message: String| {
+            if !condition {
+                failures.push(message);
+            }
+        };
+        h.state_mut().set_option("language", lang.code()).unwrap();
+        if let Some(size) = text_size {
+            h.set_size(egui::vec2(1400.0, 1600.0));
+            h.ctx.global_style_mut(|style| {
+                for kind in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                    style.text_styles.get_mut(&kind).unwrap().size = size;
+                }
+            });
+        }
+        // A saved narrow pane must also respect the translated row's minimum.
+        h.state_mut().side_panels.tools_width = 272.0;
+        h.run_steps(5);
+        let drawing_label = tr(lang, "Drawing scale");
+        let drawing = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == drawing_label => Some((s.clip_rect, t.visual_bounding_rect(), t.galley.elided)),
+                _ => None,
+            })
+            .expect("the Drawing scale label is painted");
+        require(!drawing.2, format!("{}: Drawing scale is elided", lang.code()));
+        require(
+            drawing.0.expand(1.0).contains_rect(drawing.1),
+            format!("{}: Drawing scale label {:?} extends past clip {:?}", lang.code(), drawing.1, drawing.0),
+        );
+        let scale_label = tr(lang, "Scale");
+        // Some translations call both this field and the viewer zoom "Scale".
+        let ratio = h
+            .query_all_by_label(scale_label)
+            .find(|n| {
+                n.accesskit_node().role() == egui::accesskit::Role::TextInput
+                    && n.rect().top() <= drawing.1.bottom()
+                    && n.rect().bottom() >= drawing.1.top()
+            })
+            .expect("the ratio field is on the Drawing scale row")
+            .rect();
+        require(drawing.0.expand(1.0).contains_rect(ratio), format!("{}: ratio field {ratio:?} extends past clip {:?}", lang.code(), drawing.0));
+        let label = tr(lang, "Common scales");
+        let combo = h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some(label)).rect();
+        if shots && lang.code() == "de" && text_size.is_none() {
+            h.render().unwrap().save("/tmp/5899-measure-de.png").unwrap();
+        }
+        let text = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some((s.clip_rect, t.visual_bounding_rect(), t.galley.elided)),
+                _ => None,
+            })
+            .expect("the Common scales label is painted");
+        require(!text.2, format!("{}: Common scales is elided", lang.code()));
+        require(text.0.expand(1.0).contains_rect(combo), format!("{}: combo {combo:?} extends past clip {:?}", lang.code(), text.0));
+        require(text.0.expand(1.0).contains_rect(text.1), format!("{}: label {:?} extends past clip {:?}", lang.code(), text.1, text.0));
+        require(combo.expand(1.0).contains_rect(text.1), format!("{}: label does not fit its button", lang.code()));
+    };
+    check(Lang::EN, None);
+    if !support::skip_without_catalogs("measure_common_scales_fits_in_every_ui_language (translated cases)") {
+        for lang in Lang::all().filter(|lang| lang.code() != "en") {
+            check(lang, None);
+        }
+    }
+    // Larger label text makes the ratio-field check sensitive to omitting the leading
+    // label/field sizing terms; at the normal size those two controls can still fit alone.
+    if let Some(german) = Lang::from_code("de") {
+        check(german, Some(32.0));
+    }
+    eprintln!("checked Measure row in {checked} language/font cases");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
