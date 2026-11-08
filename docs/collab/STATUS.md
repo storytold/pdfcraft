@@ -21,7 +21,7 @@
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | Background worker: socket, reconnect with backoff, heartbeat ping, resend of unconfirmed merges after a snapshot |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): rooms from a directory, startup replay, JWT verifier, commits, `/health`, `/metrics` |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet, `/health`, `/metrics` |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`: start from env, apply events, send edits, participants window, presence, commit, inverse undo |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
 
@@ -70,10 +70,11 @@ are wasm-safe (`cargo check --target wasm32-unknown-unknown` was run for
 9. **A dirty room commits when its last participant leaves.** `Room::commit_now`
    has no actor/version check; it is the server-initiated commit of RFC §8.
    `commit_if_dirty` is called by the transport after the last sink is removed.
-10. **The daemon provisions rooms from a directory.** There is no control plane
-    yet: `<fileId>.pdf` in `--documents` becomes a room, and `--data/<fileId>/`
-    holds its durable state: `CURRENT` (base version and epoch),
-    `versions/<N>/file.pdf` and `journal.jsonl`.
+10. **The control plane is the production path; a directory is dev mode.**
+    `POST /v1/sessions` (`--control ADDR`, off by default) creates or resumes a
+    room from inline base64 bytes or an `http://` URL after verifying the JWT
+    and the etag. `--documents` remains for development: one room per
+    `<fileId>.pdf`, no cabinet, and the source file is never written.
 11. **An operation is acknowledged only after its journal line is synced.**
     `Adapter::record` runs after the adapter changed the document and before
     `applied` leaves the server; a failure poisons the room (writes get
@@ -98,31 +99,73 @@ are wasm-safe (`cargo check --target wasm32-unknown-unknown` was run for
     never silently turns them into something else, and the client does not apply
     them locally. A payload without `shape` is still read as a sticky note for
     the unwritten v1 clients.
+14. **A commit is saved locally first, published second.** `CabinetAdapter`
+    writes the base through `PdfAdapter`, then POSTs
+    `{fileId, bytes, sha256, version, expectedVersion}` to `--callback-url`. Only
+    a `2xx` advances `expectedVersion` and the `CABINET` marker; a `409` refuses
+    the commit (the room is flagged `conflict` in `/health`/`/metrics`, edits
+    keep being accepted), any other failure leaves the room dirty so the next
+    commit or the last-client-leave commit retries the publication.
+15. **The cabinet marker is separate from the base marker.** `--data/<id>/CABINET`
+    (`{"version","etag"}`) records what the cabinet holds; it may lag behind
+    `CURRENT` exactly by the unpublished commits. Keeping it in `CURRENT` would
+    lose the difference and a restart would not know the room is dirty.
+16. **The etag is `sha256:<hex>` of the file bytes, computed by the daemon.**
+    The cabinet sends the etag it believes it has (or the daemon derives it from
+    the bytes); `POST /v1/sessions` refuses `400` when the etag does not match
+    the bytes and `409` when it does not match the room. In dev mode the etag
+    tracks the file in `--documents`, so replacing that file refuses commits;
+    the marker's version still advances, because a local commit is all the
+    publication dev mode has.
+17. **`409` does not stop the session.** The cabinet's copy changing under a
+    session refuses commits, not edits: the journal keeps the work, `/health`
+    says `conflict:["file-N"]`, and the cabinet decides (a new session over its
+    version, or "save a copy"). Blocking writes would lose the work anyway and
+    make the editor look broken.
 
 ## 3. Running it
 
 Server:
 
 ```bash
+# production: rooms from the cabinet control plane
 cargo run -p pdfcraft-collab-daemon --release -- \
-  --documents /srv/collab/documents --data /srv/collab/data \
+  --data /srv/collab/data \
   --jwt-key /srv/collab/cabinet-public.pem --jwt-audience lzmkm \
   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 \
-  [--origin https://cabinet.example] [--app pdfcraft]
+  --control 127.0.0.1:8789 \
+  --callback-url http://cabinet.internal/v1/collab/commit \
+  [--max-source-bytes N] [--origin https://cabinet.example] [--app pdfcraft]
+
+# dev: rooms from a directory, no cabinet
+cargo run -p pdfcraft-collab-daemon --release -- \
+  --documents /srv/collab/documents --data /srv/collab/data [...]
 ```
 
 - JWT: RS256, claims `{iss, sub, aud, fileId, app, role, sessionId, iat, exp,
   ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` with 30 s leeway;
   `fileId` must equal `hello.doc`; `app` must equal `--app`.
-- `/health` → `{"ok":true,"rooms":N,"clients":M,"poisoned":[]}`; `ok` is false
-  when a room's journal failed and it refuses writes. `/metrics` adds
-  `pdfcraft_collab_room_read_only{room="…"} 1` for those rooms.
-- `--data/<fileId>/` is the durable state: `CURRENT`,
-  `versions/<N>/file.pdf`, `journal.jsonl`. Delete the directory to reset the
-  room to the copy in `--documents`. The flat `--data/<fileId>.pdf` working copy
-  of earlier sessions is not migrated: nothing was deployed, so only local
-  scratch data is affected.
-- No token, comment text or PDF byte is logged.
+- `POST /v1/sessions` (`--control`, loopback, JWT required):
+  `{"fileId","jwt","etag"?,"bytes"|"url"}` → `201`/`200` with
+  `{"fileId","version","epoch","etag","created"}`; `401` bad token, `403`
+  token for another file, `400` bad body/etag, `409` the room holds another
+  etag, `404` no room and no source, `413` file too large, `502` the source URL
+  failed. `fileId` is restricted to `[A-Za-z0-9._-]{1,128}`.
+- Commit callback: `POST --callback-url` with
+  `{fileId, bytes(base64), sha256, version, expectedVersion}` and
+  `Authorization: Bearer $PDFCRAFT_COLLAB_CALLBACK_TOKEN` when the env var is
+  set; `2xx` accepted, `409` conflict, anything else unpublished.
+- `/health` → `{"ok":true,"rooms":N,"clients":M,"poisoned":[],"conflict":[]}`;
+  `ok` is false when a room's journal failed. `/metrics` adds
+  `pdfcraft_collab_room_read_only{room="…"} 1` and
+  `pdfcraft_collab_room_conflict{room="…"} 1`.
+- `--data/<fileId>/` is the durable state: `CURRENT`, `versions/<N>/file.pdf`,
+  `journal.jsonl`, `CABINET`. Delete the directory to reset the room. The flat
+  `--data/<fileId>.pdf` working copy of earlier sessions is not migrated:
+  nothing was deployed, so only local scratch data is affected.
+- TLS: neither the callback nor a source `url` speaks `https`; both are expected
+  to go through the reverse proxy on `http://`. No token, comment text or PDF
+  byte is logged.
 
 Client (desktop):
 
@@ -147,6 +190,8 @@ cargo test -p pdfcraft-collab-proto -p pdfcraft-collab-server \
   -p pdfcraft-collab-client-pdf -p pdfcraft-collab-session \
   -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-annot \
   -p pdfcraft-collab-daemon
+cargo clippy -p pdfcraft-collab-daemon -p pdfcraft-collab-pdf \
+  -p pdfcraft-collab-server -p pdfcraft-collab-ws --all-targets -- -D warnings
 cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings
 cargo fmt --all --check
 cargo xtask layers
@@ -154,8 +199,45 @@ cargo check -p pdfcraft --features collab
 cargo test -p pdfcraft-ui-egui --features collab
 ```
 
-Counts: proto 12, server 15, hub 4, client 11, client-pdf 9, session 2,
-ws 6 unit + 4 e2e, pdf 13, annot 10, daemon 5.
+(The UI suite was last run before the control-plane change; the change touches
+neither `ui-egui` nor the client crates, and `cargo check -p pdfcraft
+--features collab` is green.)
+
+Counts: proto 12, server 16, hub 4, client 11, client-pdf 9, session 2,
+ws 6 unit + 4 e2e, pdf 13, annot 10, daemon 27.
+
+- `apps/pdfcraft-collab-server` tests (27) cover the cabinet contract end to
+  end over real sockets:
+  - `control::tests::a_session_is_created_from_inline_bytes_and_found_again` —
+    `POST /v1/sessions` creates a room (`201`), the same call resumes it
+    (`200`) with the same etag;
+  - `a_changed_copy_is_refused_with_409` and
+    `a_live_room_reports_its_etag_and_a_replaced_file_is_refused` — a different
+    etag answers `409` with the room's etag and version;
+  - `the_token_decides_the_file` — `401` for a bad token, `403` for a token
+    issued for another file, `404` with no room and no source;
+  - `an_etag_that_does_not_match_the_bytes_is_refused` — `400` (the etag is
+    `sha256` of the bytes);
+  - `a_source_url_is_fetched_and_a_wrong_content_type_is_not_accepted` — the
+    `url` source is fetched over `http`, a failed fetch is `502`, a non-PDF is
+    `400`;
+  - `a_room_resumed_from_disk_keeps_its_version` — a second process resumes
+    from `CURRENT` + journal through the control plane;
+  - `rooms::tests::a_commit_posts_the_file_and_the_versions` — the callback
+    body is `{fileId, bytes, sha256, version, expectedVersion}`, the bytes
+    decode to the committed PDF, and the second commit expects the version the
+    cabinet just took;
+  - `a_cabinet_that_reports_409_refuses_the_commit` — commit refused with
+    `conflict`, room dirty and flagged;
+  - `a_changed_source_file_refuses_the_commit` — dev mode: replacing
+    `--documents/<id>.pdf` refuses the commit before a base is written;
+  - `resuming_with_a_different_etag_is_a_conflict` — `open_room` refuses a
+    resume whose seed etag differs;
+  - `base64_round_trips_and_refuses_junk`, `a_file_id_cannot_leave_the_data_directory`,
+    `http::tests::*` — the encoding, the path-safe `fileId` and the HTTP
+    reader/client.
+- `crates/collab-server` `a_commit_refused_by_the_adapter_flags_the_room_and_stays_dirty`
+  — the `conflict` flag on the room and both commit paths.
 
 - `crates/collab-annot` unit tests cover every supported shape, the shape
   defaults for a partial style, the legacy note payload, unknown/unsupported
@@ -184,6 +266,19 @@ ws 6 unit + 4 e2e, pdf 13, annot 10, daemon 5.
   `PDFCRAFT_COLLAB_*` variables. `/health` went from `clients:1` to `clients:0`
   when the app closed. This proves connection, JWT and presence wiring in the
   app, not only in the unit/e2e harness.
+- Live control-plane smoke test in this session (not automated): RS256 token
+  signed with `openssl`, the daemon run with
+  `--documents … --control 127.0.0.1:18082 --callback-url http://127.0.0.1:18081/commit`,
+  and a one-page PDF in `--documents`. Results: `POST /v1/sessions` answered
+  `200` with the file's `sha256` etag for the correct bytes, `400` when the
+  etag did not match the bytes and `409` with the room's etag for other bytes;
+  a real WebSocket client (`node ws`) joined with the token, added an
+  annotation, committed at version 1, and the callback received
+  `{"fileId":"file-1","bytes":…,"sha256":"395deb…","version":1,"expectedVersion":0}`;
+  after `documents/file-1.pdf` was replaced under the live room, the next
+  commit returned `{"type":"error","code":"conflict"}` and `/health` reported
+  `"conflict":["file-1"]` with
+  `pdfcraft_collab_room_conflict{room="file-1"} 1` in `/metrics`.
 - UI suite with the feature: 1493 passed, 1 failed (re-run after the typed
   annotation payload: the same numbers). The failure is
   `editing::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone`:
@@ -218,13 +313,19 @@ Ordered by the risk they pose to production.
    and selections are not drawn.
 6. **Undo is partial.** Comments, text/field values, rotation and move are
    reversible; deleting a comment or a page is not. Redo is basic.
-7. **No cabinet control plane.** Rooms are provisioned from a directory; there is
-   no `POST /v1/sessions`, no commit callback, no check of an external file
-   change (409) and no `base_etag`/file watch.
-8. **No TLS in the daemon.** WSS is expected from a reverse proxy; no per-IP
-   throttling, no session TTL/eviction besides the lease TTL.
+7. **The cabinet contract is implemented, the production loop is not closed.**
+   `POST /v1/sessions`, the commit callback and `409` exist (RFC §8.2). What is
+   still missing: an idempotent retry/queue for a failed publication (today the
+   next commit or the last-client-leave commit retries it), an endpoint to
+   resolve a `conflict` room (the cabinet decides "new session over my version"
+   or "save a copy" — the daemon only refuses), and `https` without a proxy.
+8. **No TLS in the daemon.** WSS, the control plane and the callback are
+   expected to sit behind a reverse proxy; `https://` source URLs and callback
+   URLs are refused with a clear error. No per-IP throttling, no session
+   TTL/eviction besides the lease TTL.
 9. **Large-document budget.** 500 pages are tested functionally; the 100k-page
-   inspection cost and batching remote applies are not measured.
+   inspection cost and batching remote applies are not measured. The control
+   plane caps a file at `--max-source-bytes` (256 MiB) but nothing else.
 10. **No automation tool/parity entry yet.** The feature is behind a flag; when
     it becomes user-facing, `crates/automation` and `parity/` need an entry.
 11. **Journal growth is bounded only by commits.** A room that never commits
@@ -232,6 +333,13 @@ Ordered by the risk they pose to production.
     manual button are the only compaction. A size-based forced commit is not
     implemented. Bases are pruned to the one `CURRENT` names, so disk is one
     PDF plus the journal, not one PDF per commit.
+12. **The callback is synchronous inside the hub lock.** A cabinet that does not
+    answer costs every commit up to the 10 s timeout. Commits are rare (button,
+    last client leaving) and edits are not blocked, but this is why a queue is
+    on the list above.
+13. **The legacy annotation payload lives until the flag ships.** A payload
+    without `shape` is read as a sticky note; RFC §16 p. 10 sets the deadline —
+    the first release with `collab` on by default makes `shape` mandatory.
 
 ## 6. Next session: plan
 
@@ -304,12 +412,30 @@ would need the blob channel).
 - The UI wiring currently assumes a native `Handle`; split it from the
   transport so the participants window compiles on wasm.
 
-### 6.4 Cabinet contract and 409
+### 6.4 Cabinet contract and 409 — done in this branch
 
-- `POST /v1/sessions` (file id, bytes or URL, JWT) → room; commit callback to the
-  cabinet with `{fileId, bytes, sha256, version, expectedVersion}`; `409` when the
-  file changed outside the session (`base_etag`/file watch).
-- Decide whether the daemon keeps directory provisioning as a dev mode.
+- `POST /v1/sessions` on `--control ADDR` (own loopback listener, off by
+  default): `{fileId, jwt, etag?, bytes|url}` → `201`/`200` with
+  `{fileId, version, epoch, etag, created}`. Validation: JWT (same verifier as
+  `hello`), token `fileId` = body `fileId`, path-safe `fileId`, etag =
+  `sha256` of the bytes, PDF magic, size limit. `409` when the room holds
+  another etag (external change or an unpublished commit).
+- Commit callback: `--callback-url` + `PDFCRAFT_COLLAB_CALLBACK_TOKEN` posts
+  `{fileId, bytes(base64), sha256, version, expectedVersion}`; `2xx` publishes,
+  `409` refuses the commit and flags the room, anything else leaves it dirty.
+- External change: the `CABINET` marker (`{version, etag}`) is written
+  atomically next to `CURRENT`; dev mode hashes `--documents/<id>.pdf` before
+  every commit; the control plane checks the etag on `POST /v1/sessions`, and
+  the cabinet checks `expectedVersion` on the callback.
+- Decision: **the directory stays a dev mode.** Production is the control
+  plane; `--documents` is not removed because it is the way to run the server
+  without a cabinet.
+- Tests: the daemon suite (27) and
+  `collab-server::tests::a_commit_refused_by_the_adapter_flags_the_room_and_stays_dirty`.
+  A live smoke test is described in §4 (real HTTP control plane, real WebSocket
+  commit, callback received, `409` after replacing the source file).
+- Still open here: publication retry/queue, an endpoint to resolve a conflict
+  room, `https` without a proxy (limitations 7–8, 12).
 
 ### 6.5 Presence cursors and undo
 
@@ -320,10 +446,17 @@ would need the blob channel).
 
 ### 6.6 Cleanup and submission
 
-- Update `docs/collab/RFC.md` §16 as items close.
+- Update `docs/collab/RFC.md` §16 as items close — done for §6.4.
 - Add an automation/parity entry once the feature is user-facing.
-- Re-run the full gates, open the PR (see the draft body in
-  `../PR-DRAFT.md`), no CI changes in the feature PR.
+- Re-run the full gates, open the PR, no CI changes in the feature PR. The PR
+  body is not in this tree: the cabinet-office checkout keeps the draft at
+  `pdfcraft/PR-DRAFT.md` and the checklist at `PR-CHECKLIST.md`; the body must
+  still say what was tested, what was not, and nothing about who wrote it.
+- RFC v1 was proposed on the bus (`20261108T115119Z-pdfcraft-9830`) and chair
+  approved option A with three non-blocking remarks; all three are addressed in
+  this branch (PR draft reference removed from §6.6, legacy payload deadline in
+  §16 p. 10, headless-apply limitation moved from §13 to §16 p. 8). The envoy
+  still needs three more `approve` votes for the formal quorum.
 
 ## 7. Gotchas for the next session
 
@@ -344,7 +477,21 @@ would need the blob channel).
   constant alone.
 - Mutex poisoning is treated as “hub unavailable” (`TransportError::Hub`); there
   is no panic path in the transport.
+- The control plane runs its step under the hub lock (`WsServer::with_hub`).
+  Provisioning parses a PDF, so two cabinets creating different rooms wait for
+  each other; do not call back into the server from inside that closure (it
+  would deadlock).
+- The daemon's HTTP client is plain `http://` only and refuses redirects,
+  chunked responses and `https`. If the cabinet endpoint needs any of those,
+  fix the daemon, do not "just use curl".
+- `CABINET` is the source of truth for "what the cabinet has"; if it is
+  corrupt, `Store::open` fails rather than guessing, exactly like `CURRENT`.
+- The dev-mode mirror check hashes `--documents/<fileId>.pdf` on every commit.
+  On a very large file this is a visible pause; the control plane path hashes
+  only the bytes it was handed.
 - Never use `pkill -f` with a pattern that appears in your own command line on
   this machine (it kills the shell); use `pgrep -x`/explicit PIDs.
+- `pgrep -af pdfcraft-collab-server` also matches your own shell command line;
+  check the PID before killing.
 - The smoke-test keys and JWT live under `/tmp` and are disposable; never commit
   a token or a private key.

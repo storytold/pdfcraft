@@ -106,6 +106,15 @@ impl<A: Adapter> WsServer<A> {
     pub fn open_room(&self, doc: pdfcraft_collab_proto::DocKey, adapter: A) -> Result<(), TransportError> {
         lock(&self.shared)?.hub.open_room(doc, adapter).map_err(TransportError::Room)
     }
+
+    /// Run `step` under the hub lock. This is the seam a control plane needs to
+    /// check a room and open it in one atomic step (two `POST /v1/sessions` for
+    /// the same file must not both create it). `step` must not call back into
+    /// the server: the lock it holds is the one every method here takes.
+    pub fn with_hub<T>(&self, step: impl FnOnce(&mut Hub<A>) -> T) -> Result<T, TransportError> {
+        let mut shared = lock(&self.shared)?;
+        Ok(step(&mut shared.hub))
+    }
 }
 
 impl<A: Adapter + Send + 'static> WsServer<A> {
@@ -290,6 +299,9 @@ pub struct Metrics {
     pub versions: Vec<(String, u64, u64)>,
     /// Rooms that refuse writes because their durable journal failed.
     pub poisoned: Vec<String>,
+    /// Rooms that refuse commits because the cabinet's copy changed outside
+    /// the session.
+    pub conflict: Vec<String>,
 }
 
 impl<A: Adapter> WsServer<A> {
@@ -297,15 +309,19 @@ impl<A: Adapter> WsServer<A> {
         let shared = lock(&self.shared)?;
         let mut versions = Vec::new();
         let mut poisoned = Vec::new();
+        let mut conflict = Vec::new();
         for doc in shared.hub.docs() {
             if let Some(room) = shared.hub.room(doc) {
                 versions.push((doc.as_str().to_owned(), room.version(), room.epoch()));
                 if room.poisoned().is_some() {
                     poisoned.push(doc.as_str().to_owned());
                 }
+                if room.conflict().is_some() {
+                    conflict.push(doc.as_str().to_owned());
+                }
             }
         }
-        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions, poisoned })
+        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions, poisoned, conflict })
     }
 }
 

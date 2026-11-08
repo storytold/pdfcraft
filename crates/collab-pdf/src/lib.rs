@@ -27,7 +27,7 @@
 
 use pdfcraft_collab_annot::{AnnotationInput, WireError};
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
-use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome};
+use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
 use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldValue, FormFieldKind, Session};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 mod store;
 
-pub use store::{JournalRecord, Store};
+pub use store::{CabinetCopy, JournalRecord, Store};
 
 /// One authoritative PDF, opened through the engine façade.
 pub struct PdfAdapter {
@@ -46,6 +46,9 @@ pub struct PdfAdapter {
     /// The durable base and journal. `None` keeps the document in memory only
     /// (tests, headless adapters).
     store: Option<Store>,
+    /// The file as last written by `commit`, kept so a publisher can send it
+    /// without saving the document a second time.
+    last_commit: Option<Arc<Vec<u8>>>,
 }
 
 impl PdfAdapter {
@@ -69,7 +72,7 @@ impl PdfAdapter {
                 false,
             ));
         }
-        Ok(Self { session, id, epoch: 0, store: None })
+        Ok(Self { session, id, epoch: 0, store: None, last_commit: None })
     }
 
     pub fn session(&self) -> &Session {
@@ -91,6 +94,26 @@ impl PdfAdapter {
     pub fn attach_store(&mut self, store: Store) {
         self.epoch = store.base_state().1;
         self.store = Some(store);
+    }
+
+    /// What the cabinet holds, as last agreed (see `Store::cabinet`).
+    pub fn published(&self) -> Option<Published> {
+        self.store.as_ref().and_then(Store::cabinet).map(|copy| Published { version: copy.version, etag: copy.etag.clone() })
+    }
+
+    /// Record what the cabinet holds (see `Store::set_cabinet`). Without a
+    /// store there is nowhere to keep it, so this is a no-op.
+    pub fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+        let copy = published.map(|published| CabinetCopy { version: published.version, etag: published.etag });
+        match self.store.as_mut() {
+            Some(store) => store.set_cabinet(copy),
+            None => Ok(()),
+        }
+    }
+
+    /// The file `commit` last wrote, for a publisher that has to send it on.
+    pub fn last_commit(&self) -> Option<&Arc<Vec<u8>>> {
+        self.last_commit.as_ref()
     }
 
     fn apply_edit(&mut self, edit: Edit) -> Result<(), AdapterError> {
@@ -316,7 +339,17 @@ impl Adapter for PdfAdapter {
             // a failed truncation costs disk, not correctness.
             let _ = store.truncate(version);
         }
-        Ok(CommitOutcome { sha256: sha256_hex(&bytes), bytes: bytes.len() as u64, conflict: false })
+        let outcome = CommitOutcome { sha256: sha256_hex(bytes.as_slice()), bytes: bytes.len() as u64, conflict: false };
+        self.last_commit = Some(bytes);
+        Ok(outcome)
+    }
+
+    fn published(&self) -> Option<Published> {
+        PdfAdapter::published(self)
+    }
+
+    fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+        PdfAdapter::set_published(self, published)
     }
 
     fn base(&self) -> Option<BlobRef> {

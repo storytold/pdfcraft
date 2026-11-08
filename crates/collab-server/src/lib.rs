@@ -71,6 +71,24 @@ pub trait Adapter {
     fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError>;
     /// The current base bytes, when the journal no longer covers a resync.
     fn base(&self) -> Option<BlobRef>;
+    /// What the cabinet holds for this file, as last agreed (RFC §8). `None`
+    /// means "unknown": external-change checks are skipped rather than guessed,
+    /// which is what a room seeded before the marker existed needs.
+    fn published(&self) -> Option<Published> {
+        None
+    }
+    /// Record what the cabinet holds after it accepted a commit.
+    fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+        let _ = published;
+        Ok(())
+    }
+}
+
+/// The version and etag of the cabinet's copy of the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Published {
+    pub version: u64,
+    pub etag: String,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +148,10 @@ pub struct Room<A: Adapter> {
     /// document in memory is ahead of the durable state, so no further write is
     /// accepted; resync and commit still work.
     poisoned: Option<String>,
+    /// Set when a commit was refused because the cabinet's copy changed
+    /// outside the session. Writes continue (the journal keeps them), commits
+    /// stay refused until an operator re-seeds the room, and `/health` says so.
+    conflict: Option<String>,
 }
 
 impl<A: Adapter> Room<A> {
@@ -156,6 +178,7 @@ impl<A: Adapter> Room<A> {
             applied_order: VecDeque::new(),
             applied: HashMap::new(),
             poisoned: None,
+            conflict: None,
         }
     }
 
@@ -183,6 +206,11 @@ impl<A: Adapter> Room<A> {
     /// Why the room refuses writes, if the durable journal failed.
     pub fn poisoned(&self) -> Option<&str> {
         self.poisoned.as_deref()
+    }
+
+    /// Why the room refuses commits, if the cabinet's copy changed under it.
+    pub fn conflict(&self) -> Option<&str> {
+        self.conflict.as_deref()
     }
 
     /// Join. The role comes from the verified token, never from the body.
@@ -442,9 +470,7 @@ impl<A: Adapter> Room<A> {
         if expected_version != self.version {
             return Err(server_error(ErrorCode::Stale, "the document changed; resync and commit again", true));
         }
-        let outcome = self.adapter.commit(self.version, self.epoch).map_err(|e| server_error(e.code, e.message, e.retryable))?;
-        self.committed_version = self.version;
-        Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
+        self.write_commit()
     }
 
     /// The session has changes the cabinet file does not have yet.
@@ -452,10 +478,35 @@ impl<A: Adapter> Room<A> {
         self.version > self.committed_version
     }
 
+    /// Declare which version the cabinet already holds. A room resumed from a
+    /// base that was written but never published is dirty again: the last
+    /// client leaving has to publish it.
+    pub fn mark_published(&mut self, version: u64) {
+        // A marker ahead of the base cannot be true; clamping keeps a damaged
+        // marker from claiming the cabinet has work the room never wrote.
+        self.committed_version = version.min(self.version);
+    }
+
     /// The server commits on its own (last participant leaving, RFC §8). No
     /// actor or expected version: the room's head is what is written.
     pub fn commit_now(&mut self) -> Result<CommitResult, ServerError> {
-        let outcome = self.adapter.commit(self.version, self.epoch).map_err(|e| server_error(e.code, e.message, e.retryable))?;
+        self.write_commit()
+    }
+
+    /// One code path for both commits. An adapter that refuses because the
+    /// cabinet's copy changed leaves the room dirty and flags it, so `/health`
+    /// can report a session nobody can save.
+    fn write_commit(&mut self) -> Result<CommitResult, ServerError> {
+        let outcome = match self.adapter.commit(self.version, self.epoch) {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                if e.code == ErrorCode::Conflict {
+                    self.conflict = Some(e.message.clone());
+                }
+                return Err(server_error(e.code, e.message, e.retryable));
+            }
+        };
+        self.conflict = None;
         self.committed_version = self.version;
         Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
     }
@@ -804,6 +855,36 @@ mod tests {
         // Committing writes the base at the current head, which is how an
         // operator rescues what the journal lost.
         assert!(room.commit(&editor, 1).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn a_commit_refused_by_the_adapter_flags_the_room_and_stays_dirty() -> Result<(), Box<dyn std::error::Error>> {
+        struct Conflicting(Fake);
+        impl Adapter for Conflicting {
+            fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+                self.0.apply(actor, op)
+            }
+            fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
+                Err(AdapterError::new(ErrorCode::Conflict, "the file changed outside the session", false))
+            }
+            fn base(&self) -> Option<BlobRef> {
+                self.0.base()
+            }
+        }
+
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, Conflicting(Fake::new()), RoomConfig::default());
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        assert_eq!(room.conflict(), None, "no conflict before a commit is refused");
+        assert!(matches!(room.commit(&editor, 1), Err(e) if e.code == ErrorCode::Conflict && !e.retryable));
+        assert_eq!(room.conflict(), Some("the file changed outside the session"));
+        assert!(room.is_dirty(), "a refused commit did not publish the head");
+        assert_eq!(room.version(), 1, "the edits are still accepted and journalled");
+        // The server-initiated commit is refused the same way and says so.
+        assert!(matches!(room.commit_now(), Err(e) if e.code == ErrorCode::Conflict));
         Ok(())
     }
 

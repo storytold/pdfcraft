@@ -6,6 +6,7 @@
 //!   CURRENT                 {"version":N,"epoch":E} — the base to load
 //!   versions/<N>/file.pdf   the document at version N
 //!   journal.jsonl           {"version":N,"actor":"…","op":{…}} per accepted operation
+//!   CABINET                 {"version":N,"etag":"…"} — what the cabinet holds
 //! ```
 //!
 //! The layout is what makes a crash between "write the base" and "replace
@@ -28,6 +29,7 @@ use std::path::{Path, PathBuf};
 
 const CURRENT: &str = "CURRENT";
 const JOURNAL: &str = "journal.jsonl";
+const CABINET: &str = "CABINET";
 
 /// One accepted operation, as it was broadcast.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +37,16 @@ pub struct JournalRecord {
     pub version: u64,
     pub actor: String,
     pub op: Op,
+}
+
+/// What the cabinet holds for this file: the version it has and the etag of its
+/// copy. Kept apart from `CURRENT` because a commit writes the base first and
+/// the cabinet accepts it afterwards: between those two steps the base is ahead
+/// of the cabinet, and the room must still know that (it is dirty).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CabinetCopy {
+    pub version: u64,
+    pub etag: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +61,7 @@ struct Current {
 pub struct Store {
     dir: PathBuf,
     current: Option<Current>,
+    cabinet: Option<CabinetCopy>,
 }
 
 impl Store {
@@ -67,7 +80,36 @@ impl Store {
             Err(e) if e.kind() == ErrorKind::NotFound => None,
             Err(e) => return Err(io_error(&path, "read", e)),
         };
-        Ok(Self { dir, current })
+        let cabinet = read_cabinet(&dir)?;
+        Ok(Self { dir, current, cabinet })
+    }
+
+    /// What the cabinet holds, when a session recorded it. A room seeded before
+    /// this marker existed has none, and external-change checks are skipped
+    /// instead of guessed.
+    pub fn cabinet(&self) -> Option<&CabinetCopy> {
+        self.cabinet.as_ref()
+    }
+
+    /// Record what the cabinet holds. `None` forgets it. The write is atomic: a
+    /// half-written marker would make the next commit compare against a value
+    /// nobody agreed to.
+    pub fn set_cabinet(&mut self, copy: Option<CabinetCopy>) -> Result<(), AdapterError> {
+        let path = self.dir.join(CABINET);
+        match &copy {
+            Some(copy) => {
+                let json =
+                    serde_json::to_vec(copy).map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not encode CABINET: {e}"), false))?;
+                write_atomic(&path, &json).map_err(|e| io_error(&path, "write", e))?;
+            }
+            None => match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(io_error(&path, "remove", e)),
+            },
+        }
+        self.cabinet = copy;
+        Ok(())
     }
 
     pub fn dir(&self) -> &Path {
@@ -176,6 +218,24 @@ impl Store {
         let path = self.dir.join(JOURNAL);
         write_atomic(&path, &text).map_err(|e| io_error(&path, "write", e))
     }
+}
+
+/// Read the recorded cabinet marker. A missing file means none; a file that
+/// exists but cannot be parsed is an error, not a silent `None`: treating a
+/// broken marker as "not recorded" would disable the external-change check.
+fn read_cabinet(dir: &Path) -> Result<Option<CabinetCopy>, AdapterError> {
+    let path = dir.join(CABINET);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_error(&path, "read", e)),
+    };
+    let copy = serde_json::from_str::<CabinetCopy>(&text)
+        .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("{} is not a valid CABINET file: {e}", path.display()), false))?;
+    if copy.etag.trim().is_empty() {
+        return Err(AdapterError::new(ErrorCode::Invalid, format!("{} has an empty etag", path.display()), false));
+    }
+    Ok(Some(copy))
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

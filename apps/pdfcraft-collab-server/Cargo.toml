@@ -15,7 +15,9 @@ pdfcraft-collab-pdf = { workspace = true }
 pdfcraft-collab-proto = { workspace = true }
 pdfcraft-collab-server = { workspace = true }
 pdfcraft-collab-ws = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
 
 [[bin]]
 name = "pdfcraft-collab-server"
