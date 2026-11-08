@@ -342,13 +342,15 @@ impl PdfCraftApp {
     }
 
     /// Whether something over the pages has the keyboard: a dialog or prompt, the palette, the
-    /// OCR Verify screen, the hotbar's tools window, a popup or a menu of the menu bar. On a pass
-    /// that carries the input a menu click stands for (`menu_input_due`), the hotbar's window,
-    /// popups and the menu bar don't count: that input is the pages'.
+    /// OCR Verify screen, the update prompt a check at start shows, the hotbar's tools window, a
+    /// popup or a menu of the menu bar. On a pass that carries the input a menu click stands for
+    /// (`menu_input_due`), the update prompt, the hotbar's window, popups and the menu bar don't
+    /// count: none of them turns the menus off as a dialog does, and that input is the pages'.
     pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
         self.covers_pages()
             || !self.menu_input_due
-                && (self.hotbar.picker_over_pages(ctx)
+                && (self.updates.prompt_open()
+                    || self.hotbar.picker_over_pages(ctx)
                     || egui::Popup::is_any_open(ctx)
                     || craft_menu::bar::is_open(ctx)
                     || craft_menu::bar::is_focused(ctx))
@@ -378,13 +380,12 @@ impl PdfCraftApp {
         keys || paste
     }
 
-    /// A dialog, a prompt (the update prompt a check at start shows too), the palette or the OCR
-    /// Verify screen is drawn over the pages.
+    /// A dialog, a prompt, the palette or the OCR Verify screen is drawn over the pages.
     pub(crate) fn covers_pages(&self) -> bool {
         // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
         // entered over. Dialogs and prompts show there too.
         let shown = !(self.full_screen && self.active.is_some());
-        self.modal_open() || self.pending_full_screen.is_some() || self.updates.prompt_open() || (self.palette_open || self.ocr_verify.open) && shown
+        self.modal_open() || self.pending_full_screen.is_some() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act

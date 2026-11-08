@@ -4476,17 +4476,15 @@ fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_commen
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
-/// The update prompt a check at start shows covers the window: Delete under it leaves the selected
-/// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
-#[test]
-fn keys_under_the_update_prompt_leave_the_selected_comment() {
+/// A square drawn and selected, then the update prompt a check at start shows when it finds a
+/// newer release (the check waits until the square is selected).
+fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     let found = Arc::new(AtomicBool::new(false));
     let answer = found.clone();
     let mut h = harness(move |app| {
         app.set_startup_update_check(true);
-        // The check waits until the comment is selected, then finds a newer release.
         app.set_update_source(Arc::new(move || {
             while !answer.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(5));
@@ -4513,6 +4511,14 @@ fn keys_under_the_update_prompt_leave_the_selected_comment() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     h.run_steps(2);
+    h
+}
+
+/// The update prompt a check at start shows covers the window: Delete under it leaves the selected
+/// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
+#[test]
+fn keys_under_the_update_prompt_leave_the_selected_comment() {
+    let mut h = selected_square_under_the_update_prompt();
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert_eq!(comments(&h).len(), 1, "Delete under the update prompt deleted the comment");
@@ -4520,6 +4526,18 @@ fn keys_under_the_update_prompt_leave_the_selected_comment() {
     h.run_steps(3);
     assert!(h.query_by_label_contains("is available").is_none(), "Escape closed the prompt");
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "Escape under the update prompt deselected the comment");
+}
+
+/// The update prompt doesn't turn the menus off, as a dialog does, so a native menu's click under
+/// it stands: Edit ▸ Delete removes the selected comment. Its Delete was held with the user's.
+#[test]
+fn edit_delete_from_a_native_menu_under_the_update_prompt_removes_the_comment() {
+    let mut h = selected_square_under_the_update_prompt();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+    assert!(h.query_by_label_contains("is available").is_some(), "the prompt is still open");
 }
 
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
