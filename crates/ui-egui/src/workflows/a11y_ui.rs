@@ -517,6 +517,9 @@ pub struct AltDraft {
     pub index: usize,
     pub texts: Vec<String>,
     pub decorative: Vec<bool>,
+    /// Its alternate text was left out of the listing for its size, so the dialog cannot show it
+    /// and must not let a save replace it.
+    pub truncated: Vec<bool>,
     /// The figure shown (index, picture).
     preview: Option<(usize, egui::TextureHandle)>,
 }
@@ -604,10 +607,14 @@ pub(crate) fn alt_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> 
         }
     });
     ui.add_space(8.0);
-    ui.add_enabled_ui(!d.decorative[i], |ui| {
+    let truncated = d.truncated.get(i).copied().unwrap_or(false);
+    ui.add_enabled_ui(!d.decorative[i] && !truncated, |ui| {
         let l = ui.label(tl!("Alternate text"));
         ui.add(crate::widgets::block(&mut d.texts[i]).desired_rows(3).desired_width(380.0).hint_text(tl!("Describe the figure"))).labelled_by(l.id);
     });
+    if truncated {
+        ui.label(egui::RichText::new(tl!("This figure's alternate text is too long to show here.")).color(t.text_muted));
+    }
     ui.add(widgets::checkbox(&mut d.decorative[i], tl!("Decorative figure")));
     ui.add_space(10.0);
     let (mut save, mut cancel) = (false, false);
@@ -646,6 +653,7 @@ impl PdfCraftApp {
             doc: Some(id),
             texts: figures.iter().map(|f| f.alt.clone().unwrap_or_default()).collect(),
             decorative: vec![false; figures.len()],
+            truncated: figures.iter().map(|f| f.truncated).collect(),
             figures,
             index: 0,
             preview: None,
@@ -658,6 +666,10 @@ impl PdfCraftApp {
         let d = std::mem::take(&mut self.alt_draft);
         let mut edits = Vec::new();
         for (k, f) in d.figures.iter().enumerate() {
+            if d.truncated.get(k).copied().unwrap_or(false) {
+                // What the dialog could not show it cannot replace: the figure keeps its text.
+                continue;
+            }
             if d.decorative[k] {
                 edits.push(pdfcraft_engine::Edit::MarkDecorative { figure: f.obj.num });
             } else if d.texts[k].trim() != f.alt.as_deref().unwrap_or("").trim() {

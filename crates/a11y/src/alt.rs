@@ -15,6 +15,9 @@ pub struct Figure {
     pub alt: Option<String>,
     /// Where its content is drawn, in user space (images, forms and paths it marks).
     pub bbox: Option<[f64; 4]>,
+    /// Its alternate text was left out for the listing's allowance: `alt` is `None` because it
+    /// was not shown, not because the figure has none.
+    pub truncated: bool,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -310,35 +313,60 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
 /// Many elements can name one large indirect string, and each would otherwise get a copy of it.
 pub(crate) const MAX_LISTED_TEXT: usize = 32 << 20;
 
-/// What is left of [`MAX_LISTED_TEXT`].
-pub(crate) struct TextBudget(usize);
+/// What is left of [`MAX_LISTED_TEXT`], and whether anything was left out for it.
+pub(crate) struct TextBudget {
+    left: usize,
+    /// Set once text is dropped for the allowance: a listing that omits text this way says so,
+    /// rather than reading as one whose text is genuinely absent.
+    exhausted: bool,
+    /// Whether the last [`Self::text`] or [`Self::string`] dropped its text for the allowance
+    /// rather than finding none: what lets `tags` say an `alt` is not shown, not absent.
+    refused: bool,
+}
 
 impl TextBudget {
     pub(crate) fn new() -> Self {
-        TextBudget(MAX_LISTED_TEXT)
+        TextBudget { left: MAX_LISTED_TEXT, exhausted: false, refused: false }
     }
 
     /// Spend `n` bytes: `false`, spending what is left, when they don't fit.
     pub(crate) fn charge(&mut self, n: usize) -> bool {
-        let fits = n <= self.0;
-        self.0 = self.0.saturating_sub(n);
+        let fits = n <= self.left;
+        self.left = self.left.saturating_sub(n);
+        self.exhausted |= !fits;
         fits
+    }
+
+    /// Whether this listing has dropped text for the allowance.
+    pub(crate) fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    /// Whether the last read dropped its text for the allowance (rather than there being none).
+    pub(crate) fn refused(&self) -> bool {
+        self.refused
     }
 
     /// The text of the string `key` holds, charged by the longer of its raw and decoded sizes
     /// (nothing is decoded once the raw bytes alone don't fit). `None` past the allowance.
     pub(crate) fn text(&mut self, doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
+        self.refused = false;
         let o = doc.resolve(d.get(key)?);
-        self.string(o.as_string()?)
+        let text = o.as_string()?;
+        self.string(text)
     }
 
     /// [`Self::text`] for a string already in hand.
     pub(crate) fn string(&mut self, s: &PdfString) -> Option<String> {
-        if s.bytes.len() > self.0 {
+        if s.bytes.len() > self.left {
+            self.exhausted = true;
+            self.refused = true;
             return None;
         }
         let text = s.to_text();
-        self.charge(text.len().max(s.bytes.len())).then_some(text)
+        let fits = self.charge(text.len().max(s.bytes.len()));
+        self.refused = !fits;
+        fits.then_some(text)
     }
 }
 
@@ -369,9 +397,10 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
         .into_iter()
         .map(|(e, page)| {
             let alt = text.text(doc, &e.dict, b"Alt");
+            let truncated = text.refused();
             let on_page = page.and_then(|p| bounds.get(&p));
             let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
-            Figure { obj: e.object, page, alt, bbox }
+            Figure { obj: e.object, page, alt, bbox, truncated }
         })
         .collect()
 }

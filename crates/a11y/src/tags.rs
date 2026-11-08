@@ -23,6 +23,9 @@ pub struct TagInfo {
     pub scope: Option<String>,
     /// Zero-based page when `/Pg` is known.
     pub page: Option<usize>,
+    /// Some of this tag's text was left out for the listing's allowance: an absent `alt` then
+    /// means "not shown", not "none".
+    pub truncated: bool,
 }
 
 /// A marked-content reference directly owned by a structure tag.
@@ -31,6 +34,9 @@ pub struct TagContentItem {
     pub page: Option<usize>,
     pub mcid: i64,
     pub text: String,
+    /// The text was left out for the listing's allowance: `text` is empty because it was not
+    /// shown, not because the mark has no text.
+    pub truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,18 +161,24 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
     alt::elements(doc)
         .into_iter()
         .filter_map(|e| {
+            let title = budget.text(doc, &e.dict, b"T");
+            let actual_text = budget.text(doc, &e.dict, b"ActualText");
+            let alt = budget.text(doc, &e.dict, b"Alt");
+            // The alt read's own answer: refused for the allowance, so nothing reads as no text.
+            let truncated = budget.refused();
             Some(TagInfo {
                 object: e.object,
                 parent: e.parent,
                 depth: e.depth,
                 kind: String::from_utf8_lossy(e.dict.name(b"S")?).into_owned(),
-                title: budget.text(doc, &e.dict, b"T"),
-                actual_text: budget.text(doc, &e.dict, b"ActualText"),
-                alt: budget.text(doc, &e.dict, b"Alt"),
+                title,
+                actual_text,
+                alt,
                 language: budget.text(doc, &e.dict, b"Lang"),
                 summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().and_then(|s| budget.string(s))),
                 scope: table_attribute(doc, &e.dict, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
+                truncated,
             })
         })
         .collect()
@@ -189,6 +201,7 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
         .into_iter()
         .map(|(page, mcid)| {
             let page = page.and_then(|p| page_index.get(&p).copied());
+            let mut truncated = false;
             let text = page
                 .and_then(|i| {
                     let page_texts = match texts.entry(i) {
@@ -197,10 +210,19 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
                             e.insert(pages.get(i).map(|p| crate::headings::mcid_texts(doc, &p.dict)).unwrap_or_default())
                         }
                     };
-                    page_texts.get(&mcid).filter(|t| budget.charge(t.len())).cloned()
+                    match page_texts.get(&mcid) {
+                        Some(t) if budget.charge(t.len()) => Some(t.clone()),
+                        // The mark has text the allowance could not hold: it is marked, not
+                        // emptied, so a panel does not read it as a textless mark.
+                        Some(_) => {
+                            truncated = true;
+                            None
+                        }
+                        None => None,
+                    }
                 })
                 .unwrap_or_default();
-            TagContentItem { page, mcid, text }
+            TagContentItem { page, mcid, text, truncated }
         })
         .collect())
 }
