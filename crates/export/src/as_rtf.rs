@@ -24,8 +24,16 @@ fn rtf_text(s: &str) -> String {
     o
 }
 
-/// Rich Text Format: paragraphs with their sizes and bold/italic, real table rows, page breaks
-/// between pages (images are left out).
+fn rtf_hex(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len() * 2);
+    for &byte in data {
+        out.push_str(&format!("{byte:02X}"));
+    }
+    out
+}
+
+/// Rich Text Format: paragraphs with their sizes and bold/italic, real table rows, page breaks,
+/// and embedded pictures.
 pub fn rtf(pages: &[Page]) -> String {
     let items = items(pages);
     // The colour table: entry 0 is the default (auto) colour, then each non-black colour once.
@@ -118,7 +126,12 @@ pub fn rtf(pages: &[Page]) -> String {
                     s.push_str("\\row\n");
                 }
             }
-            Item::Img(_) => {}
+            Item::Img(im) => {
+                let kind = if im.ext == "jpg" { "jpeg" } else { "png" };
+                let width = (im.size[0].max(1.0) * 20.0).round() as i64;
+                let height = (im.size[1].max(1.0) * 20.0).round() as i64;
+                s.push_str(&format!("{{\\pict\\{kind}blip\\picw{width}\\pich{height}\\picwgoal{width}\\pichgoal{height} {} }}", rtf_hex(&im.bytes)));
+            }
             Item::PageBreak => s.push_str("\\page\n"),
         }
     }

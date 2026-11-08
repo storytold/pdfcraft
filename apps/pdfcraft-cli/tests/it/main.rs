@@ -6,6 +6,7 @@ mod batch;
 mod batch_exit;
 mod check;
 mod edit;
+mod export;
 mod extract;
 mod help;
 mod info_standards;
