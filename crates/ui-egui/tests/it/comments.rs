@@ -4585,6 +4585,29 @@ fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_removes_the_comme
     }
 }
 
+/// The OCR Verify screen takes the pages' place, and the pages' own chords don't reach them under
+/// it: ⌘A selects none of the hidden page's text, and ⌘= leaves its zoom. Both acted on the
+/// hidden page, and stayed after the screen closed.
+#[test]
+fn chords_on_the_ocr_verify_screen_leave_the_hidden_page() {
+    let mut h = harness(|_| {});
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "nothing is selected");
+    let zoom = h.state().views[0].zoom;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "⌘A on the OCR Verify screen selected the hidden page's text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].zoom, zoom, "⌘= on the OCR Verify screen zoomed the hidden page");
+    h.state_mut().ocr_verify.open = false;
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_some(), "with the screen closed, ⌘A selects the page's text");
+}
+
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
 /// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
 /// which held every page key, H included.

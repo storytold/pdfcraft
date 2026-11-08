@@ -35,6 +35,10 @@ impl PdfCraftApp {
         // keyboard (Alt, F10); a command shortcut has left it already (`logic`) and runs. The
         // chords wait meanwhile: the registered commands', Select all and the view's.
         let chords = !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx);
+        // The pages' own chords (Select all, the view's) don't reach pages something covers: the
+        // OCR Verify screen in their place (a dialog has returned above, and the palette holds
+        // the keyboard).
+        let page_chords = !self.covers_pages();
         if chords {
             self.registry_shortcuts(ctx);
         }
@@ -44,7 +48,7 @@ impl PdfCraftApp {
         }
         if let Some(i) = self.active {
             // Edit ▸ Select all's ⌘A comes while the bar still reads as open.
-            if chords || self.menu_input_due {
+            if page_chords && (chords || self.menu_input_due) {
                 self.select_all_keys(i, ctx);
             }
             self.tool_keys(i, ctx);
@@ -64,7 +68,7 @@ impl PdfCraftApp {
             {
                 prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, chords, self.scroll_speed);
+            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }

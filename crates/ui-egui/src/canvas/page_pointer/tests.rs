@@ -817,12 +817,20 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
         "the pages' clipboard: Copy, Cut and Paste (events and chords), which act only when `page_keys.over()` is false, \
          and the pastes it hands on to text fields while something is over the pages",
     ),
-    ("app/keys.rs", "select_all_keys", "Select all, a chord that waits for a menu of the menu bar as the registered commands' do"),
+    (
+        "app/keys.rs",
+        "select_all_keys",
+        "Select all, a chord that waits for a menu of the menu bar as the registered commands' do, and isn't called while something covers the pages",
+    ),
     ("canvas/area.rs", "glide_interrupted", "any key stops the touchpad's glide"),
     ("canvas/autoscroll.rs", "update_latched", "Escape ends the middle-button scroll, which holds the whole view"),
     ("canvas/autoscroll.rs", "escape", "Escape ends the middle-button scroll, which holds the whole view"),
     ("canvas/find.rs", "find_bar", "the Find field's own keys, while it has the focus"),
-    ("canvas/navigation.rs", "view_chords", "the view's chords, which wait for a menu of the menu bar as the registered commands' do"),
+    (
+        "canvas/navigation.rs",
+        "view_chords",
+        "the view's chords, which wait for a menu of the menu bar as the registered commands' do, and for whatever covers the pages",
+    ),
     ("canvas/page_input.rs", "cancel_on_escape", "Escape cancels a press the pages hold, which goes on under a dialog opened during it"),
     ("tools/calc_order_ui.rs", "panel", "the Calculation order panel's own Alt+arrows"),
     ("tools/comments/composer.rs", "submit_key", "the comment field's own Enter, while it has the focus (the Comments panel's too)"),

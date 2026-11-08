@@ -2329,6 +2329,12 @@ fn delete_with_a_menu_open_leaves_selected_edit_text_objects() {
     h.key_press(egui::Key::Delete);
     h.run_steps(4);
     assert_eq!(blocks(&h), 1, "Delete with a menu open deletes nothing");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the menu");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(blocks(&h), 0, "the objects stayed selected, and Delete with the menu closed removes them");
 }
 
 /// With a menu of the menu bar open, End is the menu's: the view stays on its page. It went to the
@@ -2380,6 +2386,7 @@ fn a_hotbar_window_hidden_by_full_screen_holds_no_keys() {
 /// zooms nothing. It zoomed the view behind the menu.
 #[test]
 fn a_view_chord_with_a_menu_open_waits() {
+    // (A chord on the OCR Verify screen: comments::chords_on_the_ocr_verify_screen_leave_the_hidden_page.)
     let mut h = open(bottom_line_pages_pdf(), "100", false);
     let before = h.state().views[0].zoom;
     crate::support::open_menu(&mut h, "View");
