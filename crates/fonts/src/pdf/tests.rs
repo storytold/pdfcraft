@@ -408,6 +408,47 @@ fn type3_d1_glyph_boxes_win_over_descriptor_metrics() {
     assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && (m.descent + 8.0 * 0.0042).abs() < 1e-12, "{} {}", m.ascent, m.descent);
 }
 
+/// A `/Differences` naming more distinct glyphs than [`MAX_TYPE3_GLYPHS`] leaves some unread, so
+/// a nonzero `/FontBBox` stands over the boxes of those read.
+#[test]
+fn type3_glyphs_past_the_limit_leave_the_font_bbox_standing() {
+    let mut doc = Document::new_empty();
+    let mut procs = vec!["1 0 0 0 1 10 d1"; MAX_TYPE3_GLYPHS];
+    procs.push("1 0 0 0 1 1000 d1");
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, -2, 10, 50], &procs);
+    let names: Vec<String> = (0..procs.len()).map(|i| format!("g{i}")).collect();
+    with_differences(&mut f, &names);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (50.0, -2.0));
+}
+
+/// `d1` boxes with no height in text space (all flat) give way to a usable `/FontBBox`.
+#[test]
+fn flat_type3_glyph_boxes_give_way_to_the_font_bbox() {
+    let mut doc = Document::new_empty();
+    let f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, -2, 10, 50], &["1 0 0 5 1 5 d1"]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (50.0, -2.0));
+}
+
+/// A Type 3 font measured from its `/FontBBox` keeps that box through its font matrix over a
+/// descriptor's `/Ascent` and `/Descent`, which would be read as 1000-unit values.
+#[test]
+fn a_type3_font_bbox_wins_over_descriptor_metrics() {
+    let mut doc = Document::new_empty();
+    let small = [0.0042, 0.0, 0.0, 0.0042, 0.0, 0.0];
+    let mut f = type3(&mut doc, small, [0, -50, 100, 200], &[]);
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"Ascent".to_vec(), Object::Int(891));
+    descriptor.set(b"Descent".to_vec(), Object::Int(-216));
+    let reference = doc.add(Object::Dict(descriptor));
+    f.set(b"FontDescriptor".to_vec(), Object::Ref(reference));
+    let m = Metrics::from_dict(&doc, &f);
+    // 200 and -50 units at 0.0042, kept at the 0.5 / -0.1 em floor.
+    assert!((m.ascent - 0.84).abs() < 1e-9 && (m.descent + 0.21).abs() < 1e-9, "{} {}", m.ascent, m.descent);
+}
+
 #[test]
 fn simple_fonts_decode_and_encode_through_their_encoding() {
     let mut doc = Document::new_empty();
