@@ -2547,6 +2547,61 @@ fn a_mark_in_a_zero_width_run_follows_its_letter() {
     assert_eq!(layout(v).plain_text(), "a\u{301}b");
 }
 
+/// One show string of `text` in Helvetica remapped by `/ToUnicode`, every glyph `width` units wide, combining marks
+/// and spaces included, as a font whose `/Widths` give a mark an advance of its own draws it: each mark moves the pen,
+/// and the next letter starts right at the mark's box.
+fn one_show_string(text: &str, width: i64) -> Pdf {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut chars: Vec<char> = Vec::new();
+    for c in text.chars() {
+        if !chars.contains(&c) {
+            chars.push(c);
+        }
+    }
+    let code = |c: char| 0x21 + chars.iter().position(|&k| k == c).unwrap();
+    let codes: String = text.chars().map(|c| format!("{:02X}", code(c))).collect();
+    let ops = format!("BT /F1 14 Tf 20 220 Td <{codes}> Tj ET");
+    let widths: Vec<Object> = chars.iter().map(|_| Object::Integer(width)).collect();
+    let pairs: String = chars.iter().map(|&c| format!("<{:02X}> <{:04X}>\n", code(c), u32::from(c))).collect();
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /T def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange {} beginbfchar\n{pairs}endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+        chars.len()
+    );
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let mut differences = vec![Object::Integer(0x21)];
+    differences.extend(chars.iter().map(|_| Object::Name(b"a".to_vec())));
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "FirstChar" => 0x21, "LastChar" => 0x20 + chars.len() as i64,
+        "Widths" => widths, "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences }, "ToUnicode" => unicode
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(600), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+}
+
+/// A Thai tone mark or above or below vowel whose font gives it an advance of its own (here 300 units, as every
+/// glyph) moves the pen, so the next letter of the word starts a mark's width past its base. The cluster ends at the
+/// mark: no space opens inside "ข้อความ", "เดิม" or "ผู้ใช้", and the space glyphs between the words still read as
+/// spaces.
+#[test]
+fn a_thai_mark_with_its_own_advance_does_not_open_a_word_gap() {
+    let thai = "ข้อความเดิม น้ำ ผู้ใช้";
+    for width in [300, 600] {
+        let text = extract_page(&one_show_string(thai, width), 0, &InterpreterSettings::default()).unwrap();
+        assert_eq!(text.plain_text(), thai, "every glyph {width} units wide");
+        for word in ["ข้อความเดิม", "น้ำ", "ผู้ใช้"] {
+            assert_eq!(text.find_opts(word, true, true).len(), 1, "{word:?} found as a whole word in {:?}", text.plain_text());
+        }
+    }
+}
+
 /// The glyph under a point is the first whose box holds it, edges included; between glyphs, none.
 #[test]
 fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {

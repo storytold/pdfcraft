@@ -160,10 +160,16 @@ pub(super) struct Scratch {
     pub(super) cluster_gap: Vec<Option<f32>>,
 }
 
+/// How close, as a fraction of its height, the glyph drawn after a combining mark must start to the mark's right edge
+/// for the mark to have moved the pen by its own width ([`measure_cluster_gaps`]).
+const MARK_ADVANCE_TOLERANCE: f32 = 0.05;
+
 /// Fills `sc.cluster_gap` with the gap left of each glyph of `sc.placed`, between clusters: a combining mark riding on a
 /// glyph has none (no word ever starts at it), and its cluster ends at the base's right edge. A zero-advance mark's box
 /// is no measure of where the pen went (`draw_glyph` widens it to its outline or half an em), and its start is only
-/// the base's advance moved by a mark-positioning offset.
+/// the base's advance moved by a mark-positioning offset. A mark whose font gives it an advance of its own does move
+/// the pen, and the glyph drawn after it starts right at its box's right edge: the cluster then ends there, or every
+/// letter after such a mark would start a word.
 pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
     sc.cluster_gap.clear();
     let mut right = f32::NEG_INFINITY;
@@ -174,6 +180,11 @@ pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
         };
         if anchor_of(&sc.anchor, c) != c {
             sc.cluster_gap.push(None);
+            let tolerance = MARK_ADVANCE_TOLERANCE * (g.rect[3] - g.rect[1]).max(0.1);
+            let pen_moved = c.checked_add(1).and_then(|n| glyphs.get(n)).is_some_and(|n| (n.rect[0] - g.rect[2]).abs() <= tolerance);
+            if pen_moved && g.rect[2] > right {
+                right = g.rect[2];
+            }
         } else {
             sc.cluster_gap.push((w > 0).then_some(g.rect[0] - right));
             right = g.rect[2];
