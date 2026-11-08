@@ -5,6 +5,8 @@ pub enum Which {
     All,
     Current,
     Range,
+    /// The part of the current page visible when Print was opened.
+    CurrentView,
     /// The pages picked in the Pages panel or the organize grid when the dialog opened.
     Selected,
 }
@@ -64,6 +66,10 @@ pub struct PrintDraft {
     /// The sheet shown in the preview (0-based).
     pub sheet: usize,
     pub current_page: usize,
+    /// The current page's viewport intersection in displayed points, captured for the dialog.
+    pub current_view: Option<(usize, print::Crop)>,
+    /// Set after the first print-dialog frame has had a chance to refresh the canvas transform.
+    pub current_view_captured: bool,
     /// The printer driver's own options and the printer they were read for (Properties…, CUPS).
     pub driver_options: Option<(String, Vec<spool::PrinterOption>)>,
     /// Driver options set away from the printer's defaults, for `driver_options`' printer.
@@ -122,6 +128,8 @@ impl Default for PrintDraft {
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
+            current_view: None,
+            current_view_captured: false,
             driver_options: None,
             driver_choices: Default::default(),
             show_driver_options: false,
@@ -162,7 +170,7 @@ impl PrintDraft {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All | Which::Selected | Which::Current => None,
+            Which::All | Which::Selected | Which::Current | Which::CurrentView => None,
             Which::Range => Some(self.range.clone()),
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
@@ -170,25 +178,30 @@ impl PrintDraft {
         let pages = match self.which {
             Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
             Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
+            Which::CurrentView => print::select_listed(count, &[self.current_view.map_or(self.current_page, |(p, _)| p)], Subset::All, false),
             Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.
         .map_err(|e| e.said(&crate::i18n::words))?;
-        let layout = match self.handling {
-            Handling::Size => Layout::Size(match self.size {
-                SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
-                m => m,
-            }),
-            Handling::Multiple => match Layout::multiple(self.per_sheet) {
-                Layout::Multiple { cols, rows, per_sheet, .. } => {
-                    Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
-                }
-                other => other,
-            },
-            Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
-            Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
-            Handling::Label => Layout::Label { flip: self.label_flip },
+        let layout = if self.which == Which::CurrentView {
+            Layout::View { rect: self.current_view.map_or([0.0; 4], |(_, crop)| crop.rect) }
+        } else {
+            match self.handling {
+                Handling::Size => Layout::Size(match self.size {
+                    SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
+                    m => m,
+                }),
+                Handling::Multiple => match Layout::multiple(self.per_sheet) {
+                    Layout::Multiple { cols, rows, per_sheet, .. } => {
+                        Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
+                    }
+                    other => other,
+                },
+                Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
+                Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
+                Handling::Label => Layout::Label { flip: self.label_flip },
+            }
         };
         Ok(print::Settings {
             pages,
