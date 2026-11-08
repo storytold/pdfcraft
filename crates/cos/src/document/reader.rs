@@ -635,10 +635,20 @@ impl Document {
         // Offsets of objects that may be cross-reference streams: their dictionaries are the
         // trailers of files that have no `trailer` keyword (§7.5.8).
         let mut xref_streams = Vec::new();
-        for (num, offset, generation, body) in object_headers(&data) {
+        let headers = object_headers(&data);
+        // Where `/XRef` occurs in the file, found in one pass.
+        let mut xref_marks = Vec::new();
+        let mut mark_from = 0;
+        while let Some(p) = find(&data, b"/XRef", mark_from, data.len()) {
+            xref_marks.push(p);
+            mark_from = p + 1;
+        }
+        for &(num, offset, generation, body) in &headers {
             entries.insert(num, XrefEntry::InFile { offset, generation });
             objstms.push(num);
-            if find(&data, b"/XRef", body, body.saturating_add(1024)).is_some()
+            // `/XRef` within the 1024 bytes after the header (the first one that is there).
+            let first = xref_marks.partition_point(|&p| p < body);
+            if xref_marks.get(first).is_some_and(|&p| p + 5 <= body.saturating_add(1024).min(data.len()))
                 && let Ok(at) = usize::try_from(offset)
             {
                 xref_streams.push(at);
@@ -827,7 +837,33 @@ pub(crate) fn find(hay: &[u8], needle: &[u8], from: usize, to: usize) -> Option<
     if from >= to || needle.is_empty() || to - from < needle.len() {
         return None;
     }
-    hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    let hay = &hay[from..to];
+    // Look for the needle's rarest byte first, a plain byte scan, and compare the rest only there.
+    const COMMON: &[u8] = b" etaoinsrhldcumfpgwybvkxjqz";
+    let (k, rare) =
+        needle.iter().copied().enumerate().max_by_key(|&(_, b)| COMMON.iter().position(|&c| c == b).unwrap_or(COMMON.len())).unwrap_or((0, 0));
+    let mut i = k;
+    while let Some(p) = hay.get(i..).and_then(|rest| position_of(rest, rare)) {
+        let start = i + p - k;
+        if hay.get(start..start + needle.len()) == Some(needle) {
+            return Some(start + from);
+        }
+        i += p + 1;
+    }
+    None
+}
+
+/// The first position of `byte` in `hay`. Whole 32-byte blocks are tested without branching, which
+/// the compiler turns into vector compares; only a block that holds the byte is searched.
+fn position_of(hay: &[u8], byte: u8) -> Option<usize> {
+    const BLOCK: usize = 32;
+    let (blocks, rest) = hay.as_chunks::<BLOCK>();
+    for (i, block) in blocks.iter().enumerate() {
+        if block.iter().fold(false, |any, &b| any | (b == byte)) {
+            return block.iter().position(|&b| b == byte).map(|p| i * BLOCK + p);
+        }
+    }
+    rest.iter().position(|&b| b == byte).map(|p| blocks.len() * BLOCK + p)
 }
 
 pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
