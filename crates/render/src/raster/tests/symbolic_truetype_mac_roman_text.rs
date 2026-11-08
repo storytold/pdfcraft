@@ -172,6 +172,11 @@ fn font(inked: &[u8], mac: Option<&[(u8, u8)]>, windows: &[(u8, u8)], named: boo
 /// The text extracted from a page that shows `codes` in `font`, marked symbolic and with no
 /// `/Encoding` and no `/ToUnicode`.
 fn extracted(font: &[u8], codes: &[u8]) -> String {
+    extracted_with(font, codes, "AAAAAA+Sym", "")
+}
+
+/// [`extracted`] with the font dictionary's `/BaseFont` named `base_font` and the `extra` entries.
+fn extracted_with(font: &[u8], codes: &[u8], base_font: &str, extra: &str) -> String {
     let hex: String = codes.iter().map(|c| format!("{c:02X}")).collect();
     let content = format!("BT /F1 30 Tf 5 5 Td <{hex}> Tj ET").into_bytes();
     let widths = vec!["1000"; 256].join(" ");
@@ -180,7 +185,7 @@ fn extracted(font: &[u8], codes: &[u8]) -> String {
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 80 40] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
         [format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(), content.clone(), b"\nendstream".to_vec()].concat(),
-        format!("<< /Type /Font /Subtype /TrueType /BaseFont /AAAAAA+Sym /FirstChar 0 /LastChar 255 /Widths [{widths}] /FontDescriptor 6 0 R >>").into_bytes(),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /{base_font} /FirstChar 0 /LastChar 255 /Widths [{widths}] /FontDescriptor 6 0 R {extra}>>").into_bytes(),
         b"<< /Type /FontDescriptor /FontName /AAAAAA+Sym /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 1000 /StemV 80 /FontFile2 7 0 R >>".to_vec(),
         [format!("<< /Length {} >>\nstream\n", font.len()).into_bytes(), font.to_vec(), b"\nendstream".to_vec()].concat(),
     ];
@@ -243,4 +248,25 @@ fn a_font_that_names_its_glyphs_is_not_read_by_their_order() {
     let map = [(0x88, AGRAVE), (0x8E, EACUTE)];
     let font = font(&[AGRAVE, EACUTE], Some(&map), &map, true);
     assert_eq!(extracted(&font, &[0x88, 0x8E]), "ˆŽ", "the codes read as WinAnsi, as before");
+}
+
+#[test]
+fn a_symbol_or_zapfdingbats_font_in_the_macintosh_order_gets_no_mac_roman_reading() {
+    // Symbol and ZapfDingbats have built-in encodings that aren't Latin (ISO 32000-2 §9.6.6.1), so their codes get
+    // no implicit Mac OS Roman reading, as the editor's `unicode_map` gives them none.
+    let map = [(0x88, AGRAVE), (0x8E, EACUTE)];
+    let font = font(&[AGRAVE, EACUTE], Some(&map), &map, false);
+    for name in ["ZapfDingbats", "AAAAAA+Symbol"] {
+        let text = extracted_with(&font, &[0x88, 0x8E], name, "");
+        assert!(!text.contains(['à', 'é']), "{name}: {text:?}");
+    }
+}
+
+#[test]
+fn differences_naming_notdef_clear_the_mac_roman_reading_for_its_code() {
+    // `/Differences` without a base encoding: code 0x8E names `.notdef`, and code 0x88 keeps the Mac OS Roman reading.
+    let map = [(0x88, AGRAVE), (0x8E, EACUTE)];
+    let font = font(&[AGRAVE, EACUTE], Some(&map), &map, false);
+    let text = extracted_with(&font, &[0x88, 0x8E], "AAAAAA+Sym", "/Encoding << /Differences [142 /.notdef] >> ");
+    assert!(text.starts_with('à') && !text.contains('é'), "{text:?}");
 }

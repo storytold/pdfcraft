@@ -420,11 +420,25 @@ impl EmbeddedKind {
     /// `iacute`), and reading every such code as Mac OS Roman turned "USDA’s" into "USDAís".
     /// A font that names its glyphs in its `post` table needn't keep the order (a Wingdings subset
     /// draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`).
-    /// `None` when the font is non-symbolic, names an encoding, is a CFF program, names its glyphs,
-    /// or either test fails (SAS's AMT fonts carry a wrong (1, 0) table, #4156): the code then
-    /// reads as before. Glyph selection is unchanged.
+    /// `None` when the font is non-symbolic, names an encoding, is Symbol or ZapfDingbats (whose
+    /// built-in encodings aren't Latin, ISO 32000-2 §9.6.6.1; recognised by name as the editor's
+    /// `unicode_map` recognises them), is a CFF program, names its glyphs, or either test fails
+    /// (SAS's AMT fonts carry a wrong (1, 0) table, #4156): the code then reads as before. Glyph
+    /// selection is unchanged.
     fn mac_roman_name(&self, code: u8) -> Option<&'static str> {
+        let symbolic_builtin = self.postscript_name.as_deref().is_some_and(|name| {
+            let flat: String = name
+                .rsplit('+')
+                .next()
+                .unwrap_or(name)
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            flat.contains("symbol") || flat.contains("zapf") || flat.contains("dingbat")
+        });
         if self.is_non_symbolic()
+            || symbolic_builtin
             || !matches!(self.encoding, Encoding::BuiltIn)
             || self.cff_blob.is_some()
             || !self.glyph_names.is_empty()
