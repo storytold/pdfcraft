@@ -162,6 +162,14 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
+/// What a comment import left out of comments it did import (an appearance it could not read, so
+/// the comment is drawn from its other entries), in the repair log: said, not slipped in.
+fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
+    for why in &report.skipped {
+        doc.note_repair(format!("imported comment {why}; its appearance was left out and it is drawn from its other entries"));
+    }
+}
+
 /// Dates and unique ids stamped onto what an edit creates.
 pub(crate) struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
@@ -507,6 +515,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             if report.comments == 0 {
                 return Err(EditError::Invalid("the clipboard holds no comments".into()));
             }
+            note_skipped(doc, &report);
         }
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
@@ -856,7 +865,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     // the data importer's error.
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
-                        Ok(_) => *doc = data,
+                        Ok(report) => {
+                            note_skipped(&mut data, &report);
+                            *doc = data;
+                        }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
                             Ok(src) => import_pdf_comments(doc, &src)?,
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),

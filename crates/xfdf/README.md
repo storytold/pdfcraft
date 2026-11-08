@@ -28,8 +28,9 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   or `raw`/`hex`), the shape XFDF files from other tools carry. Copy and paste carries every
   comment's appearance. Import keeps an appearance it can read (except on a redaction mark, which
   PdfCraft always draws) and otherwise draws the comment and records the reason in
-  `Report::skipped`; it refuses one over 16 MiB, 64 MiB per import, 64 nesting levels or 100,000
-  values. Export leaves out one past those limits or whose rect has no area.
+  `Report::skipped` (the engine puts it in the repair log); it refuses one over 16 MiB, 64 MiB per
+  import, 64 nesting levels or 100,000 values. Export leaves out one past those limits or whose
+  rect has no area; where `/AS` selects one of several states, the selected stream is written.
 - **FDF**: fields (with `/Kids` hierarchies) and indirect comments. Nested annotation values
   are copied under FDF object numbers; shared references and cycles remain shared. A stamp's appearance
   (`/AP`, with the forms and images it draws) is copied, as in XFDF, and an `/AP` in the file comes
@@ -45,7 +46,9 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   levels or a conservative 64 MiB serialization budget instead of exporting partial data.
   These are copied-graph limits: source parsing and page discovery retain their existing
   COS/parser limits, with no total source-memory bound. Unknown indirect streams retain their
-  encoded bytes. FDF import copies a comment's streams only when the comment lands on a page.
+  encoded bytes. FDF import copies a comment's streams only when the comment lands on a page, and
+  refuses the file (nothing imported) when its comments expand past 1,000,000 values or 64 MiB, or
+  nest more than 256 levels, rather than import part of an appearance.
 - **Form data**: Acrobat's XML (`xfdf:original` keeps names that aren't XML names), CSV and
   tab-delimited text (a row of names, a row of values).
 

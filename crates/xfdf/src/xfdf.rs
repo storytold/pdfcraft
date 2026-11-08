@@ -102,8 +102,6 @@ fn read_own_keys(node: roxmltree::Node, d: &mut Dict) {
 /// Rich text deeper than this is written as text rather than as markup, so the XFDF it goes into
 /// stays well inside the nesting the reader accepts (`MAX_XML_DEPTH`).
 const MAX_RICH_DEPTH: usize = 512;
-/// At most this many numbers in a `dashes` list.
-const MAX_DASHES: usize = 64;
 
 /// Rich text (`/RC`) as `<contents-richtext>` holds it: its root element alone (no XML
 /// declaration), when the text is well-formed XML; `None` otherwise.
@@ -220,10 +218,7 @@ fn format_attrs(doc: &Document, d: &Dict, sub: &[u8], attrs: &mut String) {
 fn read_format(node: roxmltree::Node, d: &mut Dict) {
     let num = |a: &str| node.attribute(a).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
     let style = node.attribute("style").map(str::trim);
-    let dashes = node
-        .attribute("dashes")
-        .map(csv)
-        .filter(|v| !v.is_empty() && v.len() <= MAX_DASHES && v.iter().all(|x| *x >= 0.0) && v.iter().any(|x| *x > 0.0));
+    let dashes = node.attribute("dashes").map(csv).filter(|v| !v.is_empty() && v.iter().all(|x| *x >= 0.0) && v.iter().any(|x| *x > 0.0));
     let bs_style = match style {
         Some("dash") => Some("D"),
         Some("bevelled" | "beveled") => Some("B"),
@@ -306,7 +301,11 @@ fn read_format(node: roxmltree::Node, d: &mut Dict) {
 fn rich_plain(node: roxmltree::Node) -> String {
     let mut out = String::new();
     for n in node.descendants() {
-        if n.is_element() && matches!(n.tag_name().name(), "p" | "div" | "li" | "br") {
+        // A line break is a line of its own, so two in a row leave a blank line; a paragraph
+        // starts on a new line.
+        if n.is_element() && n.tag_name().name() == "br" {
+            out.push('\r');
+        } else if n.is_element() && matches!(n.tag_name().name(), "p" | "div" | "li") {
             if !out.is_empty() && !out.ends_with('\r') {
                 out.push('\r');
             }
@@ -359,10 +358,17 @@ fn annotation_names(doc: &Document, pages: &[pdfcraft_model::Page], only: Option
 /// The elements inside a comment's XFDF element: its text (plain and rich), default appearance
 /// and style, ink, vertices, appearance (with `ap`) and pop-up (on page `pi`).
 fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap: bool) {
-    if let Some(c) = text_of(doc, d, b"Contents") {
-        let _ = write!(out, "<contents>{}</contents>", esc(&c));
+    let rc = text_of(doc, d, b"RC");
+    match text_of(doc, d, b"Contents") {
+        Some(c) => {
+            let _ = write!(out, "<contents>{}</contents>", esc(&c));
+        }
+        // Rich text written as text (below) is read back as rich text only beside `<contents>`;
+        // alone it would become the comment's plain text.
+        None if rc.as_deref().is_some_and(|rc| rich_text_element(rc).is_none()) => out.push_str("<contents></contents>"),
+        None => {}
     }
-    if let Some(rc) = text_of(doc, d, b"RC") {
+    if let Some(rc) = rc {
         match rich_text_element(&rc) {
             // Rich text is an XML (XHTML) document (ISO 32000-2 Table 172, RC): its element goes in as markup.
             Some(markup) => {
@@ -974,11 +980,37 @@ fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
     };
     let source = rich.document().input_text();
     let Some(markup) = source.get(first.range().start..last.range().end) else { return };
+    let markup = if elements.len() == 1 { standalone(rich, markup) } else { markup.to_string() };
     // Rich text is an XML document of its own; export left its declaration out.
     d.set(b"RC".to_vec(), PdfString::text(&format!("<?xml version=\"1.0\"?>{markup}")));
     if !has_contents {
         d.set(b"Contents".to_vec(), PdfString::text(&rich_plain(rich)));
     }
+}
+
+/// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML document of
+/// its own: the namespace prefixes it uses but inherits from the XFDF around it are declared on
+/// it. Unchanged when it stands alone already, or when the declarations would not make it parse.
+fn standalone(rich: roxmltree::Node, markup: &str) -> String {
+    if parse_form_xml(markup).is_ok() {
+        return markup.to_string();
+    }
+    // The start tag's name ends at white space, `/` or `>`.
+    let Some(name_end) = markup.get(1..).and_then(|t| t.find(|c: char| c.is_whitespace() || c == '/' || c == '>')).map(|i| i + 1) else {
+        return markup.to_string();
+    };
+    let start_tag = markup.get(..markup.find('>').unwrap_or(markup.len())).unwrap_or(markup);
+    let mut declared = String::new();
+    for ns in rich.namespaces() {
+        let Some(prefix) = ns.name() else { continue };
+        if prefix == "xml" || !markup.contains(&format!("{prefix}:")) || start_tag.contains(&format!("xmlns:{prefix}=")) {
+            continue;
+        }
+        let _ = write!(declared, " xmlns:{prefix}=\"{}\"", esc(ns.uri()));
+    }
+    let (Some(head), Some(tail)) = (markup.get(..name_end), markup.get(name_end..)) else { return markup.to_string() };
+    let fixed = format!("{head}{declared}{tail}");
+    if parse_form_xml(&fixed).is_ok() { fixed } else { markup.to_string() }
 }
 
 /// Put an annotation dictionary on a page, replacing one with the same `/NM`. Returns its
@@ -1010,6 +1042,11 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
         // without usable /QuadPoints removes its /Rect, which the outline is then drawn from.
         d.remove(b"CA");
         d.remove(b"ca");
+        // The outline is PdfCraft's own (an appearance the file carries could hide the mark), and
+        // a redaction has no border effect (ISO 32000-2 Table 195 lists none; §12.5.4 gives
+        // /BE to squares, circles, polygons and free text), which the outline could not draw.
+        d.remove(b"AP");
+        d.remove(b"BE");
         let quads_drawable = d.get(b"QuadPoints").and_then(Object::as_array).is_some_and(|q| {
             let v: Vec<f64> = q.iter().filter_map(Object::as_f64).filter(|v| v.is_finite()).collect();
             let (quads, rest) = v.as_chunks::<8>();
@@ -1033,7 +1070,10 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
     // An appearance the file carries is how the comment looked where it came from, and is kept
     // (XFDF 3.0 "stamp": it takes precedence over the icon). A redaction mark is always drawn by
     // PdfCraft, so what it marks for removal is shown.
-    let keep_appearance = d.name(b"Subtype") != Some(b"Redact".as_slice()) && super::appearance::has_appearance(doc, &d);
+    let redact = d.name(b"Subtype") == Some(b"Redact".as_slice());
+    // A redaction mark with an area removes something when applied.
+    let marks = redact && d.contains(b"QuadPoints");
+    let keep_appearance = !redact && super::appearance::has_appearance(doc, &d);
     let nm = d.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text()));
     let annots: Vec<Object> = doc
         .get(page_ref)
@@ -1079,7 +1119,14 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
     };
     // Otherwise our own appearance where we can draw one; others keep none (viewers draw a default).
     if !keep_appearance {
-        let _ = pdfcraft_annot::set_appearance(doc, r);
+        let drawn = pdfcraft_annot::set_appearance(doc, r);
+        // A redaction mark that removes something but shows nothing is refused: applying it
+        // would remove content the reviewer never saw marked.
+        if let Err(why) = drawn
+            && marks
+        {
+            return Err(DataError::Malformed(format!("a redaction mark could not be drawn, so what it removes would not show ({why})")));
+        }
     }
     kept.push(Object::Ref(r));
     doc.update_dict(page_ref, |p| p.set(b"Annots".to_vec(), Object::Array(kept)))?;
@@ -1116,19 +1163,21 @@ pub fn import_comments(
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
 ) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, page, fresh, offset.filter(|o| o.iter().all(|v| v.is_finite())))
+    import_xfdf_with(doc, text, page, fresh, offset.filter(|o| o.iter().all(|v| v.is_finite())), super::appearance::MAX_IMPORT_APPEARANCE_BYTES)
 }
 
 pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, None, None, None)
+    import_xfdf_with(doc, text, None, None, None, super::appearance::MAX_IMPORT_APPEARANCE_BYTES)
 }
 
-fn import_xfdf_with(
+/// The import, with `appearance_budget` decoded bytes of appearance for all of its comments.
+pub(crate) fn import_xfdf_with(
     doc: &mut Document,
     text: &str,
     target_page: Option<usize>,
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
+    mut appearance_budget: usize,
 ) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -1137,7 +1186,6 @@ fn import_xfdf_with(
         return Err(DataError::UnknownFormat);
     }
     let mut report = Report::default();
-    let mut appearance_budget = super::appearance::MAX_IMPORT_APPEARANCE_BYTES;
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
     if let Some(p) = target_page
         && p >= pages.len()
@@ -1166,7 +1214,8 @@ fn import_xfdf_with(
             let Some(page) = target_page.or(own_page).and_then(|p| pages.get(p).copied()) else { continue };
             let Some(mut d) = annot_from_xml(node, subtype, page) else { continue };
             // The appearance the file carries (XFDF 3.0 "appearance"), when it can be read.
-            if let Some(ap) = node.children().find(|c| c.has_tag_name("appearance")) {
+            // A redaction mark is always drawn by PdfCraft (see `place`): its appearance is not read.
+            if let Some(ap) = node.children().find(|c| c.has_tag_name("appearance")).filter(|_| *subtype != "Redact") {
                 let text: String = ap.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
                 match super::appearance::decode(&text, &mut appearance_budget) {
                     Ok(tree) => {

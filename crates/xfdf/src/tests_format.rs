@@ -788,3 +788,263 @@ proptest! {
         prop_assert_eq!(sub_dict(&dst, &n.dict, b"Extra"), extra);
     }
 }
+
+/// A stamp on page 0 whose normal appearance is one form stream holding `content`.
+fn content_stamp(doc: &mut Document, nm: &str, content: Vec<u8>) -> ObjRef {
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), nums(&[0.0, 0.0, 100.0, 50.0]));
+    let n = doc.add(Object::Stream(Stream { dict: form, raw: content.into() }));
+    let mut ap = Dict::new();
+    ap.set(b"N".to_vec(), Object::Ref(n));
+    let mut d = annot("Stamp", nm, [100.0, 500.0, 200.0, 550.0]);
+    d.set(b"AP".to_vec(), Object::Dict(ap));
+    put(doc, d);
+    n
+}
+
+/// The `<appearance>` XML export wrote for the first comment of `xml`.
+fn exported_appearance(xml: &str) -> String {
+    let b64: String = xml.split("<appearance>").nth(1).unwrap().split("</appearance>").next().unwrap().split_whitespace().collect();
+    String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap()
+}
+
+/// The write-time checks leave out the closing tags and the hexadecimal line breaks: an appearance
+/// just under the limit there came out over it, and import then refused what export wrote.
+#[test]
+fn an_exported_appearance_always_fits_what_import_reads() {
+    let mut src = pages(1);
+    content_stamp(&mut src, "big", vec![0u8; (appearance::MAX_APPEARANCE_BYTES / 2) - 4096]);
+    let d = named(&src, "big");
+    if let Some(text) = appearance::encode(&src, &d) {
+        let mut budget = appearance::MAX_IMPORT_APPEARANCE_BYTES;
+        appearance::decode(&text, &mut budget).expect("what export writes, import reads");
+    }
+}
+
+/// A page whose `/Type` is a reference is still the source page: written in place it would carry
+/// the page's contents into a file meant to hold one comment.
+#[test]
+fn a_page_with_an_indirect_type_stays_out_of_an_exported_appearance() {
+    let mut src = pages(1);
+    let n = content_stamp(&mut src, "pg", b"q Q".to_vec());
+    let page = page_ref(&src, 0);
+    let page_type = src.add(Object::name("Page"));
+    src.update_dict(page, |p| p.set(b"Type".to_vec(), Object::Ref(page_type))).unwrap();
+    let Object::Stream(mut form) = (*src.get(n)).clone() else { panic!("no form") };
+    form.dict.set(b"PieceInfo".to_vec(), Object::Ref(page));
+    src.set(n, Object::Stream(form));
+    let inner = exported_appearance(&export_xfdf(&src, true, false, "src.pdf"));
+    assert!(inner.contains(r#"<NULL KEY="PieceInfo"/>"#), "{inner}");
+    assert!(!inner.contains("MediaBox"), "{inner}");
+}
+
+/// XML reads a carriage return as a line feed, so data holding one goes out as hexadecimal.
+#[test]
+fn stream_data_with_carriage_returns_comes_back_byte_for_byte() {
+    let mut src = pages(1);
+    let data = b"q\r/Im0\rDo\r\nQ\r".to_vec();
+    content_stamp(&mut src, "cr", data.clone());
+    let (_, dst) = round_trip_xfdf(&src);
+    let d = named(&dst, "cr");
+    let n = dst.resolve(sub_dict(&dst, &d, b"AP").get(b"N").unwrap());
+    let Object::Stream(n) = n.as_ref() else { panic!("no appearance") };
+    assert_eq!(n.raw.as_ref(), data.as_slice());
+}
+
+/// XFDF has no appearance state: the stream `/AS` selects is what goes out.
+#[test]
+fn the_selected_appearance_state_is_what_xfdf_carries() {
+    let mut src = pages(1);
+    let on = content_stamp(&mut src, "st", b"0 0 1 rg 0 0 100 50 re f".to_vec());
+    let off = src.add(Object::Stream(Stream { dict: Dict::new(), raw: b"%off".to_vec().into() }));
+    let mut states = Dict::new();
+    states.set(b"On".to_vec(), Object::Ref(on));
+    states.set(b"Off".to_vec(), Object::Ref(off));
+    let mut ap = Dict::new();
+    ap.set(b"N".to_vec(), Object::Dict(states.clone()));
+    ap.set(b"D".to_vec(), Object::Dict(states));
+    let r = xfdf::find_by_name(&src, "st").unwrap();
+    src.update_dict(r, |d| {
+        d.set(b"AP".to_vec(), Object::Dict(ap.clone()));
+        d.set(b"AS".to_vec(), Object::name("On"));
+    })
+    .unwrap();
+    let (_, dst) = round_trip_xfdf(&src);
+    let d = named(&dst, "st");
+    let ap = sub_dict(&dst, &d, b"AP");
+    for key in [b"N".as_slice(), b"D"] {
+        let s = dst.resolve(ap.get(key).unwrap());
+        let Object::Stream(s) = s.as_ref() else { panic!("{key:?} is not the selected stream: {s:?}") };
+        assert_eq!(s.raw.as_ref(), b"0 0 1 rg 0 0 100 50 re f");
+    }
+    // A state no stream answers to has nothing to draw: no appearance goes out.
+    src.update_dict(r, |d| d.set(b"AS".to_vec(), Object::name("Gone"))).unwrap();
+    assert!(!export_xfdf(&src, true, false, "src.pdf").contains("<appearance>"));
+}
+
+/// Forms that draw forms: FDF export writes the chain however long, and import copied only the
+/// first dozen and nulled the rest without a word. A chain sixty forms deep comes back whole; one
+/// deeper than import follows is refused rather than imported in part.
+#[test]
+fn a_chain_of_forms_comes_back_whole_from_fdf_or_is_refused() {
+    let chain = |forms: usize| {
+        let mut src = pages(1);
+        let mut inner = src.add(Object::Stream(Stream { dict: Dict::new(), raw: b"%innermost".to_vec().into() }));
+        for _ in 0..forms {
+            let mut xo = Dict::new();
+            xo.set(b"Fm".to_vec(), Object::Ref(inner));
+            let mut res = Dict::new();
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+            let mut form = Dict::new();
+            form.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.set(b"Resources".to_vec(), Object::Dict(res));
+            inner = src.add(Object::Stream(Stream { dict: form, raw: b"/Fm Do".to_vec().into() }));
+        }
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(inner));
+        let mut d = annot("Stamp", "chain", [100.0, 500.0, 200.0, 550.0]);
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+        put(&mut src, d);
+        export_fdf(&src, true, false, "src.pdf").unwrap()
+    };
+    let mut dst = pages(1);
+    import(&mut dst, &chain(20)).unwrap();
+    let d = named(&dst, "chain");
+    let mut at = dst.resolve(sub_dict(&dst, &d, b"AP").get(b"N").unwrap());
+    for level in 0..20 {
+        let Object::Stream(s) = at.as_ref() else { panic!("level {level}: {at:?}") };
+        let fm = sub_dict(&dst, &sub_dict(&dst, &s.dict, b"Resources"), b"XObject").get(b"Fm").cloned().unwrap_or(Object::Null);
+        at = dst.resolve(&fm);
+    }
+    let Object::Stream(innermost) = at.as_ref() else { panic!("the innermost form was lost: {at:?}") };
+    assert_eq!(innermost.raw.as_ref(), b"%innermost");
+    let err = import(&mut pages(1), &chain(80)).unwrap_err();
+    assert!(err.to_string().contains("nest more than"), "{err}");
+}
+
+/// A `/P` an FDF comment holds points into the FDF; it is replaced, and nothing it reaches is
+/// copied into the document.
+#[test]
+fn an_fdf_comments_page_link_copies_nothing_in() {
+    let fdf = |p: &str| {
+        format!(
+            "%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [2 0 R] >> >>\nendobj\n2 0 obj\n<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (t) /Page 0{p} >>\nendobj\n3 0 obj\n<< /Type /Page /Junk 4 0 R >>\nendobj\n4 0 obj\n<< /Length 5 >>\nstream\nhello\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n"
+        )
+        .into_bytes()
+    };
+    let added = |bytes: &[u8]| {
+        let mut dst = pages(1);
+        let before = dst.add(Object::Null);
+        import(&mut dst, bytes).unwrap();
+        let p = named(&dst, "t").reference(b"P");
+        assert_eq!(p, Some(page_ref(&dst, 0)));
+        dst.add(Object::Null).num - before.num
+    };
+    assert_eq!(added(&fdf(" /P 3 0 R")), added(&fdf("")), "the FDF's page and its stream were not copied in");
+}
+
+/// Two line breaks in a row leave a blank line in the comment's plain text.
+#[test]
+fn consecutive_rich_text_line_breaks_are_kept() {
+    let xml = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>
+<text page="0" rect="10,10,30,30" name="b"><contents-richtext><body xmlns="http://www.w3.org/1999/xhtml"><p>one<br/><br/>two</p><p><br/></p><p>three<br/></p><p>four</p></body></contents-richtext></text>
+</annots></xfdf>"#;
+    let mut dst = pages(1);
+    import(&mut dst, xml.as_bytes()).unwrap();
+    assert_eq!(text(&dst, &named(&dst, "b"), b"Contents").as_deref(), Some("one\r\rtwo\r\rthree\rfour"));
+}
+
+/// Rich text that is not XML, on a comment with no plain text, comes back as rich text, not as
+/// the comment's text (a line would otherwise show the markup as its caption).
+#[test]
+fn rich_text_alone_that_is_not_xml_comes_back_as_rich_text() {
+    let mut src = pages(1);
+    let mut d = annot("Line", "ln", [10.0, 10.0, 90.0, 30.0]);
+    d.set(b"L".to_vec(), nums(&[10.0, 20.0, 90.0, 20.0]));
+    d.set(b"RC".to_vec(), PdfString::text("<p>unclosed"));
+    put(&mut src, d);
+    let (_, dst) = round_trip_xfdf(&src);
+    let d = named(&dst, "ln");
+    assert_eq!(text(&dst, &d, b"RC").as_deref(), Some("<p>unclosed"));
+    assert_ne!(text(&dst, &d, b"Contents").as_deref(), Some("<p>unclosed"));
+}
+
+/// A prefix the rich text inherits from the XFDF around it is declared on it, so the rich text
+/// is XML of its own and goes out again as markup.
+#[test]
+fn rich_text_keeps_the_namespaces_it_inherits() {
+    let xml = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><annots>
+<text page="0" rect="10,10,30,30" name="ns"><contents>hi</contents><contents-richtext><body xmlns="http://www.w3.org/1999/xhtml" xfa:spec="2.0.2"><p>hi</p></body></contents-richtext></text>
+</annots></xfdf>"#;
+    let mut dst = pages(1);
+    import(&mut dst, xml.as_bytes()).unwrap();
+    let rc = text(&dst, &named(&dst, "ns"), b"RC").unwrap();
+    assert!(common::parse_form_xml(&rc).is_ok(), "{rc}");
+    let out = export_xfdf(&dst, true, false, "dst.pdf");
+    assert!(
+        out.contains(r#"<contents-richtext><body xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/" xmlns="http://www.w3.org/1999/xhtml" xfa:spec"#),
+        "{out}"
+    );
+}
+
+/// A redaction mark is drawn by PdfCraft whatever the file says: a cloudy border (which a
+/// redaction has none of) or text the standard fonts can't draw left the file's blank appearance
+/// in place, and the mark removed content nobody saw marked.
+#[test]
+fn an_imported_redaction_mark_is_drawn_even_when_cloudy_or_undrawable() {
+    let inner = b64(
+        r#"<DICT KEY="AP"><STREAM KEY="N"><ARRAY KEY="BBox"><INT VAL="0"/><INT VAL="0"/><INT VAL="1"/><INT VAL="1"/></ARRAY><DATA ENCODING="ASCII">%nothing</DATA></STREAM></DICT>"#,
+    );
+    for extra in [r#" style="cloudy""#, r#" overlay-text="日本語""#] {
+        let xml = appearance_xfdf(&inner, "redact").replace(r#"name="x""#, &format!(r#"name="x"{extra}"#));
+        let mut dst = pages(1);
+        let before = dst.add(Object::Null);
+        import(&mut dst, xml.as_bytes()).unwrap();
+        let d = named(&dst, "x");
+        let n = dst.resolve(sub_dict(&dst, &d, b"AP").get(b"N").unwrap());
+        let Object::Stream(n) = n.as_ref() else { panic!("{extra}: no appearance") };
+        assert_ne!(n.decoded().unwrap(), b"%nothing", "{extra}");
+        assert!(!d.contains(b"BE"), "{extra}");
+        // The file's appearance was not read in at all.
+        for num in before.num..dst.add(Object::Null).num {
+            if let Object::Stream(s) = dst.get(ObjRef::new(num, 0)).as_ref() {
+                assert_ne!(s.raw.as_ref(), b"%nothing", "{extra}");
+            }
+        }
+    }
+}
+
+/// Appearances share one budget over the whole import: past it, the rest are skipped.
+#[test]
+fn the_import_budget_is_shared_by_every_comment() {
+    let one = b64(r#"<DICT KEY="AP"><STREAM KEY="N"><DATA ENCODING="ASCII">0 0 m 1 1 l S</DATA></STREAM></DICT>"#);
+    let size = base64::engine::general_purpose::STANDARD.decode(&one).unwrap().len();
+    let stamps: String = ["a", "b", "c"]
+        .iter()
+        .map(|nm| format!(r#"<stamp page="0" rect="10,10,110,60" name="{nm}"><appearance>{one}</appearance></stamp>"#))
+        .collect();
+    let xml = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
+    let mut dst = pages(1);
+    let report = xfdf::import_xfdf_with(&mut dst, &xml, None, None, None, size * 5 / 2).unwrap();
+    assert_eq!(report.comments, 3);
+    assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
+    assert!(report.skipped[0].starts_with("c: "), "{:?}", report.skipped);
+}
+
+/// A dash array of any length export writes comes back (65 numbers were written and dropped).
+#[test]
+fn a_long_dash_array_comes_back() {
+    let mut src = pages(1);
+    let dashes: Vec<f64> = (1..=65).map(f64::from).collect();
+    let mut bs = Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(1.0));
+    bs.set(b"S".to_vec(), Object::name("D"));
+    bs.set(b"D".to_vec(), nums(&dashes));
+    let mut d = annot("Square", "sq", [10.0, 10.0, 90.0, 60.0]);
+    d.set(b"BS".to_vec(), Object::Dict(bs));
+    put(&mut src, d);
+    let (_, dst) = round_trip_xfdf(&src);
+    assert_eq!(f64s(&dst, sub_dict(&dst, &named(&dst, "sq"), b"BS").get(b"D")), dashes);
+}

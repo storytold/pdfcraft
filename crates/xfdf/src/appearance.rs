@@ -33,13 +33,35 @@ const ASCII_DATA_LIMIT: usize = 4096;
 /// The base 64 `<appearance>` text for annotation `d`'s appearance dictionary, or `None` when it
 /// has no normal appearance stream or is past the limits (the comment is then exported without
 /// one).
+///
+/// XFDF has no appearance state (`/AS`), so where `/N`, `/R` or `/D` holds one stream per state
+/// only the selected state's stream is written (ISO 32000-2 §12.5.5: `/AS` picks it); a normal
+/// appearance with no selected stream has nothing to draw and nothing is written.
 pub(crate) fn encode(doc: &Document, d: &Dict) -> Option<String> {
     if !has_appearance(doc, d) {
         return None;
     }
     let ap = d.get(b"AP").map(|a| doc.resolve(a))?;
+    let mut ap = ap.as_dict()?.clone();
+    let state = d.get(b"AS").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec));
+    for key in [b"N".as_slice(), b"R", b"D"] {
+        let Some(entry) = ap.get(key).map(|e| doc.resolve(e)) else { continue };
+        let Object::Dict(states) = entry.as_ref() else { continue };
+        match state.as_deref().and_then(|s| states.get(s)).cloned() {
+            Some(selected) => ap.set(key.to_vec(), selected),
+            None if key == b"N" => return None,
+            None => {
+                ap.remove(key);
+            }
+        }
+    }
     let mut writer = Writer { doc, out: String::new(), values: MAX_VALUES, path: Vec::new() };
-    writer.dict(Some(b"AP"), ap.as_dict()?, 0)?;
+    writer.dict(Some(b"AP"), &ap, 0)?;
+    // The checks while writing leave room for the closing tags and line breaks: the finished XML
+    // must fit what the reader accepts, or the comment would arrive without its appearance.
+    if writer.out.len() > MAX_APPEARANCE_BYTES {
+        return None;
+    }
     let b64 = base64::engine::general_purpose::STANDARD.encode(writer.out.as_bytes());
     // Line breaks every 76 characters, as base 64 text usually has them; the reader skips them.
     let mut wrapped = String::with_capacity(b64.len() + b64.len() / 76 + 1);
@@ -122,10 +144,10 @@ impl Writer<'_> {
             }
             // A page (or the page tree) reached from the appearance is the source document's, not
             // the comment's: written in place it would carry every page along.
-            Object::Dict(d) if matches!(d.name(b"Type"), Some(b"Page" | b"Pages")) => self.out.push_str(&format!(
-                "<NULL{k}/>
-"
-            )),
+            // `/Type` may itself be a reference (`resolve` follows a bounded number of them).
+            Object::Dict(d) if d.get(b"Type").is_some_and(|t| matches!(self.doc.resolve(t).as_name(), Some(b"Page" | b"Pages"))) => {
+                self.out.push_str(&format!("<NULL{k}/>\n"));
+            }
             Object::Dict(d) => self.dict(key, d, depth)?,
             Object::Stream(s) => {
                 // The data plus its hexadecimal form must fit what is left of the budget.
@@ -137,7 +159,10 @@ impl Writer<'_> {
                 for (dk, dv) in s.dict.iter().filter(|(dk, _)| dk.as_slice() != b"Length") {
                     self.value(Some(dk), dv, depth + 1)?;
                 }
-                let printable = s.raw.iter().all(|&b| (b > 32 && b < 127) || b == b'\r' || b == b'\n');
+                // XFDF 3.0 counts a carriage return as printable, but XML reads one, alone or before
+                // a line feed, as a line feed (XML 1.0 §2.11): data holding one is written as
+                // hexadecimal so it comes back byte for byte (the 4 KiB rule "is not a rule").
+                let printable = s.raw.iter().all(|&b| (b > 32 && b < 127) || b == b'\n');
                 if s.raw.len() < ASCII_DATA_LIMIT && printable && !s.dict.contains(b"Filter") {
                     // Printable ASCII is valid UTF-8.
                     let text = String::from_utf8_lossy(&s.raw);

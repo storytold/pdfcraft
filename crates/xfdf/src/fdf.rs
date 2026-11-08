@@ -366,9 +366,15 @@ struct DeepTarget<'a> {
     streams: HashMap<ObjRef, ObjRef>,
 }
 
+/// How deeply [`deep`] follows a comment's objects, references included. A form that draws a form
+/// costs four levels (the reference, the stream's dictionary, `/Resources`, `/XObject`), and
+/// export writes a chain of them however long, so this leaves room for one sixty forms deep.
+const MAX_COPY_DEPTH: usize = 4 * MAX_DEPTH;
+
 /// Copy an object out of another document, resolving references. A reference back to an object
 /// being copied becomes null. A stream (an appearance and the images and forms it draws) becomes
-/// an object of `dst`, its data charged to the budget.
+/// an object of `dst`, its data charged to the budget. Objects nested past [`MAX_COPY_DEPTH`] are
+/// an error, not a partial copy: the comment would arrive with part of its appearance missing.
 fn deep(
     src: &Document,
     dst: &mut DeepTarget,
@@ -378,9 +384,8 @@ fn deep(
     budget: &mut ImportBudget,
 ) -> Result<Object, DataError> {
     budget.spend(1, 0)?;
-    // As deep as export writes (an appearance's shading functions sit a dozen levels down).
-    if depth > MAX_DEPTH {
-        return Ok(Object::Null);
+    if depth > MAX_COPY_DEPTH {
+        return Err(DataError::Malformed(format!("a comment's objects nest more than {MAX_COPY_DEPTH} levels deep")));
     }
     Ok(match o {
         Object::Ref(r) => {
@@ -524,6 +529,14 @@ pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, Dat
         // placed on the page below, as the XFDF import does.
         let popup = src.get(b"Popup").map(|p| fdf.resolve(p)).and_then(|p| p.as_dict().cloned());
         src.remove(b"Popup");
+        // The comment's page is `/Page` here (§12.7.8.3.4, Table 254); a `/P` the file holds
+        // anyway points into the file and is replaced below, so it is not copied (nor what it
+        // reaches).
+        src.remove(b"P");
+        // A redaction mark is always drawn by PdfCraft (see `place`): its appearance is not copied.
+        if src.get(b"Subtype").is_some_and(|s| fdf.resolve(s).as_name() == Some(b"Redact".as_slice())) {
+            src.remove(b"AP");
+        }
         let mut path: Vec<ObjRef> = a.as_ref().into_iter().collect();
         let mut target = DeepTarget { doc: &mut *doc, streams: std::mem::take(&mut copied_streams) };
         let copy = deep(&fdf, &mut target, &Object::Dict(src), 0, &mut path, &mut budget);
