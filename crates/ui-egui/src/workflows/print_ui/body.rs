@@ -210,8 +210,12 @@ pub(crate) fn body(
                 let paper_name = d.paper_name().to_string();
                 let before = d.paper;
                 let mut paper_clicked = false;
+                let detecting = d.papers_loading();
                 ui.horizontal(|ui| {
                     craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(&paper_name)).width(180.0).show_ui(ui, |ui| {
+                        if detecting {
+                            ui.add_enabled(false, egui::Label::new(tl!("Detecting paper…")));
+                        }
                         for (i, (name, _)) in d.papers.iter().enumerate() {
                             if ui.selectable_value(&mut d.paper, i, tl!(name)).clicked() {
                                 paper_clicked = true;
@@ -220,8 +224,11 @@ pub(crate) fn body(
                     })
                     .response
                     .labelled_by(paper_label.id);
+                    if detecting {
+                        ui.label(egui::RichText::new(tl!("Detecting…")).small().color(t.text_muted));
+                    }
                     let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
-                        tl!("Opens the printer driver's page setup: paper size, orientation and source.")
+                        tl!("Selects paper size and orientation from the printer driver. For paper tray, print quality or other driver defaults, use Properties…")
                     } else {
                         tl!("Page setup dialog is not available on this system.")
                     };
@@ -574,8 +581,13 @@ pub(crate) fn body(
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
+        let waiting_paper = d.papers_loading();
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui
+            .add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking && !waiting_paper, |ui| widgets::pill_button(ui, label, true))
+            .inner
+            .clicked()
+        {
             go = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {

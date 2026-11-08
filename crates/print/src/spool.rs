@@ -279,8 +279,11 @@ pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
     (papers, default_paper)
 }
 
-/// Shows the printer driver's Print Settings / DocumentProperties dialog (Windows).
-/// If the user clicks OK, returns the updated paper size.
+/// Shows the printer driver's Page Setup / DocumentProperties dialog (Windows).
+///
+/// Returns the paper size and orientation selected by the user. Other per-job driver
+/// settings (such as tray or quality) are not captured; general driver settings should
+/// be configured through [`open_printer_preferences`] (Properties…).
 pub fn show_printer_properties(printer: &str, parent: Option<isize>) -> Result<Option<Paper>, crate::PrintError> {
     #[cfg(windows)]
     {

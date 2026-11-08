@@ -37,31 +37,67 @@ fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
 
-/// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
-/// index and size; US Letter when none is given.
-fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
-    let mut papers = PAPERS.iter().enumerate();
-    let found = match name {
-        None => papers.next(),
-        Some(p) => papers.find(|(_, (n, _))| {
-            n.eq_ignore_ascii_case(p)
+/// Parse explicit custom dimensions like "300x500", "300 x 500", "300x500 pt".
+fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
+    let s = s.trim().trim_end_matches("pt").trim_end_matches("points").trim();
+    let (w_str, h_str) = s.split_once(['x', 'X', '*'])?;
+    let w: f64 = w_str.trim().parse().ok()?;
+    let h: f64 = h_str.trim().parse().ok()?;
+    if w.is_finite() && h.is_finite() && w >= 72.0 && h >= 72.0 && w <= 14400.0 && h <= 14400.0 { Some((w, h)) } else { None }
+}
+
+/// `doc_print`'s `paper`, by its name, short form, driver-detected paper name, or custom dimensions.
+/// Returns `(matching_papers_index, (width, height))`.
+fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<(Option<usize>, (f64, f64))> {
+    if let Some(p) = name {
+        // 1. Match standard PAPERS presets.
+        for (index, (n, size)) in PAPERS.iter().enumerate() {
+            if n.eq_ignore_ascii_case(p)
                 || n.replace("US ", "").eq_ignore_ascii_case(p)
-                || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
-        }),
-    };
-    found.map(|(index, (_, size))| (index, *size)).ok_or_else(|| {
-        bad(format!(
-            "unknown paper {:?}; choose one of {}",
-            name.unwrap_or_default(),
+                || n.split(" (").next().is_some_and(|label| label.eq_ignore_ascii_case(p))
+            {
+                return Ok((Some(index), *size));
+            }
+        }
+        // 2. Match detected driver papers for the given printer.
+        if let Some(printer_name) = printer {
+            let driver_papers = spool::printer_papers(printer_name);
+            if let Some((_, size)) = driver_papers.iter().find(|(n, _)| n.eq_ignore_ascii_case(p)) {
+                return Ok((print::matching_paper(*size), *size));
+            }
+        }
+        // 3. Match detected driver papers across any known printer.
+        for pr in spool::printers() {
+            let driver_papers = spool::printer_papers(&pr.name);
+            if let Some((_, size)) = driver_papers.iter().find(|(n, _)| n.eq_ignore_ascii_case(p)) {
+                return Ok((print::matching_paper(*size), *size));
+            }
+        }
+        // 4. Match custom dimensions ("<w>x<h>").
+        if let Some(size) = parse_custom_dimensions(p) {
+            return Ok((print::matching_paper(size), size));
+        }
+        return Err(bad(format!(
+            "unknown paper {p:?}; choose one of {}, a paper from printer_papers, or dimensions \"<w>x<h>\"",
             PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
-        ))
-    })
+        )));
+    }
+
+    // When paper is omitted and a printer is given, use the printer's configured default paper if readable.
+    if let Some(printer_name) = printer
+        && let Some((_, size)) = spool::printer_default_paper(printer_name)
+    {
+        return Ok((print::matching_paper(size), size));
+    }
+
+    // Default fallback: US Letter.
+    Ok((Some(0), PAPERS[0].1))
 }
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
 /// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
 /// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752).
-fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: usize) -> Result<spool::Job> {
+fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: Option<usize>) -> Result<spool::Job> {
     let options = match a.get("options") {
         None => Vec::new(),
         Some(Value::Object(m)) => m
@@ -81,7 +117,7 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
         scaling: spool::Scaling::Exact,
         grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
         title,
-        options: options.into_iter().chain(print::media_option(paper)).collect(),
+        options: options.into_iter().chain(paper.and_then(print::media_option)).collect(),
     })
 }
 
@@ -112,6 +148,21 @@ impl Automation {
             })
             .collect();
         Ok(json!({ "printer": printer, "count": list.len(), "options": list }))
+    }
+
+    /// `printer_papers`: the paper sizes (names and dimensions in points) and default paper
+    /// reported by the printer driver.
+    pub(crate) fn printer_papers(&self, a: &Args) -> Result<Value> {
+        let printer = a.str("printer")?;
+        let resolved = if printer == "default" {
+            spool::printers().into_iter().find(|p| p.default).map(|p| p.name).unwrap_or_else(|| printer.to_string())
+        } else {
+            printer.to_string()
+        };
+        let (papers, default_paper) = spool::printer_paper_info(&resolved);
+        let list: Vec<Value> = papers.into_iter().map(|(name, (width, height))| json!({ "name": name, "width": width, "height": height })).collect();
+        let default_val = default_paper.map(|(name, (width, height))| json!({ "name": name, "width": width, "height": height }));
+        Ok(json!({ "printer": printer, "count": list.len(), "papers": list, "default": default_val }))
     }
 
     /// `doc_print`: lay the document out with the Print dialog's options, then save the
@@ -188,7 +239,15 @@ impl Automation {
             "form-fields-only" => Content::FormFieldsOnly,
             c => return Err(bad(format!("unknown comments_forms {c:?}"))),
         };
-        let (paper_index, paper) = paper_named(a.opt_str("paper")?)?;
+        let printer_arg = a.opt_str("printer")?;
+        let resolved_printer = printer_arg.map(|p| {
+            if p == "default" {
+                spool::printers().into_iter().find(|pr| pr.default).map(|pr| pr.name).unwrap_or_else(|| p.to_string())
+            } else {
+                p.to_string()
+            }
+        });
+        let (paper_index, paper) = resolve_paper(a.opt_str("paper")?, resolved_printer.as_deref())?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
         let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
@@ -212,7 +271,8 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
+                let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
+                let job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
@@ -256,7 +316,7 @@ mod tests {
     #[test]
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
-            let (index, _) = paper_named(paper_name).unwrap();
+            let (index, _) = resolve_paper(paper_name, None).unwrap();
             spool_job(&Args(&args), "Office", "a.pdf".into(), None, index).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
@@ -266,14 +326,14 @@ mod tests {
         assert_eq!((letter.printer.as_deref(), letter.title.as_str()), (Some("Office"), "a.pdf"));
         // Every paper, by its full name, goes out as its own media name.
         for (i, (name, size)) in PAPERS.iter().enumerate() {
-            assert_eq!(paper_named(Some(name)).ok(), Some((i, *size)), "{name}");
+            assert_eq!(resolve_paper(Some(name), None).ok(), Some((Some(i), *size)), "{name}");
             assert_eq!(job(json!({}), Some(name)).options, print::media_option(i).into_iter().collect::<Vec<_>>(), "{name}");
         }
         // Short forms find the same paper.
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
-        assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0).ok().map(|j| j.printer), Some(None));
-        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0).is_err());
+        assert!(matches!(resolve_paper(Some("Quarto"), None), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
+        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, Some(0)).ok().map(|j| j.printer), Some(None));
+        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, Some(0)).is_err());
     }
 }

@@ -172,6 +172,15 @@ impl PrintDraft {
         })
     }
 
+    /// Whether automatic paper detection for the selected printer is in progress and unresolved.
+    ///
+    /// When true, the user has not explicitly chosen or overridden the paper, and the selected
+    /// printer's media sizes and default paper are still being read in the background off the GUI thread.
+    pub fn papers_loading(&self) -> bool {
+        let Some(p) = self.printer.as_deref() else { return false };
+        !self.paper_overridden && (self.papers_loading.as_deref() == Some(p) || self.read_papers_for.as_deref() == Some(p))
+    }
+
     /// Reset an automatically selected custom paper to a standard preset on printer change.
     ///
     /// If the currently selected paper does not match any standard preset and `paper_overridden` is false,

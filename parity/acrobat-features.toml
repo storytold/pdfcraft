@@ -8280,11 +8280,15 @@ title = "Page setup"
 area = "L"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["print.dialog"]
+tools = ["printer_papers"]
+evidence = [
+    "crates/ui-egui/tests/it/print.rs::printer_papers_and_properties_selection",
+    "crates/automation/tests/it/automation.rs::printer_papers_through_tools",
+    "crates/print/src/tests.rs::printer_papers_and_default_paper_api",
+]
+notes = "The Print dialog's Page Setup button opens the driver's page setup to choose paper size and orientation. printer_papers enumerates driver-reported papers and default paper headlessly."
 
 [[feature]]
 id = "print.print-ready-pdf"

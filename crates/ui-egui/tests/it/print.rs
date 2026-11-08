@@ -1079,6 +1079,95 @@ fn printer_list_refresh_resets_unoverridden_custom_paper_when_default_printer_ch
 }
 
 #[test]
+fn print_button_waits_for_automatic_paper_detection_before_submission() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex, mpsc};
+
+    let mut h = harness();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let started_tx = Arc::new(Mutex::new(started_tx));
+
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Label 4x6 Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    let rx_clone = Arc::clone(&release_rx);
+    let tx_clone = Arc::clone(&started_tx);
+    h.state_mut().printer_papers_source = Some(Arc::new(move |_| {
+        let _ = tx_clone.lock().unwrap().send(());
+        let _ = rx_clone.lock().unwrap().recv();
+        vec![("Shipping Label 4x6".into(), (288.0, 432.0))]
+    }));
+    h.state_mut().default_paper_source = Some(Arc::new(|_| Some(("Shipping Label 4x6".into(), (288.0, 432.0)))));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Wait until background paper worker has reached the channel gate
+    let _ = started_rx.recv_timeout(std::time::Duration::from_secs(5));
+
+    // While background read is pending and paper is not manually overridden:
+    assert!(h.state().print_draft.papers_loading(), "papers_loading must be true while automatic detection is pending");
+    assert!(!h.state_mut().print_now(), "print_now must be refused while paper detection is pending");
+
+    // Overriding paper manually resolves the pending state and enables submission immediately
+    h.state_mut().print_draft.paper_overridden = true;
+    assert!(!h.state().print_draft.papers_loading(), "papers_loading becomes false once paper is overridden");
+    assert!(h.state_mut().print_now(), "print_now succeeds when user has chosen a paper");
+
+    // Unblock the worker so the thread finishes cleanly
+    let _ = release_tx.send(());
+}
+
+#[test]
+fn gated_paper_detection_enables_print_after_worker_finishes() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex, mpsc};
+
+    let mut h = harness();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let started_tx = Arc::new(Mutex::new(started_tx));
+
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Label 4x6 Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    let rx_clone = Arc::clone(&release_rx);
+    let tx_clone = Arc::clone(&started_tx);
+    h.state_mut().printer_papers_source = Some(Arc::new(move |_| {
+        let _ = tx_clone.lock().unwrap().send(());
+        let _ = rx_clone.lock().unwrap().recv();
+        vec![("Shipping Label 4x6".into(), (288.0, 432.0))]
+    }));
+    h.state_mut().default_paper_source = Some(Arc::new(|_| Some(("Shipping Label 4x6".into(), (288.0, 432.0)))));
+
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let _ = started_rx.recv_timeout(std::time::Duration::from_secs(5));
+
+    assert!(h.state().print_draft.papers_loading());
+    assert!(!h.state_mut().print_now());
+
+    // Release the worker
+    let _ = release_tx.send(());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.papers_loading() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.papers_loading());
+    assert_eq!(h.state().print_draft.paper_size(), (288.0, 432.0));
+    assert!(h.state_mut().print_now());
+}
+
+#[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};
     let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;
