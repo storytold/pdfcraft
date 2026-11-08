@@ -1,5 +1,5 @@
 use super::changes::classify_changes;
-use super::listing::{DigestCache, list, nums, sig_fields, text};
+use super::listing::{DigestCache, list, nums, sig_fields, sig_fields_bounded, text};
 use super::types::{Detail, Fill, Modification, Status, TrustStore};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
@@ -246,13 +246,21 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         // The permissions are the signed revision's: a later one can rewrite `/P` (#1788). This
         // signature is the one whose byte range ends that revision.
         let old = cache.revision(doc, bytes, covered);
-        if let Some(old) = &old
-            && let Some(v) = sig_fields(old)
-                .iter()
-                .filter_map(|f| f.signature(old))
-                .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
-        {
-            info.certify = docmdp(old, &v);
+        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788).
+        if let Some(old) = &old {
+            // When the field walk cannot reach every field, the signature that ends this revision
+            // is unknown, so no permission is claimed: keeping `docmdp(doc, v)`, read from the
+            // current revision, would let a later `/P` rewrite speak for the signed one.
+            info.certify = None;
+            let (fields, cut) = sig_fields_bounded(old);
+            if !cut
+                && let Some(v) = fields
+                    .iter()
+                    .filter_map(|f| f.signature(old))
+                    .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
+            {
+                info.certify = docmdp(old, &v);
+            }
         }
         classify_changes(doc, old, info.certify)
     };

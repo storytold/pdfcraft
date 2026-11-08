@@ -207,17 +207,26 @@ const MAX_FIELD_NAME_BYTES: usize = 32 << 20;
 
 /// Every signature field, depth first in `/Fields` order.
 pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
+    sig_fields_bounded(doc).0
+}
+
+/// [`sig_fields`], with whether the walk was cut short by [`MAX_FIELD_DEPTH`] or
+/// [`MAX_FIELD_NAME_BYTES`]: the fields it could not reach are then unknown to the caller, which
+/// is what lets a permission lookup fail closed instead of guessing.
+pub(super) fn sig_fields_bounded(doc: &Document) -> (Vec<Field>, bool) {
     let mut out = Vec::new();
-    let Some(root) = doc.root() else { return out };
+    let mut cut = false;
+    let Some(root) = doc.root() else { return (out, cut) };
     let Some(af) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()) else {
-        return out;
+        return (out, cut);
     };
-    let Some(fields) = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else { return out };
+    let Some(fields) = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else { return (out, cut) };
     let mut seen = HashSet::new();
     let mut stack: Vec<(Object, String, Option<Vec<u8>>, usize)> = fields.into_iter().rev().map(|f| (f, String::new(), None, 0)).collect();
     let mut name_bytes = 0usize;
     while let Some((o, prefix, inherited_ft, depth)) = stack.pop() {
         if depth > MAX_FIELD_DEPTH {
+            cut = true;
             continue;
         }
         if let Some(r) = o.as_ref()
@@ -239,6 +248,7 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
         // this name, and the clone of it each queued sub-field is about to hold
         name_bytes = name_bytes.saturating_add(name.len().saturating_mul(sub.len() + 1));
         if name_bytes > MAX_FIELD_NAME_BYTES {
+            cut = true;
             break;
         }
         for k in sub.into_iter().rev() {
@@ -251,6 +261,44 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
                 ws.insert(0, (o.as_ref(), d.clone()));
             }
             out.push(Field { name, r: o.as_ref(), dict: d, widgets: ws });
+        }
+    }
+    (out, cut)
+}
+
+/// Every `/V` an AcroForm field holds, however deep: a standalone document timestamp must not be
+/// confused with a signature a field already carries. No qualified names are built here, so the
+/// name budget that can stop [`sig_fields`] cannot hide a value from it.
+pub(super) fn field_values(doc: &Document) -> HashSet<ObjRef> {
+    let mut out = HashSet::new();
+    let Some(root) = doc.root() else { return out };
+    let Some(fields) = doc
+        .get(root)
+        .as_dict()
+        .and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a)))
+        .and_then(|a| a.as_dict().cloned())
+        .and_then(|a| a.get(b"Fields").map(|f| doc.resolve(f).as_array().cloned()).unwrap_or_default())
+    else {
+        return out;
+    };
+    let mut seen = HashSet::new();
+    let mut stack: Vec<(Object, usize)> = fields.into_iter().rev().map(|f| (f, 0)).collect();
+    while let Some((o, depth)) = stack.pop() {
+        if depth > MAX_FIELD_DEPTH {
+            continue;
+        }
+        if let Some(r) = o.as_ref()
+            && !seen.insert(r)
+        {
+            continue;
+        }
+        let Some(d) = doc.resolve(&o).as_dict().cloned() else { continue };
+        if let Some(v) = d.get(b"V").and_then(Object::as_ref) {
+            out.insert(v);
+        }
+        let kids: Vec<Object> = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        for k in kids.into_iter().rev() {
+            stack.push((k, depth + 1));
         }
     }
     out
@@ -283,11 +331,10 @@ pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureIn
 pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &DigestCache) -> Vec<SignatureInfo> {
     let pages = annot_pages(doc);
     let mut out = Vec::new();
-    let mut field_values: HashSet<ObjRef> = HashSet::new();
+    // Every value a field holds, listed or not: a signature below the listing's bounds still
+    // owns its `/V`, which is then not a standalone document timestamp.
+    let field_values = field_values(doc);
     for f in sig_fields(doc) {
-        if let Some(v_ref) = f.dict.get(b"V").and_then(Object::as_ref) {
-            field_values.insert(v_ref);
-        }
         let widget = f.widgets.first();
         let page = widget.and_then(|(r, w)| r.and_then(|r| pages.get(&r).copied()).or_else(|| w.reference(b"P").and_then(|p| page_index(doc, p))));
         let rect = widget

@@ -397,3 +397,27 @@ fn dss_evidence_decodes_each_stream_once_within_its_caps() {
     assert!(ocsps.cut);
     assert!(DssEvidence::new(&doc, &dss, b"OCSPs").count() <= MAX_DSS_ENTRIES);
 }
+
+/// A field tree deeper than the walk follows is reported as cut: a permission lookup that cannot
+/// reach every field must see that, so it fails closed instead of trusting a partial list.
+#[test]
+fn a_field_tree_past_the_walk_depth_is_reported_as_cut() {
+    let mut doc = fixture(&[STAMP]);
+    let mut kid = None;
+    for i in 0..80 {
+        let mut f = Dict::new();
+        f.set(b"FT".to_vec(), Object::name("Sig"));
+        f.set(b"T".to_vec(), Object::String(PdfString::literal(format!("f{i}"))));
+        if let Some(k) = kid {
+            f.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(k)]));
+        }
+        let id = doc.add(f);
+        kid = Some(id);
+    }
+    let mut form = Dict::new();
+    form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(kid.unwrap())]));
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+    let (fields, cut) = super::listing::sig_fields_bounded(&doc);
+    assert!(cut, "the walk stopped at its depth limit without saying so");
+    assert!(fields.len() < 80, "a cut walk lists what it reached: {}", fields.len());
+}
