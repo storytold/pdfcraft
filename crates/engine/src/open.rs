@@ -7,9 +7,9 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, CertificateKey, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, plain_copy, recovered_render_password, render_threads, same_pages, signatures_of, unlock_with_identities, xfa,
-    xfa_layout, xfa_values_from_datasets,
+    AppearanceCache, CertificateKey, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config,
+    guard, info_fields, js, note_warnings, plain_copy, recovered_render_password, render_threads, same_pages, signatures_of, unlock_with_identities,
+    xfa, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -18,6 +18,7 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    captions: Arc<StatusCaptions>,
     xfa_time_scale: u32,
     /// The session's identities, for a certificate-protected file.
     identities: Vec<Arc<pdfcraft_sign::DigitalId>>,
@@ -62,6 +63,7 @@ impl Session {
             now: self.now(),
             js_off: self.js_off,
             trust: self.trust.clone(),
+            captions: self.captions.clone(),
             xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
             identities: self.identities.clone(),
         }
@@ -84,6 +86,14 @@ impl Session {
         let id = DocId(self.next_id);
         let mut document = prepared.document;
         document.id = id;
+        // Trust or the interface language may have changed while it was prepared on another
+        // thread.
+        if !Arc::ptr_eq(&document.trust, &self.trust) {
+            document.captions = self.captions.clone();
+            Self::revalidate(&mut document, self.trust.clone());
+        } else if *document.captions != *self.captions {
+            Self::draw_captions(&mut document, self.captions.clone());
+        }
         self.docs.push(document);
         id
     }
@@ -300,10 +310,8 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document = Self::build_document(
-            &context.trust,
-            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, certificate, xfa },
-        );
+        let mut document =
+            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, certificate, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -316,7 +324,7 @@ impl Session {
     }
 
     /// The last step of opening: build the document record and register it.
-    fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
+    fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
         let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, certificate, xfa } = data;
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
@@ -344,7 +352,7 @@ impl Session {
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
         // Signatures cover the file itself (`bytes` may be a decrypted copy of it).
-        let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, e.cos.bytes(), trust, &sig_cache)).unwrap_or_default();
+        let mut signatures = editor.as_ref().map(|e| signatures_of(&e.cos, e.cos.bytes(), &context.trust, &sig_cache)).unwrap_or_default();
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {
@@ -354,7 +362,7 @@ impl Session {
                 }
             }
         }
-        let display = display_bytes(editor.as_mut(), &bytes);
+        let display = display_bytes(editor.as_mut(), &bytes, &mut signatures, &context.captions);
         let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
         let (form, adopted) = editor
             .as_ref()
@@ -392,7 +400,8 @@ impl Session {
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),
             signatures: Arc::new(signatures),
-            trust: trust.clone(),
+            trust: context.trust.clone(),
+            captions: context.captions.clone(),
             sig_cache,
             editor,
             config,
