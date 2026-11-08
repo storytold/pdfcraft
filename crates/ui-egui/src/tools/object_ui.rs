@@ -546,7 +546,17 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     if selection.page != Some(page) {
         return;
     }
-    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
+    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| {
+        let mut d = g.now - g.start;
+        if painter.ctx().input(|i| i.modifiers.shift) {
+            if d.x.abs() > d.y.abs() {
+                d.y = 0.0;
+            } else {
+                d.x = 0.0;
+            }
+        }
+        d
+    });
     let mut union = Rect::NOTHING;
     for object in &selection.selected {
         let rect = screen(xf, info, page, object).translate(delta);

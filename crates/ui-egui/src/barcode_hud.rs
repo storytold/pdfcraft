@@ -646,12 +646,24 @@ impl BarcodeScannerHud {
                                                 if can_modify && ui.button("✏ Edit Payload").on_hover_text("Edit and re-embed code").clicked() {
                                                     start_edit = true;
                                                 }
-                                                if can_modify
-                                                    && ui.button("🗑 Delete Code").on_hover_text("Whiteout and remove code from page").clicked()
-                                                {
+                                                let is_vector = active.image_index.is_none();
+                                                let del_tip = if is_vector {
+                                                    "Cover code with whiteout overlay (underlying vector graphics remain in document)"
+                                                } else {
+                                                    "Whiteout and remove code from page"
+                                                };
+                                                if can_modify && ui.button("🗑 Delete Code").on_hover_text(del_tip).clicked() {
                                                     delete_code = Some(active.clone());
                                                 }
                                             });
+                                            if active.image_index.is_none() {
+                                                ui.add_space(2.0);
+                                                ui.label(
+                                                    egui::RichText::new("⚠ Vector code: changes cover original graphics with an overlay.")
+                                                        .font(theme::regular(10.0))
+                                                        .color(Color32::from_rgb(0xF5, 0x9E, 0x0B)),
+                                                );
+                                            }
                                         }
                                     });
                             }
@@ -768,75 +780,13 @@ impl BarcodeScannerHud {
                 }
             }
         }
-        if let Some(active) = delete_code {
-            if let Some(image_idx) = active.image_index {
-                // Perform actual removal of the embedded image object so no data remains.
-                pending_edit = Some(Edit::EditPageImage { page: current_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete });
-                state.target_rect = None;
-                state.last_scanned_page = None;
-                state.edit_buffer = None;
-                state.show_toast("Image code deleted from page!".into(), now);
-            } else {
-                let (whiteout_rect, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
-                let edit_whiteout = display_rect(whiteout_rect, Some(info), current_page);
-                match Document::generate_whiteout(pw, ph) {
-                    Ok(whiteout_png) => {
-                        pending_edit = Some(Edit::AddImage {
-                            page: current_page,
-                            rect: Some(edit_whiteout),
-                            name: "Whiteout.png".into(),
-                            bytes: Arc::new(whiteout_png),
-                        });
-                        state.target_rect = None;
-                        state.last_scanned_page = None;
-                        state.edit_buffer = None;
-                        state.show_toast("Vector code covered with whiteout (original vector data preserved)".into(), now);
-                    }
-                    Err(e) => {
-                        state.show_toast(format!("Delete failed: {e}"), now);
-                    }
-                }
-            }
+        if let Some(active) = delete_code
+            && let Some(edit) = handle_barcode_delete(state, active, current_page, info, now)
+        {
+            pending_edit = Some(edit);
         }
         if let Some(active) = download_code {
-            let (_, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
-            let pw = pw.max(128);
-            let ph = if active.kind == pdfcraft_engine::barcode_scan::CodeKind::QrCode { pw } else { ph.max(48) };
-            match Document::generate_replacement_code(active.kind, &active.text, pw, ph) {
-                Ok(png_bytes) => {
-                    let kind_name = format!("{:?}", active.kind).to_ascii_lowercase();
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let filename = format!("barcode_{}_{}.png", kind_name, now as u64);
-                        let _ = crate::editing::download(&filename, &png_bytes);
-                        state.show_toast(format!("Downloaded {filename}!"), now);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let filename = {
-                            let mut n = 0u64;
-                            loop {
-                                let name = format!("barcode_{}_{}_{}.png", kind_name, (now as u64) % 10000, n);
-                                if !get_downloads_dir().join(&name).exists() {
-                                    break name;
-                                }
-                                n = n.saturating_add(1);
-                                if n > 1000 {
-                                    break format!("barcode_{}_{}.png", kind_name, now as u64);
-                                }
-                            }
-                        };
-                        let dest = get_downloads_dir().join(&filename);
-                        match std::fs::write(&dest, &png_bytes) {
-                            Ok(()) => state.show_toast(format!("Saved to Downloads: {filename}"), now),
-                            Err(e) => state.show_toast(format!("Download failed: {e}"), now),
-                        }
-                    }
-                }
-                Err(e) => {
-                    state.show_toast(format!("Download failed: {e}"), now);
-                }
-            }
+            handle_barcode_download(state, &active, now);
         }
         if let Some(text) = copy_text {
             ui.ctx().copy_text(text);
@@ -889,6 +839,83 @@ impl BarcodeScannerHud {
     /// Legacy compatibility stub for `show_panel` (functionality unified into `show`).
     pub fn show_panel(_ui: &mut egui::Ui, _view: &mut DocView, _doc: &Document, _info: &DocInfo, _can_modify: bool) -> Option<Edit> {
         None
+    }
+}
+
+fn handle_barcode_delete(state: &mut BarcodeHudState, active: ScannedCode, current_page: usize, info: &DocInfo, now: f64) -> Option<Edit> {
+    state.target_rect = None;
+    state.last_scanned_page = None;
+    state.edit_buffer = None;
+
+    if let Some(image_idx) = active.image_index {
+        state.show_toast("Image code deleted from page!".into(), now);
+        Some(Edit::EditPageImage { page: current_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete })
+    } else {
+        let (whiteout_rect, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
+        let edit_whiteout = display_rect(whiteout_rect, Some(info), current_page);
+        match Document::generate_whiteout(pw, ph) {
+            Ok(whiteout_png) => {
+                state.show_toast("Vector code covered with whiteout (original vector data preserved)".into(), now);
+                Some(Edit::AddImage { page: current_page, rect: Some(edit_whiteout), name: "Whiteout.png".into(), bytes: Arc::new(whiteout_png) })
+            }
+            Err(e) => {
+                state.show_toast(format!("Delete failed: {e}"), now);
+                None
+            }
+        }
+    }
+}
+
+fn handle_barcode_download(state: &mut BarcodeHudState, active: &ScannedCode, now: f64) {
+    let (_, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
+    let pw = pw.max(128);
+    let ph = if active.kind == pdfcraft_engine::barcode_scan::CodeKind::QrCode { pw } else { ph.max(48) };
+    match Document::generate_replacement_code(active.kind, &active.text, pw, ph) {
+        Ok(png_bytes) => {
+            let kind_name = format!("{:?}", active.kind).to_ascii_lowercase();
+            #[cfg(target_arch = "wasm32")]
+            {
+                let filename = format!("barcode_{}_{}.png", kind_name, now as u64);
+                let _ = crate::editing::download(&filename, &png_bytes);
+                state.show_toast(format!("Downloaded {filename}!"), now);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use std::io::Write;
+                let dir = get_downloads_dir();
+                let mut n = 0u64;
+                let mut saved = false;
+                while n < 1000 {
+                    let filename = format!("barcode_{}_{}_{}.png", kind_name, (now as u64) % 10000, n);
+                    let dest = dir.join(&filename);
+                    match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+                        Ok(mut file) => {
+                            if let Err(e) = file.write_all(&png_bytes) {
+                                state.show_toast(format!("Download failed: {e}"), now);
+                            } else {
+                                state.show_toast(format!("Saved to Downloads: {filename}"), now);
+                            }
+                            saved = true;
+                            break;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            n = n.saturating_add(1);
+                        }
+                        Err(e) => {
+                            state.show_toast(format!("Download failed: {e}"), now);
+                            saved = true;
+                            break;
+                        }
+                    }
+                }
+                if !saved {
+                    state.show_toast("Download failed: could not create unique file".into(), now);
+                }
+            }
+        }
+        Err(e) => {
+            state.show_toast(format!("Download failed: {e}"), now);
+        }
     }
 }
 

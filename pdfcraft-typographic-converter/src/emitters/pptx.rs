@@ -139,6 +139,12 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
         let slide_num = page_idx + 1;
         let slide_path = format!("ppt/slides/slide{}.xml", slide_num);
 
+        let scale = if page.width > 0.0 && page.height > 0.0 && max_width > 0.0 && max_height > 0.0 {
+            (max_width / page.width as f64).min(max_height / page.height as f64)
+        } else {
+            1.0
+        };
+
         let mut slide_xml = String::from(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -163,12 +169,12 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
         for (line_idx, line) in page.lines.iter().enumerate() {
             let shape_id = line_idx + 2;
 
-            // Coordinates in EMUs
-            let x = (line.bounds.0 * 12700.0).round() as i64;
+            // Coordinates in EMUs fitted to slide dimensions
+            let x = (line.bounds.0 as f64 * scale * 12700.0).round() as i64;
             // Flip PDF bottom-up Y-axis to top-down
-            let y = ((page.height - line.bounds.3) * 12700.0).round() as i64;
-            let cx = ((line.bounds.2 - line.bounds.0) * 12700.0).max(100000.0).round() as i64;
-            let cy = ((line.bounds.3 - line.bounds.1) * 12700.0).max(100000.0).round() as i64;
+            let y = ((max_height - line.bounds.3 as f64 * scale) * 12700.0).round() as i64;
+            let cx = ((line.bounds.2 - line.bounds.0) as f64 * scale * 12700.0).max(100000.0).round() as i64;
+            let cy = ((line.bounds.3 - line.bounds.1) as f64 * scale * 12700.0).max(100000.0).round() as i64;
 
             slide_xml.push_str(&format!(
                 r#"      <p:sp>
@@ -197,7 +203,7 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
             ));
 
             for run in &line.runs {
-                let sz = (run.font_size * 100.0).round() as i32;
+                let sz = ((run.font_size as f64 * scale) * 100.0).round() as i32;
                 let b_attr = if run.is_bold { r#" b="1""# } else { "" };
                 let i_attr = if run.is_italic { r#" i="1""# } else { "" };
                 let baseline_attr = match run.script {
@@ -208,6 +214,10 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
 
                 let escaped_font = escape_xml(&run.font_name);
                 let escaped_text = escape_xml(&run.text);
+
+                if run.has_leading_tab {
+                    slide_xml.push_str("            <a:tab/>\n");
+                }
 
                 slide_xml.push_str(&format!(
                     r#"            <a:r>
@@ -260,10 +270,14 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
                 ));
 
                 let shape_id = page.lines.len() + 2 + img_idx;
-                let x = (img.bounds.0 * 12700.0).round() as i64;
-                let y = ((page.height - img.bounds.3) * 12700.0).round() as i64;
-                let cx = ((img.bounds.2 - img.bounds.0) * 12700.0).max(100000.0).round() as i64;
-                let cy = ((img.bounds.3 - img.bounds.1) * 12700.0).max(100000.0).round() as i64;
+                let min_x = img.bounds.0.min(img.bounds.2);
+                let max_x = img.bounds.0.max(img.bounds.2);
+                let min_y = img.bounds.1.min(img.bounds.3);
+                let max_y = img.bounds.1.max(img.bounds.3);
+                let x = (min_x as f64 * scale * 12700.0).round() as i64;
+                let y = ((max_height - max_y as f64 * scale) * 12700.0).round() as i64;
+                let cx = ((max_x - min_x) as f64 * scale * 12700.0).max(100000.0).round() as i64;
+                let cy = ((max_y - min_y) as f64 * scale * 12700.0).max(100000.0).round() as i64;
 
                 slide_xml.push_str(&format!(
                     r#"      <p:pic>

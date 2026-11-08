@@ -87,7 +87,7 @@ impl SelectableElement {
 }
 
 /// A resize, move, or selection handle on an element bounding box.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SelectionHandle {
     TopLeft,
     TopRight,
@@ -335,7 +335,36 @@ impl SelectionLayoutEngine {
 
         // Paint primary selected element bounding box with 8 handles and wire dragging interactions.
         if let Some(sel) = &mut state.selected {
-            if sel.page != page || sel.kind == SelectableKind::VectorLine {
+            if sel.page != page {
+                return None;
+            }
+            if sel.kind == SelectableKind::VectorLine {
+                if let Some(line) = &mut sel.line {
+                    paint_line_highlight(painter, line, LineHighlightState::Selected, xf, info);
+                    paint_line_endpoint_handles(painter, line, xf, info, 7.0);
+
+                    for (handle_idx, (handle, h_rect)) in line_endpoint_handles(line, xf, info, 7.0).into_iter().enumerate() {
+                        let handle_id = ui.scope_id().with(("line_handle", sel.index, handle_idx));
+                        let resp = ui.interact(h_rect.expand(4.0), handle_id, egui::Sense::drag());
+                        if resp.hovered() || resp.dragged() {
+                            ui.ctx().set_cursor_icon(handle.cursor_icon());
+                        }
+                        if resp.dragged()
+                            && let Some(curr_pos) = ui.input(|i| i.pointer.interact_pos())
+                        {
+                            let user_pt = screen_to_user_point(xf, info, page, curr_pos);
+                            match handle {
+                                SelectionHandle::LineStart => line.start = user_pt,
+                                SelectionHandle::LineEnd => line.end = user_pt,
+                                _ => {}
+                            }
+                        }
+                        if resp.drag_stopped() {
+                            let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index };
+                            return Some(Edit::UpdateLineEndpoints { page, target, new_start: line.start, new_end: line.end });
+                        }
+                    }
+                }
                 return None;
             }
             let unpadded_rect = sel.screen_rect(xf, info);

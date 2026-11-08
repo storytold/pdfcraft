@@ -256,6 +256,8 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens
 fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some((i, _)) = app.active_ids() {
         let view = &mut app.views[i];
+        ui.add(crate::widgets::checkbox(&mut view.vector_edit_mode, "Edit vector lines & borders"));
+        ui.add_space(4.0);
         crate::editing::line_properties_panel(ui, view);
     }
     // Editing a paragraph of existing text: its formatting, applied as it changes.
@@ -447,7 +449,10 @@ impl PdfCraftApp {
 
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
     pub(crate) fn apply_line_format(&mut self, index: usize, mut ed: crate::edit_text_ui::LineEditor, ctx: Option<&egui::Context>) {
-        let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+        let reflow = self.views[index].reflow_paragraphs;
+        let page_blocks = if reflow { self.session.get(self.views[index].id).map(|d| d.text_blocks(ed.page)) } else { None };
+        let edit = crate::edit_text_ui::finished_edit_with_reflow(ed.clone(), reflow, page_blocks.as_deref())
+            .unwrap_or_else(|| pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() });
         if self.apply_edit(edit) {
             ed.applied();
             if let Some(doc) = self.session.get(self.views[index].id)

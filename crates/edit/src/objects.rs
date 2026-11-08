@@ -921,6 +921,14 @@ pub fn editable_lines(doc: &Document, page: usize) -> Result<Vec<LineSegment>, E
     Ok(parsed_lines
         .into_iter()
         .enumerate()
+        .filter(|(_, pl)| {
+            pl.start[0].is_finite()
+                && pl.start[1].is_finite()
+                && pl.end[0].is_finite()
+                && pl.end[1].is_finite()
+                && pl.thickness.is_finite()
+                && pl.thickness > 0.0
+        })
         .map(|(index, pl)| LineSegment { page, index, start: pl.start, end: pl.end, thickness: pl.thickness })
         .collect())
 }

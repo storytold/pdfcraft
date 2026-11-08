@@ -335,8 +335,9 @@ fn build_line_runs(glyphs: &[RawGlyph], scripts: &[ScriptType]) -> Vec<TextRun> 
             let next_g = &glyphs[i + 1];
             let next_script = scripts[i + 1];
 
-            // Horizontal gap between current glyph right and next glyph left
-            let gap = next_g.bounds.0 - g.bounds.2;
+            // Gap in reading direction: LTR is next_left - current_right; RTL is current_left - next_right
+            let is_rtl = is_rtl_char(g.char_code) || is_rtl_char(next_g.char_code);
+            let gap = if is_rtl { min_x - next_g.bounds.0.max(next_g.bounds.2) } else { next_g.bounds.0.min(next_g.bounds.2) - max_x };
 
             let style_changed = next_g.font_name != run_font_name
                 || (next_g.font_size - run_font_size).abs() > 0.01

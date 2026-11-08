@@ -225,3 +225,22 @@ fn test_baseline_clustering_no_chain_drift() {
     let layout = build_layout(vec![(0, 595.0, 842.0, glyphs)]);
     assert!(layout.pages[0].lines.len() >= 2, "Chained glyphs must split across lines when drifting beyond tolerance");
 }
+
+#[test]
+fn test_hebrew_rtl_spatial_gap_word_separation() {
+    // Two Hebrew words with a spatial gap but no explicit space character:
+    // Word 1: 'ש' (80..90), 'ל' (70..80) -> left edge is 70.0
+    // Spatial gap: 3.6 pt (between 70.0 and 66.4 >= 12.0 * 0.22 = 2.64 pt)
+    // Word 2: 'ו' (56.4..66.4), 'ם' (46.4..56.4) -> right edge is 66.4
+    let glyphs = vec![
+        make_glyph('ש', "David", 12.0, false, false, 80.0, 90.0, 80.0, 500.0),
+        make_glyph('ל', "David", 12.0, false, false, 70.0, 80.0, 70.0, 500.0),
+        make_glyph('ו', "David", 12.0, false, false, 56.4, 66.4, 56.4, 500.0),
+        make_glyph('ם', "David", 12.0, false, false, 46.4, 56.4, 46.4, 500.0),
+    ];
+
+    let layout = build_layout(vec![(0, 595.0, 842.0, glyphs)]);
+    let line = &layout.pages[0].lines[0];
+    let full_text: String = line.runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(full_text, "של ום");
+}

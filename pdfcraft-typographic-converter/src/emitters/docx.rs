@@ -1,6 +1,6 @@
 use crate::layout::{DocumentLayout, PageImage, ScriptType, TextLine};
 use anyhow::{Context, Result};
-use docx_rs::{BreakType, Docx, Paragraph, Pic, Run, RunFonts, VertAlignType};
+use docx_rs::{BreakType, Docx, PageOrientationType, PageSize, Paragraph, Pic, Run, RunFonts, Section, VertAlignType};
 use std::fs::File;
 use std::path::Path;
 
@@ -13,11 +13,25 @@ enum PageItem<'a> {
 pub fn export_docx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     let mut docx = Docx::new();
 
+    let has_mixed_page_sizes = doc.pages.windows(2).any(|w| (w[0].width - w[1].width).abs() > 1.0 || (w[0].height - w[1].height).abs() > 1.0);
+
+    if let Some(first_page) = doc.pages.first() {
+        let w_dxa = (first_page.width * 20.0).round().max(1.0) as u32;
+        let h_dxa = (first_page.height * 20.0).round().max(1.0) as u32;
+        docx = docx.page_size(w_dxa, h_dxa);
+    }
+
     for (page_idx, page) in doc.pages.iter().enumerate() {
-        // If transitioning to subsequent pages, insert a page break
-        if page_idx > 0 {
+        let w_dxa = (page.width * 20.0).round().max(1.0) as u32;
+        let h_dxa = (page.height * 20.0).round().max(1.0) as u32;
+        let orient = if page.width > page.height { PageOrientationType::Landscape } else { PageOrientationType::Portrait };
+
+        let mut page_paragraphs: Vec<Paragraph> = Vec::new();
+
+        // If transitioning to subsequent pages without separate sections, insert a page break
+        if page_idx > 0 && !has_mixed_page_sizes {
             let break_p = Paragraph::new().add_run(Run::new().add_break(BreakType::Page));
-            docx = docx.add_paragraph(break_p);
+            page_paragraphs.push(break_p);
         }
 
         // Interleave lines and images by vertical position (descending y / top to bottom)
@@ -71,15 +85,33 @@ pub fn export_docx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
                         paragraph = paragraph.add_run(r);
                     }
 
-                    docx = docx.add_paragraph(paragraph);
+                    page_paragraphs.push(paragraph);
                 }
                 PageItem::Image(img) => {
                     if !img.bytes.is_empty() {
-                        let pic = Pic::new(&img.bytes);
+                        let min_x = img.bounds.0.min(img.bounds.2);
+                        let max_x = img.bounds.0.max(img.bounds.2);
+                        let min_y = img.bounds.1.min(img.bounds.3);
+                        let max_y = img.bounds.1.max(img.bounds.3);
+                        let w_emu = ((max_x - min_x) * 12700.0).round().max(1.0) as u32;
+                        let h_emu = ((max_y - min_y) * 12700.0).round().max(1.0) as u32;
+                        let pic = Pic::new(&img.bytes).size(w_emu, h_emu);
                         let paragraph = Paragraph::new().add_run(Run::new().add_image(pic));
-                        docx = docx.add_paragraph(paragraph);
+                        page_paragraphs.push(paragraph);
                     }
                 }
+            }
+        }
+
+        if has_mixed_page_sizes {
+            let mut section = Section::new().page_size(PageSize::new().size(w_dxa, h_dxa).orient(orient));
+            for p in page_paragraphs {
+                section = section.add_paragraph(p);
+            }
+            docx = docx.add_section(section);
+        } else {
+            for p in page_paragraphs {
+                docx = docx.add_paragraph(p);
             }
         }
     }

@@ -127,15 +127,29 @@ fn compute_col_edges(blocks: &[Block]) -> Vec<f64> {
     col_edges
 }
 
-fn process_header_blocks(
-    p: &Page,
-    consumed: &[bool],
-    col_edges: &[f64],
-    rows: &mut Vec<XlsxRow>,
-    row_tops: &mut Vec<(f64, usize)>,
-    col_max_len: &mut Vec<usize>,
-    current_row: &mut usize,
-) {
+enum PageItem<'a> {
+    Line(Vec<&'a Block>),
+    Table(&'a Table),
+}
+
+impl<'a> PageItem<'a> {
+    fn top_y(&self) -> f64 {
+        match self {
+            PageItem::Line(group) => group.iter().map(|b| b.rect[3]).fold(0.0, f64::max),
+            PageItem::Table(t) => t.rect[3],
+        }
+    }
+}
+
+struct PageRowsAccumulator<'a> {
+    rows: &'a mut Vec<XlsxRow>,
+    row_tops: &'a mut Vec<(f64, usize)>,
+    merges: &'a mut Vec<String>,
+    col_max_len: &'a mut Vec<usize>,
+    current_row: &'a mut usize,
+}
+
+fn process_page_content(p: &Page, consumed: &[bool], tables: &[Table], col_edges: &[f64], acc: &mut PageRowsAccumulator<'_>) {
     let mut header_blocks: Vec<&Block> = p
         .blocks
         .iter()
@@ -157,37 +171,106 @@ fn process_header_blocks(
         line_groups.push(vec![b]);
     }
 
-    for mut group in line_groups {
-        let group_top_pt = if p.height > 0.0 {
-            let max_y = group.iter().map(|b| b.rect[3]).fold(0.0, f64::max);
-            (p.height - max_y).max(0.0)
-        } else {
-            0.0
-        };
-        group.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
-        let mut cells = Vec::new();
-        let mut last_col = 0usize;
-        for b in group {
-            let natural_col = col_edges.iter().position(|&e| (b.rect[0] - e).abs() <= 16.0).unwrap_or(0) + 1;
-            let col = natural_col.max(last_col + 1);
-            last_col = col;
+    let mut items: Vec<PageItem> = Vec::new();
+    for g in line_groups {
+        items.push(PageItem::Line(g));
+    }
+    for t in tables {
+        items.push(PageItem::Table(t));
+    }
+    items.sort_by(|a, b| b.top_y().total_cmp(&a.top_y()));
 
-            let text = b.text.trim().to_string();
-            let num = parse_numeric(&text);
-            let style = if b.size >= 14.0 || b.bold { STYLE_TITLE } else { STYLE_DEFAULT };
-            let len = text.len();
-            if col_max_len.len() < col {
-                col_max_len.resize(col, 10);
+    for item in items {
+        match item {
+            PageItem::Line(mut group) => {
+                let group_top_pt = if p.height > 0.0 {
+                    let max_y = group.iter().map(|b| b.rect[3]).fold(0.0, f64::max);
+                    (p.height - max_y).max(0.0)
+                } else {
+                    0.0
+                };
+                group.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
+                let mut cells = Vec::new();
+                let mut last_col = 0usize;
+                for b in group {
+                    let natural_col = col_edges.iter().position(|&e| (b.rect[0] - e).abs() <= 16.0).unwrap_or(0) + 1;
+                    let col = natural_col.max(last_col + 1);
+                    last_col = col;
+
+                    let text = b.text.trim().to_string();
+                    let num = parse_numeric(&text);
+                    let style = if b.size >= 14.0 || b.bold { STYLE_TITLE } else { STYLE_DEFAULT };
+                    let len = text.len();
+                    if acc.col_max_len.len() < col {
+                        acc.col_max_len.resize(col, 10);
+                    }
+                    if let Some(l) = acc.col_max_len.get_mut(col - 1) {
+                        *l = (*l).max(len);
+                    }
+                    cells.push(XlsxCell { col, text, num, style });
+                }
+                if !cells.is_empty() {
+                    acc.row_tops.push((group_top_pt, *acc.current_row));
+                    acc.rows.push(XlsxRow { row_num: *acc.current_row, cells });
+                    *acc.current_row += 1;
+                }
             }
-            if let Some(l) = col_max_len.get_mut(col - 1) {
-                *l = (*l).max(len);
+            PageItem::Table(t) => {
+                if !acc.rows.is_empty() {
+                    *acc.current_row += 1;
+                }
+                let t_height = (t.rect[3] - t.rect[1]).max(0.0);
+                let row_h = if !t.rows.is_empty() { t_height / t.rows.len() as f64 } else { 20.0 };
+                for (row_idx, row) in t.rows.iter().enumerate() {
+                    let row_top_y = t.rect[3] - (row_idx as f64) * row_h;
+                    let row_top_pt = if p.height > 0.0 { (p.height - row_top_y).max(0.0) } else { 0.0 };
+                    let is_header = is_table_header_row(&t.rows, row_idx);
+                    let is_last = row_idx + 1 == t.rows.len();
+                    let mut col_cursor = 1usize;
+                    let mut cells = Vec::new();
+
+                    for c in row {
+                        let text = c.text.trim().to_string();
+                        let num = parse_numeric(&text);
+                        let style = if is_header {
+                            STYLE_HEADER
+                        } else if is_last && c.bold {
+                            STYLE_TOTAL_BORDER
+                        } else if num.is_some() {
+                            STYLE_NUMBER_BORDER
+                        } else {
+                            STYLE_TEXT_BORDER
+                        };
+
+                        let span = c.span.max(1);
+                        if span > 1 {
+                            let c1 = col_name(col_cursor);
+                            let c2 = col_name(col_cursor + span - 1);
+                            let cur_r = *acc.current_row;
+                            acc.merges.push(format!("{c1}{cur_r}:{c2}{cur_r}"));
+                        }
+
+                        let len = text.len();
+                        for sc in 0..span {
+                            let c_idx = col_cursor + sc;
+                            if acc.col_max_len.len() < c_idx {
+                                acc.col_max_len.resize(c_idx, 10);
+                            }
+                            if let Some(l) = acc.col_max_len.get_mut(c_idx - 1) {
+                                *l = (*l).max(len / span);
+                            }
+                        }
+
+                        cells.push(XlsxCell { col: col_cursor, text, num, style });
+                        col_cursor += span;
+                    }
+
+                    acc.row_tops.push((row_top_pt, *acc.current_row));
+                    acc.rows.push(XlsxRow { row_num: *acc.current_row, cells });
+                    *acc.current_row += 1;
+                }
+                *acc.current_row += 1;
             }
-            cells.push(XlsxCell { col, text, num, style });
-        }
-        if !cells.is_empty() {
-            row_tops.push((group_top_pt, *current_row));
-            rows.push(XlsxRow { row_num: *current_row, cells });
-            *current_row += 1;
         }
     }
 }
@@ -212,73 +295,6 @@ fn is_table_header_row(rows: &[Vec<Cell>], row_idx: usize) -> bool {
     let row0_has_span = non_empty.iter().any(|c| c.span > 1);
     let next_row_has_numeric = rows.get(1).is_some_and(|r1| r1.iter().any(|c| parse_numeric(&c.text).is_some()));
     row0_bold || row0_has_span || next_row_has_numeric || non_empty.iter().all(|c| parse_numeric(&c.text).is_none())
-}
-
-fn process_tables(
-    p: &Page,
-    tables: &[Table],
-    rows: &mut Vec<XlsxRow>,
-    row_tops: &mut Vec<(f64, usize)>,
-    merges: &mut Vec<String>,
-    col_max_len: &mut Vec<usize>,
-    current_row: &mut usize,
-) {
-    if !rows.is_empty() && !tables.is_empty() {
-        *current_row += 1;
-    }
-
-    for t in tables {
-        let t_height = (t.rect[3] - t.rect[1]).max(0.0);
-        let row_h = if !t.rows.is_empty() { t_height / t.rows.len() as f64 } else { 20.0 };
-        for (row_idx, row) in t.rows.iter().enumerate() {
-            let row_top_y = t.rect[3] - (row_idx as f64) * row_h;
-            let row_top_pt = if p.height > 0.0 { (p.height - row_top_y).max(0.0) } else { 0.0 };
-            let is_header = is_table_header_row(&t.rows, row_idx);
-            let is_last = row_idx + 1 == t.rows.len();
-            let mut col_cursor = 1usize;
-            let mut cells = Vec::new();
-
-            for c in row {
-                let text = c.text.trim().to_string();
-                let num = parse_numeric(&text);
-                let style = if is_header {
-                    STYLE_HEADER
-                } else if is_last && c.bold {
-                    STYLE_TOTAL_BORDER
-                } else if num.is_some() {
-                    STYLE_NUMBER_BORDER
-                } else {
-                    STYLE_TEXT_BORDER
-                };
-
-                let span = c.span.max(1);
-                if span > 1 {
-                    let c1 = col_name(col_cursor);
-                    let c2 = col_name(col_cursor + span - 1);
-                    merges.push(format!("{c1}{current_row}:{c2}{current_row}"));
-                }
-
-                let len = text.len();
-                for sc in 0..span {
-                    let c_idx = col_cursor + sc;
-                    if col_max_len.len() < c_idx {
-                        col_max_len.resize(c_idx, 10);
-                    }
-                    if let Some(l) = col_max_len.get_mut(c_idx - 1) {
-                        *l = (*l).max(len / span);
-                    }
-                }
-
-                cells.push(XlsxCell { col: col_cursor, text, num, style });
-                col_cursor += span;
-            }
-
-            row_tops.push((row_top_pt, *current_row));
-            rows.push(XlsxRow { row_num: *current_row, cells });
-            *current_row += 1;
-        }
-        *current_row += 1; // blank row after table
-    }
 }
 
 fn compute_image_anchor(top_pt: f64, row_tops: &[(f64, usize)], current_row: usize) -> (usize, i64) {
@@ -440,8 +456,14 @@ pub fn xlsx(pages: &[Page], title: &str) -> Vec<u8> {
         let mut current_row = 1usize;
 
         let col_edges = compute_col_edges(&p.blocks);
-        process_header_blocks(p, &consumed, &col_edges, &mut rows, &mut row_tops, &mut col_max_len, &mut current_row);
-        process_tables(p, &tables, &mut rows, &mut row_tops, &mut merges, &mut col_max_len, &mut current_row);
+        let mut acc = PageRowsAccumulator {
+            rows: &mut rows,
+            row_tops: &mut row_tops,
+            merges: &mut merges,
+            col_max_len: &mut col_max_len,
+            current_row: &mut current_row,
+        };
+        process_page_content(p, &consumed, &tables, &col_edges, &mut acc);
 
         let drawings = build_page_drawings(p, &col_edges, &row_tops, current_row, &mut global_image_counter, &mut media_files);
         let has_drawing = drawings.is_some();

@@ -798,6 +798,10 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.reading_bg.picker_open = !app.reading_bg.picker_open;
     }
 
+    if app.views.is_empty() {
+        app.reading_bg.picker_open = false;
+    }
+
     if app.reading_bg.picker_open {
         let reading_bg = &mut app.reading_bg;
         let mut open = reading_bg.picker_open;

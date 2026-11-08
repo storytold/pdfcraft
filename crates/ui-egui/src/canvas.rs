@@ -1730,6 +1730,16 @@ fn cached_edit_images<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document
     &entry.1
 }
 
+/// Vector lines parsed once per page and document edit generation.
+pub(crate) fn cached_vector_lines<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document, page: usize) -> &'a [pdfcraft_engine::LineSegment] {
+    let generation = doc.edit_generation();
+    let entry = view.vector_lines.entry(page).or_insert_with(|| (generation, doc.editable_lines(page).unwrap_or_default()));
+    if entry.0 != generation {
+        *entry = (generation, doc.editable_lines(page).unwrap_or_default());
+    }
+    &entry.1
+}
+
 fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i: usize) {
     let PageEnv { allowed, comments_hidden, doc, editing_content, info, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
     let PageFrame { ptr, origin, visible, pressed, pointer, .. } = *frame;
@@ -3104,9 +3114,102 @@ fn handle_symbol_palette(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo) 
     }
 }
 
-fn handle_symbol_palette_and_hud(ui: &mut egui::Ui, view: &mut DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, can_modify: bool) {
+fn handle_symbol_palette_and_hud(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    info: &DocInfo,
+    can_modify: bool,
+    tool: QuickTool,
+) {
+    let now = ui.input(|i| i.time);
+    let scan_active = view.barcode_hud.open || view.barcode_hud.panel_open || tool == QuickTool::QrBarcode;
+    crate::barcode_hud::BarcodeScannerHud::auto_scan_on_page_change(view, doc, now, scan_active, Some(ui.ctx()));
+
     if let Some(hud_edit) = crate::barcode_hud::BarcodeScannerHud::show(ui, view, doc, info, can_modify) {
         view.pending_edit = Some(hud_edit);
+    }
+
+    let viewport = ui.clip_rect();
+    if let Some(action) = crate::canvas_selection::FloatingContextMenu::show(ui, viewport, view, info, can_modify, true) {
+        match action {
+            crate::canvas_selection::FloatingMenuAction::ToggleGridMode => {
+                view.extend_perpendicular_lines = !view.extend_perpendicular_lines;
+            }
+            crate::canvas_selection::FloatingMenuAction::SetStrokeColor(rgb) => {
+                view.line_properties.color = [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32];
+                if let Some(sel) = &view.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    view.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: Some(rgb), width: None, dash: None });
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::SetStrokeWidth(w) => {
+                view.line_properties.width = w;
+                if let Some(sel) = &view.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    view.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: None, width: Some(w), dash: None });
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::SetDash(dash_idx) => {
+                view.line_properties.dash_idx = dash_idx;
+                if let Some(sel) = &view.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    let dash = match dash_idx {
+                        1 => vec![3.0, 3.0],
+                        2 => vec![6.0, 3.0],
+                        3 => vec![6.0, 3.0, 2.0, 3.0],
+                        _ => vec![],
+                    };
+                    view.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: None, width: None, dash: Some(dash) });
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::Delete => {
+                if let Some(sel) = &view.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    view.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: None, width: Some(0.0), dash: None });
+                    view.canvas_selection.selected = None;
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::OpenSymbolPalette => {
+                view.canvas_selection.symbol_palette_open = true;
+            }
+            crate::canvas_selection::FloatingMenuAction::EditText => {
+                if let Some(sel) = &view.canvas_selection.selected {
+                    view.pending_text_open = Some((sel.page, pdfcraft_engine::BlockKey::new(sel.text.clone().unwrap_or_default(), sel.user_rect)));
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::Cut | crate::canvas_selection::FloatingMenuAction::Copy => {
+                if let Some(sel) = &view.canvas_selection.selected {
+                    if let Some(text) = &sel.text
+                        && !text.is_empty()
+                    {
+                        ui.ctx().copy_text(text.clone());
+                    }
+                    if matches!(action, crate::canvas_selection::FloatingMenuAction::Cut)
+                        && can_modify
+                        && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                    {
+                        let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                        view.pending_edit =
+                            Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: None, width: Some(0.0), dash: None });
+                        view.canvas_selection.selected = None;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     if view.canvas_selection.symbol_palette_open {
@@ -3445,7 +3548,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     let text_done = frame_overlays(ui, view, &env, primary_down, hover_text);
 
-    handle_symbol_palette_and_hud(ui, view, doc, info, can_modify);
+    handle_symbol_palette_and_hud(ui, view, doc, info, can_modify, app.quick_tool);
 
     if let Some(why) = view.objects.notice.take() {
         refused = Some(why);

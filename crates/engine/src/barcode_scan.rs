@@ -685,11 +685,15 @@ pub fn scan_rgba_buffer(width: usize, height: usize, rgba: &[u8], page: usize) -
             if text.is_empty() {
                 continue;
             }
-            let kind = match *res.getBarcodeFormat() {
-                rxing::BarcodeFormat::QR_CODE => CodeKind::QrCode,
-                rxing::BarcodeFormat::CODE_128 => CodeKind::Code128,
-                rxing::BarcodeFormat::CODE_39 => CodeKind::Code39,
-                rxing::BarcodeFormat::EAN_13 => CodeKind::Ean13,
+            let (kind, text) = match *res.getBarcodeFormat() {
+                rxing::BarcodeFormat::QR_CODE => (CodeKind::QrCode, text),
+                rxing::BarcodeFormat::CODE_128 => (CodeKind::Code128, text),
+                rxing::BarcodeFormat::CODE_39 => (CodeKind::Code39, text),
+                rxing::BarcodeFormat::EAN_13 => (CodeKind::Ean13, text),
+                rxing::BarcodeFormat::UPC_A => {
+                    let full_ean = if text.len() == 12 { format!("0{text}") } else { text };
+                    (CodeKind::Ean13, full_ean)
+                }
                 _ => continue,
             };
             let points = res.getPoints();
@@ -710,98 +714,7 @@ pub fn scan_rgba_buffer(width: usize, height: usize, rgba: &[u8], page: usize) -
             let is_1d = kind != CodeKind::QrCode;
 
             if is_1d {
-                // For 1D barcodes, rxing only returns detection points along a single horizontal scanline.
-                // We calculate true vertical height and exact bar bounds by scanning vertically
-                // from the center to find where the black bars end, then horizontally along the mid-line.
-                let raw_y = (min_y.round() as usize).clamp(0, height.saturating_sub(1));
-                let center_x = (((min_x + max_x) * 0.5).round() as usize).clamp(0, width.saturating_sub(1));
-
-                // 1. Locate a dark pixel (bar) at or near the scanline
-                let mut found_dark = None;
-                for dy in [0isize, -1, 1, -2, 2, -3, 3] {
-                    let sy = (raw_y as isize + dy).clamp(0, height.saturating_sub(1) as isize) as usize;
-                    for dx in 0..150usize {
-                        let cands = [
-                            center_x.saturating_sub(dx),
-                            (center_x + dx).min(width.saturating_sub(1)),
-                            (min_x.round() as usize).saturating_sub(dx),
-                            ((min_x.round() as usize) + dx).min(width.saturating_sub(1)),
-                            (max_x.round() as usize).saturating_sub(dx),
-                            ((max_x.round() as usize) + dx).min(width.saturating_sub(1)),
-                        ];
-                        for cx in cands {
-                            if gray.get(cx, sy) < 180 {
-                                found_dark = Some((cx, sy));
-                                break;
-                            }
-                        }
-                        if found_dark.is_some() {
-                            break;
-                        }
-                    }
-                    if found_dark.is_some() {
-                        break;
-                    }
-                }
-
-                if let Some((dark_x, dark_y)) = found_dark {
-                    // 2. Scan vertically up and down from dark_y along dark_x until black bars end
-                    let mut top_y = dark_y;
-                    while top_y > 0 && gray.get(dark_x, top_y.saturating_sub(1)) < 180 {
-                        top_y = top_y.saturating_sub(1);
-                    }
-                    let mut bot_y = dark_y;
-                    while bot_y + 1 < height && gray.get(dark_x, bot_y.saturating_add(1)) < 180 {
-                        bot_y = bot_y.saturating_add(1);
-                    }
-
-                    // 3. Along mid_y (vertical center of barcode), scan horizontally
-                    // to find the exact left edge of the first bar and right edge of the last bar.
-                    let mid_y = (top_y + bot_y) / 2;
-
-                    let mut bar_left = dark_x;
-                    let mut gap = 0usize;
-                    for x in (0..=dark_x).rev() {
-                        if gray.get(x, mid_y) < 180 {
-                            bar_left = x;
-                            gap = 0;
-                        } else {
-                            gap = gap.saturating_add(1);
-                            if gap > 12 {
-                                break;
-                            }
-                        }
-                    }
-
-                    let mut bar_right = dark_x;
-                    let mut gap = 0usize;
-                    for x in dark_x..width {
-                        if gray.get(x, mid_y) < 180 {
-                            bar_right = x;
-                            gap = 0;
-                        } else {
-                            gap = gap.saturating_add(1);
-                            if gap > 12 {
-                                break;
-                            }
-                        }
-                    }
-
-                    if bar_right > bar_left.saturating_add(15) && bot_y > top_y.saturating_add(8) {
-                        min_x = bar_left as f32;
-                        max_x = bar_right as f32;
-                        min_y = top_y as f32;
-                        max_y = bot_y as f32;
-                    } else {
-                        let default_h = ((max_x - min_x) * 0.35).clamp(25.0, 100.0);
-                        min_y = (min_y - default_h * 0.5).max(0.0);
-                        max_y = (min_y + default_h).min(height as f32);
-                    }
-                } else {
-                    let default_h = ((max_x - min_x) * 0.35).clamp(25.0, 100.0);
-                    min_y = (min_y - default_h * 0.5).max(0.0);
-                    max_y = (min_y + default_h).min(height as f32);
-                }
+                refine_1d_bounds(&gray, width, height, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
             }
 
             let rect = [
@@ -835,6 +748,190 @@ pub fn scan_rgba_buffer(width: usize, height: usize, rgba: &[u8], page: usize) -
     }
 
     codes
+}
+
+fn refine_1d_bounds(gray: &GrayImage, width: usize, height: usize, min_x: &mut f32, max_x: &mut f32, min_y: &mut f32, max_y: &mut f32) {
+    if (*max_y - *min_y) > (*max_x - *min_x) {
+        refine_1d_vertical(gray, width, height, min_x, max_x, min_y, max_y);
+    } else {
+        refine_1d_horizontal(gray, width, height, min_x, max_x, min_y, max_y);
+    }
+}
+
+fn refine_1d_vertical(gray: &GrayImage, width: usize, height: usize, min_x: &mut f32, max_x: &mut f32, min_y: &mut f32, max_y: &mut f32) {
+    let raw_x = (min_x.round() as usize).clamp(0, width.saturating_sub(1));
+    let center_y = (((*min_y + *max_y) * 0.5).round() as usize).clamp(0, height.saturating_sub(1));
+
+    let mut found_dark = None;
+    for dx in [0isize, -1, 1, -2, 2, -3, 3] {
+        let sx = (raw_x as isize + dx).clamp(0, width.saturating_sub(1) as isize) as usize;
+        for dy in 0..150usize {
+            let cands = [
+                center_y.saturating_sub(dy),
+                (center_y + dy).min(height.saturating_sub(1)),
+                (min_y.round() as usize).saturating_sub(dy),
+                ((min_y.round() as usize) + dy).min(height.saturating_sub(1)),
+                (max_y.round() as usize).saturating_sub(dy),
+                ((max_y.round() as usize) + dy).min(height.saturating_sub(1)),
+            ];
+            for cy in cands {
+                if gray.get(sx, cy) < 180 {
+                    found_dark = Some((sx, cy));
+                    break;
+                }
+            }
+            if found_dark.is_some() {
+                break;
+            }
+        }
+        if found_dark.is_some() {
+            break;
+        }
+    }
+
+    if let Some((dark_x, dark_y)) = found_dark {
+        let mut left_x = dark_x;
+        while left_x > 0 && gray.get(left_x.saturating_sub(1), dark_y) < 180 {
+            left_x = left_x.saturating_sub(1);
+        }
+        let mut right_x = dark_x;
+        while right_x + 1 < width && gray.get(right_x.saturating_add(1), dark_y) < 180 {
+            right_x = right_x.saturating_add(1);
+        }
+
+        let mid_x = (left_x + right_x) / 2;
+
+        let mut bar_top = dark_y;
+        let mut gap = 0usize;
+        for y in (0..=dark_y).rev() {
+            if gray.get(mid_x, y) < 180 {
+                bar_top = y;
+                gap = 0;
+            } else {
+                gap = gap.saturating_add(1);
+                if gap > 12 {
+                    break;
+                }
+            }
+        }
+
+        let mut bar_bot = dark_y;
+        let mut gap = 0usize;
+        for y in dark_y..height {
+            if gray.get(mid_x, y) < 180 {
+                bar_bot = y;
+                gap = 0;
+            } else {
+                gap = gap.saturating_add(1);
+                if gap > 12 {
+                    break;
+                }
+            }
+        }
+
+        if bar_bot > bar_top.saturating_add(15) && right_x > left_x.saturating_add(8) {
+            *min_x = left_x as f32;
+            *max_x = right_x as f32;
+            *min_y = bar_top as f32;
+            *max_y = bar_bot as f32;
+        } else {
+            let default_w = ((*max_y - *min_y) * 0.35).clamp(25.0, 100.0);
+            *min_x = (*min_x - default_w * 0.5).max(0.0);
+            *max_x = (*min_x + default_w).min(width as f32);
+        }
+    } else {
+        let default_w = ((*max_y - *min_y) * 0.35).clamp(25.0, 100.0);
+        *min_x = (*min_x - default_w * 0.5).max(0.0);
+        *max_x = (*min_x + default_w).min(width as f32);
+    }
+}
+
+fn refine_1d_horizontal(gray: &GrayImage, width: usize, height: usize, min_x: &mut f32, max_x: &mut f32, min_y: &mut f32, max_y: &mut f32) {
+    let raw_y = (min_y.round() as usize).clamp(0, height.saturating_sub(1));
+    let center_x = (((*min_x + *max_x) * 0.5).round() as usize).clamp(0, width.saturating_sub(1));
+
+    let mut found_dark = None;
+    for dy in [0isize, -1, 1, -2, 2, -3, 3] {
+        let sy = (raw_y as isize + dy).clamp(0, height.saturating_sub(1) as isize) as usize;
+        for dx in 0..150usize {
+            let cands = [
+                center_x.saturating_sub(dx),
+                (center_x + dx).min(width.saturating_sub(1)),
+                (min_x.round() as usize).saturating_sub(dx),
+                ((min_x.round() as usize) + dx).min(width.saturating_sub(1)),
+                (max_x.round() as usize).saturating_sub(dx),
+                ((max_x.round() as usize) + dx).min(width.saturating_sub(1)),
+            ];
+            for cx in cands {
+                if gray.get(cx, sy) < 180 {
+                    found_dark = Some((cx, sy));
+                    break;
+                }
+            }
+            if found_dark.is_some() {
+                break;
+            }
+        }
+        if found_dark.is_some() {
+            break;
+        }
+    }
+
+    if let Some((dark_x, dark_y)) = found_dark {
+        let mut top_y = dark_y;
+        while top_y > 0 && gray.get(dark_x, top_y.saturating_sub(1)) < 180 {
+            top_y = top_y.saturating_sub(1);
+        }
+        let mut bot_y = dark_y;
+        while bot_y + 1 < height && gray.get(dark_x, bot_y.saturating_add(1)) < 180 {
+            bot_y = bot_y.saturating_add(1);
+        }
+
+        let mid_y = (top_y + bot_y) / 2;
+
+        let mut bar_left = dark_x;
+        let mut gap = 0usize;
+        for x in (0..=dark_x).rev() {
+            if gray.get(x, mid_y) < 180 {
+                bar_left = x;
+                gap = 0;
+            } else {
+                gap = gap.saturating_add(1);
+                if gap > 12 {
+                    break;
+                }
+            }
+        }
+
+        let mut bar_right = dark_x;
+        let mut gap = 0usize;
+        for x in dark_x..width {
+            if gray.get(x, mid_y) < 180 {
+                bar_right = x;
+                gap = 0;
+            } else {
+                gap = gap.saturating_add(1);
+                if gap > 12 {
+                    break;
+                }
+            }
+        }
+
+        if bar_right > bar_left.saturating_add(15) && bot_y > top_y.saturating_add(8) {
+            *min_x = bar_left as f32;
+            *max_x = bar_right as f32;
+            *min_y = top_y as f32;
+            *max_y = bot_y as f32;
+        } else {
+            let default_h = ((*max_x - *min_x) * 0.35).clamp(25.0, 100.0);
+            *min_y = (*min_y - default_h * 0.5).max(0.0);
+            *max_y = (*min_y + default_h).min(height as f32);
+        }
+    } else {
+        let default_h = ((*max_x - *min_x) * 0.35).clamp(25.0, 100.0);
+        *min_y = (*min_y - default_h * 0.5).max(0.0);
+        *max_y = (*min_y + default_h).min(height as f32);
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1107,8 +1204,13 @@ impl Document {
         let mut rgba = vec![255u8; tw.saturating_mul(th).saturating_mul(4)];
 
         if min_x <= max_x && min_y <= max_y {
-            let cw = (max_x - min_x + 1) as f64;
-            let ch = (max_y - min_y + 1) as f64;
+            let modules_w = max_x - min_x + 1;
+            let modules_h = max_y - min_y + 1;
+            if modules_w > tw || modules_h > th {
+                return Err("barcode symbol resolution exceeds target raster dimensions".to_string());
+            }
+            let cw = modules_w as f64;
+            let ch = modules_h as f64;
 
             for y in 0..th {
                 let sy = ((min_y as f64) + ((y as f64) / (th as f64)) * ch).floor() as u32;

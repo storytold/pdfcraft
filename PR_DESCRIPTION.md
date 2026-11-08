@@ -6,21 +6,20 @@ Adds vector line selection, property editing, and endpoint resizing to the Edit 
 - **Session 2 (Batch 2):** `set_line_properties()` mutation function with pre-validation, Line Properties panel (color, width, dash) in the Edit a PDF sidebar.
 - **Session 3 (Batch 3):** Endpoint handles on selected lines (`SelectionHandle::LineStart`, `SelectionHandle::LineEnd`), live drag preview, `update_line_endpoints()` on release.
 
+### Content stream mutations & validation
+- **`set_line_properties()`:** In-place content-stream mutation is implemented by rewriting the stream operations, applying graphics state updates (`w`, `RG`/`rg`, `d`) with bounding box preservation. Validates coordinate bounds (`abs <= 1e9`), finite numbers, stroke widths in `0.0..=100.0`, dash lengths (`<= 8`), target kinds, and budget limits.
+- **`update_line_endpoints()`:** In-place content-stream mutation is implemented by modifying the path's `m` and `l` coordinates under the active CTM. Validates non-degenerate endpoints, minimum length threshold, finite user coordinates, and CTM consistency.
+
 ### What is fully working
 - **Line Primitives & Geometry:** `LineSegment` struct, bounding box computation, Euclidean length, and point-to-segment distance calculations (`crates/edit/src/objects.rs`).
 - **Line Segment Enumeration:** `editable_lines()` enumerates stroked line segments on a page from real PDF content streams via `checked_streams()` and `parse_page_lines()`, bounded by `MAX_PAGE_LINES`.
 - **Collinear Segment Merging:** Collinear reduction algorithm joining adjacent segments sharing width and slope within angular/distance thresholds.
-- **Selection & Interaction:** `vector_edit_mode` toggle in the Edit a PDF toolbar, line hover (yellow) and selection (blue) highlights on canvas (`crates/ui-egui/src/canvas.rs`).
+- **Selection & Interaction:** `vector_edit_mode` toggle in the Edit a PDF toolbar and panels, line hover (yellow) and selection (blue) highlights on canvas (`crates/ui-egui/src/canvas.rs`).
 - **Endpoint Resize Handles:** Two endpoint handles render at segment start/end (`paint_line_endpoint_handles`), with crosshair cursor on hover/drag (`crates/ui-egui/src/canvas_selection.rs`).
 - **Drag Preview:** Endpoint dragging dynamically tracks the pointer in screen space, inverting to PDF user space coordinates via `screen_to_user_point` to display a real-time live preview of the dragged endpoint on the canvas.
 - **Line Properties UI:** Color picker, stroke width slider (0.5–20.0 pt), and dash pattern selector in the sidebar panel (`crates/ui-egui/src/editing.rs`).
-- **Strict Input Validation:** Both `set_line_properties` and `update_line_endpoints` validate coordinate bounds (`abs <= 1e9`), finite numbers, valid stroke widths, dash lengths (`<= 8`), target kinds, and zero-length prevention.
-
-### What is deferred
-- **Content Stream Mutation Path:** Both `set_line_properties()` (line 171) and `update_line_endpoints()` (line 211) in `crates/edit/src/objects.rs` are safely guarded with `Err(EditError::Invalid(...))` because the `edit` crate currently lacks an in-place content-stream operator splice helper for compound stroked paths.
-
-### Known limitations
-- `set_line_properties()` and `update_line_endpoints()` return descriptive errors (`"the content stream mutation path is not implemented"`), safely surfaced in the sidebar UI rather than modifying PDF bytes.
+- **QR & Barcode HUD:** Auto-scans 1D and 2D barcodes across page turns, supports re-embedding, download, copy payload, and warning banner when covering vector graphics.
+- **Office Export Suite & Converter:** Interleaved text and tables in page order for XLSX, slide-fitted PPTX export, and section/image-sized DOCX generation.
 - i18n: Translations belong in `storytold/craft-i18n` under `locales/<lang>/pdfcraft.tsv` per project standard; no local catalogs are committed in this repository.
 
 ### Relationship to PR #1990
