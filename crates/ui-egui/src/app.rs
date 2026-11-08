@@ -341,15 +341,18 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
-    /// Whether something over the pages has the keyboard: a dialog or prompt, the palette, the
-    /// OCR Verify screen, the update prompt a check at start shows, the hotbar's tools window, a
-    /// popup or a menu of the menu bar. On a pass that carries the input a menu click stands for
-    /// (`menu_input_due`), the update prompt, the hotbar's window, popups and the menu bar don't
-    /// count: none of them turns the menus off as a dialog does, and that input is the pages'.
+    /// Whether something over the pages has the keyboard. Two kinds:
+    /// - What covers them ([`Self::covers_pages`]): nothing acts on the pages under it, a menu
+    ///   click's input included.
+    /// - What sits over them and leaves the menus on: the full-screen and update prompts, the
+    ///   hotbar's tools window, a popup or a menu of the menu bar. On a pass that carries the
+    ///   input a menu click stands for (`menu_input_due`) these don't count, and that input is the
+    ///   pages'; the user's own keys are not.
     pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
         self.covers_pages()
             || !self.menu_input_due
-                && (self.updates.prompt_open()
+                && (self.pending_full_screen.is_some()
+                    || self.updates.prompt_open()
                     || self.hotbar.picker_over_pages(ctx)
                     || egui::Popup::is_any_open(ctx)
                     || craft_menu::bar::is_open(ctx)
@@ -362,9 +365,9 @@ impl PdfCraftApp {
     /// it (one later, or two with a discarded pass between). A native menu's click runs in `logic` before
     /// this, so its keys come on its own pass; an in-window menu's runs as the bar is drawn, so
     /// they come on the next one, when the bar still reads as open (craft-menu stores the menu as
-    /// open on the pass its click closes it). A native menu's click leaves egui's popups and the
-    /// Hotbar tools window open too. That input is the pages' even so; the user's own keys on the
-    /// passes after it are not.
+    /// open on the pass its click closes it). A native menu's click leaves egui's popups, the
+    /// Hotbar tools window and the full-screen and update prompts open too. That input is the
+    /// pages' even so; the user's own keys on the passes after it are not.
     fn take_menu_input(&mut self, ctx: &egui::Context) -> bool {
         let keys = !self.menu_input.is_empty();
         if keys {
@@ -380,12 +383,14 @@ impl PdfCraftApp {
         keys || paste
     }
 
-    /// A dialog, a prompt, the palette or the OCR Verify screen is drawn over the pages.
+    /// The pages are covered: by a dialog or prompt that turns the menus off (`modal_open`), by
+    /// the palette, which turns them off too, or by the OCR Verify screen, which takes the pages'
+    /// place.
     pub(crate) fn covers_pages(&self) -> bool {
         // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
         // entered over. Dialogs and prompts show there too.
         let shown = !(self.full_screen && self.active.is_some());
-        self.modal_open() || self.pending_full_screen.is_some() || (self.palette_open || self.ocr_verify.open) && shown
+        self.modal_open() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act

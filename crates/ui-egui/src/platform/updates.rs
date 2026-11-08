@@ -30,8 +30,9 @@ pub(crate) struct Updates {
 }
 
 impl Updates {
-    /// The prompt a check at start shows when it finds a newer release is open, over the whole
-    /// window. It isn't the Updates dialog (`open`).
+    /// The prompt that offers a newer release, after the check at start or Help ▸ Check for
+    /// updates, is open over the whole window. It isn't the Updates dialog (`open`), and it leaves
+    /// the menus on.
     pub(crate) fn prompt_open(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {

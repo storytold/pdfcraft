@@ -4514,18 +4514,27 @@ fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// The update prompt a check at start shows covers the window: Delete under it leaves the selected
+/// The update prompt covers the window, in full screen too: Delete under it leaves the selected
 /// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
 #[test]
 fn keys_under_the_update_prompt_leave_the_selected_comment() {
-    let mut h = selected_square_under_the_update_prompt();
-    h.key_press(egui::Key::Delete);
-    h.run_steps(3);
-    assert_eq!(comments(&h).len(), 1, "Delete under the update prompt deleted the comment");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(3);
-    assert!(h.query_by_label_contains("is available").is_none(), "Escape closed the prompt");
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "Escape under the update prompt deselected the comment");
+    for full_screen in [false, true] {
+        let mut h = selected_square_under_the_update_prompt();
+        if full_screen {
+            assert!(h.state_mut().execute("view.full_screen"));
+            h.run_steps(4);
+            assert!(h.state().full_screen && h.query_by_label_contains("is available").is_some(), "full screen, the prompt over it");
+        }
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "Delete under the update prompt deleted the comment (full screen: {full_screen})");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("is available").is_none(), "Escape closed the prompt");
+        assert_eq!(h.state().full_screen, full_screen, "the Escape that closed the prompt is the prompt's alone");
+        let selected = h.state().views[0].comments.selected;
+        assert_eq!(selected, Some((0, 0)), "Escape under the update prompt deselected the comment (full screen: {full_screen})");
+    }
 }
 
 /// The update prompt doesn't turn the menus off, as a dialog does, so a native menu's click under
@@ -4538,6 +4547,30 @@ fn edit_delete_from_a_native_menu_under_the_update_prompt_removes_the_comment() 
     h.run_steps(4);
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
     assert!(h.query_by_label_contains("is available").is_some(), "the prompt is still open");
+}
+
+/// "Open in Full Screen mode?", asked for a document that wants it, leaves the menus on as the
+/// update prompt does: the user's Delete under it leaves the comment selected in another document,
+/// and Edit ▸ Delete from a native menu removes it. That did nothing.
+#[test]
+fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_removes_the_comment() {
+    let mut h = selected_square();
+    let deck = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("/Type /Catalog", "/Type /Catalog /PageMode /FullScreen").into_bytes();
+    h.state_mut().open_bytes("deck.pdf", None, deck).expect("the deck opens");
+    h.run_steps(3);
+    assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::with_params("window.document", serde_json::json!({ "index": 0 })));
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0), "Window ▸ the first document switched to it");
+    assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is still open");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Delete under the full-screen prompt deleted the comment");
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
