@@ -80,8 +80,9 @@ rustix = { version = "1", features = ["fs"] }
 # Auto interface language: the Windows display language, without starting a process.
 sys-locale = "0.3"
 # Region ▸ Measurement system for the default Units, read from the registry without starting reg.exe;
-# where the pointer is while files are dragged over the window (winit doesn't say).
-winsafe = { version = "0.0.29", default-features = false, features = ["advapi", "user"] }
+# where the pointer is while files are dragged over the window (winit doesn't say); Windows file
+# association registration and opening Default apps settings.
+winsafe = { version = "0.0.29", default-features = false, features = ["advapi", "shell", "user"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rfd = { workspace = true, features = ["file-handle-inner"] }

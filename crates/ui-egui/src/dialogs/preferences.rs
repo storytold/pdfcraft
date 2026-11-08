@@ -372,6 +372,15 @@ impl<'a> PrefSearchContext<'a> {
         self.scroll_if_first_match(&resp, matches);
         changed
     }
+
+    #[cfg(target_os = "windows")]
+    pub fn button(&mut self, ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
+        let count = find_match_ranges(label, self.query).len();
+        self.total_matches += count;
+        let resp = widgets::pill_button(ui, label, primary);
+        self.scroll_if_first_match(&resp, count);
+        resp
+    }
 }
 
 /// Whether the interface can draw a language picker's native name.
@@ -677,6 +686,91 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
             "Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
         ));
     }
+
+    #[cfg(target_os = "windows")]
+    windows_portable_and_association_section(ui, app, t, ctx);
+}
+
+#[cfg(target_os = "windows")]
+fn windows_portable_and_association_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.add_space(8.0);
+
+    let mut portable_marker = crate::portable::marker_present();
+    if ctx.checkbox(ui, &mut portable_marker, tl!("Portable mode: keep settings and data in PdfCraftData beside pdfcraft.exe"), t).changed() {
+        match crate::portable::set_enabled(portable_marker) {
+            Ok(_) => {
+                if portable_marker {
+                    if !app.windows_association_disabled {
+                        let _ = crate::windows_association::register_current_user();
+                    }
+                    app.notify_tr("Portable mode enabled. Restart PdfCraft to use PdfCraftData beside pdfcraft.exe.");
+                } else {
+                    app.notify_tr("Portable mode disabled. Restart PdfCraft to use the user folder.");
+                }
+            }
+            Err(e) => {
+                app.notify_error(e);
+            }
+        }
+    }
+    if let Some(dir) = crate::portable::data_dir() {
+        let msg = crate::i18n::fmt(tl!("Active portable data folder: {path}"), &[("path", &dir.display().to_string())]);
+        ctx.label_secondary(ui, &msg, t);
+    } else if let Some(unwritable) = &crate::portable::current().unwritable {
+        ctx.label_secondary(ui, &unwritable.to_string(), t);
+    } else {
+        ctx.label_secondary(ui, tl!("Creates or removes portable.txt next to pdfcraft.exe. Takes effect the next time PdfCraft starts."), t);
+    }
+
+    ui.add_space(8.0);
+    ctx.label_primary(ui, tl!("Windows PDF association and document icon"), t);
+    ui.add_space(2.0);
+
+    let assoc_status = crate::windows_association::status();
+    ui.horizontal_wrapped(|ui| {
+        if ctx.button(ui, tl!("Set as default PDF reader…"), false).clicked() {
+            match crate::windows_association::register_and_open_default_apps() {
+                Ok(()) => {
+                    app.windows_association_disabled = false;
+                    app.notify_tr("Registered PdfCraft with the PDF document icon. Choose PdfCraft for .pdf in Windows Settings.");
+                }
+                Err(e) => app.notify_error(e),
+            }
+        }
+
+        if ctx.button(ui, tl!("Repair PDF file icon"), false).clicked() {
+            match crate::windows_association::repair_pdf_icon() {
+                Ok(()) => {
+                    app.windows_association_disabled = false;
+                    app.notify_tr("Applied the dedicated PDF document icon and refreshed Windows Explorer.");
+                }
+                Err(e) => app.notify_error(e),
+            }
+        }
+
+        if matches!(
+            assoc_status,
+            crate::windows_association::AssociationStatus::RegisteredCurrentExe
+                | crate::windows_association::AssociationStatus::NeedsIconOrPathRepair
+        ) && ctx.button(ui, tl!("Remove Windows registration"), false).clicked()
+        {
+            match crate::windows_association::unregister_current_user() {
+                Ok(()) => {
+                    app.windows_association_disabled = true;
+                    app.notify_tr("Removed PdfCraft's Windows file association entries.");
+                }
+                Err(e) => app.notify_error(e),
+            }
+        }
+    });
+
+    ctx.label_secondary(
+        ui,
+        tl!(
+            "Registers PdfCraft in your Windows account with the dedicated PDF document icon (-2) so .pdf files do not use the application icon, even in portable mode or after manual Open With selection."
+        ),
+        t,
+    );
 }
 
 /// Content for Card 2: Appearance & Theme
