@@ -89,16 +89,16 @@ pub(crate) struct Refusal {
     pub(crate) renaming: bool,
 }
 
-/// Ungroup form `name` from the page's `resources`. `translucent` says whether the graphics state
-/// at the `Do` is translucent, blended or soft-masked, which a transparency group composites as a
-/// whole. `page_space` is the page group's blending colour space ([`page_blend_space`]).
-/// `placement` maps the form's space to the page's default space at the `Do` (its `/Matrix`,
-/// then the CTM there). The form, and the forms and patterns it draws, decode within `budget`.
+/// Ungroup the form drawn by the `Do` at `page_ops[at]` (the page's streams parsed as one, the
+/// indexes `page_images` gives) from the page's `resources`. `page_space` is the page group's
+/// blending colour space ([`page_blend_space`]). `placement` maps the form's space to the page's
+/// default space at the `Do` (its `/Matrix`, then the CTM there). The form, and the forms and
+/// patterns it draws, decode within `budget`.
 pub(crate) fn ungroup_ops(
     doc: &Document,
     resources: &Dict,
-    name: &[u8],
-    translucent: bool,
+    page_ops: &[Op],
+    at: usize,
     page_space: Option<&Object>,
     placement: Matrix,
     budget: &mut DecodeBudget,
@@ -112,6 +112,19 @@ pub(crate) fn ungroup_ops(
     let refuse = |why: &str| refusal(why, false);
     // The form itself is the reason: every placement of it is refused the same way.
     let invalid = |why: &str| refusal(why, true);
+    let op = page_ops.get(at).filter(|op| op.is("Do")).ok_or_else(|| refuse("it is missing"))?;
+    // The renderer draws a `Do`'s last operand, and the placement was read for its first
+    // (`page_images`): with more than one they can be different forms.
+    if op.operands.len() != 1 {
+        return Err(refuse("it is drawn with an operand too many"));
+    }
+    let name = op.name(0).ok_or_else(|| refuse("it is missing"))?;
+    let (translucent, open) = state_at(doc, resources, page_ops, at);
+    // Inline, its clip would take in the page's unfinished path and its text objects would be
+    // nested in the page's.
+    if open {
+        return Err(refuse("it is drawn inside an unfinished path or text object"));
+    }
     let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).ok_or_else(|| refuse("it is missing"))?;
     let form = xobjects.get(name).ok_or_else(|| refuse("it is missing"))?;
     let Object::Stream(s) = &*doc.resolve(form) else { return Err(refuse("it is not a Form XObject")) };
@@ -680,16 +693,22 @@ fn blends(doc: &Document, gs: &Dict) -> bool {
     !first.is_some_and(|b| matches!(b.as_name(), Some(b"Normal" | b"Compatible")))
 }
 
-/// Whether the graphics state is translucent, blended or soft-masked at op `at` of the page's
-/// streams parsed as one (the indexes `page_images` gives), following `q`/`Q` and `gs`. Each `gs`
-/// changes only the parameters it sets.
-pub(crate) fn translucent_at(doc: &Document, resources: &Dict, ops: &[Op], at: usize) -> bool {
+/// The state at op `at` of the page's streams parsed as one: whether the graphics state is
+/// translucent, blended or soft-masked there, following `q`/`Q` and `gs` (each `gs` changes only
+/// the parameters it sets), which a transparency group composites as a whole; and whether a path
+/// or a text object is open there.
+fn state_at(doc: &Document, resources: &Dict, ops: &[Op], at: usize) -> (bool, bool) {
     let states = resources.get(b"ExtGState").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     // Fill alpha below one, stroke alpha below one, a soft mask, a blend mode other than Normal.
     let mut stack: Vec<[bool; 4]> = Vec::new();
     let mut now = [false; 4];
+    let (mut path, mut text) = (false, false);
     for op in ops.iter().take(at) {
         match op.op.as_slice() {
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" | b"W" | b"W*" => path = true,
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => path = false,
+            b"BT" => text = true,
+            b"ET" => text = false,
             b"q" => stack.push(now),
             // A Q with nothing to restore is ignored, as renderers ignore it.
             b"Q" => now = stack.pop().unwrap_or(now),
@@ -715,5 +734,5 @@ pub(crate) fn translucent_at(doc: &Document, resources: &Dict, ops: &[Op], at: u
             _ => {}
         }
     }
-    now.iter().any(|v| *v)
+    (now.iter().any(|v| *v), path || text)
 }

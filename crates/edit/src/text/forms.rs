@@ -77,24 +77,12 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
             crate::page_images(&next, page)?.into_iter().filter(|i| i.is_form).map(|i| (i.op, i)).collect();
         let mut replacements = std::collections::BTreeMap::new();
         let mut merged = resources;
-        let mut pending_path = false;
-        let mut in_text = false;
         let (mut refused_here, mut expanded_here) = (std::collections::HashSet::new(), std::collections::HashSet::new());
         for (at, op) in ops.iter().enumerate() {
-            match op.op.as_slice() {
-                b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" | b"W" | b"W*" => pending_path = true,
-                b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => pending_path = false,
-                b"BT" => in_text = true,
-                b"ET" => in_text = false,
-                _ => {}
-            }
             let Some(image) = images.get(&at) else { continue };
             if image.object.is_some_and(|o| settled.contains(&o)) {
                 continue;
             }
-            // The resource name exactly as the `Do` writes it (its last operand, the one drawn):
-            // a name need not be UTF-8, and `image.name` is only its display form.
-            let name = op.last_name().map_or_else(|| image.name.as_bytes().to_vec(), <[u8]>::to_vec);
             // An earlier placement is read again only when it was refused for a rename that the
             // names merged since have made unnecessary. The last pass opens nothing, so there it
             // keeps its reason.
@@ -102,7 +90,9 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
             if earlier {
                 let Some(w) = waiting.iter().position(|(i, _)| *i == at) else { continue };
                 let (_, reason) = waiting.swap_remove(w);
-                if pass == MAX_LEVELS || !ungroup::merges_without_renaming(&next, &merged, &name) {
+                // The name exactly as the `Do` writes it: a name need not be UTF-8, and
+                // `image.name` is only its display form.
+                if pass == MAX_LEVELS || !op.last_name().is_some_and(|name| ungroup::merges_without_renaming(&next, &merged, name)) {
                     still_waiting.push((at, reason));
                     continue;
                 }
@@ -111,24 +101,13 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                     result.refused.remove(i);
                 }
             }
-            if pending_path || in_text {
-                result.refused.push(format!("{}: the group is drawn inside an unfinished path or text object", image.name));
-                continue;
-            }
-            // The renderer draws a `Do`'s last operand; `image` was found by its first. With more
-            // than one they can be different forms, so this placement is left as it is.
-            if op.operands.len() != 1 {
-                result.refused.push(format!("{}: the group is drawn with an operand too many", image.name));
-                continue;
-            }
             if !earlier {
                 visits = visits.saturating_add(1);
                 if visits > 64 {
                     return Err(EditError::Invalid("too many grouped text placements on this page (limit 64); the page was left unchanged".into()));
                 }
             }
-            let translucent = ungroup::translucent_at(&next, &merged, &ops, at);
-            match ungroup::ungroup_ops(&next, &merged, &name, translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
+            match ungroup::ungroup_ops(&next, &merged, &ops, at, space.as_ref(), Matrix(image.matrix), &mut decode) {
                 Ok(ungroup::Ungrouped { ops: inline, resources: mut res, patterns, shows_text }) => {
                     // Vector and image artwork needs no preparation. Nested text groups are
                     // visited on the next pass, with their inherited placement and clip in force.

@@ -12944,6 +12944,30 @@ fn a_group_refused_for_renaming_is_prepared_once_the_page_has_its_names() {
     assert!(["alpha", "beta"].iter().all(|t| blocks.iter().any(|b| b.text == *t)), "{blocks:?}");
 }
 
+/// Ungroup finds the form by the name its `Do` writes, byte for byte: `/F#FF` is not UTF-8, and
+/// the picture's display name (`F�`) names no resource.
+#[test]
+fn ungroup_finds_a_form_under_a_non_utf8_name() {
+    let mut doc = page_with_forms("/F#FF Do", &[("F#FF".into(), "BT /F1 14 Tf 40 500 Td (named) Tj ET".into())]);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "named"));
+}
+
+/// Ungroup refuses a form drawn inside a text object or an unfinished path: inline, its text
+/// objects would be nested in the page's, and its clip would take in the page's path (which its
+/// `n` then discards). The same form drawn outside them is ungrouped.
+#[test]
+fn ungroup_refuses_a_form_drawn_inside_text_or_a_path() {
+    let form = [("Body".to_string(), "BT /F1 14 Tf 40 500 Td (body) Tj ET".to_string())];
+    for content in ["BT /F1 14 Tf /Body Do ET", "10 10 m 20 20 l /Body Do S"] {
+        let mut doc = page_with_forms(content, &form);
+        let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup);
+        assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("unfinished path or text object")), "{content}: {r:?}");
+    }
+    let mut doc = page_with_forms("BT /F1 14 Tf ET /Body Do 10 10 m 20 20 l S", &form);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+}
+
 /// The `Do` is matched to its resource by the name's bytes as written, which need not be UTF-8.
 #[test]
 fn grouped_text_under_a_non_utf8_resource_name_is_prepared() {
