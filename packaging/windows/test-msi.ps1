@@ -279,13 +279,27 @@ foreach ($value in @(
     @("Software\Classes\CLSID\$previewClsid\InprocServer32", '', '[#PdfcraftPreviewDll]'),
     @("Software\Classes\CLSID\$previewClsid\InprocServer32", 'ThreadingModel', 'Apartment'),
     @($previewHandler, '', $previewClsid),
-    @($previewList, '', 'PdfCraft PDF preview'),
-    @($previewList, 'AppId', $previewClsid))) {
+    @("Software\Classes\CLSID\$previewClsid", 'AppID', '[PreviewHostAppId]'),
+    @($previewList, '', 'PdfCraft PDF preview'))) {
   $name = if ($value[1]) { '`Name` = ''' + $value[1] + '''' } else { '`Name` IS NULL' }
   $row = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $value[0] + ''' AND ' + $name) 3
   Assert-Equal $row[0] $value[2] "Preview handler $($value[0]) $($value[1])"
   Assert-Equal $row[1] 'PdfcraftPreview' "Preview handler $($value[0]) component"
   Assert-Equal $row[2] '-1' "Preview handler $($value[0]) HKMU root"
+}
+# Windows starts the handler in prevhost.exe through its class's AppID: the system's own host,
+# except that a 32-bit package on 64-bit Windows needs the 32-bit host.
+$previewHost = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''PreviewHostAppId''' 1
+Assert-Equal $previewHost[0] '{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}' 'Preview host AppID'
+if ($view64) {
+  Assert-NoRow 'SELECT `Action` FROM `CustomAction` WHERE `Source` = ''PreviewHostAppId''' '64-bit package switching the preview host'
+} else {
+  $previewHost32 = Read-Row 'SELECT `Action`, `Target` FROM `CustomAction` WHERE `Source` = ''PreviewHostAppId''' 2
+  Assert-Equal $previewHost32[1] '{534A1E02-D58F-44f0-B58B-36CBED287C7C}' '32-bit preview host AppID'
+  foreach ($sequence in @('InstallUISequence', 'InstallExecuteSequence')) {
+    $set = Read-Row ('SELECT `Condition` FROM `' + $sequence + '` WHERE `Action` = ''' + $previewHost32[0] + '''') 1
+    Assert-Equal $set[0] 'VersionNT64' "$sequence 32-bit preview host condition"
+  }
 }
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}''' '.pdf preview handler'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'

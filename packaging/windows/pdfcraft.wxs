@@ -20,6 +20,14 @@
     <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/pdfcraft" />
     <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/pdfcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+    <!-- Windows starts preview handlers in prevhost.exe through the AppID on their class
+         (learn.microsoft.com, "How to Register a Preview Handler"). The DLL's bitness picks the
+         host: a 32-bit handler on 64-bit Windows needs the 32-bit host, anywhere else the system's
+         own. Private, so msiexec's command line cannot point the class at another server. -->
+    <Property Id="PreviewHostAppId" Value="{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}" />
+    <?if $(sys.BUILDARCH) = x86 ?>
+    <SetProperty Id="PreviewHostAppId" Action="CraftPreviewHost32On64" Value="{534A1E02-D58F-44f0-B58B-36CBED287C7C}" After="AppSearch" Sequence="both" Condition="VersionNT64" />
+    <?endif?>
     <!-- Desktop shortcut (#143): on by default for a first install, a checkbox in the full-UI
          welcome dialog, and INSTALLDESKTOPSHORTCUT=0 on the msiexec command line for unattended
          installs. Secure, so the choice made in the (unelevated) UI reaches the elevated install.
@@ -210,16 +218,16 @@
       </Component>
 
       <!-- Preview pane in File Explorer: pdfcraft_preview.dll (crates/preview) is an IPreviewHandler
-           registered for PdfCraft.Document only (not on .pdf itself). Explorer hosts preview
-           handlers in its surrogate process. -->
+           registered for PdfCraft.Document only (not on .pdf itself). Explorer and Outlook start
+           it in prevhost.exe, the surrogate its AppID names (PreviewHostAppId above). -->
       <Component Id="PdfcraftPreview" Guid="A4F01955-8490-404C-C66C-4F18F4820D70">
         <File Id="PdfcraftPreviewDll" Source="$(var.BinDir)\pdfcraft_preview.dll" KeyPath="yes" />
         <RegistryValue Root="HKMU" Key="Software\Classes\CLSID\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}" Value="PdfCraft PDF preview" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\CLSID\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}" Name="AppID" Value="[PreviewHostAppId]" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\CLSID\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}\InprocServer32" Value="[#PdfcraftPreviewDll]" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\CLSID\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}\InprocServer32" Name="ThreadingModel" Value="Apartment" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\PdfCraft.Document\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" Value="{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\PreviewHandlers\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}" Value="PdfCraft PDF preview" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\PreviewHandlers\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}" Name="AppId" Value="{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}" Type="string" />
       </Component>
 
       <Component Id="PdfcraftCli">
