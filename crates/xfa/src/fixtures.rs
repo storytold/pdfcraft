@@ -739,3 +739,43 @@ if (this.rawValue == "1") {
 "##
     .to_string()
 }
+
+/// A form whose text field `probe` counts its enters in `enters` and its exits in `exits`, whose
+/// text field `quiet` only shows a message when it is left, and whose radio button `size.large`
+/// counts its enters in `picks` and its exits in `drops` (each button of a radio group is a field
+/// with scripts of its own), whose text field `hint` clears its "Type here" when it gains focus, and
+/// whose text field `relay` puts that "Type here" back in `hint` when it loses focus.
+pub fn focus_template() -> String {
+    let js = "application/x-javascript";
+    let count = |name: &str| format!(r#"<script contentType="{js}">{name}.rawValue = Number({name}.rawValue) + 1;</script>"#);
+    let counter = |name: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" access="protected"><ui><textEdit/></ui><value><integer>0</integer></value></field>"#)
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <field name="probe" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ <field name="quiet" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">xfa.host.messageBox("left quiet");</script></event></field>
+ <exclGroup name="size" layout="lr-tb">
+  <field name="small" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>S</text></items></field>
+  <field name="large" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>L</text></items><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ </exclGroup>
+ {}{}{}{}
+ <field name="hint" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>Type here</text></value><event activity="enter"><script contentType="{js}">if (this.rawValue == "Type here") this.rawValue = "";</script></event></field>
+ <field name="relay" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">hint.rawValue = "Type here";</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        count("enters"),
+        count("exits"),
+        count("picks"),
+        count("drops"),
+        counter("exits"),
+        counter("enters"),
+        counter("picks"),
+        counter("drops")
+    )
+}
