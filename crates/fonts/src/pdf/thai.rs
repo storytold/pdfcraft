@@ -304,7 +304,7 @@ impl LegacyThaiFont {
         if !space.is_finite() || space < 0.0 {
             return Err("the source space width is invalid".into());
         }
-        let bytes = super::embedded_sfnt_within(doc, font, budget).ok_or("the source Thai font has no readable glyph program")?;
+        let mut bytes = super::embedded_sfnt_within(doc, font, budget).ok_or("the source Thai font has no readable glyph program")?;
         let positioned = crate::source_shaping::has_thai_layout(&bytes);
         let (unicode, codes) = composite_glyph_maps(doc, font, &bytes, &m, budget).ok_or("the Thai source glyph codes cannot be recovered safely")?;
         // A subset keeps only the glyphs its document used, so no particular letter or alternate
@@ -321,7 +321,23 @@ impl LegacyThaiFont {
                 legacy_glyph(ch) == Some(gid)
                     || ((342..=368).contains(&gid) && (char::from_u32(ch).is_some_and(is_thai_mark) || matches!(ch, 0x0e0d | 0x0e10)))
             });
-        Ok(usable.then_some(Self { bytes, codes, space, positioned }))
+        if !usable {
+            return Ok(None);
+        }
+        if !positioned {
+            // Glyphs 342–368 are alternates moved for a context. Mapped as the nominal character
+            // (its glyph dropped), one would be drawn out of place where the nominal form is
+            // needed: the shaper reaches it only through its PUA form, and that text is refused.
+            use skrifa::MetadataProvider as _;
+            let alternate = |u: u32, g: skrifa::GlyphId| matches!(u, 0x0e01..=0x0e5b) && (342..=368).contains(&g.to_u32());
+            let charmap = skrifa::FontRef::new(&bytes).map_err(|e| e.to_string())?.charmap();
+            if charmap.mappings().any(|(u, g)| alternate(u, g)) {
+                let nominal: BTreeMap<u32, u32> =
+                    charmap.mappings().filter(|&(u, g)| g.to_u32() != 0 && !alternate(u, g)).take(65_537).map(|(u, g)| (u, g.to_u32())).collect();
+                super::append_editor_cmap(&mut bytes, &nominal).ok_or("the Thai source glyph map cannot be rebuilt safely")?;
+            }
+        }
+        Ok(Some(Self { bytes, codes, space, positioned }))
     }
 
     /// Shape into glyphs that are already in this exact source face.
@@ -613,6 +629,21 @@ mod tests {
         assert_eq!(shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [290, 291, 292, 214, 215]);
         let error = crate::source_shaping::shape(&program, "กิ่").unwrap_err();
         assert!(error.contains("mark positioning"), "{error}");
+    }
+
+    /// A legacy subset whose map gives a shifted alternate as the nominal mark (its nominal glyph
+    /// dropped) draws it only where that alternate belongs, and refuses text needing the nominal.
+    #[test]
+    fn a_legacy_alternate_is_not_drawn_as_the_nominal_mark() {
+        let mut program = without_tables(&thai_ordered_program(), &[b"cmap", b"GSUB", b"GPOS"]);
+        drop_glyph(&mut program, 265);
+        let unicode = [INTACT, b" 1 beginbfchar <0157> <0e34> endbfchar"].concat();
+        let mut doc = Document::new_empty();
+        let font = thai_font(&mut doc, &program, &unicode);
+        let font = LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut DecodeBudget::new(1 << 26, 0)).unwrap().expect("a legacy subset");
+        let ids = |text: &str| font.shape(text).map(|run| run.shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>());
+        assert_eq!(ids("ปิ"), Ok(vec![240, 343]), "after an ascender, the alternate is the form needed");
+        assert!(ids("กิ").is_err(), "elsewhere the nominal ิ is needed, which the subset dropped");
     }
 
     /// A THSarabunPSK program with its own Thai mark positioning is shaped by that layout; one
