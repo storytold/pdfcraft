@@ -84,6 +84,9 @@ hayro-jbig2 = "0.3"
 
 # foundation
 thiserror = "2"
+# Linear-time matching (no backtracking) for caller-supplied redaction patterns. `perf-dfa` gives
+# the lazy-DFA cache that `RegexBuilder::dfa_size_limit` bounds (the limit is inert without it).
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf-dfa"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 log = "0.4"

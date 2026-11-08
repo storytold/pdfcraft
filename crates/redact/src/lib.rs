@@ -32,6 +32,7 @@ mod tests;
 mod tests_verify;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
+pub mod user_regex;
 pub mod verify;
 
 use interp::{Mode, Scope, process};

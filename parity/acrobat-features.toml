@@ -5827,6 +5827,18 @@ evidence = ["crates/redact/src/patterns.rs::labelled_italian_international_slash
 notes = "phone (North American, E.164 with + country code, national with trunk 0, a slash after a trunk-0 area code; labelled Italian +39 geographic numbers with one slash after the area code match with their complete country code (#3205 follow-up), with or without one space after +39; international slash numbers without a phone label, or with country codes other than +39, remain unsupported; numbers without separators only after a phone label such as Tel. or cell.), e-mail, credit card (Luhn), SSN, dates (English US forms); text drawn in a font whose built-in encoding we hold no table for (Symbol, ZapfDingbats, MacExpert) has no Unicode mapping, so a pattern search cannot see it -- it is skipped rather than mis-decoded"
 
 [[feature]]
+id = "protect.redact-regex"
+title = "Redact by caller-supplied regular expression"
+area = "G"
+tier = "P2"
+milestone = "M8"
+status = "shipped"
+commands = []
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/user_regex.rs::hostile_expressions_are_refused_or_stay_linear", "crates/redact/src/user_regex.rs::validators_filter_matches", "crates/automation/tests/it/automation.rs::redacting_with_a_caller_regex_through_tools"]
+notes = "Headless only (redact_mark regex, optional validate luhn, mod97 or iban; issue #1886): no UI entry yet. Rust regex syntax, matched in linear time with no look-around or back-references; expression capped at 1024 bytes, compiled size and nesting capped, empty-matching expressions refused. Matches run on the page text as the pattern matchers see it (words and lines joined by one space), so a match cannot span a page break. Missing: a UI field, a mask for checksums that need more than the whole match (for example the French social security key), and a check against Acrobat's own custom-pattern syntax (not observed)."
+
+[[feature]]
 id = "protect.redact-pattern-locales"
 title = "Pattern sets per locale"
 area = "G"
@@ -7487,8 +7499,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/automation/tests/it/optimize_content_boundaries.rs::fragment_merge_preserves_a_comment_across_content_pieces", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/ui-egui/src/workflows/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled", "crates/optimize/tests/optimize.rs::images_and_forms_nothing_draws_are_dropped", "crates/automation/tests/it/automation.rs::a_deleted_image_is_not_kept_by_reduce_or_optimize", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_picks_a_preset", "crates/automation/tests/it/automation.rs::a_page_printed_in_strips_gets_small_through_tools", "crates/optimize/tests/optimize.rs::the_mobile_preset_makes_a_printed_page_small"]
-notes = "Settings menu with the Standard and Mobile presets (Custom once an option changes; doc_optimize preset), Images (with Merge image fragments: a page picture drawn as one-pixel strips, as some PDF printers write it, is put back together so it can be resampled), Discard Objects, Discard User Data, Clean Up (also drops images and forms the pages list but never draw, such as deleted images); runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no saved custom presets, no space audit"
+evidence = ["crates/automation/tests/it/optimize_content_boundaries.rs::fragment_merge_preserves_a_comment_across_content_pieces", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/automation/tests/it/automation.rs::optimizing_to_a_target_size", "crates/ui-egui/src/workflows/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled", "crates/optimize/tests/optimize.rs::images_and_forms_nothing_draws_are_dropped", "crates/automation/tests/it/automation.rs::a_deleted_image_is_not_kept_by_reduce_or_optimize", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_picks_a_preset", "crates/automation/tests/it/automation.rs::a_page_printed_in_strips_gets_small_through_tools", "crates/optimize/tests/optimize.rs::the_mobile_preset_makes_a_printed_page_small"]
+notes = "Settings menu with the Standard and Mobile presets (Custom once an option changes; doc_optimize preset), Images (with Merge image fragments: a page picture drawn as one-pixel strips, as some PDF printers write it, is put back together so it can be resampled), Discard Objects, Discard User Data, Clean Up (also drops images and forms the pages list but never draw, such as deleted images); runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no saved custom presets, no space audit; headless-only optional target_bytes retries up to 5 stronger image steps (an automation extension, not an Acrobat feature)"
 
 [[feature]]
 id = "optimize.downsample-images"
