@@ -137,7 +137,7 @@ fn word_table_cell_widths_follow_the_columns_they_span() {
             vec![cell("All", 3)],
             vec![cell("First", 1)],
         ],
-        ruled: false,
+        ruled: None,
     };
     let xml = docx_table(&table);
     assert!(xml.contains("<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/>"), "{xml}");
@@ -245,6 +245,61 @@ pub(crate) fn part(zip: &[u8], name: &str) -> String {
         i = data + size;
     }
     panic!("{name} missing")
+}
+
+/// The PDF's language (`/Lang`) is the default language of the Word document's text, in the
+/// attribute Word keeps for its script, and the HTML page's. No language, or one that is not a
+/// well formed tag, leaves both files as they were.
+#[test]
+fn word_and_html_take_the_documents_language() {
+    let pages = [page()];
+    let styles = |lang| part(&docx_with_language(&pages, "Report", lang), "word/styles.xml");
+    let defaults = |lang: &str| format!("<w:docDefaults><w:rPrDefault><w:rPr>{lang}</w:rPr></w:rPrDefault></w:docDefaults>");
+    assert!(styles(Some("bg-BG")).contains(&defaults("<w:lang w:val=\"bg-BG\"/>")), "{}", styles(Some("bg-BG")));
+    assert!(styles(Some(" en-GB ")).contains("<w:lang w:val=\"en-GB\"/>"), "the tag is trimmed");
+    assert!(styles(Some("zh-Hant-TW")).contains(&defaults("<w:lang w:eastAsia=\"zh-Hant-TW\"/>")), "East Asian text");
+    assert!(styles(Some("ja")).contains("<w:lang w:eastAsia=\"ja\"/>"), "East Asian text");
+    assert!(styles(Some("ar-EG")).contains(&defaults("<w:lang w:bidi=\"ar-EG\"/>")), "right-to-left text");
+    assert!(styles(Some("HE")).contains("<w:lang w:bidi=\"HE\"/>"), "right-to-left text");
+    // A script subtag decides over the language; private use names no script.
+    assert!(styles(Some("pa-Arab-PK")).contains("<w:lang w:bidi=\"pa-Arab-PK\"/>"), "Punjabi in Arabic script");
+    assert!(styles(Some("sr-Latn")).contains("<w:lang w:val=\"sr-Latn\"/>"), "Serbian in Latin script");
+    assert!(styles(Some("zh-Latn")).contains("<w:lang w:val=\"zh-Latn\"/>"), "Chinese in Latin script");
+    assert!(styles(Some("en-x-arab")).contains("<w:lang w:val=\"en-x-arab\"/>"), "private use");
+    assert!(styles(Some("az-Latn-x-arab")).contains("<w:lang w:val=\"az-Latn-x-arab\"/>"), "private use");
+    assert!(html_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
+    // A tag longer than 35 characters is still a tag.
+    let long = "en-US-u-ca-gregory-nu-latn-co-phonebk";
+    assert!(styles(Some(long)).contains(&format!("<w:lang w:val=\"{long}\"/>")), "{long}");
+    assert!(html_with_language(&pages, "Report", Some(long)).contains(&format!("<html lang=\"{long}\">")), "{long}");
+    let too_long = format!("en{}", "-abcdefgh".repeat(29));
+    // Private use takes one-character subtags.
+    assert!(html_with_language(&pages, "Report", Some("en-x-a-b")).contains("<html lang=\"en-x-a-b\">"));
+    for lang in [
+        None,
+        Some(""),
+        Some("  "),
+        Some("bg_BG"),
+        Some("b"),
+        Some("bulg-BG"),
+        Some("bg--BG"),
+        Some("bg-"),
+        Some("en-x"),
+        Some("en-a"),
+        Some("en-a-x-private"),
+        Some("en-US-u-ca-x"),
+        Some("en-US-abcdefghi"),
+        Some(too_long.as_str()),
+        Some("en-\"x\""),
+        Some("1a-BG"),
+        Some("\u{431}\u{433}-BG"),
+    ] {
+        assert!(docx_with_language(&pages, "Report", lang) == docx(&pages, "Report"), "{lang:?}");
+        assert_eq!(html_with_language(&pages, "Report", lang), html(&pages, "Report"), "{lang:?}");
+        assert_eq!(html_simple_with_language(&pages, "Report", lang), html_simple(&pages, "Report"), "{lang:?}");
+    }
+    // The simple export leaves out styling, not the language.
+    assert!(html_simple_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
 }
 
 #[test]
@@ -887,7 +942,7 @@ fn a_ruled_two_by_two_grid_is_a_table() {
     ];
     let (found, consumed) = tables(&blocks, &grid);
     assert_eq!(found.len(), 1);
-    assert!(found[0].ruled);
+    assert_eq!(found[0].ruled, Some([true; 4]), "the grid's frame is ruled on every side");
     assert_eq!(found[0].rows.len(), 2);
     assert!(consumed.iter().all(|used| *used));
     let p = Page { width: 320.0, height: 300.0, blocks: blocks.clone(), rules: grid, ..Page::default() };
@@ -898,4 +953,33 @@ fn a_ruled_two_by_two_grid_is_a_table() {
     assert!(tables(&blocks, &[]).0.is_empty(), "alignment alone does not make two by two a table");
     let underlines = [[20.0, 245.0, 300.0, 245.0]];
     assert!(tables(&blocks, &underlines).0.is_empty(), "a rule between the rows alone is no grid");
+}
+
+/// A grid drawn with inside lines only gets inside borders in Word, not a box the page never
+/// draws; an outer line far from the table (a page rule) is not its frame.
+#[test]
+fn a_ruled_table_gets_outer_borders_only_where_the_page_draws_them() {
+    let blocks = vec![
+        block("Name", 25.0, 250.0, 55.0, 261.0),
+        block("Value", 165.0, 250.0, 195.0, 261.0),
+        block("Alpha", 25.0, 225.0, 55.0, 236.0),
+        block("One", 165.0, 225.0, 185.0, 236.0),
+    ];
+    let inside = vec![[20.0, 245.0, 300.0, 245.0], [160.0, 220.0, 160.0, 270.0]];
+    let (found, _) = tables(&blocks, &inside);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].ruled, Some([false; 4]));
+    let xml = docx_table(&found[0]);
+    for edge in ["insideH", "insideV"] {
+        assert!(xml.contains(&format!("<w:{edge} w:val=\"single\"")), "{xml}");
+    }
+    for edge in ["top", "left", "bottom", "right"] {
+        assert!(xml.contains(&format!("<w:{edge} w:val=\"nil\"/>")), "{xml}");
+    }
+
+    let mut ruled_top = inside.clone();
+    ruled_top.push([20.0, 270.0, 300.0, 270.0]);
+    ruled_top.push([0.0, 500.0, 320.0, 500.0]);
+    ruled_top.push([0.0, 0.0, 320.0, 0.0]);
+    assert_eq!(tables(&blocks, &ruled_top).0[0].ruled, Some([true, false, false, false]), "only the top line near the table frames it");
 }
