@@ -56,7 +56,7 @@
         runtimeInputs = [ pkgs.git ];
         text = ''
           root=$(git rev-parse --show-toplevel)
-          exec cargo run --release --manifest-path "$root/Cargo.toml" -p "$(basename "$root")" -- "$@"
+          exec cargo run --release --manifest-path "$root/Cargo.toml" -p pdfcraft -- "$@"
         '';
       };
     in
