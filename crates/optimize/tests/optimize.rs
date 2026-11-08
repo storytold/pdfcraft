@@ -193,6 +193,18 @@ fn images_are_measured_where_drawn_and_downsampled() {
 }
 
 #[test]
+fn downsampling_settings_with_a_target_above_the_images_resolution_never_enlarge_it() {
+    let mut doc = Document::new_empty();
+    // 1200 px drawn 144 pt wide: 600 ppi, above the 100 ppi threshold but below the 4000 ppi "target".
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    page(&mut doc, &[("Im", img)], "q 144 0 0 144 36 600 cm /Im Do Q");
+    let enlarge = ImageSettings { downsample: true, target_ppi: 4000.0, above_ppi: 100.0, compression: Compression::Retain };
+    let report = optimize(&mut doc, &Settings { color: enlarge, gray: enlarge, ..Settings::default() }).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    assert_eq!(stream(&doc, img).dict.int(b"Width"), Some(1200));
+}
+
+#[test]
 fn an_identity_decode_array_does_not_stop_reduce() {
     // Office scanners write /Decode [0 1 0 1 0 1] (no change) on their page images (#490).
     let with_decode = |doc: &mut Document, r: ObjRef, decode: Vec<Object>| {
