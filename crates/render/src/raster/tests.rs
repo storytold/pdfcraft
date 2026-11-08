@@ -9196,13 +9196,33 @@ fn trailing_data_without_objects_reads_as_before() {
     assert_eq!((count, size, model), (1, (200, 100), 1));
 }
 
+/// A cut-off update on `one_page_file` whose object headers are written `N G obj{after}<<` in place
+/// of `N G obj\n<<`. Only the update is rewritten, so the base file's table stays at the offset
+/// its `startxref` names and reading it raises no error that would rebuild the file anyway: the
+/// update is found only if the header scan accepts what follows `obj`.
+fn cut_off_update_with_headers(after: &str) -> Vec<u8> {
+    let base = one_page_file();
+    let mut file = with_update(&base, 5000, false);
+    let update = String::from_utf8(file.split_off(base.len())).unwrap();
+    assert_eq!(update.matches(" obj\n<<").count(), 3, "every updated header is rewritten");
+    file.extend_from_slice(update.replace(" obj\n<<", &format!(" obj{after}<<")).as_bytes());
+    file
+}
+
 /// A cut-off update whose object headers run straight into their dictionaries (`4 0 obj<<`) is
-/// still found: a delimiter ends the keyword (ISO 32000-2 §7.2.2), and the renderer shows the
-/// update's new first page.
+/// still found: a delimiter ends the keyword (ISO 32000-2 §7.2.3, Table 2), and the renderer
+/// shows the update's new first page.
 #[test]
 fn a_cut_off_update_with_obj_followed_by_a_delimiter_is_rebuilt() {
-    let file = String::from_utf8(with_update(&one_page_file(), 5000, false)).unwrap().replace(" obj\n<<", " obj<<").into_bytes();
-    let ((count, size), model) = renderer_and_model_pages(file);
+    let ((count, size), model) = renderer_and_model_pages(cut_off_update_with_headers(""));
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// The same with a comment straight after the keyword (`4 0 obj%comment`): `%` is a delimiter
+/// that starts a comment (ISO 32000-2 §7.2.3 Table 2, §7.2.4), so it ends the keyword too.
+#[test]
+fn a_cut_off_update_with_obj_followed_by_a_comment_is_rebuilt() {
+    let ((count, size), model) = renderer_and_model_pages(cut_off_update_with_headers("%comment\n"));
     assert_eq!((count, size, model), (2, (300, 150), 2));
 }
 
