@@ -70,7 +70,7 @@ pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset
                     Some(_) if labels.iter().any(|l| l == part) => pages.push(page_of(part, count, labels)?),
                     Some((a, b)) => {
                         let from = if a.trim().is_empty() { 0 } else { page_of(a, count, labels)? };
-                        let to = if b.trim().is_empty() { count.saturating_sub(1) } else { page_of(b, count, labels)? };
+                        let to = if b.trim().is_empty() { count.checked_sub(1).ok_or(PrintError::NoPages)? } else { page_of(b, count, labels)? };
                         if from <= to {
                             pages.extend(from..=to);
                         } else {
@@ -114,4 +114,19 @@ fn narrow(pages: Vec<usize>, subset: Subset, reverse: bool) -> Result<Vec<usize>
         return Err(PrintError::NoPages);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_ended_range_of_empty_document_is_an_error() {
+        assert!(select_pages(0, Some("-"), &[], Subset::All, false).is_err());
+    }
+
+    #[test]
+    fn open_ended_range_covers_all_pages() {
+        assert_eq!(select_pages(5, Some("-"), &[], Subset::All, false).unwrap(), vec![0, 1, 2, 3, 4]);
+    }
 }

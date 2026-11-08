@@ -2,11 +2,11 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize};
 
 mod extract;
 mod upright_image;
-pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
+pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -23,29 +23,48 @@ pub const LETTER: (f64, f64) = (612.0, 792.0);
 /// The largest page side PDF allows (ISO 32000-2 Annex C: 14 400 units).
 const MAX_SIDE: f64 = 14_400.0;
 
-fn add_page(doc: &mut Document, w: f64, h: f64, resources: Dict, content: Option<Vec<u8>>) -> Result<ObjRef, CreateError> {
-    // `Document::new_empty` always has a page tree.
-    let pages = doc
-        .root()
-        .and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")))
-        .ok_or_else(|| CreateError::Invalid("the new document has no page tree".into()))?;
-    let mut page = Dict::new();
-    page.set(b"Type".to_vec(), Object::name("Page"));
-    page.set(b"Parent".to_vec(), Object::Ref(pages));
-    page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(w), Object::Real(h)]));
-    page.set(b"Resources".to_vec(), Object::Dict(resources));
-    if let Some(c) = content {
-        let s = doc.add(Object::Stream(Stream::flate(Dict::new(), &c)));
-        page.set(b"Contents".to_vec(), Object::Ref(s));
+/// The page tree of a document being made, with the pages added to it so far: its `/Kids` are
+/// written once, by [`Pages::finish`]. Adding each page to the tree in the document would copy every
+/// page before it, which a text of a million form feeds makes quadratic.
+struct Pages {
+    tree: ObjRef,
+    kids: Vec<Object>,
+}
+
+impl Pages {
+    /// The page tree of `doc`, with the pages it has.
+    fn of(doc: &Document) -> Result<Self, CreateError> {
+        // `Document::new_empty` always has a page tree.
+        let tree = doc
+            .root()
+            .and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")))
+            .ok_or_else(|| CreateError::Invalid("the new document has no page tree".into()))?;
+        let kids = doc.get(tree).as_dict().and_then(|d| d.get(b"Kids")).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        Ok(Self { tree, kids })
     }
-    let r = doc.add(page);
-    let _ = doc.update_dict(pages, |d| {
-        let mut kids = d.get(b"Kids").and_then(|k| k.as_array().cloned()).unwrap_or_default();
-        kids.push(Object::Ref(r));
-        d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
-        d.set(b"Kids".to_vec(), Object::Array(kids));
-    });
-    Ok(r)
+
+    fn add(&mut self, doc: &mut Document, w: f64, h: f64, resources: Dict, content: Option<Vec<u8>>) {
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(self.tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(w), Object::Real(h)]));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        if let Some(c) = content {
+            let s = doc.add(Object::Stream(Stream::flate(Dict::new(), &c)));
+            page.set(b"Contents".to_vec(), Object::Ref(s));
+        }
+        self.kids.push(Object::Ref(doc.add(page)));
+    }
+
+    /// Writes the pages added into the tree.
+    fn finish(self, doc: &mut Document) -> Result<(), CreateError> {
+        let count = i64::try_from(self.kids.len()).map_err(|_| CreateError::Invalid("too many pages".into()))?;
+        doc.update_dict(self.tree, |d| {
+            d.set(b"Count".to_vec(), Object::Int(count));
+            d.set(b"Kids".to_vec(), Object::Array(self.kids));
+        })
+        .map_err(|e| CreateError::Invalid(e.to_string()))
+    }
 }
 
 fn set_title(doc: &mut Document, title: &str) {
@@ -65,9 +84,31 @@ pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateEr
         return Err(CreateError::Invalid("invalid page size or count".into()));
     }
     let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
     for _ in 0..pages {
-        add_page(&mut doc, width, height, Dict::new(), None)?;
+        tree.add(&mut doc, width, height, Dict::new(), None);
     }
+    tree.finish(&mut doc)?;
+    Ok(doc)
+}
+
+/// A document whose pages hold ready-made content: one `(width, height, resources, content)`
+/// tuple per page, in page order. Empty content vectors make blank pages. The OCR Verify
+/// screen's editable-text output builds its pages this way.
+pub fn from_contents(pages: &[(f64, f64, Dict, Vec<u8>)]) -> Result<Document, CreateError> {
+    if pages.is_empty() || pages.len() > 10_000 {
+        return Err(CreateError::Invalid("invalid page count".into()));
+    }
+    if pages.iter().any(|(w, h, _, _)| !(w.is_finite() && h.is_finite() && (3.0..=MAX_SIDE).contains(w) && (3.0..=MAX_SIDE).contains(h))) {
+        return Err(CreateError::Invalid("invalid page size".into()));
+    }
+    let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
+    for (w, h, resources, content) in pages {
+        let content = if content.is_empty() { None } else { Some(content.clone()) };
+        tree.add(&mut doc, *w, *h, resources.clone(), content);
+    }
+    tree.finish(&mut doc)?;
     Ok(doc)
 }
 
@@ -108,9 +149,42 @@ fn jpeg_icc(mut chunks: Vec<(u8, u8, &[u8])>) -> Option<Vec<u8>> {
     complete.then(|| chunks.iter().flat_map(|c| c.2.iter().copied()).collect())
 }
 
+/// The samples of a black-and-white image packed one bit per pixel (1 for white, each row
+/// starting on a byte): eight-bit grey (`n` 1) or RGB (`n` 3) whose every pixel is pure black or
+/// pure white, or one-bit grey, already packed (a bilevel TIFF). `None` for anything else, found
+/// at its first other pixel.
+fn bilevel(data: &[u8], (w, h): (u32, u32), n: usize, bits: Option<i64>) -> Option<Vec<u8>> {
+    let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
+    let stride = w.div_ceil(8);
+    let size = stride.checked_mul(h)?;
+    match (bits, n) {
+        (Some(1), 1) => data.get(..size).map(<[u8]>::to_vec),
+        (Some(8), 1 | 3) if w > 0 => {
+            let samples = data.get(..w.checked_mul(h)?.checked_mul(n)?)?;
+            let mut packed = vec![0u8; size];
+            for (i, px) in samples.chunks_exact(n).enumerate() {
+                let white = match px {
+                    [0] | [0, 0, 0] => false,
+                    [255] | [255, 255, 255] => true,
+                    _ => return None,
+                };
+                if white && let Some(b) = packed.get_mut((i / w) * stride + (i % w) / 8) {
+                    *b |= 0x80 >> (i % w % 8);
+                }
+            }
+            Some(packed)
+        }
+        _ => None,
+    }
+}
+
 /// Add `img` to `doc` as an image XObject. An ICC profile becomes an `/ICCBased` colour space
 /// (with the device space as `/Alternate`); `profiles` shares one object between images that
 /// carry the same profile.
+///
+/// A black-and-white image is stored at one bit per pixel, as CCITT Group 4 when that is smaller
+/// than Flate: losslessly, and several times smaller than the eight bits a scan saved as a 1-bit
+/// PNG decodes to. RGB keeps its colour space when it has a colour profile.
 fn add_image(doc: &mut Document, img: Embedded, profiles: &mut Vec<(Vec<u8>, ObjRef)>) -> ObjRef {
     let mut d = img.dict;
     d.set(b"Type".to_vec(), Object::name("XObject"));
@@ -118,12 +192,48 @@ fn add_image(doc: &mut Document, img: Embedded, profiles: &mut Vec<(Vec<u8>, Obj
     d.set(b"Width".to_vec(), Object::Int(img.px.0 as i64));
     d.set(b"Height".to_vec(), Object::Int(img.px.1 as i64));
     let device = d.name(b"ColorSpace").map(<[u8]>::to_vec);
-    let n = match device.as_deref() {
+    let mut n = match device.as_deref() {
         Some(b"DeviceGray") => 1,
         Some(b"DeviceRGB") => 3,
         Some(b"DeviceCMYK") => 4,
         _ => 0,
     };
+    let (mut data, mut filtered) = (img.data, img.filtered);
+    let profiled_rgb = n == 3 && img.icc.is_some();
+    if !filtered
+        && !profiled_rgb
+        && let Some(packed) = bilevel(&data, img.px, n, d.int(b"BitsPerComponent"))
+    {
+        if n == 3 {
+            d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+            n = 1;
+        }
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        // The smaller as stored, dictionary included: Group 4's parameters outweigh its saving on
+        // a tiny image.
+        let stored = |d: &Dict, data: &[u8]| {
+            let mut out = Vec::new();
+            serialize(&Object::Dict(d.clone()), &mut out);
+            out.len().saturating_add(data.len())
+        };
+        let mut flate_dict = d.clone();
+        flate_dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let flate = pdfcraft_filters::encode_flate(&packed);
+        (d, data) = match pdfcraft_filters::encode_g4(&packed, img.px.0, img.px.1) {
+            Ok(g4) => {
+                let mut parms = Dict::new();
+                parms.set(b"K".to_vec(), Object::Int(-1));
+                parms.set(b"Columns".to_vec(), Object::Int(i64::from(img.px.0)));
+                parms.set(b"Rows".to_vec(), Object::Int(i64::from(img.px.1)));
+                let mut g4_dict = d.clone();
+                g4_dict.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+                g4_dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+                if stored(&g4_dict, &g4) < stored(&flate_dict, &flate) { (g4_dict, g4) } else { (flate_dict, flate) }
+            }
+            Err(_) => (flate_dict, flate),
+        };
+        filtered = true;
+    }
     if let (Some(icc), Some(device)) = (img.icc.and_then(|p| icc_for(p, n)), device) {
         let r = match profiles.iter().find(|(p, _)| *p == icc) {
             Some((_, r)) => *r,
@@ -142,7 +252,7 @@ fn add_image(doc: &mut Document, img: Embedded, profiles: &mut Vec<(Vec<u8>, Obj
         let mr = doc.add(Object::Stream(Stream::flate(m, &alpha)));
         d.set(b"SMask".to_vec(), Object::Ref(mr));
     }
-    let stream = if img.filtered { Stream::from_raw(d, img.data) } else { Stream::flate(d, &img.data) };
+    let stream = if filtered { Stream::from_raw(d, data) } else { Stream::flate(d, &data) };
     doc.add(Object::Stream(stream))
 }
 
@@ -269,7 +379,7 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
             0xEE if seg.starts_with(b"Adobe") => adobe = true,
             // APP2 ICC profile, possibly split over several chunks.
             0xE2 => {
-                if let Some(([seq, count], data)) = seg.strip_prefix(b"ICC_PROFILE\0").and_then(|r| r.split_first_chunk::<2>()) {
+                if let Some(([seq, count], data)) = seg.strip_prefix(b"ICC_PROFILE\0").and_then(<[u8]>::split_first_chunk::<2>) {
                     icc_chunks.push((*seq, *count, data));
                 }
             }
@@ -406,6 +516,129 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
     Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
 }
 
+fn le16(b: &[u8], at: usize) -> Option<u16> {
+    b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]))
+}
+
+/// How a PCX image holds its pixels: bits per plane and planes.
+#[derive(Clone, Copy, PartialEq)]
+enum PcxLayout {
+    /// One byte per pixel per colour: each scanline has a red, a green and a blue row.
+    Rgb,
+    /// One byte per pixel, an index into the palette after the image (grey without one).
+    Indexed,
+    /// One bit per pixel in each of 1 to 4 planes, an index into the header's palette.
+    Bits(usize),
+}
+
+impl PcxLayout {
+    fn of(bits: u8, planes: usize) -> Option<PcxLayout> {
+        match (bits, planes) {
+            (8, 3) => Some(PcxLayout::Rgb),
+            (8, 1) => Some(PcxLayout::Indexed),
+            (1, 1..=4) => Some(PcxLayout::Bits(planes)),
+            _ => None,
+        }
+    }
+}
+
+/// The palette of a PCX image, and where its run-length coded scanlines end. An 8-bit image ends
+/// with a 0x0C byte and 256 colours; a one-plane bit image is black and white whatever its header
+/// holds; other bit images use the 16 colours at byte 16.
+fn pcx_palette(bytes: &[u8], layout: PcxLayout) -> (Vec<u8>, usize) {
+    match layout {
+        PcxLayout::Rgb => (Vec::new(), bytes.len()),
+        PcxLayout::Indexed => match bytes.len().checked_sub(769).filter(|at| *at >= 128 && bytes.get(*at) == Some(&0x0C)) {
+            Some(at) => (bytes.get(at + 1..).unwrap_or_default().to_vec(), at),
+            None => ((0..=255u8).flat_map(|v| [v, v, v]).collect(), bytes.len()),
+        },
+        PcxLayout::Bits(1) => (vec![0, 0, 0, 255, 255, 255], bytes.len()),
+        PcxLayout::Bits(_) => (bytes.get(16..64).unwrap_or_default().to_vec(), bytes.len()),
+    }
+}
+
+/// The `rows` scanlines of `line` bytes each, decoded. A run may cross from one plane's row into the
+/// next, but not out of its scanline.
+fn pcx_scanlines(mut body: &[u8], rows: usize, line: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(rows.checked_mul(line)?).ok()?;
+    for row in 1..=rows {
+        let end = row * line;
+        while out.len() < end {
+            let (&c, rest) = body.split_first()?;
+            body = rest;
+            if c < 0xC0 {
+                out.push(c);
+                continue;
+            }
+            let (&value, rest) = body.split_first()?;
+            body = rest;
+            let count = usize::from(c & 0x3F);
+            if count > end - out.len() {
+                return None;
+            }
+            out.resize(out.len() + count, value);
+        }
+    }
+    Some(out)
+}
+
+/// The RGB samples of the `w` pixels of scanline `row` (planes `stride` bytes apart).
+fn pcx_row(out: &mut Vec<u8>, row: &[u8], w: usize, stride: usize, layout: PcxLayout, palette: &[u8]) {
+    let at = |i: usize| row.get(i).copied().unwrap_or(0);
+    for x in 0..w {
+        let index = match layout {
+            PcxLayout::Rgb => {
+                out.extend([at(x), at(stride + x), at(2 * stride + x)]);
+                continue;
+            }
+            PcxLayout::Indexed => usize::from(at(x)),
+            PcxLayout::Bits(planes) => (0..planes).fold(0, |index, k| index | (usize::from(at(k * stride + x / 8) >> (7 - x % 8) & 1) << k)),
+        };
+        out.extend((0..3).map(|c| palette.get(index * 3 + c).copied().unwrap_or(0)));
+    }
+}
+
+/// A PCX image: a 128-byte header (size at 4-11, resolution at 12 and 14, plane count at 65, bytes
+/// per plane row at 66), then run-length coded scanlines, each holding one row of every plane.
+fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
+    let bad = |m: &str| CreateError::Image(name.into(), m.into());
+    let header = bytes.get(..128).ok_or_else(|| bad("a damaged PCX header"))?;
+    let word = |at: usize| le16(header, at).unwrap_or(0);
+    let byte = |at: usize| header.get(at).copied().unwrap_or(0);
+    let (bits, planes, stride) = (byte(3), usize::from(byte(65)), usize::from(word(66)));
+    let (Some(w), Some(h)) = (word(8).checked_sub(word(4)), word(10).checked_sub(word(6))) else {
+        return Err(bad("a damaged PCX header"));
+    };
+    let (w, h) = (usize::from(w) + 1, usize::from(h) + 1);
+    if planes == 0 || stride == 0 {
+        return Err(bad("a damaged PCX header"));
+    }
+    let layout = PcxLayout::of(bits, planes).ok_or_else(|| bad("this PCX plane layout is not supported"))?;
+    if stride < (w * usize::from(bits)).div_ceil(8) {
+        return Err(bad("a damaged PCX header"));
+    }
+    let line = planes * stride;
+    if line.saturating_mul(h) > MAX_DECODED_BYTES || w.saturating_mul(h).saturating_mul(3) > MAX_DECODED_BYTES {
+        return Err(bad("unusual PCX image size"));
+    }
+    let (palette, end) = pcx_palette(bytes, layout);
+    let body = bytes.get(128..end).unwrap_or_default();
+    let scanlines = pcx_scanlines(body, h, line).ok_or_else(|| bad("a damaged PCX body"))?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(w * h * 3).map_err(|_| bad("not enough memory for this image"))?;
+    for row in scanlines.chunks_exact(line) {
+        pcx_row(&mut data, row, w, stride, layout, &palette);
+    }
+    let dpi = (f64::from(word(12)), f64::from(word(14)));
+    let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
+    let mut d = Dict::new();
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    let px = (u32::try_from(w).unwrap_or(0), u32::try_from(h).unwrap_or(0));
+    Ok(Embedded { dict: d, data, filtered: false, smask: None, icc: None, px, dpi })
+}
+
 /// Largest GIF logical screen, in pixels (4096×4096).
 const MAX_GIF_PIXELS: u64 = 1 << 24;
 
@@ -513,7 +746,13 @@ pub enum SourceKind {
 }
 
 /// File extensions Create converts to PDF (images and plain text).
-pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
+pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
+
+/// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8
+/// bits per plane. `pcx` says when the rest of the header isn't one it can read.
+fn is_pcx(bytes: &[u8]) -> bool {
+    bytes.first() == Some(&0x0A) && matches!(bytes.get(1), Some(0 | 2..=5)) && bytes.get(2) == Some(&1) && matches!(bytes.get(3), Some(1 | 8))
+}
 
 /// A classic TIFF or a BigTIFF (version 43), in either byte order.
 fn is_tiff(bytes: &[u8]) -> bool {
@@ -530,6 +769,7 @@ fn is_image(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
         || is_tiff(bytes)
         || is_gif(bytes)
+        || is_pcx(bytes)
         // JPEG 2000: a JP2 file or a raw codestream.
         || bytes.starts_with(JP2_SIGNATURE)
         || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
@@ -562,9 +802,11 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
     } else if is_tiff(bytes) {
         tiff_pages(name, bytes, wanted)
     } else if bytes.starts_with(b"BM") {
-        Ok(vec![decoded(name, bytes, image::ImageFormat::Bmp)?])
+        Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), image::ImageFormat::Bmp)?])
     } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
+    } else if is_pcx(bytes) {
+        Ok(vec![pcx(name, bytes)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
         Ok(vec![jpx(name, bytes)?])
     } else {
@@ -606,6 +848,7 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         return Err(CreateError::Invalid("no images".into()));
     }
     let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
     let mut profiles = Vec::new();
     for img in images.iter().map(|(name, bytes)| embed(name, bytes, usize::MAX)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten() {
         let dpi = match resolution {
@@ -623,8 +866,9 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xobj));
         let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
-        add_page(&mut doc, w, h, res, Some(content))?;
+        tree.add(&mut doc, w, h, res, Some(content));
     }
+    tree.finish(&mut doc)?;
     if let Some((name, _)) = images.first() {
         set_title(&mut doc, name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s));
     }
@@ -718,6 +962,7 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result
     font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let fr = doc.add(font);
+    let mut tree = Pages::of(&doc)?;
     let mut page_lines: Vec<Vec<String>> = vec![Vec::new()];
     for l in lines.iter().take(lines.len().saturating_sub(1)) {
         if l == "\u{c}" || page_lines.last().is_some_and(|p| p.len() >= per_page) {
@@ -741,8 +986,9 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result
         fonts.set(b"F1".to_vec(), Object::Ref(fr));
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts));
-        add_page(&mut doc, w, h, res, Some(c))?;
+        tree.add(&mut doc, w, h, res, Some(c));
     }
+    tree.finish(&mut doc)?;
     set_title(&mut doc, title);
     Ok(doc)
 }

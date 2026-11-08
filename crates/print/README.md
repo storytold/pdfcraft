@@ -35,6 +35,7 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
 Each source page becomes a Form XObject (its content wrapped in q/Q, plus the printable
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
+Annotation appearances receive unused XObject names, preserving existing page resources even when they use the same naming prefix.
 
 The GUI Print dialog remembers its last selected paper size across application sessions,
 including when Print is cancelled. The preference stores a canonical name such as `A4`;
@@ -45,7 +46,9 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`. Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`; on macOS they also carry the job
+name and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog
+sends them, which some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files

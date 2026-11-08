@@ -93,7 +93,9 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     }
     let dss_ref = doc.add(Object::Dict(dss));
     doc.update_dict(root, |c| c.set(b"DSS".to_vec(), Object::Ref(dss_ref)))?;
-    Ok(pdfcraft_cos::write_incremental(&doc, &SaveOptions::default())?)
+    // What the user removed again before this (a cleared redaction mark) stays out of the file,
+    // as in a save; the store and everything in it are reachable from the catalog.
+    Ok(pdfcraft_cos::write_incremental(&doc, &SaveOptions { drop_unlinked: true, ..SaveOptions::default() })?)
 }
 
 /// Store one DER blob as a `/Type /Embed` stream.

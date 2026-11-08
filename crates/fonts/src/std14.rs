@@ -59,7 +59,7 @@ impl Std14 {
     /// report that called it a standard-14 name would be telling the reader something untrue.
     pub fn recognise(base: &str) -> Option<(Self, Match)> {
         let base = base.rsplit('+').next().unwrap_or(base);
-        let flat: String = base.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect();
+        let flat: String = base.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
         let has = |w: &str| flat.contains(w);
         let (bold, italic) = (has("bold"), has("italic") || has("oblique"));
         // Two bools index a four-element array, so the subscript is provably 0..=3.

@@ -119,6 +119,7 @@ impl Automation {
             "page": s.page.map(|p| p + 1),
             "rect": rect,
             "visible": s.visible,
+            "verdict_shown": s.verdict_shown,
             "revision": s.revision,
             "sub_filter": s.sub_filter,
             "algorithm": s.algorithm,
@@ -214,7 +215,7 @@ impl Automation {
             return Err(failed(format!("pkcs11:{uri}: PKCS #11 tokens aren't available in the browser")));
         }
         let path = self.resolve(a.str("id")?, false)?;
-        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let bytes = crate::read_input(&path)?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {
             sign::SignError::WrongPassword => bad("the digital ID password is incorrect"),
             e => failed(e),
@@ -345,7 +346,7 @@ impl Automation {
         };
         for p in paths {
             let path = self.resolve(&p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let bytes = crate::read_input(&path)?;
             let lower = p.to_ascii_lowercase();
             let found = if lower.ends_with(".p12") || lower.ends_with(".pfx") {
                 let id = sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(failed)?;

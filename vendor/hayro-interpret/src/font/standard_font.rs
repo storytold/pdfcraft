@@ -544,6 +544,15 @@ impl StandardKind {
                 return path;
             };
 
+            // PdfCraft patch (57): a stand-in for a font the document names is narrowed to a
+            // narrower /Widths advance, so neighbours don't overlap, but never widened: the
+            // advance already places the next glyph, and widening drew `i` and `l` of a 600-unit
+            // `Arial,Bold` as solid blocks twice their width.
+            let should_width = if self.fallback {
+                should_width.min(actual_width)
+            } else {
+                should_width
+            };
             return stretch_glyph(path, should_width, actual_width);
         }
 

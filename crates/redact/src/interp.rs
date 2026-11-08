@@ -21,17 +21,53 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
-use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, MAX_PAGE_FORMS, ObjRef, Object, Stream};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
-const MAX_DEPTH: usize = 12;
+mod layers;
+mod prune;
+
+use layers::strip_hidden_layers;
+use prune::{clip_out, extgstate_font, prune_form_resources};
+pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns};
+
+/// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
+/// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
+/// otherwise survive -- but it also removes whatever else that form drew, marked or not. So the
+/// limit has to reach as deep as anything the reader can see: the renderer follows forms to 50
+/// (`MAX_NESTED_INTERPRETATION_DEPTH`) and so does Edit text's reader (`text::MAX_FORM_DEPTH`).
+/// At 12, a page with a 13-deep chain lost the text of its innermost form even with nothing in it
+/// marked (#3645); past 50 nothing is drawn by any of the three, so removing it costs nothing
+/// visible.
+pub(crate) const MAX_DEPTH: usize = 50;
+
+// A form a reader still shows must be walkable here, or a redaction removes content that is
+// visible; the build says so rather than a test, so the two limits cannot drift apart.
+const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
     Apply,
     Verify,
+}
+
+/// A run of glyphs cut out under a region, kept for the redaction proof
+/// ([`Snapshot::capture`](crate::verify::Snapshot::capture)).
+pub(crate) struct Removed {
+    /// Index of the region (in `Scope::rects`) the run lay under.
+    pub(crate) rect: usize,
+    /// The character codes as they stood in the string.
+    pub(crate) raw: Vec<u8>,
+    /// What the font says they showed (codes without a known meaning are left out).
+    pub(crate) text: String,
+    /// How many character codes the run holds (a composite font's codes are several bytes).
+    pub(crate) codes: usize,
+    /// Which text operator showed it, counted from the start of the page.
+    pub(crate) op: usize,
+    /// Where in that operator it starts: the operand's place in a `TJ` array, and the byte in it.
+    pub(crate) at: (usize, usize),
 }
 
 #[derive(Clone)]
@@ -49,6 +85,17 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
+    /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
+    /// everything else. A pattern's cell is a content stream of its own and this pass does not
+    /// enter it, so a pattern whose only painting was removed has to leave the page's resources
+    /// or its drawing stays in the file (#3647).
+    fill_pattern: Option<Vec<u8>>,
+    stroke_pattern: Option<Vec<u8>>,
+    /// The current font is a Type 3 font without `/Resources`: its glyph descriptions look their
+    /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
+    /// any of this scope's patterns.
+    type3_inherits: bool,
 }
 
 /// What processing a scope produced.
@@ -66,6 +113,16 @@ pub(crate) struct Output {
     /// dictionaries may name them too (an inherited or shared /Resources, or the caller's when a
     /// form has none of its own): [`unlink_doomed`] removes those entries.
     pub doomed: Vec<ObjRef>,
+    /// Pattern resource names a painting operator that survived the rewrite still uses. A name
+    /// this scope saw selected but never painted with afterwards is pruned from the page's
+    /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
+    /// saved file (#3647).
+    pub patterns_seen: Vec<Vec<u8>>,
+    pub patterns_painted: Vec<Vec<u8>>,
+    /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
+    /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
+    /// not tracked, so the page keeps them all.
+    pub keeps_all_patterns: bool,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -86,6 +143,8 @@ pub(crate) struct Scope<'a> {
     pub rects: &'a [[f64; 4]],
     pub mode: Mode,
     pub report: &'a mut Report,
+    /// What the images it clears may spend, shared by all the pages of a run.
+    pub images: &'a mut ImageBudget,
     /// Sanitize: remove hidden text (invisible render modes, or wholly outside this page box).
     pub hidden_text: Option<[f64; 4]>,
     /// Sanitize: optional content groups that are off; content marked with them is removed.
@@ -103,6 +162,12 @@ pub(crate) struct Scope<'a> {
     xobject_oc_cache: HashMap<ObjRef, bool>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
+    /// Collects the glyph runs removed under a region in apply mode (`None` = not collected).
+    /// The redaction proof's snapshot is what sets it: it must know what applying is about to
+    /// remove, by the interpreter's own judgement, without trusting anything else to it.
+    pub removed: Option<Vec<Removed>>,
+    /// How many text operators have been shown, for [`Removed::op`].
+    shown: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
@@ -115,11 +180,12 @@ pub(crate) struct Scope<'a> {
 impl<'a> Scope<'a> {
     /// A scope whose form walk spends `budget`, what is left of the page's allowance after its
     /// content streams were decoded.
-    pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget) -> Self {
+    pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget, images: &'a mut ImageBudget) -> Self {
         Scope {
             rects,
             mode,
             report,
+            images,
             hidden_text: None,
             hidden_layers: HashSet::new(),
             layers_enabled: false,
@@ -127,6 +193,8 @@ impl<'a> Scope<'a> {
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
+            removed: None,
+            shown: 0,
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
@@ -139,217 +207,6 @@ impl<'a> Scope<'a> {
         self.hidden_text.is_some() || self.layers_enabled
     }
 
-    /// Is this optional-content reference (an OCG or OCMD) hidden?
-    fn layer_hidden(&mut self, doc: &Document, o: &Object) -> bool {
-        if !self.layers_enabled {
-            return false;
-        }
-        let reference = o.as_ref();
-        if let Some(r) = reference {
-            if let Some(hidden) = self.ocmd_cache.get(&r) {
-                return *hidden;
-            }
-            if self.hidden_layers.contains(&r) {
-                self.ocmd_cache.insert(r, true);
-                return true;
-            }
-        }
-        // Evaluate the policy against the same default configuration used to select hidden
-        // groups. A membership dictionary's default policy is AnyOn.
-        let d = doc.resolve(o);
-        let Some(d) = d.as_dict() else { return false };
-        if d.name(b"Type") != Some(b"OCMD") {
-            return false;
-        }
-        let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
-            Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).collect(),
-            Some(_) => d.get(b"OCGs").and_then(Object::as_ref).into_iter().collect(),
-            None => Vec::new(),
-        };
-        let fail_closed = || groups.iter().any(|g| self.hidden_layers.contains(g));
-        let hidden = if let Some(expression) = d.get(b"VE") {
-            let visible = self.visibility_expression(doc, expression, 0, &mut HashSet::new(), &mut 4096);
-            match visible {
-                Some(visible) => !visible,
-                None => fail_closed() || self.expression_mentions_hidden(doc, expression, 0, &mut HashSet::new(), &mut 4096),
-            }
-        } else if groups.is_empty() {
-            false
-        } else {
-            let any_on = groups.iter().any(|g| !self.hidden_layers.contains(g));
-            let all_on = groups.iter().all(|g| !self.hidden_layers.contains(g));
-            let policy = d.get(b"P").map(|p| doc.resolve(p)).and_then(|p| p.as_name().map(|name| name.to_vec()));
-            match (d.get(b"P"), policy.as_deref()) {
-                (None, _) | (Some(_), Some(b"AnyOn")) => !any_on,
-                (Some(_), Some(b"AllOn")) => !all_on,
-                (Some(_), Some(b"AnyOff")) => all_on,
-                (Some(_), Some(b"AllOff")) => any_on,
-                // An invalid policy must not make a candidate hidden block survive sanitization.
-                _ => fail_closed(),
-            }
-        };
-        if !hidden {
-            self.retained_off_layers.extend(groups.iter().filter(|g| self.hidden_layers.contains(g)).copied());
-            if let Some(expression) = d.get(b"VE") {
-                let mut referenced = HashSet::new();
-                if Self::collect_hidden_expression_groups(doc, expression, &self.hidden_layers, 0, &mut HashSet::new(), &mut 4096, &mut referenced) {
-                    self.retained_off_layers.extend(referenced);
-                } else {
-                    // If an expression cannot be fully walked, preserve every off group so that
-                    // the content we kept does not change visibility after configuration cleanup.
-                    self.retained_off_layers.extend(self.hidden_layers.iter().copied());
-                }
-            }
-        }
-        if let Some(r) = reference {
-            self.ocmd_cache.insert(r, hidden);
-        }
-        hidden
-    }
-
-    fn xobject_layer_hidden(&mut self, doc: &Document, xobject: ObjRef, oc: &Object) -> bool {
-        if oc.as_ref().is_some() {
-            return self.layer_hidden(doc, oc);
-        }
-        if let Some(hidden) = self.xobject_oc_cache.get(&xobject) {
-            return *hidden;
-        }
-        let hidden = self.layer_hidden(doc, oc);
-        self.xobject_oc_cache.insert(xobject, hidden);
-        hidden
-    }
-
-    fn collect_hidden_expression_groups(
-        doc: &Document,
-        expression: &Object,
-        hidden_layers: &HashSet<ObjRef>,
-        depth: usize,
-        path: &mut HashSet<ObjRef>,
-        budget: &mut usize,
-        found: &mut HashSet<ObjRef>,
-    ) -> bool {
-        if depth > 64 || *budget == 0 {
-            return false;
-        }
-        *budget -= 1;
-        let reference = expression.as_ref();
-        if let Some(r) = reference
-            && !path.insert(r)
-        {
-            return false;
-        }
-        let resolved = doc.resolve(expression);
-        let complete = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => {
-                if let Some(r) = reference
-                    && hidden_layers.contains(&r)
-                {
-                    found.insert(r);
-                }
-                reference.is_some()
-            }
-            Object::Array(items) => {
-                let Some(Object::Name(operator)) = items.first() else { return false };
-                let operands = match operator.as_slice() {
-                    b"And" | b"Or" if (2..=4097).contains(&items.len()) => items.get(1..),
-                    b"Not" if items.len() == 2 => items.get(1..),
-                    _ => None,
-                };
-                operands.is_some_and(|operands| {
-                    operands.iter().all(|item| Self::collect_hidden_expression_groups(doc, item, hidden_layers, depth + 1, path, budget, found))
-                })
-            }
-            _ => false,
-        };
-        if let Some(r) = reference {
-            path.remove(&r);
-        }
-        complete
-    }
-
-    /// Evaluate an optional-content visibility expression (`/VE`) against the default config.
-    /// Malformed, cyclic, or excessive expressions return `None` so the caller can fail closed.
-    fn visibility_expression(
-        &self,
-        doc: &Document,
-        expression: &Object,
-        depth: usize,
-        path: &mut HashSet<ObjRef>,
-        budget: &mut usize,
-    ) -> Option<bool> {
-        if depth > 64 || *budget == 0 {
-            return None;
-        }
-        *budget -= 1;
-        let reference = expression.as_ref();
-        if let Some(r) = reference
-            && !path.insert(r)
-        {
-            return None;
-        }
-        let resolved = doc.resolve(expression);
-        let result = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
-            Object::Array(items) if (2..=4097).contains(&items.len()) => {
-                let operator = match items.first() {
-                    Some(Object::Name(n)) => n.as_slice(),
-                    _ => return None,
-                };
-                match operator {
-                    b"And" if items.len() >= 2 => {
-                        let mut visible = true;
-                        for item in items.iter().skip(1) {
-                            visible &= self.visibility_expression(doc, item, depth + 1, path, budget)?;
-                        }
-                        Some(visible)
-                    }
-                    b"Or" if items.len() >= 2 => {
-                        let mut visible = false;
-                        for item in items.iter().skip(1) {
-                            visible |= self.visibility_expression(doc, item, depth + 1, path, budget)?;
-                        }
-                        Some(visible)
-                    }
-                    b"Not" if items.len() == 2 => Some(!self.visibility_expression(doc, &items[1], depth + 1, path, budget)?),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        if let Some(r) = reference {
-            path.remove(&r);
-        }
-        result
-    }
-
-    /// Conservatively find hidden groups in an expression that could not be evaluated. Unknown
-    /// syntax, cycles, and exhausted budgets count as a possible hidden reference.
-    fn expression_mentions_hidden(&self, doc: &Document, expression: &Object, depth: usize, path: &mut HashSet<ObjRef>, budget: &mut usize) -> bool {
-        if depth > 64 || *budget == 0 {
-            return true;
-        }
-        *budget -= 1;
-        if let Some(r) = expression.as_ref() {
-            if self.hidden_layers.contains(&r) {
-                return true;
-            }
-            if !path.insert(r) {
-                return true;
-            }
-        }
-        let resolved = doc.resolve(expression);
-        let found = match &*resolved {
-            Object::Array(items) => items.iter().any(|item| self.expression_mentions_hidden(doc, item, depth + 1, path, budget)),
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
-            Object::Dict(_) => true,
-            _ => false,
-        };
-        if let Some(r) = expression.as_ref() {
-            path.remove(&r);
-        }
-        found
-    }
-
     fn hits(&self, b: [f64; 4]) -> bool {
         self.rects.iter().any(|r| overlaps(*r, b, 0.0))
     }
@@ -358,21 +215,33 @@ impl<'a> Scope<'a> {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
     }
 
-    /// Does a glyph box count as under a region? Any real overlap does (more than a fifth of
+    /// Which regions a glyph box counts as under? Any real overlap does (more than a fifth of
     /// the glyph or a point, whichever is less, in both directions), so neighbours that only
     /// touch an edge survive while partly covered glyphs go. Degenerate boxes (zero-size text)
-    /// count when their origin is inside.
-    fn glyph_hit(&self, b: [f64; 4], origin: (f64, f64)) -> bool {
+    /// count when their origin is inside. Empty = under no region (a glyph kept). A glyph may
+    /// lie under several regions at once (overlapping marks); each is reported.
+    fn glyph_rects(&self, b: [f64; 4], origin: (f64, f64)) -> Vec<usize> {
         let (gw, gh) = (b[2] - b[0], b[3] - b[1]);
         if gw < 0.01 || gh < 0.01 {
-            return self.rects.iter().any(|r| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3]);
+            return self
+                .rects
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3])
+                .map(|(i, _)| i)
+                .collect();
         }
         let (mx, my) = ((gw * 0.2).min(1.0), (gh * 0.2).min(1.0));
-        self.rects.iter().any(|r| {
-            let ox = b[2].min(r[2]) - b[0].max(r[0]);
-            let oy = b[3].min(r[3]) - b[1].max(r[1]);
-            ox > mx && oy > my
-        })
+        self.rects
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                let ox = b[2].min(r[2]) - b[0].max(r[0]);
+                let oy = b[3].min(r[3]) - b[1].max(r[1]);
+                ox > mx && oy > my
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 
@@ -406,359 +275,30 @@ fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
     }
 }
 
-/// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
-/// so a full-rewrite save stops reaching the original image or form it named. A name that some
-/// surviving `Do` still draws (the same image shown again outside a mark) is kept.
-pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
-    if replaced.is_empty() {
-        return;
-    }
-    let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    let still_drawn = |n: &[u8]| ops.iter().any(|op| op.is("Do") && op.last_name() == Some(n));
-    for n in replaced {
-        if !still_drawn(n) {
-            xo.remove(n);
-        }
-    }
-}
-
-/// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or
-/// through a form that has no /Resources of its own (such a form draws through its caller's).
-/// `None` when that cannot be told (a form that will not decode, or nesting past the limit).
-fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], depth: usize, seen: &mut HashSet<ObjRef>) -> Option<bool> {
-    let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    for op in ops.iter().filter(|op| op.is("Do")) {
-        let Some(n) = op.last_name() else { continue };
-        if n == name {
-            return Some(true);
-        }
-        let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
-        let obj = doc.get(r);
-        let Object::Stream(s) = &*obj else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
-            continue;
-        }
-        if depth >= MAX_DEPTH {
-            return None;
-        }
-        let Ok(data) = s.decoded() else { return None };
-        match content_draws(doc, std::slice::from_ref(&data), xo, name, depth + 1, seen) {
-            Some(false) => {}
-            other => return other,
-        }
-    }
-    Some(false)
-}
-
-/// Unlink the XObjects a rewrite dropped or replaced (`doomed`) from every page-tree resource
-/// dictionary that still names them. The rewritten page has its own pruned /Resources, but the
-/// originals stay reachable, and so stay in a full-rewrite save, when:
-/// - the page inherited its /Resources from a /Pages node, which still lists them;
-/// - several pages share one resource dictionary, and another page still refers to it;
-/// - a form without /Resources drew them through the page's dictionary.
-///
-/// An entry goes unless a page that draws through that dictionary still draws the name (the same
-/// image shown on another page, or again outside a mark). A dictionary that loses an entry is
-/// replaced by a private copy on its node, so a dictionary object shared with other nodes is
-/// left as it is for them. Retired properties are likewise unlinked only when none of the
-/// holder's pages or inheriting forms names them. Fails closed when use cannot be determined.
-pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_properties: &[Object]) -> Result<(), RedactError> {
-    if doomed.is_empty() && retired_properties.is_empty() {
-        return Ok(());
-    }
-    let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
-    // Every page-tree node with a /Resources of its own, and the pages that draw through it
-    // (the nearest such node above a page, or the page itself). Cycles are cut as in
-    // `pdfcraft_model::pages`.
-    let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
-    while let Some((node, mut holder)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > 1_000_000 {
-            continue;
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        if d.contains(b"Resources") {
-            holders.push((node, Vec::new()));
-            holder = Some(holders.len() - 1);
-        }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
-        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
-            h.1.push(node);
-        }
-    }
-    let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
-    for (node, users) in holders {
-        let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
-            continue;
-        };
-        let mut xo = res_dict(doc, &res, b"XObject");
-        let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
-        let properties = res_dict(doc, &res, b"Properties");
-        let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() && property_names.is_empty() {
-            continue;
-        }
-        let mut contents = Vec::with_capacity(users.len());
-        for user in &users {
-            let page = doc.get(*user).as_dict().cloned().unwrap_or_default();
-            // A page whose content cannot be read may still draw the name: fail closed.
-            contents.push(page_streams(doc, &page, index.get(user).copied().unwrap_or(0))?.1);
-        }
-        let mut pruned = false;
-        for n in names {
-            let mut drawn = Some(false);
-            for content in &contents {
-                drawn = content_draws(doc, content, &xo, &n, 0, &mut HashSet::new());
-                if drawn != Some(false) {
-                    break;
-                }
-            }
-            match drawn {
-                Some(true) => {}
-                Some(false) => {
-                    xo.remove(&n);
-                    pruned = true;
-                }
-                None => return Err(RedactError::Residue(1)),
-            }
-        }
-        if pruned {
-            res.set(b"XObject".to_vec(), Object::Dict(xo));
-        }
-        pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
-        if pruned {
-            doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-        }
-    }
-    // A surviving form can own the same old resource dictionary as a rewritten page. Its
-    // unused descriptions and doomed XObjects remain reachable too, even after every page
-    // holder is cleaned.
-    unlink_from_forms(doc, &holder_nodes, &doomed, retired_properties)?;
-    Ok(())
-}
-
-/// Retire only properties removed from a rewritten scope, preserving names still used by any
-/// content sharing this holder. Different pages' streams must never be concatenated together.
-fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], contents: &[Vec<Vec<u8>>]) -> Result<bool, CosError> {
-    if names.is_empty() {
-        return Ok(false);
-    }
-    let mut used = HashSet::new();
-    for content in contents {
-        for op in resource_ops(doc, res, content)? {
-            if matches!(op.op.as_slice(), b"BDC" | b"DP")
-                && let Some(name) = op.name(1)
-            {
-                used.insert(name.to_vec());
-            }
-        }
-    }
-    let mut properties = res_dict(doc, res, b"Properties");
-    let mut pruned = false;
-    for name in names {
-        if !used.contains(name) {
-            pruned |= properties.remove(name).is_some();
-        }
-    }
-    if pruned {
-        if properties.is_empty() {
-            res.remove(b"Properties");
-        } else {
-            res.set(b"Properties".to_vec(), Object::Dict(properties));
-        }
-    }
-    Ok(pruned)
-}
-
-/// Unlink retired properties and `doomed` XObjects from the resources of the forms reachable from
-/// the page-tree `holders`, each unless the form's own content (or a form inheriting its
-/// resources) still uses the name. Fails closed when that cannot be determined.
-fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), CosError> {
-    if retired.is_empty() && doomed.is_empty() {
-        return Ok(());
-    }
-    let mut pending: Vec<Dict> = holders
-        .iter()
-        .filter_map(|r| doc.get(*r).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()))
-        .collect();
-    let mut seen = HashSet::new();
-    while let Some(resources) = pending.pop() {
-        for (_, value) in res_dict(doc, &resources, b"XObject").iter() {
-            let Some(reference) = value.as_ref() else { continue };
-            if !seen.insert(reference) {
-                continue;
-            }
-            if seen.len() > 1_000_000 {
-                return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() });
-            }
-            let object = doc.get(reference);
-            let Object::Stream(form) = &*object else { continue };
-            if form.dict.name(b"Subtype") != Some(b"Form") {
-                continue;
-            }
-            let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
-            let names: Vec<Vec<u8>> =
-                res_dict(doc, &res, b"Properties").iter().filter(|(_, value)| retired.contains(value)).map(|(name, _)| name.to_vec()).collect();
-            let mut xo = res_dict(doc, &res, b"XObject");
-            let doomed_names: Vec<Vec<u8>> =
-                xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
-            if names.is_empty() && doomed_names.is_empty() {
-                pending.push(res);
-                continue;
-            }
-            let data = form.decoded()?;
-            let mut pruned = false;
-            for name in doomed_names {
-                match content_draws(doc, std::slice::from_ref(&data), &xo, &name, 0, &mut HashSet::new()) {
-                    Some(true) => {}
-                    Some(false) => pruned |= xo.remove(&name).is_some(),
-                    None => return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() }),
-                }
-            }
-            if pruned {
-                res.set(b"XObject".to_vec(), Object::Dict(xo));
-            }
-            pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
-            if pruned {
-                doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
-            }
-            pending.push(res);
-        }
-    }
-    Ok(())
-}
-
-/// The clip that hides everything inside each region: one even-odd clip per region (a big
-/// rectangle with the region cut out), in the current user space. Returns `None` when the CTM
-/// can't be inverted (nothing is painted then anyway).
-fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Option<Vec<Op>> {
-    let inv = ctm.invert()?;
-    let mut ops = Vec::new();
-    let big = [around[0] - 10.0, around[1] - 10.0, around[2] + 10.0, around[3] + 10.0];
-    for r in rects.iter().filter(|r| overlaps(**r, around, 0.0)) {
-        let outer = [(big[0], big[1]), (big[2], big[1]), (big[2], big[3]), (big[0], big[3])];
-        let inner = [(r[0], r[1]), (r[0], r[3]), (r[2], r[3]), (r[2], r[1])];
-        for poly in [outer, inner] {
-            for (k, (x, y)) in poly.iter().enumerate() {
-                let (u, v) = inv.apply(*x, *y);
-                ops.push(Op::new(if k == 0 { "m" } else { "l" }, vec![num(u), num(v)]));
-            }
-            ops.push(Op::new("h", vec![]));
-        }
-        ops.push(Op::new("W*", vec![]));
-        ops.push(Op::new("n", vec![]));
-    }
-    Some(ops)
-}
-
-fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
-    let parsed = Pieces::join(content).parse();
-    if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect property resources".into() });
-    }
-    let mut ops = parsed.ops;
-    let xobjects = res_dict(doc, res, b"XObject");
-    let mut seen = HashSet::new();
-    let mut cursor = 0;
-    while cursor < ops.len() {
-        let op = &ops[cursor];
-        if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
-            && seen.insert(r)
-            && let Object::Stream(s) = &*doc.get(r)
-            && s.dict.name(b"Subtype") == Some(b"Form")
-            && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
-        {
-            let parsed = pdfcraft_content::parse(&s.decoded()?);
-            if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
-                return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
-            }
-            ops.extend(parsed.ops);
-        }
-        cursor += 1;
-    }
-    Ok(ops)
-}
-
-pub(crate) fn prune_properties(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
-    let mut properties = res_dict(doc, res, b"Properties");
-    if properties.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut retired = Vec::new();
-    let ops = resource_ops(doc, res, content)?;
-    let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
-    for name in names {
-        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.name(1) == Some(&name))
-            && let Some(value) = properties.remove(&name)
-        {
-            retired.push(value);
-        }
-    }
-    if properties.is_empty() {
-        res.remove(b"Properties");
-    } else {
-        res.set(b"Properties".to_vec(), Object::Dict(properties));
-    }
-    Ok(retired)
-}
-
-fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
-    let ops = resource_ops(doc, res, content)?;
-    let mut xo = res_dict(doc, res, b"XObject");
-    let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
-    for name in names {
-        if !ops.iter().any(|op| op.is("Do") && op.last_name() == Some(&name)) {
-            xo.remove(&name);
-        }
-    }
-    res.set(b"XObject".to_vec(), Object::Dict(xo));
-    Ok(())
-}
-
-/// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
-/// would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The metrics are cached with the
-/// fonts `Tf` names, under a key no resource name can take (a name cannot hold a null byte).
-fn extgstate_font(
-    doc: &Document,
-    scope: &mut Scope<'_>,
-    ext_gstates: &Dict,
-    name: &[u8],
-    fallback: &Rc<Metrics>,
-) -> Option<(Rc<Metrics>, bool, f64)> {
-    let state = doc.resolve(ext_gstates.get(name)?).as_dict().cloned()?;
-    let entry = doc.resolve(state.get(b"Font")?).as_array().cloned()?;
-    let [font, size] = entry.as_slice() else { return None };
-    let size = doc.resolve(size).as_f64()?;
-    let font_dict = doc.resolve(font).as_dict().cloned();
-    let vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-    let key = [b"\0".as_slice(), name].concat();
-    let metrics = match scope.fonts.get(&key) {
-        Some(m) => m.clone(),
-        None => {
-            let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
-            scope.fonts.insert(key, m.clone());
-            m
-        }
-    };
-    Some((metrics, vertical, size))
-}
-
 /// One glyph of a shown string.
 struct Glyph {
     bytes: std::ops::Range<usize>,
     /// Advance in unscaled text space (before `Th`).
     advance: f64,
     hit: bool,
+    /// The regions it lies under (empty for hidden text).
+    rects: Vec<usize>,
+}
+
+/// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
+/// painting knows exactly what it draws and whether the paint survived; text, images and forms
+/// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted,
+/// and with it the pattern's cell. A cell that carries text or images is then refused by
+/// `pattern_guard`; a vector-only cell stays in the file though nothing shows it
+/// (`a_pattern_painted_only_by_redacted_text_keeps_its_vector_cell`). Dropping a pattern something
+/// still draws with would lose paint from the page instead.
+fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
+    if fills && let Some(n) = &gs.fill_pattern {
+        out.patterns_painted.push(n.clone());
+    }
+    if strokes && let Some(n) = &gs.stroke_pattern {
+        out.patterns_painted.push(n.clone());
+    }
 }
 
 /// Process a scope's content streams (state flows from one stream to the next).
@@ -774,6 +314,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        fill_pattern: None,
+        stroke_pattern: None,
+        type3_inherits: false,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -781,32 +324,21 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
 /// [`process`] from graphics state `gs`: a form XObject starts with its caller's, text state
 /// included (ISO 32000-2 §8.10.1), so text it shows without setting a font of its own is placed
 /// with the caller's font, size and spacing, as the renderer places it.
-fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, mut gs: Gs) -> Output {
-    let mut out = Output::default();
-    let fallback = Rc::new(Metrics::fallback());
-    let mut stack: Vec<Gs> = Vec::new();
-    let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
-    let fonts_res = res_dict(doc, resources, b"Font");
-    let ext_gstates = res_dict(doc, resources, b"ExtGState");
-    let mut xobjects = res_dict(doc, resources, b"XObject");
-    // The current path: its operators, its bounding box in user space, and whether it clips.
-    let mut path: Vec<Op> = Vec::new();
-    let mut path_box: Option<[f64; 4]> = None;
-    let mut clip = false;
-    let mut forced_change = false;
-
+fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, gs: Gs) -> Output {
+    let mut walk = Walk::new(doc, resources, gs);
     // The streams are one content stream in pieces, which may be split between any two tokens
     // (ISO 32000-2 §7.8.2): an operator's operands can end one piece and the operator start the
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
-    out.ambiguous = parsed.ambiguous_images > 0;
+    walk.out.ambiguous = parsed.ambiguous_images > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.
     let comment_edges = joined.comment_edges(&parsed);
     // Layer removal also changes enclosing replacement spans, so remember the operators before
     // any cleanup, not just the survivors of the layer pass.
     let original = parsed.ops.clone();
+    let mut forced_change = false;
     if scope.layers_enabled {
         let props = res_dict(doc, resources, b"Properties");
         let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
@@ -816,12 +348,32 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
             forced_change = true;
         }
     }
-    let mut pieces: Vec<Vec<Op>> = streams.iter().map(|_| Vec::new()).collect();
-    let mut rewrite: Vec<bool> = vec![forced_change; streams.len()];
-    for op in parsed.ops {
+    let (pieces, rewrite) = split_into_pieces(&joined, parsed.ops, streams.len(), forced_change);
+    let mut processed = Vec::new();
+    for (piece, changed) in pieces.into_iter().zip(rewrite) {
+        let mut done = Piece { ops: Vec::with_capacity(piece.len()), changed };
+        for op in piece {
+            walk.step(doc, scope, resources, op, &mut done);
+        }
+        if !walk.path.is_empty() {
+            done.ops.append(&mut walk.path);
+        }
+        processed.push((done.ops, done.changed));
+    }
+    if scope.mode == Mode::Apply {
+        clean_replacements(doc, resources, &original, &walk.clipped, &mut processed, scope.report);
+    }
+    walk.out.streams = processed.into_iter().zip(comment_edges).map(|((ops, changed), edges)| changed.then(|| piece_bytes(&ops, edges))).collect();
+    walk.out
+}
+
+/// Gives each operator to the piece its keyword is in. An operator split across pieces is written
+/// whole into its keyword's piece, so every piece it spans is rewritten.
+fn split_into_pieces(joined: &Pieces, ops: Vec<Op>, count: usize, forced_change: bool) -> (Vec<Vec<Op>>, Vec<bool>) {
+    let mut pieces: Vec<Vec<Op>> = (0..count).map(|_| Vec::new()).collect();
+    let mut rewrite: Vec<bool> = vec![forced_change; count];
+    for op in ops {
         let (first, last) = joined.pieces_of(&op);
-        // An operator split across pieces is written whole into its keyword's piece, so every
-        // piece it spans is rewritten.
         if first < last {
             for r in rewrite.iter_mut().take(last + 1).skip(first) {
                 *r = true;
@@ -831,254 +383,378 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
             p.push(op);
         }
     }
-
-    let mut processed = Vec::new();
-    for (piece, mut changed) in pieces.into_iter().zip(rewrite) {
-        let mut ops: Vec<Op> = Vec::with_capacity(piece.len());
-        for op in piece {
-            let o = op.op.as_slice();
-            // Path construction.
-            if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {
-                let pts: Vec<(f64, f64)> = match o {
-                    b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
-                    b"h" | b"W" | b"W*" => Vec::new(),
-                    _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
-                };
-                for (x, y) in pts {
-                    let (u, v) = gs.ctm.apply(x, y);
-                    path_box = Some(match path_box {
-                        None => [u, v, u, v],
-                        Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
-                    });
-                }
-                clip |= matches!(o, b"W" | b"W*");
-                path.push(op);
-                continue;
-            }
-            if matches!(o, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
-                let body = std::mem::take(&mut path);
-                let bbox = path_box.take();
-                let clips = std::mem::replace(&mut clip, false);
-                let hit = scope.mode == Mode::Apply && o != b"n" && bbox.is_some_and(|b| scope.hits(b));
-                if !hit {
-                    ops.extend(body);
-                    ops.push(op);
-                    continue;
-                }
-                let b = bbox.unwrap_or_default();
-                changed = true;
-                if scope.covered(b) {
-                    scope.report.paths_removed += 1;
-                    if clips {
-                        // Keep the clipping, drop the painting.
-                        ops.extend(body);
-                        ops.push(Op::new("n", vec![]));
-                    }
-                } else if clips {
-                    // A clip-and-paint path can't be wrapped in q/Q without losing its clip:
-                    // paint it clipped, then set its clip with a no-op path.
-                    scope.report.paths_clipped += 1;
-                    if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
-                        let plain: Vec<Op> = body.iter().filter(|p| !p.is("W") && !p.is("W*")).cloned().collect();
-                        ops.push(Op::new("q", vec![]));
-                        ops.extend(c);
-                        ops.extend(plain);
-                        ops.push(op);
-                        ops.push(Op::new("Q", vec![]));
-                    }
-                    ops.extend(body);
-                    ops.push(Op::new("n", vec![]));
-                } else {
-                    scope.report.paths_clipped += 1;
-                    if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
-                        ops.push(Op::new("q", vec![]));
-                        ops.extend(c);
-                        ops.extend(body);
-                        ops.push(op);
-                        ops.push(Op::new("Q", vec![]));
-                    }
-                }
-                continue;
-            }
-            if !path.is_empty() {
-                // A path not ended by a painting operator: pass it through.
-                ops.append(&mut path);
-                path_box = None;
-                clip = false;
-            }
-            match o {
-                b"q" => stack.push(gs.clone()),
-                b"Q" => {
-                    if let Some(g) = stack.pop() {
-                        gs = g;
-                    }
-                }
-                b"cm" => {
-                    if let Some(m) = op.nums::<6>() {
-                        gs.ctm = Matrix(m).then(&gs.ctm);
-                    }
-                }
-                b"BT" => {
-                    tm = Matrix::IDENTITY;
-                    tlm = Matrix::IDENTITY;
-                }
-                b"Tf" => {
-                    gs.size = op.num(1).unwrap_or(gs.size);
-                    if let Some(name) = op.name(0) {
-                        let font_dict = fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
-                        gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-                        gs.font = match scope.fonts.get(name) {
-                            Some(f) => f.clone(),
-                            None => {
-                                let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
-                                scope.fonts.insert(name.to_vec(), m.clone());
-                                m
-                            }
-                        };
-                    }
-                }
-                b"gs" => {
-                    if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &ext_gstates, n, &fallback)) {
-                        (gs.font, gs.vertical, gs.size) = (font, vertical, size);
-                    }
-                }
-                b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
-                b"Tw" => gs.word_spacing = op.num(0).unwrap_or(0.0),
-                b"Tz" => gs.scale = op.num(0).unwrap_or(100.0) / 100.0,
-                b"TL" => gs.leading = op.num(0).unwrap_or(0.0),
-                b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
-                b"Tr" => gs.render_mode = op.num(0).unwrap_or(0.0) as i64,
-                b"Td" | b"TD" => {
-                    if let Some([x, y]) = op.nums::<2>() {
-                        if o == b"TD" {
-                            gs.leading = -y;
-                        }
-                        tlm = Matrix::translate(x, y).then(&tlm);
-                        tm = tlm;
-                    }
-                }
-                b"Tm" => {
-                    if let Some(m) = op.nums::<6>() {
-                        tlm = Matrix(m);
-                        tm = tlm;
-                    }
-                }
-                b"T*" => {
-                    tlm = Matrix::translate(0.0, -gs.leading).then(&tlm);
-                    tm = tlm;
-                }
-                b"Tj" | b"TJ" | b"'" | b"\"" => {
-                    if o == b"\"" {
-                        gs.word_spacing = op.num(0).unwrap_or(gs.word_spacing);
-                        gs.char_spacing = op.num(1).unwrap_or(gs.char_spacing);
-                    }
-                    if matches!(o, b"'" | b"\"") {
-                        tlm = Matrix::translate(0.0, -gs.leading).then(&tlm);
-                        tm = tlm;
-                    }
-                    let items: Vec<Object> = match o {
-                        // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
-                        // takes the one immediately before it, as the renderer and every other
-                        // reader here do (#3569), so a redaction search matches what is drawn.
-                        b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
-                        _ => op.operands.last().cloned().into_iter().collect(),
-                    };
-                    // Vertical-writing text is laid out horizontally by `show`, so its glyphs are
-                    // never matched against a region. Rather than ship a document whose vertical
-                    // text was silently left under a mark, record it so apply can fail closed.
-                    // (Full vertical-text removal is a future enhancement.)
-                    if gs.vertical
-                        && scope.mode == Mode::Apply
-                        && scope.hidden_text.is_none()
-                        && !scope.rects.is_empty()
-                        && items.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty()))
-                    {
-                        out.vertical = true;
-                    }
-                    let (new_items, removed) = show(scope, &gs, &mut tm, &items);
-                    if removed == 0 {
-                        ops.push(op);
-                        continue;
-                    }
-                    if scope.mode == Mode::Verify {
-                        out.residue += removed;
-                        ops.push(op);
-                        continue;
-                    }
-                    changed = true;
-                    scope.report.glyphs += removed;
-                    match o {
-                        b"\"" => {
-                            ops.push(Op::new("Tw", vec![num(gs.word_spacing)]));
-                            ops.push(Op::new("Tc", vec![num(gs.char_spacing)]));
-                            ops.push(Op::new("T*", vec![]));
-                        }
-                        b"'" => ops.push(Op::new("T*", vec![])),
-                        _ => {}
-                    }
-                    ops.push(Op::new("TJ", vec![Object::Array(new_items)]));
-                    continue;
-                }
-                b"BI" => {
-                    let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
-                    if scope.hits(b) {
-                        if scope.mode == Mode::Verify {
-                            out.residue += 1;
-                        } else {
-                            scope.report.images_removed += 1;
-                            changed = true;
-                            continue;
-                        }
-                    }
-                }
-                b"sh" if scope.mode == Mode::Apply => {
-                    // A shading fills the current clip: clip the regions out.
-                    if let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]) {
-                        changed = true;
-                        ops.push(Op::new("q", vec![]));
-                        ops.extend(c);
-                        ops.push(op);
-                        ops.push(Op::new("Q", vec![]));
-                        continue;
-                    }
-                }
-                b"Do" => {
-                    if let Some(new) = xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out) {
-                        changed = true;
-                        if let Some(n) = new {
-                            ops.push(n);
-                        }
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-            ops.push(op);
-        }
-        if !path.is_empty() {
-            ops.append(&mut path);
-        }
-        processed.push((ops, changed));
-    }
-    if scope.mode == Mode::Apply {
-        clean_replacements(doc, resources, &original, &mut processed, scope.report);
-    }
-    for ((ops, changed), (comment_in, comment_out)) in processed.into_iter().zip(comment_edges) {
-        out.streams.push(changed.then(|| {
-            // The piece before still ends inside a comment: end it before the first operator.
-            let mut bytes = if comment_in { b"\n".to_vec() } else { Vec::new() };
-            bytes.extend(serialize_ops(&ops));
-            // The piece ended inside a comment that hid the start of the next one: keep it open.
-            if comment_out {
-                bytes.push(b'%');
-            }
-            bytes
-        }));
-    }
-    out
+    (pieces, rewrite)
 }
 
-fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], processed: &mut [(Vec<Op>, bool)], report: &mut Report) {
+/// A rewritten piece's bytes. `(comment_in, comment_out)` say whether the piece before ended
+/// inside a comment, and whether this one did.
+fn piece_bytes(ops: &[Op], (comment_in, comment_out): (bool, bool)) -> Vec<u8> {
+    // The piece before still ends inside a comment: end it before the first operator.
+    let mut bytes = if comment_in { b"\n".to_vec() } else { Vec::new() };
+    bytes.extend(serialize_ops(ops));
+    // The piece ended inside a comment that hid the start of the next one: keep it open.
+    if comment_out {
+        bytes.push(b'%');
+    }
+    bytes
+}
+
+/// The operators written for one piece of a scope's content, and whether they differ from the source.
+struct Piece {
+    ops: Vec<Op>,
+    changed: bool,
+}
+
+/// The interpreter state carried across the operators of a scope.
+struct Walk {
+    gs: Gs,
+    /// With each saved state, the text and text line matrices: inside a text object `q`/`Q`
+    /// save and restore them too (ISO 32000-2 §9.4.1 as corrected by the PDF Association's
+    /// errata, issue 368), as the renderer does.
+    stack: Vec<(Gs, Matrix, Matrix)>,
+    tm: Matrix,
+    tlm: Matrix,
+    fonts_res: Dict,
+    ext_gstates: Dict,
+    xobjects: Dict,
+    /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
+    patterns: Vec<Vec<u8>>,
+    fallback: Rc<Metrics>,
+    /// The current path: its operators, its bounding box in user space, and whether it clips.
+    path: Vec<Op>,
+    path_box: Option<[f64; 4]>,
+    clip: bool,
+    /// Painting operators written again under a clip that cuts the regions out: unchanged as
+    /// operators, but what they paint is no longer all there.
+    clipped: HashSet<usize>,
+    out: Output,
+}
+
+impl Walk {
+    fn new(doc: &Document, resources: &Dict, gs: Gs) -> Self {
+        Self {
+            gs,
+            stack: Vec::new(),
+            tm: Matrix::IDENTITY,
+            tlm: Matrix::IDENTITY,
+            fonts_res: res_dict(doc, resources, b"Font"),
+            ext_gstates: res_dict(doc, resources, b"ExtGState"),
+            xobjects: res_dict(doc, resources, b"XObject"),
+            patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
+            fallback: Rc::new(Metrics::fallback()),
+            path: Vec::new(),
+            path_box: None,
+            clip: false,
+            clipped: HashSet::new(),
+            out: Output::default(),
+        }
+    }
+
+    /// Interprets one operator, writing what replaces it to `piece`.
+    fn step(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) {
+        let o = op.op.as_slice();
+        if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {
+            self.construct_path(op);
+            return;
+        }
+        if matches!(o, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
+            self.paint_path(scope, op, piece);
+            return;
+        }
+        if !self.path.is_empty() {
+            // A path not ended by a painting operator: pass it through.
+            piece.ops.append(&mut self.path);
+            self.path_box = None;
+            self.clip = false;
+        }
+        let kept = match o {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
+                self.graphics_state(doc, scope, &op);
+                Some(op)
+            }
+            b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
+                self.text_state(&op);
+                Some(op)
+            }
+            b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
+            b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
+            b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, &mut self.clipped, op, piece),
+            b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
+            // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
+            // and clear it. `cs` with a space other than /Pattern clears it too.
+            b"scn" | b"SCN" => {
+                let fill = o == b"scn";
+                let picked = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                if let Some(name) = &picked {
+                    self.out.patterns_seen.push(name.clone());
+                }
+                if fill {
+                    self.gs.fill_pattern = picked;
+                } else {
+                    self.gs.stroke_pattern = picked;
+                }
+                Some(op)
+            }
+            b"cs" | b"CS" => {
+                if op.name(0) != Some(b"Pattern") {
+                    if o == b"cs" {
+                        self.gs.fill_pattern = None;
+                    } else {
+                        self.gs.stroke_pattern = None;
+                    }
+                }
+                Some(op)
+            }
+            b"g" | b"rg" | b"k" => {
+                self.gs.fill_pattern = None;
+                Some(op)
+            }
+            b"G" | b"RG" | b"K" => {
+                self.gs.stroke_pattern = None;
+                Some(op)
+            }
+            _ => Some(op),
+        };
+        piece.ops.extend(kept);
+    }
+
+    /// Path construction: collects the operator and grows the path's bounding box.
+    fn construct_path(&mut self, op: Op) {
+        let o = op.op.as_slice();
+        let pts: Vec<(f64, f64)> = match o {
+            b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
+            b"h" | b"W" | b"W*" => Vec::new(),
+            _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
+        };
+        for (x, y) in pts {
+            let (u, v) = self.gs.ctm.apply(x, y);
+            self.path_box = Some(match self.path_box {
+                None => [u, v, u, v],
+                Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
+            });
+        }
+        self.clip |= matches!(o, b"W" | b"W*");
+        self.path.push(op);
+    }
+
+    /// A painting operator ends the path; one under a region is removed (or kept as a clip).
+    fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
+        let body = std::mem::take(&mut self.path);
+        let bbox = self.path_box.take();
+        let clips = std::mem::replace(&mut self.clip, false);
+        let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
+        if !hit {
+            // The paint survives, so the pattern it draws with is still in use. `n` paints
+            // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
+            let o = op.op.as_slice();
+            let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+            let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+            uses_patterns(&mut self.out, &self.gs, fills, strokes);
+            piece.ops.extend(body);
+            piece.ops.push(op);
+            return;
+        }
+        let b = bbox.unwrap_or_default();
+        piece.changed = true;
+        scope.report.paths_removed += 1;
+        if scope.covered(b) && clips {
+            // Keep the clipping, drop the painting.
+            piece.ops.extend(body);
+            piece.ops.push(Op::new("n", vec![]));
+        }
+        // Partial vector redaction must not retain underlying drawing commands
+        // behind clipping (F-008). Refuse partial clip retention and remove the path.
+    }
+
+    fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+        match op.op.as_slice() {
+            b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
+            b"Q" => {
+                if let Some((g, m, lm)) = self.stack.pop() {
+                    (self.gs, self.tm, self.tlm) = (g, m, lm);
+                }
+            }
+            b"cm" => {
+                if let Some(m) = op.nums::<6>() {
+                    self.gs.ctm = Matrix(m).then(&self.gs.ctm);
+                }
+            }
+            b"Tf" => self.select_font(doc, scope, op),
+            _ => {
+                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
+                    (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                    // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
+                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                }
+            }
+        }
+    }
+
+    fn select_font(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+        self.gs.size = op.num(1).unwrap_or(self.gs.size);
+        let Some(name) = op.name(0) else { return };
+        let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
+        self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
+        self.gs.font = match scope.fonts.get(name) {
+            Some(f) => f.clone(),
+            None => {
+                let m = font_dict.as_ref().map_or_else(|| self.fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, d)));
+                scope.fonts.insert(name.to_vec(), m.clone());
+                m
+            }
+        };
+    }
+
+    /// Text state and text-positioning operators.
+    fn text_state(&mut self, op: &Op) {
+        let gs = &mut self.gs;
+        match op.op.as_slice() {
+            b"BT" => {
+                self.tm = Matrix::IDENTITY;
+                self.tlm = Matrix::IDENTITY;
+            }
+            b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
+            b"Tw" => gs.word_spacing = op.num(0).unwrap_or(0.0),
+            b"Tz" => gs.scale = op.num(0).unwrap_or(100.0) / 100.0,
+            b"TL" => gs.leading = op.num(0).unwrap_or(0.0),
+            b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
+            b"Tr" => gs.render_mode = op.num(0).unwrap_or(0.0) as i64,
+            b"Td" | b"TD" => {
+                if let Some([x, y]) = op.nums::<2>() {
+                    if op.is("TD") {
+                        gs.leading = -y;
+                    }
+                    self.tlm = Matrix::translate(x, y).then(&self.tlm);
+                    self.tm = self.tlm;
+                }
+            }
+            b"Tm" => {
+                if let Some(m) = op.nums::<6>() {
+                    self.tlm = Matrix(m);
+                    self.tm = self.tlm;
+                }
+            }
+            _ => {
+                self.tlm = Matrix::translate(0.0, -gs.leading).then(&self.tlm);
+                self.tm = self.tlm;
+            }
+        }
+    }
+
+    /// `Tj`, `TJ`, `'` and `"`: glyphs under a region are cut out (or counted, when verifying).
+    fn show_text(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
+        // Text paints with the fill pattern, and with the stroke pattern in the stroking render
+        // modes. Mode 3 paints nothing and mode 7 only clips.
+        let mode = self.gs.render_mode;
+        uses_patterns(&mut self.out, &self.gs, matches!(mode, 0 | 2 | 4 | 6), matches!(mode, 1 | 2 | 5 | 6));
+        // A Type 3 glyph without resources of its own paints through this scope's: keep every
+        // pattern it could select, as with a form that has no /Resources.
+        if self.gs.type3_inherits {
+            self.out.patterns_painted.extend(self.patterns.iter().cloned());
+            self.out.keeps_all_patterns = true;
+        }
+        let o = op.op.as_slice();
+        if o == b"\"" {
+            self.gs.word_spacing = op.num(0).unwrap_or(self.gs.word_spacing);
+            self.gs.char_spacing = op.num(1).unwrap_or(self.gs.char_spacing);
+        }
+        if matches!(o, b"'" | b"\"") {
+            self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
+            self.tm = self.tlm;
+        }
+        let items: Vec<Object> = match o {
+            // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
+            // takes the one immediately before it, as the renderer and every other
+            // reader here do (#3569), so a redaction search matches what is drawn.
+            b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
+            _ => op.operands.last().cloned().into_iter().collect(),
+        };
+        // Vertical-writing text is laid out horizontally by `show`, so its glyphs are
+        // never matched against a region. Rather than ship a document whose vertical
+        // text was silently left under a mark, record it so apply can fail closed.
+        // (Full vertical-text removal is a future enhancement.)
+        if self.gs.vertical
+            && scope.mode == Mode::Apply
+            && scope.hidden_text.is_none()
+            && !scope.rects.is_empty()
+            && items.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty()))
+        {
+            self.out.vertical = true;
+        }
+        let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        if removed == 0 {
+            return Some(op);
+        }
+        if scope.mode == Mode::Verify {
+            self.out.residue += removed;
+            return Some(op);
+        }
+        piece.changed = true;
+        scope.report.glyphs += removed;
+        match op.op.as_slice() {
+            b"\"" => {
+                piece.ops.push(Op::new("Tw", vec![num(self.gs.word_spacing)]));
+                piece.ops.push(Op::new("Tc", vec![num(self.gs.char_spacing)]));
+                piece.ops.push(Op::new("T*", vec![]));
+            }
+            b"'" => piece.ops.push(Op::new("T*", vec![])),
+            _ => {}
+        }
+        piece.ops.push(Op::new("TJ", vec![Object::Array(new_items)]));
+        None
+    }
+
+    /// An inline image under a region is removed (or counted, when verifying).
+    fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
+        // An image mask paints with the fill colour, pattern included.
+        uses_patterns(out, gs, true, false);
+        if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
+            return Some(op);
+        }
+        if scope.mode == Mode::Verify {
+            out.residue += 1;
+            return Some(op);
+        }
+        scope.report.images_removed += 1;
+        piece.changed = true;
+        None
+    }
+
+    /// A shading fills the current clip: the regions are clipped out. Removing hidden content has
+    /// no regions, so the shading and its name stay as they are.
+    fn shading(gs: &Gs, scope: &Scope<'_>, clipped: &mut HashSet<usize>, op: Op, piece: &mut Piece) -> Option<Op> {
+        let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]).filter(|c| !c.is_empty()) else { return Some(op) };
+        piece.changed = true;
+        clipped.insert(op.span.start);
+        piece.ops.push(Op::new("q", vec![]));
+        piece.ops.extend(c);
+        piece.ops.push(op);
+        piece.ops.push(Op::new("Q", vec![]));
+        None
+    }
+
+    fn draw_xobject(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) -> Option<Op> {
+        // An image mask paints with the fill colour, and a form's content is interpreted with a
+        // graphics state of its own, so a pattern it inherits from here is never recorded inside it.
+        uses_patterns(&mut self.out, &self.gs, true, true);
+        let Some(new) = xobject(doc, scope, &op, &self.gs, resources, &mut self.xobjects, &mut self.out) else { return Some(op) };
+        piece.changed = true;
+        piece.ops.extend(new);
+        None
+    }
+}
+
+/// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
+/// removed, changed or `clipped`: the words they name may be among what is gone.
+fn clean_replacements(
+    doc: &Document,
+    resources: &Dict,
+    original: &[Op],
+    clipped: &HashSet<usize>,
+    processed: &mut [(Vec<Op>, bool)],
+    report: &mut Report,
+) {
     let originals: HashMap<usize, &Op> = original.iter().map(|op| (op.span.start, op)).collect();
     let unchanged: HashSet<usize> =
         processed.iter().flat_map(|(ops, _)| ops).filter(|op| originals.get(&op.span.start) == Some(op)).map(|op| op.span.start).collect();
@@ -1090,7 +766,13 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
             b"EMC" => {
                 stack.pop();
             }
-            _ if !unchanged.contains(&op.span.start) => affected.extend(stack.iter().copied()),
+            // A scope joins `affected` only with every scope around it, so once the innermost one
+            // is in, the rest are too: deep nesting over many changed ops stays linear.
+            _ if (!unchanged.contains(&op.span.start) || clipped.contains(&op.span.start))
+                && stack.last().is_some_and(|top| !affected.contains(top)) =>
+            {
+                affected.extend(stack.iter().copied())
+            }
             _ => {}
         }
     }
@@ -1122,11 +804,14 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
 /// items with the glyphs under a region replaced by displacements, and how many were removed.
-fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+/// In apply mode the runs removed under each region are also handed to `scope.removed`.
+fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
     let f = &gs.font;
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    scope.shown += 1;
+    let op = scope.shown;
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -1139,7 +824,7 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
         }
         out.push(num(v));
     };
-    for item in items {
+    for (place, item) in items.iter().enumerate() {
         match item {
             Object::String(s) => {
                 let bytes = &s.bytes;
@@ -1152,17 +837,49 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let b = trm.bbox([0.0, f.descent, w0, f.ascent]);
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
+                    let mut rects = Vec::new();
                     let hit = match scope.hidden_text {
                         // Invisible (Tr 3) and clip-only (Tr 7) text, or text wholly off the page.
                         Some(page) => {
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => scope.glyph_hit(b, origin),
+                        None => {
+                            rects = scope.glyph_rects(b, origin);
+                            !rects.is_empty()
+                        }
                     };
-                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
+                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit, rects });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
                     pos += len;
+                }
+                if scope.mode == Mode::Apply
+                    && let Some(sink) = scope.removed.as_mut()
+                {
+                    // Consecutive removed glyphs under one region are one run, recorded for
+                    // every region the glyphs lie under: overlapping marks each account for
+                    // their own share of what was cut.
+                    let mut under: Vec<usize> = glyphs.iter().flat_map(|g| g.rects.iter().copied()).collect();
+                    under.sort_unstable();
+                    under.dedup();
+                    for r in under {
+                        let mut k = 0;
+                        while let Some(g) = glyphs.get(k) {
+                            if !g.rects.contains(&r) {
+                                k += 1;
+                                continue;
+                            }
+                            let mut end = k;
+                            while glyphs.get(end + 1).is_some_and(|n| n.rects.contains(&r)) {
+                                end += 1;
+                            }
+                            let span = g.bytes.start..glyphs.get(end).map_or(g.bytes.end, |l| l.bytes.end);
+                            let at = (place, span.start);
+                            let raw = bytes.get(span).unwrap_or_default().to_vec();
+                            sink.push(Removed { rect: r, text: f.decode(&raw), raw, codes: end - k + 1, op, at });
+                            k = end + 1;
+                        }
+                    }
                 }
                 let mut run: Vec<u8> = Vec::new();
                 for g in &glyphs {
@@ -1231,7 +948,7 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            match image::clear(doc, s, &gs.ctm, scope.rects) {
+            match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
                 Ok(None) => None,
                 Ok(Some(new)) => {
                     let nr = doc.add(Object::Stream(new));
@@ -1264,6 +981,9 @@ fn xobject(
             {
                 return None;
             }
+            // Too deep: this form cannot be read, so it goes (Apply) or the page is left alone
+            // (Verify), as a form that will not decode does. The page's decode budget below is what
+            // keeps a fan-out or a cycle from costing 2^50 walks.
             if scope.depth >= MAX_DEPTH {
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan
@@ -1280,7 +1000,7 @@ fn xobject(
             }
             // Strict, like page content: a Form read only in part counts as undecodable.
             let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(s)
+                scope.budget.decode_strict(doc, s)
             } else {
                 Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
             };
@@ -1325,8 +1045,18 @@ fn xobject(
             out.ambiguous |= inner.ambiguous;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
+            // A Type 3 glyph without resources shown inside the form may paint with the page's
+            // patterns (the renderer resolves its names there), whether or not the form has
+            // /Resources of its own.
+            out.keeps_all_patterns |= inner.keeps_all_patterns;
             out.tag_changes.extend(inner.tag_changes);
             out.error = inner.error.or(out.error.take());
+            // A form without /Resources of its own paints with its caller's patterns, so what it
+            // still paints keeps the caller's entry. Only the painted side is passed up: a name
+            // the form selected but no longer paints with is left for the caller to keep.
+            if own.is_none() {
+                out.patterns_painted.extend(inner.patterns_painted);
+            }
             if scope.mode == Mode::Verify {
                 return None;
             }
@@ -1336,6 +1066,11 @@ fn xobject(
             }
             let mut dict = s.dict.clone();
             dict.remove(b"Length");
+            if new_data.is_some() {
+                // As for page content streams: the source text of an added item (Edit ▸ Add
+                // content) would keep what the rewrite removed.
+                dict.remove(b"PCAdded");
+            }
             let mut cleaned_res = res.clone();
             // Install rewritten nested forms before finding live property names: a new form may
             // still inherit its caller's resources, and its new Do name must resolve here.
@@ -1362,6 +1097,10 @@ fn xobject(
                     out.error = Some(error);
                     return None;
                 }
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
+                    out.error = Some(error);
+                    return None;
+                }
             }
             if cleaned_res != res {
                 dict.set(b"Resources".to_vec(), Object::Dict(cleaned_res));
@@ -1385,44 +1124,17 @@ fn xobject(
     }
 }
 
-/// Remove marked-content blocks of hidden layers (`/OC /name BDC … EMC`, nested blocks
-/// included). Returns the remaining operators and how many blocks went.
-fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Vec<Op>, props: &Dict) -> (Vec<Op>, usize) {
-    let mut out = Vec::with_capacity(ops.len());
-    // For each open marked-content block: does it hide its contents?
-    let mut stack: Vec<bool> = Vec::new();
-    let mut removed = 0;
-    for op in ops {
-        let hidden_now = stack.last().copied().unwrap_or(false);
-        match op.op.as_slice() {
-            b"BDC" | b"BMC" => {
-                let this = op.is("BDC")
-                    && op.name(0) == Some(b"OC")
-                    && match op.operands.get(1) {
-                        Some(Object::Name(n)) => props.get(n).is_some_and(|o| scope.layer_hidden(doc, o)),
-                        Some(o) => scope.layer_hidden(doc, o),
-                        None => false,
-                    };
-                if this && !hidden_now {
-                    removed += 1;
-                }
-                stack.push(hidden_now || this);
-                if !(hidden_now || this) {
-                    out.push(op);
-                }
-            }
-            b"EMC" => {
-                let was = stack.pop().unwrap_or(false);
-                if !was {
-                    out.push(op);
-                }
-            }
-            _ => {
-                if !hidden_now {
-                    out.push(op);
-                }
-            }
-        }
-    }
-    (out, removed)
+/// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
+fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {
+    let Some(state) = ext_gstates.get(name).map(|s| doc.resolve(s)) else { return false };
+    let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
+    let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
+    let dict = doc.resolve(reference);
+    dict.as_dict().is_some_and(|d| type3_without_resources(doc, d))
+}
+
+/// A Type 3 font whose glyph descriptions use the resources of whatever shows them: no
+/// `/Resources`, or `/Resources null`, which is the same thing.
+fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
+    font.name(b"Subtype") == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
 }

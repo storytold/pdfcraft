@@ -294,6 +294,24 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
     }
     let (scheme, scheme_digest) = signature_algorithm(&next)?;
     let signature = it.next().ok_or_else(|| bad("signature"))?.octets("signature")?.into_owned();
+    let (timestamp, timestamp_token) = parse_timestamp_token(it)?;
+    Ok(SignerInfo {
+        sid,
+        digest,
+        signed_attrs,
+        message_digest,
+        content_type,
+        signing_time,
+        signing_certificate,
+        scheme,
+        scheme_digest,
+        signature,
+        timestamp,
+        timestamp_token,
+    })
+}
+
+fn parse_timestamp_token<'a>(it: impl Iterator<Item = Tlv<'a>>) -> Result<(bool, Option<Vec<u8>>), SignError> {
     let mut timestamp = false;
     let mut timestamp_token = None;
     for t in it {
@@ -309,20 +327,7 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
             }
         }
     }
-    Ok(SignerInfo {
-        sid,
-        digest,
-        signed_attrs,
-        message_digest,
-        content_type,
-        signing_time,
-        signing_certificate,
-        scheme,
-        scheme_digest,
-        signature,
-        timestamp,
-        timestamp_token,
-    })
+    Ok((timestamp, timestamp_token))
 }
 
 /// Attach an RFC 3161 `signatureTimeStampToken` unsigned attribute to a detached CMS object.
@@ -371,7 +376,7 @@ pub fn sign_detached(
     alg: DigestAlg,
     content_digest: &[u8],
 ) -> Result<Vec<u8>, SignError> {
-    build(key, cert, chain, alg, DATA, None, content_digest)
+    build(SignedDataInput { key, cert, chain, alg, content_type: DATA, content: None, content_digest })
 }
 
 /// A CMS SignedData that encapsulates `content` under `content_type` (an RFC 3161 token wraps
@@ -384,20 +389,23 @@ pub fn sign_encapsulated(
     content_type: &str,
     content: &[u8],
 ) -> Result<Vec<u8>, SignError> {
-    build(key, cert, chain, alg, content_type, Some(content), &alg.digest(&[content]))
+    let content_digest = alg.digest(&[content]);
+    build(SignedDataInput { key, cert, chain, alg, content_type, content: Some(content), content_digest: &content_digest })
 }
 
-// The parameters mirror the SignedData fields being assembled.
-#[allow(clippy::too_many_arguments)]
-fn build(
-    key: &PrivateKey,
-    cert: &Certificate,
-    chain: &[Certificate],
+/// The values needed to assemble a CMS SignedData object.
+struct SignedDataInput<'a> {
+    key: &'a PrivateKey,
+    cert: &'a Certificate,
+    chain: &'a [Certificate],
     alg: DigestAlg,
-    content_type: &str,
-    content: Option<&[u8]>,
-    content_digest: &[u8],
-) -> Result<Vec<u8>, SignError> {
+    content_type: &'a str,
+    content: Option<&'a [u8]>,
+    content_digest: &'a [u8],
+}
+
+fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
+    let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
     let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
     let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
     let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &der::uint(&cert.serial)])])])]);

@@ -86,7 +86,9 @@ impl Type0Font {
                     if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
                         (FontQuery::Standard(standard), true)
                     } else {
-                        let mut query = FallbackFontQuery::new(dict);
+                        // PdfCraft patch: the style comes from the descendant's descriptor.
+                        let mut query =
+                            FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
                         query.character_collection = character_collection.clone();
 
                         warn!(
@@ -285,13 +287,14 @@ impl Type0Font {
             }
             FontType::Cff(c) => {
                 // Map codepoint to glyph name via AFL, and then look it up.
-                if let Some(name) = glyph_names::get_reverse(character)
-                    && let Some(gid) = c.glyph_index_by_name(name)
-                {
-                    Some(gid)
-                } else {
-                    None
-                }
+                let by_name = |character: char| {
+                    glyph_names::get_reverse(character).and_then(|name| c.glyph_index_by_name(name))
+                };
+                // PdfCraft patch: a soft hyphen the substitute has no glyph for is its hyphen
+                // (#5888). Windows exporters map the hyphen glyph of a font they don't embed to
+                // U+00AD, which ISO 32000-2 Annex D.2 calls typographically the same as the
+                // hyphen; without this the CID, taken as a glyph index, drew an unrelated glyph.
+                by_name(character).or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
             }
             FontType::Type1(_) => {
                 // We could in theory map to a glyph via AFL and then look up
@@ -618,6 +621,12 @@ fn read_widths2(arr: &Array<'_>) -> Option<HashMap<u32, [f32; 3]>> {
             let mut iter = range.iter::<f32>();
 
             while let Some(w) = iter.next() {
+                // PdfCraft patch: as in `read_widths`, checked before the run's metrics are
+                // read. Without it, a run starting at 4294967295 overflowed `first` and
+                // discarded the whole /W2 table.
+                if first > MAX_CID {
+                    break;
+                }
                 let v1 = iter.next()?;
                 let v2 = iter.next()?;
                 map.insert(first, [w, v1, v2]);
@@ -667,5 +676,98 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
             CMap::parse(&decoded, move |n| (resolver)(n))
         }
         _ => None,
+    }
+}
+
+/// PdfCraft patch test (ported from craft-libs): a /W2 run whose first CID is past `MAX_CID`
+/// is skipped and the rest of the table kept.
+#[cfg(test)]
+mod tests {
+    use super::read_widths2;
+    use hayro_syntax::object::{Array, FromBytes};
+
+    #[test]
+    fn w2_run_past_the_largest_cid_keeps_the_rest_of_the_table() {
+        let arr =
+            Array::from_bytes(b"[4294967295 [1000 500] 10 [900 450 860] 20 30 800 400 870]")
+                .unwrap();
+        let map = read_widths2(&arr).unwrap();
+
+        assert_eq!(map.get(&4_294_967_295), None);
+        assert_eq!(map.get(&10), Some(&[900.0, 450.0, 860.0]));
+        assert_eq!(map.get(&25), Some(&[800.0, 400.0, 870.0]));
+        assert_eq!(map.len(), 12);
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::ObjectIdentifier;
+
+    /// A PDF whose object 5 is `array`, for what references in it can reach.
+    fn with_array(array: &str) -> Pdf {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >> endobj\n\
+             4 0 obj 20 endobj\n5 0 obj {array} endobj\n6 0 obj 22 endobj\n\
+             7 0 obj 7 0 R endobj\n8 0 obj 9 0 R endobj\n9 0 obj 8 0 R endobj\n\
+             10 0 obj 4 0 R endobj\n11 0 obj [500 600] endobj\n12 0 obj [-1000 500 880] endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n"
+        );
+        Pdf::new(pdf.into_bytes()).unwrap()
+    }
+
+    /// `/W` and `/W2` read groups of items, and either kind can start with a reference: taken for
+    /// the whole group it was lost, with all that followed, and those glyphs fell back to `/DW`.
+    #[test]
+    fn a_width_group_can_start_with_a_reference() {
+        let widths = |array: &str| {
+            let pdf = with_array(array);
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+            let mut read: Vec<_> = read_widths(&array).unwrap().into_iter().collect();
+            read.sort_by_key(|(cid, _)| *cid);
+            read
+        };
+        let by_list = vec![(20, 500.0), (21, 600.0)];
+        assert_eq!(widths("[20 [500 600]]"), by_list);
+        assert_eq!(widths("[4 0 R [500 600]]"), by_list);
+        let by_range = vec![(20, 700.0), (21, 700.0), (22, 700.0)];
+        assert_eq!(widths("[20 22 700]"), by_range);
+        assert_eq!(widths("[4 0 R 22 700]"), by_range);
+        assert_eq!(widths("[4 0 R 6 0 R 700]"), by_range);
+        assert_eq!(widths("[1 [100] 4 0 R [500 600]]"), vec![(1, 100.0), (20, 500.0), (21, 600.0)], "after a group");
+
+        let vertical = |array: &str| {
+            let pdf = with_array(array);
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+            let mut read: Vec<_> = read_widths2(&array).unwrap().into_iter().collect();
+            read.sort_by_key(|(cid, _)| *cid);
+            read
+        };
+        let by_list = vec![(20, [-1000.0, 500.0, 880.0])];
+        assert_eq!(vertical("[20 [-1000 500 880]]"), by_list);
+        assert_eq!(vertical("[4 0 R [-1000 500 880]]"), by_list);
+        let by_range = vec![(20, [-900.0, 400.0, 800.0]), (21, [-900.0, 400.0, 800.0]), (22, [-900.0, 400.0, 800.0])];
+        assert_eq!(vertical("[20 22 -900 400 800]"), by_range);
+        assert_eq!(vertical("[4 0 R 22 -900 400 800]"), by_range);
+
+        // A group's list can be given by reference too, and a reference to a reference is what it
+        // names.
+        let by_list = vec![(20, 500.0), (21, 600.0)];
+        assert_eq!(widths("[20 11 0 R]"), by_list);
+        assert_eq!(widths("[10 0 R [500 600]]"), by_list);
+        assert_eq!(widths("[10 0 R 11 0 R]"), by_list);
+        assert_eq!(vertical("[20 12 0 R]"), vec![(20, [-1000.0, 500.0, 880.0])]);
+
+        // A reference that only leads back to itself holds no number, so those glyphs keep `/DW`.
+        for array in ["[7 0 R [500 600]]", "[8 0 R [500 600]]", "[20 7 0 R 700]", "[7 0 R 8 0 R 700]", "[20 [7 0 R 600]]"] {
+            assert!(widths(array).is_empty(), "{array}");
+        }
+        for array in ["[7 0 R [-1000 500 880]]", "[8 0 R 22 -900 400 800]", "[20 [7 0 R 500 880]]"] {
+            assert!(vertical(array).is_empty(), "{array}");
+        }
     }
 }
