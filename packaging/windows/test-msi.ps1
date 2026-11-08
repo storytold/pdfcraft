@@ -201,11 +201,31 @@ foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2
   Assert-Equal $selection[0] 'Single' "$ext context menu selection"
   Assert-Equal $selection[1] 'PdfcraftImageContextMenu' "$ext context menu selection component"
 }
+# Explorer actions (#1172): localized classic verbs (MUIVerb resources in pdfcraft.exe), one launch
+# per file (Player) that the single-instance hand-off collects. They belong to the menu component of
+# their file type, so the same choice installs and removes them.
+foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx', 'txt', 'text', 'pdf')) {
+  $verbs = @(@('EmailPdf', 'email', '1002'), @('Combine', 'combine', '1003'))
+  if ($ext -in @('txt', 'text')) { $verbs += ,@('CreatePdf', 'convert', '1001') }
+  $component = if ($ext -eq 'pdf') { 'PdfcraftPdfContextMenu' } else { 'PdfcraftImageContextMenu' }
+  foreach ($verb in $verbs) {
+    $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.' + $verb[0]
+    $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MUIVerb''') 3
+    Assert-Equal $menu[0] ('@[#PdfcraftExe],-' + $verb[2]) "$ext $($verb[0]) localized menu resource"
+    Assert-Equal $menu[1] $component "$ext $($verb[0]) context menu component"
+    Assert-Equal $menu[2] '-1' "$ext $($verb[0]) context menu context-sensitive root"
+    $command = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 2
+    Assert-Equal $command[0] ('"[#PdfcraftExe]" --shell-' + $verb[1] + ' -- "%1"') "$ext $($verb[0]) context menu command"
+    Assert-Equal $command[1] $component "$ext $($verb[0]) context menu command component"
+    $selection = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MultiSelectModel''') 1
+    Assert-Equal $selection[0] 'Player' "$ext $($verb[0]) context menu selection"
+  }
+}
 $view = $Database.OpenView('SELECT `Key` FROM `Registry` WHERE `Component_` = ''PdfcraftApp''')
 try {
   [void] $view.Execute()
   while ($record = $view.Fetch()) {
-    if ($record.StringData(1) -match 'PdfCraft\.CreatePdf') { throw "image menu row left in PdfcraftApp: $($record.StringData(1))" }
+    if ($record.StringData(1) -match 'PdfCraft\.(CreatePdf|EmailPdf|Combine)') { throw "image menu row left in PdfcraftApp: $($record.StringData(1))" }
   }
 } finally { [void] $view.Close() }
 $imageKeyPath = Read-Row ('SELECT `Registry` FROM `Registry` WHERE `Key` = ''' + $imageKey + ''' AND `Name` IS NULL') 1

@@ -27,6 +27,7 @@ mod copy_image;
 pub mod dates;
 mod document;
 mod edit;
+pub mod email;
 mod error;
 pub mod export;
 pub mod field_table;

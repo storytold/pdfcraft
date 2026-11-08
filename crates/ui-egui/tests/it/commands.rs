@@ -77,6 +77,14 @@ fn every_registered_command_is_implemented() {
         }
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        if spec.id == "app.default_pdf_settings" {
+            // Exercise the command without launching or reading actual Windows settings.
+            app.default_pdf_integration = Some(pdfcraft_ui_egui::DefaultPdfIntegration {
+                is_default: std::sync::Arc::new(|| Ok(true)),
+                open_settings: std::sync::Arc::new(|| Ok(())),
+                automatic_prompt: false,
+            });
+        }
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         } else if spec.id == "protect.unlock" {

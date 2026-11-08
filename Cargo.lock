@@ -4417,6 +4417,7 @@ dependencies = [
 name = "pdfcraft-engine"
 version = "0.18.1"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "craft-docpath",
  "getrandom 0.4.3",
@@ -4451,6 +4452,7 @@ dependencies = [
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
  "png 0.18.1",
+ "tempfile",
  "thiserror 2.0.21",
  "tiff",
  "unicode-segmentation",

@@ -105,6 +105,24 @@ fn quick_clicks_with_the_highlighter_mark_only_the_word() {
     assert!(app.views[0].selected_text().is_none());
 }
 
+#[test]
+fn highlighting_a_word_does_not_restore_its_selection_when_the_text_layer_returns() {
+    let (mut h, at) = harness(|app| assert!(app.execute("comment.highlight")));
+    click(&mut h, at);
+    click(&mut h, at);
+    // Adding the highlight invalidates the text layer. Its asynchronous return must not
+    // replay the old double-click on a later frame with no pointer event.
+    crate::support::wait_until(&mut h, "the highlight and the page after it", |app| {
+        app.session.get(app.views[0].id).is_some_and(|d| !d.info.annotations.is_empty()) && !app.render_pending()
+    });
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let marks: Vec<(&str, usize)> = doc.info.annotations.iter().map(|a| (a.subtype.as_str(), a.quads.len())).collect();
+    assert_eq!(marks, [("Highlight", 1)]);
+    assert!(app.views[0].selected_text().is_none(), "idle frames must not reselect the highlighted word");
+}
+
 /// Press at `from`, move to `to` and release there.
 fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
     h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });

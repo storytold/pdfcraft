@@ -348,6 +348,7 @@ impl PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        self.pdf_opened_for_default_prompt();
         Ok(id)
     }
 

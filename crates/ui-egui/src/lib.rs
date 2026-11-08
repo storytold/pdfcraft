@@ -52,14 +52,18 @@ pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
+mod default_pdf;
 mod dialogs;
+pub use default_pdf::DefaultPdfIntegration;
 pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
 mod home;
 mod hotbar;
 mod panels;
+mod shell_ui;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use shell_ui::ShellAction;
 pub mod i18n;
 pub mod theme;
 mod widgets;
@@ -358,6 +362,11 @@ pub struct PdfCraftApp {
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
+    /// Windows-only host callbacks; absent on other frontends.
+    pub default_pdf_integration: Option<DefaultPdfIntegration>,
+    /// Ask after opening a PDF; the preference survives a restart.
+    pub ask_default_pdf: bool,
+    pub(crate) default_pdf: default_pdf::Prompt,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
     pub printer_source: Option<PrinterSource>,
@@ -465,6 +474,16 @@ pub struct PdfCraftApp {
     pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub open_email_draft: Option<shell_ui::OpenDraftFn>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub shell_email_paths: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    shell_email_generation: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    shell_email_run: Option<shell_ui::EmailRun>,
+    #[cfg(not(target_arch = "wasm32"))]
+    shell_requests: std::collections::VecDeque<(ShellAction, Vec<String>)>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).

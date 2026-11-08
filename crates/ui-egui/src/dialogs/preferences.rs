@@ -661,6 +661,12 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     ctx.checkbox(ui, &mut app.reload_changed_files, tl!("Reload documents when their files change on disk"), t);
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
+    if app.default_pdf_integration.is_some() {
+        ctx.checkbox(ui, &mut app.ask_default_pdf, tl!("Ask to make PdfCraft the default PDF app"), t);
+        if ui.button(tl!("Open default app settings")).clicked() {
+            app.execute("app.default_pdf_settings");
+        }
+    }
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
 
     #[cfg(not(target_arch = "wasm32"))]
