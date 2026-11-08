@@ -32,10 +32,13 @@ mod validate;
 #[cfg(test)]
 use changes::only_grew;
 #[cfg(test)]
-use listing::{DISCOVERY_CACHE_LIMIT, is_document_timestamp};
+pub(crate) use listing::MAX_FIELD_NAME_BYTES;
+#[cfg(test)]
+use listing::{DISCOVERY_CACHE_LIMIT, Field, MAX_ENTRIES, MAX_FIELDS, MAX_NAME_BYTES, is_document_timestamp, sig_fields};
 pub use listing::{DigestCache, list, list_cached};
+pub(crate) use listing::{walk_sig_fields, widget_shown};
 pub(crate) use signing::fmt;
-pub use signing::{Appearance, AppearanceLabels, SignOptions, display_date, sign, sign_with_timestamp, timestamp_document};
+pub use signing::{Appearance, AppearanceLabels, SignOptions, display_date, has_signatures, sign, sign_with_timestamp, timestamp_document};
 pub use types::{Detail, Fill, Modification, Status, TrustStore, WORDINGS, Words, in_english, kind};
 pub(crate) use validate::signature_contents;
 pub use validate::validate;
@@ -45,6 +48,9 @@ use validate::{DssEvidence, MAX_DSS_BYTES, MAX_DSS_ENTRIES};
 #[cfg(test)]
 #[path = "pdf_discovery_tests.rs"]
 mod discovery_tests;
+#[cfg(test)]
+#[path = "pdf_fields_tests.rs"]
+mod fields_tests;
 #[cfg(test)]
 #[path = "pdf/revision_classification_tests.rs"]
 mod revision_classification_tests;
@@ -89,6 +95,11 @@ pub struct SignatureInfo {
     pub timestamp_time: Option<Time>,
     pub status: Status,
     pub modification: Modification,
+    /// The display copy draws this verdict into the appearance of at least one of the
+    /// signature's visible widgets (its named status layers, see [`crate::status_layers`]). The
+    /// document can still clip those layers away or cover them, so this never stands in for the
+    /// page's own validation badge. [`list`] leaves it false; [`crate::show_status_layers`] sets it.
+    pub verdict_shown: bool,
     /// Acrobat-style sentences explaining the verdict, each one ready to read in English and ready to
     /// be said in another language (see [`Detail`]).
     pub details: Vec<Detail>,
