@@ -80,7 +80,7 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Catalan | `ca` | 2,798 entries | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
 | Romanian | `ro` | 2,798 entries (every current key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
-| Georgian | `ka` | 2,805 entries (every current key) | partial; reviewed by a native speaker | no |
+| Georgian | `ka` | 2,898 entries (every current key) | partial; reviewed by a native speaker | no |
 | Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 
 **21 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
