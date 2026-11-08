@@ -45,7 +45,7 @@ pub(crate) use area::signature_badges;
 use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
 use bars::in_size_hint_zone;
-use bars::{Notice, notices, page_size_hint, quick_bar};
+use bars::{Notice, notices, page_indicator, page_size_hint, quick_bar};
 pub use cache::RasterMemory;
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
 #[cfg(test)]
@@ -1246,6 +1246,7 @@ struct PageEnv<'a> {
     navigation_enabled: bool,
     paper: Color32,
     show_page_edge_shadows: bool,
+    show_page_indicator: bool,
     ppp: f32,
     precise_scroll: Vec2,
     prefs: &'a comments::CommentPrefs,
@@ -2650,6 +2651,9 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     }
     find_bar(view, info.pages.len(), avail, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
+    if env.show_page_indicator {
+        page_indicator(view, info.pages.len(), avail, ui, t);
+    }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
@@ -3155,6 +3159,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         navigation_enabled,
         paper,
         show_page_edge_shadows: app.show_page_edge_shadows,
+        show_page_indicator: app.show_page_indicator,
         ppp,
         precise_scroll,
         prefs,
