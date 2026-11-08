@@ -545,6 +545,13 @@ pub enum Edit {
         content: AddedContent,
         file: Option<(String, Arc<Vec<u8>>)>,
     },
+    /// Edit ▸ Paste of objects copied together in Edit a PDF ([`Document::copy_objects`](crate::Document::copy_objects)), in this
+    /// document or another: drawn on top of `page` as they were, moved by `offset` (user space).
+    PasteObjects {
+        page: usize,
+        clip: Arc<crate::ObjectClip>,
+        offset: [f64; 2],
+    },
     /// Apply redaction marks (all, or those on `pages`): remove what they cover for good.
     ApplyRedactions {
         pages: Option<Vec<usize>>,
