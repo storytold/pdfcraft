@@ -299,16 +299,21 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
     });
 }
 
+/// The rule before a tool's own controls, across the bar's button column. It takes the column's
+/// width (its height on a horizontal bar), not the bar's: the bar's would widen the frame and put
+/// the settings button off centre (#6614). The bar's width stays the most it takes, should the
+/// column ever be unbounded.
 fn controls_divider(ui: &mut egui::Ui, t: &Tokens, vertical: bool) {
+    let most = crate::canvas::bars::QUICK_BAR_WIDTH;
     let (r, _) = if vertical {
-        ui.allocate_exact_size(vec2(crate::canvas::bars::QUICK_BAR_WIDTH, 9.0), Sense::hover())
+        ui.allocate_exact_size(vec2(ui.available_width().min(most), 9.0), Sense::hover())
     } else {
-        ui.allocate_exact_size(vec2(9.0, crate::canvas::bars::QUICK_BAR_WIDTH), Sense::hover())
+        ui.allocate_exact_size(vec2(9.0, ui.available_height().min(most)), Sense::hover())
     };
     if vertical {
-        ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+        ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, t.divider));
     } else {
-        ui.painter().vline(r.center().x, r.y_range().shrink(6.0), Stroke::new(1.0, t.divider));
+        ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0, t.divider));
     }
 }
 

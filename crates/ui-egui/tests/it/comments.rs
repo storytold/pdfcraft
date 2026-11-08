@@ -3614,6 +3614,26 @@ fn hotbar_vertical_size_and_docking() {
     assert_ne!(saved["hotbar"]["position"], moved["hotbar"]["position"]);
 }
 
+/// #6614: a tool's own controls (the divider, colour, opacity) leave the settings button in the
+/// tool buttons' column, on a vertical bar and on a horizontal one. The divider used to take the
+/// whole bar's width, widening the frame and putting the button 7 pt off centre.
+#[test]
+fn hotbar_settings_button_stays_in_the_tool_column_with_tool_controls() {
+    for side in ["float", "bottom"] {
+        for tool in ["select", "highlight", "note"] {
+            let mut h = harness(move |app| {
+                app.set_option("hotbar-side", side).unwrap();
+                app.set_option("quick", tool).unwrap();
+            });
+            h.run_steps(3);
+            let select = h.get_by_label("Select (V)").rect().center();
+            let settings = h.get_by_label("Hotbar settings").rect().center();
+            let (off, axis) = if side == "float" { (settings.x - select.x, "x") } else { (settings.y - select.y, "y") };
+            assert!(off.abs() < 0.5, "{side} bar, {tool}: the settings button is {off} pt off the tool column in {axis}");
+        }
+    }
+}
+
 #[test]
 fn hotbar_settings_layout_and_side_controls_are_reachable_by_label() {
     let mut h = harness(|_| {});
