@@ -78,6 +78,9 @@ pub struct PrintDraft {
     pub crops: Vec<Option<print::Crop>>,
     /// The pages `crops` were read for, so a changed page selection reads them again.
     pub crop_pages: Option<Vec<usize>>,
+    /// The destination is a network printer (WS-Print) rather than `printer`.
+    #[cfg(network_print)]
+    pub network_dest: bool,
     /// The printer whose options are being read in the background (CUPS runs `lpoptions`,
     /// which a stuck CUPS can hold up; #1818). The panel says so meanwhile.
     pub driver_options_loading: Option<String>,
@@ -129,6 +132,8 @@ impl Default for PrintDraft {
             label_flip: false,
             crops: Vec::new(),
             crop_pages: None,
+            #[cfg(network_print)]
+            network_dest: false,
             driver_options_loading: None,
             read_options_for: None,
         }
@@ -136,6 +141,18 @@ impl Default for PrintDraft {
 }
 
 impl PrintDraft {
+    /// Is the destination a network printer? Never, in a build without network printing.
+    pub(super) fn to_network(&self) -> bool {
+        #[cfg(network_print)]
+        {
+            self.network_dest
+        }
+        #[cfg(not(network_print))]
+        {
+            false
+        }
+    }
+
     /// Choose Page Sizing & Handling. Label loads label stock and remembers the paper it
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {

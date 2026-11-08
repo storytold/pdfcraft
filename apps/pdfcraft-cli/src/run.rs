@@ -166,6 +166,7 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
     let args = args.as_slice();
     validate_options("mcp", args, MCP_OPTIONS)?;
     let compact = args.iter().any(|a| a == "--compact");
+    let allow_network_print = args.iter().any(|a| a == "--allow-network-print");
     let mut auto = automation(args)?;
     if let Some(roots) = roots {
         let show = |root: Option<&Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
@@ -177,7 +178,10 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
         );
         auto = auto.with_automation_roots(Some(roots));
     }
-    let mut server = pdfcraft_automation::mcp::McpServer::new(auto).with_compact(compact);
+    let mut server = pdfcraft_automation::mcp::McpServer::new(auto).with_compact(compact).with_network_print(allow_network_print);
+    if allow_network_print {
+        let _ = writeln!(std::io::stderr().lock(), "pdfcraft-cli: the agent may print to network printers (--allow-network-print)");
+    }
     let _ = writeln!(
         std::io::stderr().lock(),
         "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
