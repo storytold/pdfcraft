@@ -59,6 +59,21 @@ Vendored (vendor/, patched; see vendor/README.md):
 - hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in vendor/hayro).
 - hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (LICENSE-APACHE, LICENSE-MIT kept in vendor/hayro-interpret).
 
+PaddleOCR PP-OCRv6 and PP-LCNet model weights and recognition dictionary
+Copyright PaddlePaddle / PaddleOCR contributors. Licensed under Apache-2.0.
+Fetched from the authors' pinned releases; see ATTRIBUTION.toml.
+
+Optional historical OCR add-on (not included in standard installers)
+PP-OCRv6 small multilingual handwritten and printed text recognition model,
+Benjamin Kiessling, ALMAnaCH, Inria Paris — Apache-2.0.
+https://doi.org/10.5281/zenodo.21788405
+Modified distribution: PdfCraft contributors converted the author's safetensors
+weights to ONNX and extracted the character codec to JSON, without retraining.
+Architecture: Kraken, revision 0d07314ba0e6fa31d786bf3f88b20dd93597f591,
+Copyright 2026, Apache-2.0. See LICENSE-APACHE and docs/historical-ocr-model.txt.
+Installation writes the licence and this model's provenance beside the verified
+model files. No training data or evaluation scans are redistributed.
+
 Bundled egui font icons
 
 The pinned egui dependency includes egui-icons.ttf, a small subset of John Slegers'

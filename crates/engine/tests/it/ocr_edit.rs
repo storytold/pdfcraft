@@ -136,10 +136,13 @@ fn a_longer_ocr_phrase_grows_rightwards() {
         scanned_word("Lead", 59.0, 80.0, 70.0, 11.0),
         scanned_word("Testing", 20.0, 56.0, 56.0, 11.0),
     ]);
+    let before = s.get(id).unwrap().bytes.clone();
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0].text, "Project Lead");
     s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "Project Coordinator Lead".into(), style: Default::default() }).unwrap();
     let blocks = s.get(id).unwrap().text_blocks(0);
     assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Project Coordinator Lead", "Testing"]);
     assert_eq!(blocks[0].rows.len(), 1, "one line");
+    assert_saved_text_and_undo(&mut s, id, &["Project Coordinator Lead", "Testing"], &before);
 }
 
 /// OCR words differ in size and are stretched to fit the scan: a rewritten phrase keeps each
@@ -151,6 +154,8 @@ fn a_rewritten_ocr_phrase_keeps_its_word_widths() {
         scanned_word("Smith", 49.0, 78.0, 70.0, 11.0),
         scanned_word("Example", 82.0, 124.0, 70.0, 11.5),
     ]);
+    let before = s.get(id).unwrap().bytes.clone();
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0].text, "John Smith Example");
     s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Smith Exam".into(), style: Default::default() }).unwrap();
     let lines = s.get(id).unwrap().text_lines(0);
     assert_eq!(lines.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["John", "Smith", "Exam"]);
@@ -158,6 +163,37 @@ fn a_rewritten_ocr_phrase_keeps_its_word_widths() {
     for pair in lines.windows(2) {
         assert!(pair[1].rect[0] >= pair[0].rect[2] - 0.5, "{:?} runs into {:?}", pair[1].text, pair[0].text);
     }
+    assert_saved_text_and_undo(&mut s, id, &["John Smith Exam"], &before);
+}
+
+/// Switching from empty, fixed-width OCR glyphs to a visible face must not squeeze it.
+#[test]
+fn unicode_ocr_replacement_keeps_the_source_word_width() {
+    for (old, new) in [("MMMM", "NNNN"), ("iiii", "llll"), ("café", "cafe")] {
+        let (mut s, id) = scanned_with(vec![word(old, 20.0, 60.0, 50.0)]);
+        let before = s.get(id).unwrap().bytes.clone();
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: new.into(), style: Default::default() }).unwrap();
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, new);
+        assert!(!blocks[0].invisible);
+        assert_eq!(blocks[0].base_font, "Helvetica", "visible glyphs replace empty OCR procedures");
+        // Equal-metric letters retain the old width; removing an accent does too.
+        let width = blocks[0].rect[2] - blocks[0].rect[0];
+        let ratio = pdfcraft_fonts::Std14::Helvetica.text_width(new, 1.0) / pdfcraft_fonts::Std14::Helvetica.text_width(old, 1.0);
+        assert!((width - 40.0 * ratio).abs() < 0.5, "{old} -> {new}: width {width}");
+        assert_saved_text_and_undo(&mut s, id, &[new], &before);
+    }
+}
+
+fn assert_saved_text_and_undo(s: &mut Session, id: pdfcraft_engine::DocId, expected: &[&str], before: &[u8]) {
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let reopened_id = reopened.open("edited.pdf", None, saved, None).unwrap();
+    let blocks = reopened.get(reopened_id).unwrap().text_blocks(0);
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), expected);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().bytes.as_slice(), before);
 }
 
 /// Visible text set with a horizontally stretched text matrix (3 × 1), as some generators write.

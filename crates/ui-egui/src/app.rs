@@ -201,6 +201,7 @@ impl PdfCraftApp {
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
             ocr_draft: ocr_ui::OcrDraft::default(),
+            ocr_addon: ocr_ui::AddonState::default(),
             ocr_run: None,
             ocr_batch: None,
             ocr_verify: ocr_verify::OcrVerify::default(),

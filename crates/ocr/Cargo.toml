@@ -14,11 +14,17 @@ workspace = true
 pdfcraft-fonts = { workspace = true }
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
 rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
+rten-tensor = "0.26.0"
+rten-imageproc = "0.26.0"
+image = { version = "0.25", default-features = false }
 thiserror.workspace = true
+serde_json.workspace = true
+unicode-normalization = "0.1.25"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The page image is handed to the external tesseract process as a PNG.
 png = "0.18"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3.27"

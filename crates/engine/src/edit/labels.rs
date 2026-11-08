@@ -101,6 +101,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Change initial view",
     "Set alternate text",
     "Mark figure as decorative",
+    "Straighten scanned page",
     "Recognize text",
     "Enhance scanned file",
     "Run JavaScript",
@@ -162,8 +163,16 @@ pub const EDIT_LABELS: &[&str] = &[
 /// The names of the batches built below L7, which an interface shows in the same places as
 /// [`EDIT_LABELS`] and so translates the same way. A batch built in the interface itself arrives
 /// already worded in the interface's language.
-pub const BATCH_LABELS: &[&str] =
-    &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text", field_table::LABEL, "Style"];
+pub const BATCH_LABELS: &[&str] = &[
+    "Set document title",
+    "Mark differences",
+    "Detect form fields",
+    "Run JavaScript",
+    "Recognize text",
+    "Correct scans",
+    field_table::LABEL,
+    "Style",
+];
 
 impl Edit {
     /// Label for the Edit menu and history ("Undo Rotate pages").
@@ -257,6 +266,7 @@ impl Edit {
             Edit::SetTagProperty { .. } => Label::of("Change tag properties"),
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
+            Edit::DeskewPage { .. } => Label::of("Straighten scanned page"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
             Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),

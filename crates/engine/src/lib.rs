@@ -37,6 +37,8 @@ mod layers;
 pub mod links;
 pub mod model3d;
 pub mod ocr;
+pub mod ocr_addons;
+mod ocr_pdf;
 mod open;
 pub mod optimizer;
 mod page_filter;

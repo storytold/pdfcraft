@@ -14,22 +14,33 @@
 //! searchable layer uses empty Type3 programs and ToUnicode maps, preserving Unicode without
 //! display fonts. WinAnsi-only invisible text keeps the standard Helvetica layout here.
 //!
-//! The ocrs models read the Latin alphabet (English and other languages written without
-//! accents); Tesseract (the `tesseract` module, off the web build) reads whatever its installed
-//! language packs cover.
+//! The ocrs engine detects text lines with its own models; it reads English with the ocrs
+//! recognition model and the other [`LANGUAGES`] (accented Latin, Japanese, Chinese) with PaddleOCR's
+//! multilingual recognizer, whose document orientation classifier also tells [`scan`] how far a
+//! page is turned. Tesseract (the `tesseract` module, off the web build) reads whatever its
+//! installed language packs cover. See README.md for limitations.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod confidence;
+pub mod crop;
+mod handwriting;
+pub mod historical;
+mod lines;
 pub mod merge;
+mod multilingual;
 mod ocrs;
 pub mod preprocess;
+pub mod scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
+mod typography;
 
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
-pub use ocrs::{ALPHABET, DETECTION_MODEL, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL};
+pub use ocrs::{
+    ALPHABET, DETECTION_MODEL, DICTIONARY, LANGUAGES, MULTILINGUAL_MODEL, Models, ORIENTATION_MODEL, Ocr, OcrsRecognizer, RECOGNITION_MODEL,
+};
 
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
@@ -42,6 +53,29 @@ pub const MAX_SIDE: u32 = 10_000;
 /// multiply out to a raster no engine should have to read; larger images are rejected with
 /// [`OcrError::ImageTooLarge`] instead of being processed.
 pub const MAX_PIXELS: u32 = 64_000_000;
+
+/// Map the system locale to an OCR choice, independently of UI translations.
+/// Chinese script tags take precedence over region; bare `zh` selects simplified Chinese.
+/// Missing or unsupported locales use English.
+pub fn language_for_locale(locale: Option<&str>) -> &'static str {
+    let locale = locale.unwrap_or_default().trim().split(['.', '@']).next().unwrap_or_default();
+    let mut parts = locale.split(['-', '_']);
+    let primary = parts.next().unwrap_or_default();
+    if primary.eq_ignore_ascii_case("zh") {
+        // Only language/script/region subtags matter, never a later extension or private use.
+        let next = parts.next().unwrap_or_default();
+        if next.eq_ignore_ascii_case("Hant") {
+            return "zh-Hant";
+        }
+        if next.eq_ignore_ascii_case("Hans") {
+            return "zh-Hans";
+        }
+        return if ["TW", "HK", "MO"].iter().any(|region| next.eq_ignore_ascii_case(region)) { "zh-Hant" } else { "zh-Hans" };
+    }
+    // Older platforms use the generic Norwegian tag for Bokmål.
+    let primary = if primary.eq_ignore_ascii_case("no") { "nb" } else { primary };
+    LANGUAGES.iter().find(|(code, _)| code.eq_ignore_ascii_case(primary)).map_or("en", |(code, _)| *code)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -210,6 +244,12 @@ pub trait Recognizer: Send + Sync {
     fn languages(&self) -> Vec<(String, String)>;
     /// Read the words in `image`, in reading order.
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError>;
+    /// How far clockwise `image` must turn to be upright (0, 90, 180 or 270), when this engine
+    /// can tell: `None` when it has no orientation classifier (Scan & OCR ▸ Correct scanned
+    /// pages then leaves the page's rotation alone).
+    fn orientation(&self, _image: &image::RgbImage) -> Option<Result<u16, OcrError>> {
+        None
+    }
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the
@@ -466,6 +506,54 @@ pub fn text_layer(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPlan) -> Vec<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn system_locale_selects_ocr_language_with_english_fallback() {
+        for (locale, expected) in [
+            ("de-AT", "de"),
+            ("de_CH.UTF-8", "de"),
+            ("JA-jp", "ja"),
+            ("fr-CA", "fr"),
+            ("es-MX", "es"),
+            ("it-IT", "it"),
+            ("nl-BE", "nl"),
+            ("da-DK", "da"),
+            ("nb-NO", "nb"),
+            ("no_NO", "nb"),
+            ("sv-FI", "sv"),
+            ("fi_FI", "fi"),
+            ("pt-BR", "pt"),
+            ("pt_PT@euro", "pt"),
+            (" EN-us ", "en"),
+            ("is-IS", "en"),
+            ("nn-NO", "en"),
+            ("ca-ES", "ca"),
+            ("ca_ES.UTF-8", "ca"),
+            ("ca-AD", "ca"),
+            ("ca-ES-valencia", "ca"),
+            ("zh-Hans", "zh-Hans"),
+            ("zh", "zh-Hans"),
+            ("zh-CN", "zh-Hans"),
+            ("zh_SG.UTF-8", "zh-Hans"),
+            ("zh-TW", "zh-Hant"),
+            ("zh_HK", "zh-Hant"),
+            ("zh-MO", "zh-Hant"),
+            (" ZH-hANT-cn ", "zh-Hant"),
+            ("zh-Hans-TW", "zh-Hans"),
+            ("zh-Hant-HK", "zh-Hant"),
+            ("C.UTF-8", "en"),
+            ("POSIX", "en"),
+            ("", "en"),
+            ("日本語", "en"),
+            ("deutsch", "en"),
+        ] {
+            assert_eq!(super::language_for_locale(Some(locale)), expected, "{locale}");
+        }
+        assert_eq!(super::language_for_locale(None), "en");
+        for (code, _) in super::LANGUAGES {
+            assert_eq!(super::language_for_locale(Some(code)), *code);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -772,7 +860,7 @@ mod tests {
             std::fs::create_dir_all(&models_dir).unwrap();
             let found = || Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d));
             assert_eq!(found(), None, "{name}: no models yet");
-            for file in [DETECTION_MODEL, RECOGNITION_MODEL] {
+            for file in [DETECTION_MODEL, RECOGNITION_MODEL, MULTILINGUAL_MODEL, ORIENTATION_MODEL, DICTIONARY] {
                 std::fs::write(models_dir.join(file), b"model").unwrap();
             }
             let models = found().unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
@@ -811,6 +899,10 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, px).unwrap()).to_rgb8();
+        let multi = ocr.recognize_language(&image, "de").unwrap();
+        assert!(multi.iter().map(Line::text).collect::<Vec<_>>().join(" ").contains("HELLO"), "{multi:?}");
+        let _ = ocr.orientation(&image).unwrap();
     }
 
     /// The recognised words name their engine.

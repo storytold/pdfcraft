@@ -1,0 +1,63 @@
+PdfCraft historical OCR add-on v1
+================================
+
+This is a MODIFIED DISTRIBUTION: PdfCraft contributors converted the original
+PP-OCRv6 (small) multilingual handwritten and printed text recognition model
+from safetensors to an ONNX inference graph and extracted its character codec
+as historical-dictionary.json. No fine-tuning or quantization was performed.
+Both derived files remain available under Apache-2.0; see LICENSE.txt.
+
+Original model author: Benjamin Kiessling, ALMAnaCH, Inria Paris.
+Original source: https://doi.org/10.5281/zenodo.21788405
+Original file: https://zenodo.org/records/21788405/files/small.safetensors
+Original size: 13065380 bytes
+Original SHA-256: 3108259779f5abfed3908a1c9eafba64d17e4a2a169368c539ecfeff04c018f3
+Original Zenodo MD5: 07279cd68cd4402807542799f12d0f4a
+The pinned record's license field is apache2.0 (checked 2026-10-11).
+
+Architecture implementation: Kraken, Apache-2.0.
+https://github.com/mittagessen/kraken/tree/0d07314ba0e6fa31d786bf3f88b20dd93597f591/kraken/lib/ppocr
+The upstream architecture files carry Copyright 2026 and Apache-2.0 notices.
+No third-party training data, scans, private documents or Python runtime are
+distributed in this add-on. The original model card identifies a mixed training
+corpus, including nonredistributable datasets; those datasets are not included.
+
+Conversion performed 2026-10-11 using PyTorch 2.14.1+cpu, ONNX 1.23.2 and
+NumPy 2.5.4. The model state is loaded strictly into build_recognizer('small',
+1623) from the pinned Kraken revision. Export uses evaluation mode and the
+CTC branch only: logits.squeeze(2).transpose(1,2).softmax(-1). ONNX opset 17,
+legacy torch.onnx exporter (dynamo=False), float32 weights, dynamic input width
+and output steps. Input is RGB float32 [1,3,96,width], values 1 - pixel/255;
+the 96-pixel height is from the original file metadata (the prose model card
+mentions 128, which does not describe these weights). Output is probabilities
+[1,steps,1623]. The dictionary is a UTF-8 JSON array indexed by the original
+codec IDs, including empty CTC blank at zero. Decoding collapses repeated IDs
+and removes blanks; PdfCraft normalizes the resulting Unicode string to NFC.
+
+Line images are resized proportionally to height 96 and receive 16 white
+pixels of horizontal padding on both ends. The model is a line recognizer;
+page layout/line detection are separate and can affect real-document quality.
+
+Validation and limitations
+--------------------------
+The initial conversion check compared 62 independently prepared historical
+line crops against the native Rust RTen recognizer: all 62 decoded strings
+matched the PyTorch reference exactly before NFC normalization.
+Fraktur: 30 lines, 1769 NFC characters, 14 character edits (0.79% CER).
+Kurrent: 32 lines, 858 NFC characters, 45 character edits (5.24% CER).
+CER uses per-line Levenshtein distance after NFC/whitespace normalization.
+These are small regression checks, NOT an unseen-document benchmark: both
+source corpora are explicitly listed in the model's training mixture.
+Sources: ubtue/gt-fraktur commit 479511242648b5438e346c599ef872d39842788c
+(CC0-1.0), and bertsky/mkn-kurrent-gt commit
+8ddc7276f24504cfccde655aa901f08fea2fb7eb (ground truth CC-BY-SA-4.0;
+SLUB original page public-domain mark). No test images or transcriptions are
+part of this release.
+
+Fraktur is printed type; Kurrent is handwriting. The latter is less consistent
+between writers. This base model also includes diverse historical Latin,
+French and other material, but those scripts were not locally evaluated here.
+Sutterlin-specific accuracy is unverified. Historical abbreviations and glyphs
+may be transcribed inconsistently. Always check important text against the scan.
+The add-on runs locally after installation and is never bundled or downloaded
+by default. This is an optional model prerelease, not an application installer.

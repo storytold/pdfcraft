@@ -810,6 +810,22 @@ fn turkish_dotted_and_dotless_i_match_in_any_case() {
 }
 
 #[test]
+fn apostrophe_forms_match_each_other_in_both_case_modes() {
+    let mut v = Vec::new();
+    word(&mut v, "l’été", 10.0, 10.0, 7.0);
+    word(&mut v, "l'été", 60.0, 10.0, 7.0);
+    word(&mut v, "Hawaiʻi", 110.0, 10.0, 7.0);
+    let text = layout(v);
+    assert_eq!(text.plain_text(), "l’été l'été Hawaiʻi", "the page text keeps what was typeset");
+    for query in ["l'été", "l’été", "Lʼété"] {
+        assert_eq!(text.find(query), vec![0..5, 5..10], "{query}");
+    }
+    assert_eq!(text.find_opts("l’été", true, true), vec![0..5, 5..10]);
+    assert!(text.find_opts("L'été", true, false).is_empty());
+    assert!(text.find("Hawai'i").is_empty(), "the ʻokina is a letter, not an apostrophe");
+}
+
+#[test]
 fn greek_sigma_forms_match_without_changing_exact_search_or_glyph_ranges() {
     let mut v = Vec::new();
     word(&mut v, "κόσμος", 10.0, 10.0, 7.0);

@@ -1,9 +1,9 @@
 use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
 
 impl Automation {
-    /// The settings every OCR tool shares: dpi, language, the engine/strategy choice, the four
-    /// preprocessing flags, the skip flags and the output mode — each named exactly as its tool
-    /// schema says. An unknown engine, strategy or mode is an honest error, never a silent
+    /// The settings every OCR tool shares: dpi, language, the recognizer (modern print or the
+    /// historical add-on), the engine/strategy choice, the four preprocessing flags, the skip
+    /// flags and the output mode — each named exactly as its tool schema says. An unknown engine, strategy or mode is an honest error, never a silent
     /// fallback: a tool run must not quietly do something other than what it was asked.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OutputMode};
@@ -19,6 +19,9 @@ impl Automation {
                 )));
             }
             settings.language = l.into();
+        }
+        if let Some(recognizer) = a.opt_str("recognizer")? {
+            settings.recognizer = pdfcraft_engine::ocr::RecognizerChoice::from_id(recognizer).map_err(ToolError::InvalidArgs)?;
         }
         if let Some(e) = a.opt_str("engine")? {
             settings.engine = match e.trim().to_ascii_lowercase().as_str() {
@@ -65,6 +68,41 @@ impl Automation {
                 *flag = on;
             }
         }
+        // Correct scanned pages: what changes in the document itself, beside the words.
+        for (key, flag) in [
+            ("rotate_pages", &mut settings.rotate_pages),
+            ("straighten_pages", &mut settings.straighten_pages),
+            ("auto_crop", &mut settings.auto_crop),
+            ("recognize", &mut settings.recognize),
+        ] {
+            if let Some(on) = a.opt_bool(key)? {
+                *flag = on;
+            }
+        }
+        if let Some(v) = a.opt_num("crop_margin")? {
+            if !v.is_finite() || !(0.0..=20.0).contains(&v) {
+                return Err(ToolError::InvalidArgs("crop_margin must be between 0 and 20 pt".into()));
+            }
+            settings.crop_margin = v;
+        }
+        if let Some(v) = a.opt_bool("auto_rotate")? {
+            settings.auto_rotate = v;
+        }
+        if let Some(v) = a.opt_bool("deskew")? {
+            settings.deskew = v;
+        }
+        if let Some(v) = a.opt_bool("auto_crop")? {
+            settings.auto_crop = v;
+        }
+        if let Some(v) = a.opt_num("crop_margin")? {
+            if !v.is_finite() || !(0.0..=20.0).contains(&v) {
+                return Err(ToolError::InvalidArgs("crop_margin must be between 0 and 20 pt".into()));
+            }
+            settings.crop_margin = v;
+        }
+        if let Some(v) = a.opt_bool("recognize")? {
+            settings.recognize = v;
+        }
         Ok(settings)
     }
 
@@ -104,7 +142,15 @@ impl Automation {
             .map(|p| match &p.skipped {
                 Some(why) => json!({ "page": p.page + 1, "skipped": why }),
                 None => {
-                    let mut page = json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page });
+                    let mut page = json!({
+                        "page": p.page + 1,
+                        "words": p.words.len(),
+                        "already_on_page": p.already_on_page,
+                        "rotation": p.correction.rotation,
+                        "deskew": p.correction.deskew,
+                        "deskew_skipped": p.deskew_skipped,
+                        "crop_box": p.crop,
+                    });
                     // The editable output's substitution warnings (characters no font could
                     // show) are part of the result: reported per page, never dropped.
                     if !p.notes.is_empty() {
@@ -204,8 +250,23 @@ impl Automation {
     }
 
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
+        self.ocr_process(a, false)
+    }
+
+    /// Scan & OCR ▸ Correct scanned pages: the same run without recognition, with the paper
+    /// crop on unless asked otherwise, and pages that already have text corrected too.
+    pub(crate) fn ocr_enhance(&mut self, a: &Args) -> Result<Value> {
+        self.ocr_process(a, true)
+    }
+
+    fn ocr_process(&mut self, a: &Args, correction_only: bool) -> Result<Value> {
         use pdfcraft_engine::ocr::OutputMode;
         let mut settings = self.ocr_settings(a)?;
+        if correction_only {
+            settings.recognize = false;
+            settings.auto_crop = a.opt_bool("auto_crop")?.unwrap_or(true);
+            settings.skip_text_pages = a.opt_bool("skip_text_pages")?.unwrap_or(false);
+        }
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.
@@ -508,6 +569,9 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "count": words.len(), "words": words }))
     }
 
+    /// Whether text recognition's models are installed, the directories searched for them (in
+    /// order), the languages it reads, each as a code and a name, the recognizers and the
+    /// optional historical add-on's status.
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
@@ -528,7 +592,38 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
+        let recognizers = ["modern", "historical", "historical-handwriting"];
+        let available = ocr::available();
+        let addon = pdfcraft_engine::ocr_addons::status();
+        Ok(
+            json!({ "available": available, "search_dirs": dirs, "languages": langs, "engines": engines, "recognizers": recognizers, "historical_addon": addon }),
+        )
+    }
+
+    pub(crate) fn ocr_addon_status(&self, a: &Args) -> Result<Value> {
+        let status = match a.opt_str("directory")? {
+            Some(path) => pdfcraft_engine::ocr_addons::status_at(&self.resolve(path, true)?),
+            None => pdfcraft_engine::ocr_addons::status(),
+        };
+        Ok(json!(status))
+    }
+
+    pub(crate) fn ocr_addon_install(&mut self, a: &Args) -> Result<Value> {
+        let path = match a.opt_str("directory")? {
+            Some(path) => self.resolve(path, true)?,
+            None => self.resolve(&pdfcraft_engine::ocr_addons::default_dir().map_err(failed)?.to_string_lossy(), true)?,
+        };
+        let status = pdfcraft_engine::ocr_addons::install_at(&path).map_err(failed)?;
+        Ok(json!(status))
+    }
+
+    pub(crate) fn ocr_addon_remove(&mut self, a: &Args) -> Result<Value> {
+        let path = match a.opt_str("directory")? {
+            Some(path) => self.resolve(path, true)?,
+            None => self.resolve(&pdfcraft_engine::ocr_addons::default_dir().map_err(failed)?.to_string_lossy(), true)?,
+        };
+        pdfcraft_engine::ocr_addons::remove_at(&path).map_err(failed)?;
+        Ok(json!(pdfcraft_engine::ocr_addons::status_at(&path)))
     }
 }
 
