@@ -26,7 +26,7 @@ pub fn page_rules(doc: &Document, page: usize) -> Result<Vec<[f64; 4]>, EditErro
     let pages = pdfcraft_model::pages(doc);
     let p = pages.get(page).ok_or(EditError::NoSuchPage(page))?;
     let streams = crate::text::content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = Pieces::join(&streams.iter().map(|s| s.data.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
 
     let mut out: Vec<[f64; 4]> = Vec::new();
