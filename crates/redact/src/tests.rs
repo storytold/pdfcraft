@@ -2405,6 +2405,165 @@ fn an_unreadable_mark_on_another_page_does_not_stop_the_selected_page() {
     assert!(!content(&doc, 0).contains("1234"));
 }
 
+/// The quad over "1234" in `AB1234CD` (x 20–40) and the one over "CD" (x 40–50).
+const OVER_1234: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+const OVER_CD: [f64; 8] = [40.0, 110.0, 50.0, 110.0, 40.0, 95.0, 50.0, 95.0];
+
+/// `AB1234CD` with one mark whose `/QuadPoints` is `quads`, whose `/Rect` is `rect` (removed when
+/// `None`) and which has a fill (`/IC`) only when `fill` is set.
+fn quad_mark(quads: Vec<Object>, rect: Option<[i64; 4]>, fill: bool) -> (Document, ObjRef) {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::Array(quads));
+        if let Some(r) = rect {
+            d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Int(*v)).collect()));
+        } else {
+            d.remove(b"Rect");
+        }
+        if !fill {
+            d.remove(b"IC");
+        }
+    })
+    .unwrap();
+    (doc, m.obj)
+}
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// An all-NaN quad folded to `[MAX, MAX, MIN, MIN]`: a finite, inverted box that passed as a
+/// readable area. Without a fill the mark was applied and removed nothing; with one the overlay
+/// failed. With no `/Rect` either, the mark has no area and apply refuses it.
+#[test]
+fn an_all_nan_quad_without_a_rect_is_refused_not_applied_as_nothing() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), None, fill);
+        assert!(marks(&doc).is_empty(), "fill {fill}: the NaN quad is no area");
+        assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)), "fill {fill}");
+        assert!(content(&doc, 0).contains("(AB1234CD) Tj"), "fill {fill}: nothing changed");
+    }
+}
+
+/// With a usable `/Rect`, an all-NaN mark redacts exactly the `/Rect`.
+#[test]
+fn an_all_nan_quad_falls_back_to_the_rect() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), Some([20, 95, 40, 110]), fill);
+        assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]], "fill {fill}");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 4), "fill {fill}");
+        assert!(!content(&doc, 0).contains("1234"), "fill {fill}");
+    }
+}
+
+/// One NaN among finite entries made `f64::min`/`max` ignore it and fold the other three corners:
+/// a quad the document never described. Such a quad is unusable.
+#[test]
+fn a_quad_with_one_nan_entry_is_unusable() {
+    let mut q = OVER_1234;
+    q[0] = f64::NAN;
+    let (mut doc, _) = quad_mark(reals(&q), None, false);
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    // Next to a usable quad, only that one applies.
+    let (mut doc, _) = quad_mark(reals(&[q, OVER_CD].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// A name in the middle of `/QuadPoints` was dropped, which moved every later coordinate into the
+/// wrong slot and folded the first quad to a box over most of the page.
+#[test]
+fn a_non_number_entry_drops_its_quad_without_shifting_the_rest() {
+    let mut quads = reals(&[OVER_1234, OVER_CD].concat());
+    quads[2] = Object::name("oops");
+    let (mut doc, _) = quad_mark(quads, None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// Twelve entries are one quad and half of another: only the whole one applies.
+#[test]
+fn a_trailing_partial_quad_is_ignored() {
+    let (mut doc, _) = quad_mark(reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(4));
+}
+
+/// Finite quads redact what they always did, one box each, and the `/Rect` is not consulted.
+#[test]
+fn finite_quads_redact_their_areas_as_before() {
+    let (mut doc, _) = quad_mark(reals(&[OVER_1234, OVER_CD].concat()), Some([0, 0, 1, 1]), true);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0], [40.0, 95.0, 50.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 6));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// The boxes a reader's quads outline, or its `/Rect` when it has none (as the comment outlines
+/// fall back to it).
+fn outline(quads: &[[f32; 8]], rect: [f32; 4]) -> Vec<[f32; 4]> {
+    if quads.is_empty() {
+        return vec![rect];
+    }
+    quads
+        .iter()
+        .map(|q| {
+            let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+            let (lo, hi) = (|v: [f32; 4]| v.into_iter().fold(f32::MAX, f32::min), |v: [f32; 4]| v.into_iter().fold(f32::MIN, f32::max));
+            [lo(xs), lo(ys), hi(xs), hi(ys)]
+        })
+        .collect()
+}
+
+/// The outline the comment list draws (`pdfcraft_annot::summaries`, and the inspector's listing
+/// of the saved file) is the area apply removes, for malformed `/QuadPoints` too. The readers
+/// used to disagree: the summaries and the inspector read non-numbers as zeros, apply dropped
+/// them.
+#[test]
+fn the_outline_shown_is_the_area_apply_removes() {
+    // (entries, whether a saved file can say them: PDF syntax has no NaN). `forty` is an indirect
+    // number, which every reader follows.
+    let cases = |forty: ObjRef| -> Vec<(Vec<Object>, bool)> {
+        let mut name_inside = reals(&[OVER_1234, OVER_CD].concat());
+        name_inside[2] = Object::name("oops");
+        let mut by_reference = reals(&OVER_1234);
+        by_reference[2] = Object::Ref(forty);
+        let mut one_nan = OVER_1234;
+        one_nan[5] = f64::NAN;
+        let mut one_huge = OVER_1234;
+        one_huge[5] = 4e38;
+        vec![
+            (reals(&[OVER_1234, OVER_CD].concat()), true),
+            (name_inside, true),
+            (reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), true),
+            (by_reference, true),
+            (vec![Object::name("oops"); 8], true),
+            (reals(&[one_nan, OVER_CD].concat()), false),
+            (reals(&[one_huge, OVER_CD].concat()), true),
+            (reals(&[f64::NAN; 8]), false),
+        ]
+    };
+    for i in 0.. {
+        let (mut doc, obj) = quad_mark(Vec::new(), Some([20, 95, 40, 110]), true);
+        let forty = doc.add(Object::Int(40));
+        let Some((quads, saved)) = cases(forty).into_iter().nth(i) else { break };
+        doc.update_dict(obj, |d| d.set(b"QuadPoints".to_vec(), Object::Array(quads))).unwrap();
+        let applied: Vec<[f32; 4]> = marks(&doc)[0].rects.iter().map(|r| r.map(|v| v as f32)).collect();
+        let summary = pdfcraft_annot::summaries(&doc).into_iter().find(|s| s.subtype == "Redact").unwrap();
+        assert_eq!(outline(&summary.quads, summary.rect), applied, "case {i}: comment summaries");
+        if saved {
+            let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            let info = pdfcraft_render::inspect(Arc::new(bytes), None).unwrap();
+            let listed = info.annotations.iter().find(|a| a.subtype == "Redact").unwrap();
+            assert_eq!(outline(&listed.quads, listed.rect), applied, "case {i}: inspector");
+        }
+    }
+}
+
 /// A document with something in every hidden-information category.
 fn hidden_fixture() -> Document {
     let content = b"BT /F1 10 Tf 10 100 Td (Visible) Tj 3 Tr (Hidden) Tj 0 Tr ET BT /F1 10 Tf 500 500 Td (Offpage) Tj ET /OC /L1 BDC BT /F1 10 Tf 10 50 Td (Layer) Tj ET EMC";
