@@ -547,7 +547,9 @@ fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageB
     let r = s.dict.get(b"SMask")?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(m) = &*obj else { return None };
-    gray_plane(doc, m, w, h, budget)
+    // A soft mask that cannot be decoded leaves the image showing what the mask hides, so the
+    // image is refused rather than written out opaque.
+    gray_plane(doc, m, w, h, budget, true)
 }
 
 /// A stencil `/Mask` (an image mask stream, 8.9.6.3) as 8-bit alpha: its 1 samples (0 with
@@ -556,12 +558,12 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut Ima
     let r = s.dict.get(b"Mask")?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(m) = &*obj else { return None };
-    Some(gray_plane(doc, m, w, h, budget)?.into_iter().map(|v| 255 - v).collect())
+    Some(gray_plane(doc, m, w, h, budget, false)?.into_iter().map(|v| 255 - v).collect())
 }
 
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
-fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
+fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget, soft: bool) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
     let f = filters(m);
@@ -585,7 +587,18 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&decoded(doc, m, (mw, mh, 1, bpc), budget).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            let data = match decoded(doc, m, (mw, mh, 1, bpc), budget) {
+                Ok(data) => data,
+                Err(_) => {
+                    // A stage limit stops the mask being decoded: a soft mask leaves the image
+                    // refusing it rather than showing what the mask hides.
+                    if soft {
+                        budget.refuse();
+                    }
+                    return None;
+                }
+            };
+            unpack(&data, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {

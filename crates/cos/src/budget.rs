@@ -172,6 +172,12 @@ impl ImageBudget {
         self.pay_pixels(samples.saturating_mul(JPEG_WORK).saturating_add(reading))
     }
 
+    /// Records an image left out for a reason other than its allowance, so that the caller
+    /// refuses it as it refuses one whose decode spent everything.
+    pub fn refuse(&mut self) {
+        self.refused += 1;
+    }
+
     /// Pays for the pixels of image `s` that its `decoded` data holds, those of its `/Width` and
     /// `/Height` but no more than a bit of the data each, unless it is JBIG2, whose decoder pays for
     /// its page, or isn't decoded here. What can't be paid for refuses the image.

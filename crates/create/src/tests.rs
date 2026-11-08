@@ -859,7 +859,8 @@ fn image_data_far_past_its_samples_is_not_decoded() {
     let (ext, rgba) = exported_rgba(&bomb(4, 2, 4 * 2 + 64));
     assert_eq!((ext, rgba), ("png", [7, 7, 7, 255].repeat(8)));
 
-    // The same for a soft mask: it is not decoded, and the image exports without it.
+    // The same for a soft mask: it is not decoded, and the image that needs it is refused rather
+    // than written out without the transparency it hides.
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
     with_image(&mut doc, |doc| {
         let m = doc.add(Object::Stream(Stream::flate(image_dict(1, 1, "DeviceGray", 8), &vec![0u8; 64 << 20])));
@@ -867,7 +868,9 @@ fn image_data_far_past_its_samples_is_not_decoded() {
         d.set(b"SMask".to_vec(), Object::Ref(m));
         Stream::from_raw(d, vec![10; 24])
     });
-    assert_eq!(alphas(&exported_rgba(&doc).1), [255; 8]);
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty(), "an image is not written without the mask that hides its content");
+    assert_eq!(out.skipped.len(), 1);
 }
 
 #[test]
