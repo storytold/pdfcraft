@@ -831,23 +831,7 @@ pub(crate) fn relayout_changed_text(
         .filter_map(|f| {
             let object = current.get(f.obj);
             let dict = object.as_dict()?;
-            // Every value: a list box's picks are an array, a check box's state a name (Off for
-            // none, as the field's value has none).
-            let values: Vec<String> = match dict.get(b"V").map(|v| current.resolve(v)).as_deref() {
-                Some(pdfcraft_cos::Object::Array(items)) => {
-                    items.iter().filter_map(|i| current.resolve(i).as_string().map(|s| s.to_text())).collect()
-                }
-                Some(pdfcraft_cos::Object::Name(n)) if n.as_slice() == b"Off" => Vec::new(),
-                Some(pdfcraft_cos::Object::Name(n)) => vec![String::from_utf8_lossy(n).into_owned()],
-                Some(v) => v.as_string().map(|s| s.to_text()).into_iter().collect(),
-                None => Vec::new(),
-            };
-            let unchanged = if f.kind == pdfcraft_forms::FieldKind::Text {
-                f.value.first().map_or("", String::as_str) == values.first().map_or("", String::as_str)
-            } else {
-                f.value == values
-            };
-            if unchanged {
+            if value_unchanged(current, f, dict.get(b"V")) {
                 return None;
             }
             dict.get(pdfcraft_xfa::SOM_KEY).and_then(|s| current.resolve(s).as_string().map(|s| s.to_text()))
@@ -868,6 +852,60 @@ pub(crate) fn relayout_changed_text(
     let report = pdfcraft_xfa::rerender(doc, &template).map_err(|e| e.to_string())?;
     crate::xfa_redraw(doc)?;
     Ok(Some(report.warnings))
+}
+
+/// Whether field `f` still holds the value it had (`f.value`), its `/V` being `v`: a list box's
+/// picks are an array, a check box's state a name (Off for none, as the field's value has
+/// none), and of a text field only the first value counts. Compared in place, so an edit costs
+/// no copy of every field's value.
+fn value_unchanged(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, v: Option<&pdfcraft_cos::Object>) -> bool {
+    use pdfcraft_cos::Object as O;
+    let text = f.kind == pdfcraft_forms::FieldKind::Text;
+    let first = f.value.first().map_or("", String::as_str);
+    // The value is the one string `is` accepts.
+    let one = |is: &dyn Fn(&str) -> bool| if text { is(first) } else { matches!(f.value.as_slice(), [old] if is(old)) };
+    let none = if text { first.is_empty() } else { f.value.is_empty() };
+    let held;
+    let v = match v {
+        Some(r @ O::Ref(_)) => {
+            held = doc.resolve(r);
+            Some(&*held)
+        }
+        v => v,
+    };
+    match v {
+        Some(O::Array(items)) => {
+            let mut old = f.value.iter();
+            for item in items {
+                let held_item;
+                let item = match item {
+                    O::Ref(_) => {
+                        held_item = doc.resolve(item);
+                        &*held_item
+                    }
+                    i => i,
+                };
+                let Some(s) = item.as_string() else { continue };
+                if text {
+                    return s.text_eq(first);
+                }
+                if !old.next().is_some_and(|o| s.text_eq(o)) {
+                    return false;
+                }
+            }
+            if text { none } else { old.next().is_none() }
+        }
+        Some(O::Name(n)) if n.as_slice() == b"Off" => none,
+        Some(O::Name(n)) => {
+            let n = String::from_utf8_lossy(n);
+            one(&|old| old == n)
+        }
+        Some(v) => match v.as_string() {
+            Some(s) => one(&|old| s.text_eq(old)),
+            None => none,
+        },
+        None => none,
+    }
 }
 
 /// On open: initialize scripts, then calculations. Returns what they changed.
@@ -1001,5 +1039,103 @@ mod tests {
             split_instance(&Template::default(), "form[0].table[0].row[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
             Some((2, "form[0].table[0]".into(), "row".into(), 2))
         );
+    }
+
+    fn field(obj: pdfcraft_cos::ObjRef, kind: pdfcraft_forms::FieldKind, value: &[&str]) -> pdfcraft_forms::Field {
+        pdfcraft_forms::Field {
+            name: "f".into(),
+            obj,
+            kind,
+            value: value.iter().map(|v| (*v).to_owned()).collect(),
+            default: Vec::new(),
+            flags: 0,
+            max_len: None,
+            options: Vec::new(),
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: Vec::new(),
+            actions: pdfcraft_forms::af::Actions::default(),
+            button: None,
+        }
+    }
+
+    /// A field dictionary whose `/V` is `v`, with a SOM path.
+    fn field_dict(doc: &mut pdfcraft_cos::Document, v: Option<pdfcraft_cos::Object>) -> pdfcraft_cos::ObjRef {
+        let mut d = pdfcraft_cos::Dict::new();
+        if let Some(v) = v {
+            d.set(b"V".to_vec(), v);
+        }
+        d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::text("form[0].f[0]")));
+        doc.add(d)
+    }
+
+    #[test]
+    fn changed_values_are_found_in_place() {
+        use pdfcraft_cos::{Object as O, PdfString};
+        use pdfcraft_forms::FieldKind as K;
+        let s = |t: &str| O::String(PdfString::text(t));
+        let mut doc = pdfcraft_cos::Document::new_empty();
+        let same = |doc: &mut pdfcraft_cos::Document, kind, old: &[&str], v: Option<O>| {
+            let r = field_dict(doc, v);
+            let dict = doc.get(r);
+            value_unchanged(doc, &field(r, kind, old), dict.as_dict().and_then(|d| d.get(b"V")))
+        };
+        // Text: the first value only, an absent or non-text value being empty.
+        assert!(same(&mut doc, K::Text, &["Café"], Some(s("Café"))));
+        assert!(!same(&mut doc, K::Text, &["Café"], Some(s("Cafe"))));
+        assert!(same(&mut doc, K::Text, &[], None));
+        assert!(same(&mut doc, K::Text, &[], Some(s(""))));
+        assert!(!same(&mut doc, K::Text, &["a"], None));
+        assert!(same(&mut doc, K::Text, &["a", "b"], Some(O::Array(vec![s("a"), s("c")]))));
+        // A value given by reference is followed.
+        let inner = doc.add(s("日本"));
+        assert!(same(&mut doc, K::Text, &["日本"], Some(O::Ref(inner))));
+        assert!(!same(&mut doc, K::Combo, &["日"], Some(O::Ref(inner))));
+        // Combo box: one value.
+        assert!(same(&mut doc, K::Combo, &["Two"], Some(s("Two"))));
+        assert!(!same(&mut doc, K::Combo, &["Two"], Some(s("Three"))));
+        assert!(!same(&mut doc, K::Combo, &[], Some(s("Two"))));
+        assert!(!same(&mut doc, K::Combo, &["Two"], None));
+        // List box: every pick, in order, by count; non-strings in the array are skipped.
+        let picks = |v: &[&str]| O::Array(v.iter().map(|t| s(t)).collect());
+        assert!(same(&mut doc, K::List, &["a", "b"], Some(picks(&["a", "b"]))));
+        assert!(!same(&mut doc, K::List, &["a", "b"], Some(picks(&["b", "a"]))));
+        assert!(!same(&mut doc, K::List, &["a", "b"], Some(picks(&["a"]))));
+        assert!(!same(&mut doc, K::List, &["a"], Some(picks(&["a", "b"]))));
+        assert!(!same(&mut doc, K::List, &["a", "b"], Some(picks(&["a", "c"]))));
+        assert!(same(&mut doc, K::List, &[], Some(picks(&[]))));
+        let item = doc.add(s("b"));
+        assert!(same(&mut doc, K::List, &["a", "b"], Some(O::Array(vec![s("a"), O::Int(3), O::Ref(item)]))));
+        // Check box: a state name, Off for none.
+        assert!(same(&mut doc, K::CheckBox, &["Yes"], Some(O::name("Yes"))));
+        assert!(!same(&mut doc, K::CheckBox, &["Yes"], Some(O::name("Off"))));
+        assert!(same(&mut doc, K::CheckBox, &[], Some(O::name("Off"))));
+        assert!(!same(&mut doc, K::CheckBox, &[], Some(O::name("Yes"))));
+        assert!(!same(&mut doc, K::CheckBox, &["Yes"], Some(O::name("On"))));
+    }
+
+    #[test]
+    fn unchanged_values_return_before_the_template_is_read() {
+        use pdfcraft_cos::{Object as O, PdfString};
+        use pdfcraft_forms::FieldKind as K;
+        // Laid out, but with no XFA packets: reading the template fails.
+        let mut doc = pdfcraft_cos::Document::new_empty();
+        let mut acro = pdfcraft_cos::Dict::new();
+        acro.set(pdfcraft_xfa::LAYOUT_KEY.to_vec(), pdfcraft_cos::Dict::new());
+        let acro = doc.add(acro);
+        let root = doc.root().unwrap_or_else(|| panic!("no catalog"));
+        let mut catalog = doc.get(root).as_dict().cloned().unwrap_or_default();
+        catalog.set(b"AcroForm".to_vec(), O::Ref(acro));
+        doc.set(root, catalog);
+        assert!(pdfcraft_xfa::existing_layout(&doc).is_some());
+        let text = field_dict(&mut doc, Some(O::String(PdfString::text("same"))));
+        let list = field_dict(&mut doc, Some(O::Array(vec![O::String(PdfString::text("a")), O::String(PdfString::text("b"))])));
+        let check = field_dict(&mut doc, Some(O::name("Yes")));
+        let before = [field(text, K::Text, &["same"]), field(list, K::List, &["a", "b"]), field(check, K::CheckBox, &["Yes"])];
+        assert_eq!(relayout_changed_text(&mut doc, None, &before), Ok(None));
+        // A changed pick reaches the template, which this document doesn't have.
+        let before = [field(text, K::Text, &["same"]), field(list, K::List, &["b", "a"]), field(check, K::CheckBox, &["Yes"])];
+        assert!(relayout_changed_text(&mut doc, None, &before).is_err());
     }
 }
