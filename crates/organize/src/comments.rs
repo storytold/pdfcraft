@@ -164,7 +164,7 @@ fn reserve(dst: &mut Document, src: &Document, annots: &mut PageAnnots, mut dict
 /// reference objects), or `Some(None)` for any other non-reference value.
 fn irt_parent(src: &Document, dict: &Dict) -> Option<Option<ObjRef>> {
     let v = dict.get(b"IRT")?;
-    if matches!(*src.resolve(v), Object::Null) {
+    if matches!(v, Object::Null) {
         return None;
     }
     let Some(mut r) = v.as_ref() else {
@@ -172,6 +172,7 @@ fn irt_parent(src: &Document, dict: &Dict) -> Option<Option<ObjRef>> {
     };
     for _ in 0..8 {
         match *src.get(r) {
+            Object::Null => return None,
             Object::Ref(next) => r = next,
             _ => break,
         }
@@ -688,7 +689,7 @@ mod tests {
         let src = build(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
-            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 16 0 R] >>",
             "<< /Type /Annot /Subtype /Text /NM (root-null-irt) /IRT null /Contents (root comment) /Rect [10 10 30 30] /P 3 0 R >>",
             "<< /Type /Annot /Subtype /Text /IRT 14 0 R /Contents (reply to root) /Rect [10 10 30 30] /P 3 0 R >>",
             "<< /Type /Annot /Subtype 7 0 R /Parent 4 0 R /Rect [40 40 200 120] /P 3 0 R >>",
@@ -703,16 +704,21 @@ mod tests {
             "<< /Type /Annot /Subtype /Text /IRT 12 0 R /Contents (cycle-b) /Rect [10 10 30 30] /P 3 0 R >>",
             "4 0 R",
             "<< /Type /Annot /Subtype /Text /Contents (dropped root) /Rect [10 10 30 30] /P 8 0 R >>",
+            // Comment whose /IRT chains through an intermediate reference (17 0 R -> 18 0 R -> null):
+            "<< /Type /Annot /Subtype /Text /IRT 17 0 R /Contents (indirect null irt) /Rect [10 10 30 30] /P 3 0 R >>",
+            "18 0 R",
+            "null",
         ]);
         let mut dst = build(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
             "<< /Type /Page /Parent 2 0 R >>",
         ]);
-        assert_eq!(import_comments(&mut dst, &src).unwrap(), 4);
+        assert_eq!(import_comments(&mut dst, &src).unwrap(), 5);
         let annots = page_annots(&dst, 0);
-        assert_eq!(annots.len(), 5, "root comment, its reply via indirect IRT, two cycling replies, and the popup");
+        assert_eq!(annots.len(), 6, "two root comments, reply via indirect IRT, two cycling replies, and the popup");
         let (root_ref, _) = by_contents(&annots, "root comment");
         assert_eq!(by_contents(&annots, "reply to root").1.reference(b"IRT"), Some(*root_ref));
+        assert!(by_contents(&annots, "indirect null irt").1.get(b"IRT").is_some());
     }
 }
