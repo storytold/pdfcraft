@@ -1,5 +1,5 @@
 use super::tab_order::rank_tabs;
-use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfString, Widget, af, appearance, flags, name_text, text_of};
+use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfString, Trigger, Widget, af, appearance, flags, name_text, text_of};
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
@@ -15,7 +15,32 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         dict.get(b"A").cloned().or_else(|| dict.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|aa| aa.get(b"U").cloned())))
     };
     let action = pick(d).or_else(|| widgets.iter().find_map(|w| doc.get(*w).as_dict().and_then(pick)))?;
-    let a = doc.resolve(&action);
+    parse_action(doc, &action, scripts)
+}
+
+/// The action widget `widget` of `field` runs on `trigger` (ISO 32000-2 §12.6.3, Table 197): Mouse
+/// Up is its `/A` (or `/AA /U`), the others its `/AA` entries D, E, X, Fo and Bl. The widget's own
+/// come first, then the field's: a field with one widget is often a single dictionary holding
+/// both. `None` when there is none, or it is not an action PdfCraft can read.
+pub fn widget_action(doc: &Document, field: &Field, widget: usize, trigger: Trigger) -> Option<af::ButtonAction> {
+    let pick = |r: ObjRef| -> Option<Object> {
+        let obj = doc.get(r);
+        let d = obj.as_dict()?;
+        let aa = || d.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned());
+        match trigger.key() {
+            None => d.get(b"A").cloned().or_else(|| aa().and_then(|aa| aa.get(b"U").cloned())),
+            Some(k) => aa().and_then(|aa| aa.get(k).cloned()),
+        }
+    };
+    let w = field.widgets.get(widget)?;
+    let action = pick(w.obj).or_else(|| (field.obj != w.obj).then(|| pick(field.obj)).flatten())?;
+    parse_action(doc, &action, &mut script_budget())
+}
+
+/// What `action` (an action dictionary, or a reference to one) does, as far as PdfCraft can run
+/// it; `None` for an action type it can't.
+fn parse_action(doc: &Document, action: &Object, scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
+    let a = doc.resolve(action);
     let a = a.as_dict()?;
     let s = |k: &[u8]| a.get(k).and_then(|v| text_of(&doc.resolve(v)));
     Some(match a.name(b"S")? {
@@ -86,7 +111,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
             let preserve_rb = !a.get(b"PreserveRB").is_some_and(|p| matches!(&*doc.resolve(p), Object::Bool(false)));
             af::ButtonAction::SetLayers { changes, preserve_rb }
         }
-        b"JavaScript" => af::button_script(&script(doc, &action, scripts)?),
+        b"JavaScript" => af::button_script(&script(doc, action, scripts)?),
         _ => return None,
     })
 }
