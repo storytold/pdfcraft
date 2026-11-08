@@ -1304,8 +1304,43 @@ fn closing_the_last_thumbnail_consumer_releases_thumbnails_while_a_visible_page_
     v.begin_render_frame();
     v.frame_queue = vec![main];
     v.frame_visible.insert(0);
+    v.stale_thumbs.insert(0);
     assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
     assert!(v.thumbs.is_empty(), "nothing shows it any more, whatever the page is doing");
+    assert!(v.stale_thumbs.is_empty(), "nor is it remembered as out of date");
+    // Shown again once the page is drawn: the thumbnail is asked for afresh.
+    v.last_queue = vec![main];
+    assert!(v.receive_result(&ctx, solid_result(main, 100, 130)) > 0);
+    v.begin_render_frame();
+    v.frame_visible.insert(0);
+    v.need_thumbnail(0, true);
+    let queue = v.prepare_render_queue(&info, 1.0);
+    assert!(queue.iter().any(|r| r.page == 0 && r.tag & THUMB_TAG != 0), "the thumbnail is asked for again: {queue:?}");
+}
+
+/// While anything still shows a thumbnail, the thumbnails all wait for the visible page, as before:
+/// only the last consumer closing lets them go early.
+#[test]
+fn a_thumbnail_still_shown_keeps_the_others_while_a_visible_page_renders() {
+    let ctx = egui::Context::default();
+    // Pages 0 and 3 are the same size.
+    let info = thumbnail_info(4);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    v.need_thumbnail(3, true);
+    let first = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = first.clone();
+    for r in &first {
+        assert!(v.receive_result(&ctx, solid_result(*r, 132, 171)) > 0, "thumbnail of page {} taken", r.page);
+    }
+    assert_eq!(v.thumbs.len(), 2);
+    let main = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+    v.begin_render_frame();
+    v.need_thumbnail(0, true);
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.contains_key(&0) && v.thumbs.contains_key(&3), "both wait for the page");
 }
 
 #[test]
