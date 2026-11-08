@@ -207,7 +207,7 @@ const PAGE_MODULES: [&str; 37] = [
 /// What a file that acts on the pages uses: the pointer, a tool's or the comments' page context,
 /// what a press is to a page, the router's hits and owners, or the router itself. Such a file is a
 /// page module. One that acts on the pages through the page view's response and a bare point alone
-/// uses none of them (`canvas/image_pick.rs`): PAGE_MODULES lists it by hand.
+/// would use none of them, and PAGE_MODULES would list it by hand.
 const PAGE_MODULE_MARKS: [&str; 6] = ["PagePointer", "PageToolContext", "PageCx", "PagePress", "page_router::", ".router."];
 
 /// The router's own files, which define what page modules use.
@@ -260,7 +260,11 @@ fn declares(line: &str) -> Option<&str> {
     let mut rest = line;
     loop {
         let before = rest;
-        for prefix in ["pub(crate) ", "pub(super) ", "pub ", "const ", "async ", "unsafe "] {
+        // `pub(crate)`, `pub(super)`, `pub(in crate::canvas)` and the like.
+        if let Some(scoped) = rest.strip_prefix("pub(") {
+            rest = scoped.split_once(") ").map_or(rest, |(_, after)| after);
+        }
+        for prefix in ["pub ", "const ", "async ", "unsafe "] {
             rest = rest.strip_prefix(prefix).unwrap_or(rest);
         }
         if rest == before {
@@ -270,6 +274,19 @@ fn declares(line: &str) -> Option<&str> {
     let rest = rest.strip_prefix("fn ")?;
     rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|end| &rest[..end])
 }
+
+/// egui's drag start, which counts every button: a right-button drag would start what a left one
+/// does. Page modules read `PagePointer::drag_started`, the primary button's, or ask for that button
+/// (`drag_started_by`).
+const ANY_BUTTON_DRAG: [&str; 1] = [".drag_started()"];
+
+/// Functions in the page modules that start a drag of a widget of their own, not of the pages:
+/// (file, function, why).
+const NOT_PAGE_DRAGS: [(&str, &str, &str); 3] = [
+    ("canvas/organize.rs", "drag_pages", "Organize Pages drags thumbnails, not pages"),
+    ("tools/fill_sign.rs", "signature_pad", "the signature dialog's drawing pad"),
+    ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
+];
 
 /// Ways to set egui's cursor.
 const CURSOR_WRITES: [&str; 4] = ["set_cursor_icon(", ".cursor_icon = ", "on_hover_cursor(", "on_hover_and_drag_cursor("];
@@ -462,6 +479,14 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
             }
         }
     }
+    problems.extend(misuses(
+        &ANY_BUTTON_DRAG,
+        &NOT_PAGE_DRAGS,
+        "starts a drag with any button: a right-button drag would start what a left one does. Read \
+         `PagePointer::drag_started` (the primary button's) instead. A widget of its own, not the pages? Add the \
+         function to NOT_PAGE_DRAGS in src/canvas/page_pointer/tests.rs, with why.",
+        "starts no drag of its own any more: remove it from NOT_PAGE_DRAGS.",
+    ));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
@@ -483,20 +508,22 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 }
 
 /// What decides, keeps or drops the press the pages hold.
-const ROUTER_WRITES: [&str; 8] = [
+const ROUTER_WRITES: [&str; 10] = [
     "router.begin(",
     "router.press(",
+    "router.drag_began(",
     "router.settle(",
     "router.cancel(",
     "PageRouter::begin(",
     "PageRouter::press(",
+    "PageRouter::drag_began(",
     "PageRouter::settle(",
     "PageRouter::cancel(",
 ];
 
 /// The functions that decide, keep or drop the press the pages hold: (file, function, why).
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
-    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
+    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press, and a declined drag lets it go"),
     ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
     ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, automation's cancel"),
 ];
@@ -523,11 +550,12 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 
 /// The functions that call a hit test: (file, function, why). Hit tests are found by name (a
 /// function named `hit` or `…_hit`, called by path, bare or as a method). The comments' point test
-/// has a list of its own (`COMMENT_POINT_TESTERS`); the others by other names (added content's,
-/// Edit text's paragraphs', Redact's text test, the text layer's links) are not listed yet, and
-/// most are PR 4b's. `PageHits::hits` is the one: the hits
-/// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
-/// painting and a right-click.
+/// has a list of its own (`COMMENT_POINT_TESTERS`). Point tests by other names are not seen: what is
+/// left of them paints (a picture's hover outline), keeps a behaviour no hit stands for (added
+/// text's click with the tools that don't pick it up, crop mode's controls) or tells a tool that a
+/// press nobody holds began on its page (the text layer's `press_here`, redaction's). `PageHits::hits`
+/// is the one: the hits at the press point decide its owner, and those under the pointer give its
+/// cursor, its tip, hover painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "canvas/page_input.rs",
     "hits",
@@ -571,27 +599,38 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 4] = [
 ];
 
 /// What reads who holds the press the pages hold.
-const ROUTER_READS: [&str; 6] =
-    ["router.press_for(", "router.owner(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::owner(", "PageRouter::keeps_drag("];
+const ROUTER_READS: [&str; 4] = ["router.press_for(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
-/// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the
-/// text layer and link following still ask, until they are told too (PR 4b), and an unused entry
-/// fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 8] = [
-    (
-        "canvas/page_input.rs",
-        "page_tool_input",
-        "the page view: what the press is to each page (`press_for`); Add text's paragraph and the pictures until 4b",
-    ),
-    ("canvas/page_input.rs", "update_selection_on_press", "the text layer selects no text under a press held by what keeps its drag (4b)"),
-    ("canvas/page_input.rs", "finish_text_pointer_gesture", "a click held by what keeps its drag leaves the text selection alone (4b)"),
-    ("canvas/page_input.rs", "page_overlays", "a click follows the link that holds its press (4b)"),
-    ("tools/content_ui.rs", "page_input", "added text and pictures, until they are told (4b)"),
-    ("tools/edit_text_ui.rs", "page_input", "Edit text's paragraphs, until they are told (4b)"),
-    ("tools/edit_text_ui/image.rs", "image_input", "Edit text's pictures, until they are told (4b)"),
-    ("tools/object_ui.rs", "input", "the objects selected together, until they are told (4b)"),
-];
+/// page and tells each module what the press is to its page (`PagePress`): modules never read the
+/// router, and outside `canvas` the compiler refuses them (its methods are `pub(in crate::canvas)`).
+/// An unused entry fails the test.
+const ROUTER_READERS: [(&str, &str, &str); 1] = [(
+    "canvas/page_input.rs",
+    "page_tool_input",
+    "the page view: what the press is to each page (`press_for`), and whether its drag is the text's (`keeps_drag`)",
+)];
+
+/// Words a page module's functions are not named with: a function that grabs or owns a press decides
+/// for itself whether the press is its own, which the page view tells it (`PagePress`).
+const PRESS_CLAIMING_WORDS: [&str; 2] = ["grabs", "owns"];
+
+/// The function `line` declares, when one of the words of its name is one of
+/// [`PRESS_CLAIMING_WORDS`].
+fn press_claiming_fn(line: &str) -> Vec<String> {
+    declares(line.trim_start())
+        .filter(|name| name.split('_').any(|word| PRESS_CLAIMING_WORDS.contains(&word)))
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+}
+
+/// Whether `line` takes the router whole (`let r = &view.router;`), which the checks by method
+/// name would not see through: anything but a method call on it.
+fn takes_the_router(line: &str) -> bool {
+    line.match_indices(".router")
+        .any(|(at, name)| line[at + name.len()..].chars().next().is_none_or(|c| c != '.' && !(c.is_alphanumeric() || c == '_')))
+}
 
 /// What ignores the press the pages hold until the button is up.
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
@@ -599,34 +638,6 @@ const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 /// The one function that ignores a press until the button is up: (file, function, why).
 const PRESS_IGNORERS: [(&str, &str, &str); 1] =
     [("canvas/page_input.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
-
-/// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
-/// may).
-const PAGE_HIT_CALLS: [&str; 12] = [
-    "link_ui::hit(",
-    "prepare::hit(",
-    "forms_ui::hit(",
-    "comments::hit(",
-    "comments::context_hit(",
-    "camera_ui::hit(",
-    "edit_text_ui::hit(",
-    "edit_text_ui::picture_hit(",
-    "edit_text_ui::picture_handle_hit(",
-    "edit_text_ui::crop_hit(",
-    "object_ui::hit(",
-    "content_ui::hit(",
-];
-
-/// Whether a press handler's `code` acts on the owner the router captured, and calls no hit test
-/// of its own to choose one.
-fn routed_press_handler(code: &str) -> bool {
-    let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
-    code.contains("router.owner(")
-        && !PAGE_HIT_CALLS.iter().any(|call| code.contains(call))
-        && !uses(&code, "hit(")
-        && !uses(&code, "body_hit(")
-        && !uses(&code, "handle_hit(")
-}
 
 /// Page modules act on a press only when the router says it is theirs. The hits at the press
 /// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
@@ -658,7 +669,7 @@ fn page_modules_act_on_a_press_only_through_the_router() {
     // functions use it.
     let known: Vec<&str> = ROUTER_WRITES.iter().chain(ROUTER_READS.iter()).copied().collect();
     let unlisted = page_module_matches(|line| {
-        let router = uses(line, ".router.") || uses(line, "PageRouter::");
+        let router = uses(line, ".router.") || uses(line, "PageRouter::") || takes_the_router(line);
         if router && !known.iter().any(|name| uses(line, name)) { vec!["router".to_owned()] } else { Vec::new() }
     });
     problems.extend(
@@ -692,6 +703,13 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          place that must ask? Add the function to PAGE_HITS_ASKERS in src/canvas/page_pointer/tests.rs, with why.",
         "no longer asks the page view's hits: remove it from PAGE_HITS_ASKERS.",
     ));
+    // A module is told what the press is to its page; none decides it for itself.
+    problems.extend(page_module_matches(press_claiming_fn).into_iter().map(|(file, _, n, name)| {
+        format!(
+            "src/{file}:{n}: `fn {name}` decides whether a press is its module's. The page view tells each module what the \
+             press is to its page (`PagePress`): act on that, in a function named for what it does."
+        )
+    }));
     problems.extend(misuses(
         &PRESS_IGNORES,
         &PRESS_IGNORERS,
@@ -699,19 +717,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          `DocView::cancel_pointer_gestures` instead.",
         "no longer ignores a press: remove it from PRESS_IGNORERS.",
     ));
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for (file, function) in [
-        ("tools/content_ui.rs", "page_input"),
-        ("tools/edit_text_ui.rs", "page_input"),
-        ("tools/edit_text_ui/image.rs", "image_input"),
-        ("tools/object_ui.rs", "input"),
-    ] {
-        let source = std::fs::read_to_string(src.join(file)).expect("page input module");
-        let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
-        if !routed_press_handler(&body) {
-            problems.push(format!("src/{file}: {function} must consume the captured router owner without repeating a hit test"));
-        }
-    }
     // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
     // which gives the module's cursor, its tip and its press.
     problems.extend(misuses_in(
@@ -725,14 +730,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         "calls no hit test any more: remove it from HIT_TESTERS.",
     ));
     problems.extend(hit_test_aliases());
-    // An entry no page module calls any more no longer guards anything.
-    let called = page_module_uses(&PAGE_HIT_CALLS);
-    problems.extend(
-        PAGE_HIT_CALLS
-            .iter()
-            .filter(|call| !called.iter().any(|(_, _, _, name)| name == *call))
-            .map(|call| format!("no page module calls `{call}` any more: remove it from PAGE_HIT_CALLS.")),
-    );
     let builds = page_module_uses(&HIT_BUILDS);
     assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
     problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(is_hit_test)).map(|(file, _, n, name)| {
@@ -763,6 +760,15 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert!(hit_test_calls("let all = self.hits(view, p, false);").is_empty());
     assert_eq!(declares("pub(crate) const fn crop_hit<'a>(view: &DocView) {"), Some("crop_hit"));
     assert_eq!(declares("let hit = 1;"), None);
+    assert_eq!(press_claiming_fn("    pub(crate) fn fill_grabs(view: &DocView) -> bool {"), ["fill_grabs"]);
+    assert_eq!(press_claiming_fn("fn owns_press() {"), ["owns_press"]);
+    assert_eq!(press_claiming_fn("    pub(in crate::canvas) fn link_grabs(view: &DocView) {"), ["link_grabs"]);
+    assert!(press_claiming_fn("fn dropdowns() {").is_empty(), "a word that ends in one");
+    assert_eq!(declares("pub(in crate::canvas) fn drag_began(&mut self) {"), Some("drag_began"));
+    assert!(takes_the_router("let r = &view.router;") && takes_the_router("keep(view.router, 1)"));
+    assert!(!takes_the_router("view.router.press_for(i)") && !takes_the_router("view.routers.len()"));
+    assert!(press_claiming_fn("fn holds(&self, page: usize) -> bool {").is_empty());
+    assert!(press_claiming_fn("let grabs = 1;").is_empty());
     let source = "impl PageHits<'_> {\n    fn at(&self) {\n        self\n            .hits(view, p, false)\n    }\n}\nfn after() {\n    // view.router.owner(0)\n    let _ = view\n        .router\n        .owner(0);\n}\n";
     assert_eq!(
         code_lines(source),
@@ -781,14 +787,4 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
         "fn a() {}\n\n#[cfg(any())]\nuse crate::camera_ui::hit as corner_under;\nuse crate::x::{\n    hit as x_hit,\n    picture_hit as under,\n};\n";
     let aliases: Vec<(String, String)> = [("hit", "corner_under"), ("picture_hit", "under")].map(|(a, b)| (a.to_owned(), b.to_owned())).to_vec();
     assert_eq!(aliased_hit_tests(source), aliases);
-}
-
-#[test]
-fn the_page_press_guard_rejects_missing_owners_and_second_hit_tests() {
-    assert!(routed_press_handler("let owner = view.router.owner(page);"));
-    assert!(!routed_press_handler("// view.router.owner(page)\nlet owner = None;"));
-    assert!(!routed_press_handler("let owner = view.router.owner(page);\nlet again = cx.hit(origin);"));
-    for call in PAGE_HIT_CALLS {
-        assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
-    }
 }

@@ -12,8 +12,8 @@ use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 /// the press the pages hold: a press on a comment where the tool reaches it ([`hit`]: the Select
 /// tool, Fill & Sign over its marks, a shape tool over the selected shape's handles) is that
 /// comment's, and one nobody holds is a commenting tool's. When another tool took this frame
-/// (`taken`: Prepare, added content, which still decide for themselves), the commenting tools leave
-/// it to that tool, as before; the Select tool's click there still unselects. Returns `true` when
+/// (`taken`: Prepare, added content), the commenting tools leave it to that tool, as before; the
+/// Select tool's click there still unselects. Returns `true` when
 /// the pointer gesture belongs to commenting (text selection must ignore it).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, taken: bool, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
@@ -188,13 +188,18 @@ pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut
     }
 }
 
+/// Whether the page shows a tip for what lies under the pointer (a comment, a signature's badge)
+/// with `tool`: not with Fill & Sign, whose placement stays clear; not while drawing freehand,
+/// where it would cover the next stroke (#429); and not while a comment is moved, resized or drawn.
+pub(crate) fn tips_shown(tool: QuickTool, view: &DocView) -> bool {
+    let freehand = matches!(tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
+    !(matches!(tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some())
+}
+
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
-/// shows a comment's tooltip whatever tool is active. Not with Fill & Sign, whose placement stays
-/// clear; not while drawing freehand, where it would cover the next stroke (#429); and not while a
-/// comment is moved, resized or drawn.
+/// shows a comment's tooltip whatever tool is active. Not where [`tips_shown`] says no.
 pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
-    let freehand = matches!(cx.tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
-    if matches!(cx.tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some() {
+    if !tips_shown(cx.tool, view) {
         return;
     }
     let Some(p) = cx.ptr.pos else { return };
@@ -242,7 +247,7 @@ fn select_input(
     };
     let cv = &mut view.comments;
     let mut consumed = false;
-    if resp.drag_started()
+    if cx.ptr.drag_started
         && let (Some((a, part)), Some(o)) = (owner, origin)
     {
         match part {
@@ -288,8 +293,16 @@ fn select_input(
             CommentPart::Body => {}
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    let live =
+        matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page);
+    if live {
         consumed = true;
+    }
+    // A move, resize or reshape ends where its drag stops. One whose release the pages missed (the
+    // button is up, and no drag stopped here) ends with nothing applied: where it came up is not
+    // known, and the pointer may be anywhere by now.
+    if live && !resp.drag_stopped() && !cx.ptr.primary_down {
+        cv.gesture = None;
     }
     if resp.drag_stopped()
         && let Some(p) = pointer
@@ -393,7 +406,8 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
 /// Text asks for the replacement.
 pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) {
     let QuickTool::Comment(tool) = cx.tool else { return };
-    if tool == CommentTool::ReplaceText && cx.allowed && (resp.drag_stopped() || resp.double_clicked()) {
+    let finished = resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked();
+    if tool == CommentTool::ReplaceText && cx.allowed && finished {
         if let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page) {
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
@@ -403,7 +417,7 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         }
         return;
     }
-    if tool.markup().is_none() || !cx.allowed || !(resp.drag_stopped() || resp.double_clicked()) {
+    if tool.markup().is_none() || !cx.allowed || !finished {
         return;
     }
     if let Some(kind) = tool.markup()
@@ -448,7 +462,7 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        if resp.drag_started()
+        if cx.ptr.drag_started
             && pressed_here
             && let Some(o) = origin
         {
@@ -586,7 +600,7 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        if resp.drag_started()
+        if cx.ptr.drag_started
             && pressed_here
             && let Some(o) = origin
         {
@@ -667,7 +681,7 @@ impl Gestures<'_> {
         // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
         // text wraps inside it (#2669).
         if tool == CommentTool::TextBox {
-            if resp.drag_started()
+            if cx.ptr.drag_started
                 && pressed_here
                 && let Some(o) = origin
             {
