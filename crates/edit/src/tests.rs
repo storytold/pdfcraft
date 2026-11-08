@@ -9791,6 +9791,88 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
 
+/// #6131: a subset that writes width 0 for its unused space (pdfTeX does) has no space glyph. A word added to
+/// the line takes a positioning gap for its spaces, not code 32 at width 0, which would run the words together.
+#[test]
+fn a_space_in_a_subset_that_gives_it_no_width_is_a_gap_not_code_32() {
+    for subtype in ["TrueType", "Type1"] {
+        // Codes 32..=98: the space and everything else 0 wide, but a and b (97, 98).
+        let widths: Vec<String> = (32..=98).map(|c| if c == 97 || c == 98 { "500" } else { "0" }.to_string()).collect();
+        let font = format!(
+            "<< /Type /Font /Subtype /{subtype} /BaseFont /ABCDEF+Sample /FirstChar 32 /LastChar 98 /Widths [{}] /Encoding /WinAnsiEncoding >>",
+            widths.join(" ")
+        );
+        let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+            format!(
+                "<< /Length {} >>
+stream
+{content}
+endstream",
+                content.len()
+            ),
+            font,
+        ];
+        let mut out = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{} 0 obj
+{o}
+endobj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+        }
+        let x = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offs {
+            out.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{x}
+%%EOF
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        let mut doc = Document::open(Arc::new(out)).unwrap();
+        assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None, "{subtype}");
+        let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
+        assert!(content.contains("TJ"), "{subtype}: the space is a gap: {content}");
+        assert!(!content.contains("b a") && !content.contains("(ab ba)"), "{subtype}: no code 32 at width 0: {content}");
+    }
+}
+
 #[test]
 fn image_exclusive_scope_resets_path_on_scope_exit() {
     // An earlier scope has a path operation closed by Q (with 'h' closepath).

@@ -316,6 +316,13 @@ fn subset_fonts_only_encode_the_glyphs_they_have() {
 /// space as a gap instead (as for a subset whose widths stop short of 32).
 #[test]
 fn a_subset_that_gives_the_space_no_width_cannot_encode_one() {
+    // pdfTeX writes Type 1 fonts; the same rule holds for a TrueType subset.
+    for subtype in ["TrueType", "Type1"] {
+        a_zero_width_space_in_a_subset_of(subtype);
+    }
+}
+
+fn a_zero_width_space_in_a_subset_of(subtype: &str) {
     let metrics = |base: &str, space: i64| {
         let mut doc = Document::new_empty();
         // Codes 32..=98: the space, then a and b (97, 98) with a width, everything else 0.
@@ -331,7 +338,7 @@ fn a_subset_that_gives_the_space_no_width_cannot_encode_one() {
         let f = font(
             &mut doc,
             vec![
-                ("Subtype", Object::name("TrueType")),
+                ("Subtype", Object::name(subtype)),
                 ("BaseFont", Object::name(base)),
                 ("FirstChar", Object::Int(32)),
                 ("Widths", Object::Array(widths)),
