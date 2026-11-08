@@ -3,6 +3,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod api;
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use pdfcraft_ui_egui::PdfCraftApp;
@@ -67,6 +70,11 @@ fn main() {
                         eframe::web_sys::console::warn_1(
                             &"PdfCraft: ?host=parent needs a framing page on the same origin; saves download instead".into(),
                         );
+                    }
+                    // `?control`: `window.pdfcraft`, the page's command API (`api`). Opt-in: the control
+                    // channel keeps the accessibility tree of every frame.
+                    if query_param("control").is_some() {
+                        api::install(app.attach_control(&cc.egui_ctx));
                     }
                     Ok(Box::new(app))
                 }),
