@@ -47,6 +47,7 @@ impl PdfCraftApp {
             password: None,
             activate: true,
             after_open: Some(destination),
+            from_attachment: None,
             recovered: None,
             then: None,
         });
