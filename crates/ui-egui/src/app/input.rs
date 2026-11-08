@@ -19,7 +19,7 @@ impl PdfCraftApp {
             self.open_path(&p);
             return;
         }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+        let name = crate::files::dropped_name(&f);
         match f.bytes() {
             Ok(bytes) => {
                 if self.ctx.is_some() && !self.run_inline {
@@ -76,7 +76,7 @@ impl PdfCraftApp {
         };
         let mut files = Vec::new();
         for f in &dropped {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            let name = crate::files::dropped_name(f);
             if f.path().is_absolute() {
                 files.push((name, Err(f.path().to_path_buf())));
                 continue;
@@ -132,7 +132,7 @@ impl PdfCraftApp {
         let read = WebRead::start(&self.web_reads);
         wasm_bindgen_futures::spawn_local(async move {
             let _read = read;
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            let name = crate::files::dropped_name(&f);
             if let Ok(bytes) = f.bytes_async().await
                 && let Ok(mut q) = inbox.lock()
             {

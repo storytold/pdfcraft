@@ -38,6 +38,12 @@ fn combinable(ext: &str) -> bool {
     std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).any(|c| ext.eq_ignore_ascii_case(c))
 }
 
+/// Whether Combine takes a file by what it is: a PDF (by its header or its name) or an image or
+/// text file it converts, as `Session::as_pdf` tells them apart.
+pub(super) fn takes(name: &str, bytes: &[u8]) -> bool {
+    pdfcraft_engine::source_kind(name, bytes).is_some() || name.to_ascii_lowercase().ends_with(".pdf")
+}
+
 /// A file's bookmark in the combined PDF: its name without ".pdf", or without the extension of
 /// the image or text file it was made from.
 pub(super) fn title_of(name: &str) -> &str {
