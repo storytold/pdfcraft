@@ -145,9 +145,10 @@ pub fn pill_button_marked(ui: &mut egui::Ui, label: &str, primary: bool, marked:
 }
 
 /// A pill whose complete label wraps inside the available width, retaining focus and click semantics.
+/// Reveal a newly focused action once, so retaining focus cannot undo a later wheel scroll.
 pub(crate) fn pill_button_wrapped(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
     let response = pill_button_layout(ui, label, primary, false, true);
-    if response.has_focus() {
+    if response.gained_focus() {
         response.scroll_to_me(None);
     }
     response

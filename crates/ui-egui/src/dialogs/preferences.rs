@@ -392,6 +392,12 @@ fn date_language_options(drawable: impl Fn(&str) -> bool) -> Vec<(&'static pdfcr
     pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, &drawable))).collect()
 }
 
+/// Automatic dates disclose Punjabi's English vocabulary; other interface picker names stay unchanged.
+fn date_language_follow_label(code: &str, name: &str) -> String {
+    let name = pdfcraft_engine::dates::date_language(code).filter(|l| l.code == "pa-guru").map_or(name, |l| tl!(l.display_name()));
+    crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", name)])
+}
+
 /// The date picker's displayed name.
 pub(crate) fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable: impl FnOnce(&str) -> bool) -> &'static str {
     if l.code == "pa-guru" {
@@ -892,8 +898,9 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut P
         let label = ctx.label_primary(ui, tl!("Language"), t);
         let (follow, selected, current, names) = {
             let drawable = |text: &str| picker_text_is_drawable(ui, text);
-            let interface = crate::i18n::current().picker_name(drawable);
-            let follow = crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]);
+            let language = crate::i18n::current();
+            let interface = language.picker_name(drawable);
+            let follow = date_language_follow_label(language.code(), interface);
             let current = app.session.date_language().map(str::to_string);
             let selected = DATE_LANGUAGES
                 .iter()
@@ -1040,7 +1047,7 @@ mod tests {
     }
 }
 
-/// Pending Punjabi dates are conditional and their English vocabulary is explicit.
+/// Date choices and automatic Punjabi English-vocabulary disclosure remain explicit.
 #[cfg(test)]
 mod punjabi_date_tests {
     use super::*;
@@ -1066,5 +1073,21 @@ mod punjabi_date_tests {
         assert!(
             super::date_language_options(|_| false).iter().any(|(l, name)| l.code == "pa-guru" && *name == "Punjabi (Gurmukhi; English date names)")
         );
+    }
+
+    /// Following a Punjabi interface must disclose the effective English month/weekday vocabulary.
+    #[test]
+    fn second_review_follow_punjabi_discloses_english_names() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let label = date_language_follow_label("pa-guru", "ਪੰਜਾਬੀ");
+        assert!(label.contains("English date names"), "{label}");
+        assert!(label.starts_with("Same as interface ("), "{label}");
+        // Automatic selection remains None; explicit choices and restoration retain their contract.
+        let app = crate::PdfCraftApp::default();
+        assert_eq!(app.session.date_language(), None);
+        assert_eq!(date_language_follow_label("en", "English"), "Same as interface (English)");
+        assert_eq!(date_language_follow_label("hi", "हिन्दी"), "Same as interface (हिन्दी)");
+        let pa = pdfcraft_engine::dates::date_language("pa-guru").unwrap();
+        assert_eq!(date_language_picker_name(pa, |_| false), "Punjabi (Gurmukhi; English date names)");
     }
 }
