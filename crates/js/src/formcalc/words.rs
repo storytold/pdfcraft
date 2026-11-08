@@ -77,7 +77,6 @@ pub(super) fn word_num(n: f64, cents: bool) -> String {
 /// Decode XML (`html == false`) or HTML (`html == true`) character and entity references in a
 /// single pass so `&amp;lt;` becomes `&lt;` rather than `<`, and invalid or unrecognized
 /// references remain literal without panicking.
-/// Decode XML or HTML character references in `s` in a single pass.
 ///
 /// When `html` is `false`, only the five predefined XML entities (`&lt;`, `&gt;`, `&amp;`,
 /// `&quot;`, `&apos;`) and numeric character references (`&#...;`, `&#x...;`, `&#X...;`) are
@@ -153,6 +152,9 @@ fn html_named_entity(name: &str) -> Option<char> {
     HTML_ENTITIES.iter().find(|&&(n, _)| n == name).map(|&(_, c)| c)
 }
 
+/// ISO-8859-1 named entities in code-point order `U+00A0..=U+00FF`. Entries must remain ordered
+/// by successive code points starting at `0xA0` and must not be reordered alphabetically, since
+/// [`html_named_entity`] maps each entry's index to `0xA0 + idx as u32`.
 #[rustfmt::skip]
 const LATIN1_ENTITIES: [&str; 96] = [
     "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf", "laquo", "not", "shy", "reg", "macr",
