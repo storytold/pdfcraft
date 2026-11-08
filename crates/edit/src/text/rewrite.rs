@@ -4,10 +4,10 @@ use super::fallback::{
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
-use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, joined, page_dict, rewritten_contents, splice, text_lines};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, group_blocks, is_centred, parse,
-    rewrite_styled_block,
+    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks, is_centred,
+    parse, rewrite_styled_block,
 };
 
 /// What replacing a line did.
@@ -56,7 +56,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     // The line's own font, when it can show every character.
@@ -127,7 +127,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
     let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
-    let contents = rewritten_contents(doc, &streams, new_data);
+    let contents = rewritten_contents(doc, &streams, new_data)?;
     let page_ref = p.obj;
     if substituted.is_some() {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
@@ -501,7 +501,6 @@ fn underline_ops(fill: &[Op], tm: &[f64; 6], size: f64, underlines: &[(f64, f64,
 
 /// Alignment: each line's offset from the left edge.
 struct Alignment {
-    align: Option<crate::added::Align>,
     width: f64,
     k: f64,
     anchored_right: bool,
@@ -510,10 +509,11 @@ struct Alignment {
 }
 
 impl Alignment {
-    /// `visible` is the width the line is aligned on, in user space; the offset is in text space.
-    fn offset(&self, visible: f64) -> f64 {
+    /// `visible` is the width the line is aligned on, in user space, and `align` its row's
+    /// alignment; the offset is in text space.
+    fn offset(&self, visible: f64, align: Option<crate::added::Align>) -> f64 {
         let free = (self.width - visible).max(0.0) / self.k;
-        match self.align {
+        match align {
             Some(crate::added::Align::Center) => free / 2.0,
             // A right-to-left line anchored at its right edge may start left of the old box.
             Some(crate::added::Align::Right) if self.anchored_right => (self.right_edge - visible) / self.k,
@@ -531,7 +531,9 @@ struct LineWriter<'a> {
     alignment: Alignment,
     encode: &'a Encoder,
     source: Option<&'a Metrics>,
-    justify: bool,
+    /// The paragraph's alignment, and the rows aligned on their own ([`BlockStyle::aligns`]).
+    align: Option<crate::added::Align>,
+    aligns: &'a [Option<crate::added::Align>],
     /// Whether `Tw` reaches every shown space.
     word_spacing_reaches_spaces: bool,
     width: f64,
@@ -551,13 +553,18 @@ struct LineCursor {
 }
 
 impl LineWriter<'_> {
+    /// Row `row`'s alignment: its own, or the paragraph's.
+    fn align_of(&self, row: usize) -> Option<crate::added::Align> {
+        self.aligns.get(row).copied().flatten().or(self.align)
+    }
+
     /// Justify: each line but the last fills the width. A stretched line shows only its words, as
     /// before #4199: word spacing would reach the spaces before its first word and after its
     /// last, so they are left out. Nothing to stretch over, or a paragraph drawn at `0 Tz`, isn't
     /// justified.
-    fn stretch(&self, body: &str, last: bool) -> f64 {
+    fn stretch(&self, body: &str, last: bool, justify: bool) -> f64 {
         let interior = body.matches(' ').count();
-        if self.justify && !last && interior > 0 && self.scale.abs() > 1e-6 {
+        if justify && !last && interior > 0 && self.scale.abs() > 1e-6 {
             Some((self.width - self.advance.of(body)).max(0.0) / self.k / self.scale / interior as f64).filter(|tw| tw.is_finite()).unwrap_or(0.0)
         } else {
             0.0
@@ -578,14 +585,41 @@ impl LineWriter<'_> {
         }
     }
 
-    /// Writes one wrapped line, returning its underline (x0, x1, y) in text space.
-    fn write_line(&self, index: usize, line: &str, last: bool, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(f64, f64, f64), EditError> {
+    /// Writes one wrapped line of its logical draft row, returning its underline (x0, x1, y) in text space. `wrap`: whether
+    /// this line continues the previous one because a word did not fit, and, when it does, how
+    /// many separator characters the wrap consumed (0 for a Chinese/Japanese word split).
+    fn write_line(
+        &self,
+        index: usize,
+        line: &str,
+        wrap: (usize, bool, usize),
+        last: bool,
+        cursor: &mut LineCursor,
+        ops: &mut Vec<Op>,
+    ) -> Result<(f64, f64, f64), EditError> {
         let n = pdfcraft_content::num;
+        let (row, soft, gap) = wrap;
+        let line_align = self.align_of(row);
         let body = line.trim_matches(' ');
         let interior = body.matches(' ').count();
-        let tw = self.stretch(body, last);
+        let tw = self.stretch(body, last, line_align == Some(crate::added::Align::Justify));
         let (shown, visible) = self.shown(line, body, tw);
-        let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible) };
+        let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible, line_align) };
+        if index > 0 {
+            // Inside this text object, so the marker starts and ends here. `/PCHard` is a newline
+            // that was already in the text. `/PCSoft` rejoins when the box widens, with `/N` the
+            // exact number of separator characters the wrap consumed (0 for a Chinese/Japanese
+            // word split), so a rejoin restores what was actually there instead of guessing a
+            // single space and silently dropping the rest of a typed run (#2529).
+            if soft {
+                let mut properties = Dict::new();
+                properties.set(b"N".to_vec(), Object::Int(i64::try_from(gap).unwrap_or(i64::MAX)));
+                ops.push(Op::new("BDC", vec![Object::name("PCSoft"), Object::Dict(properties)]));
+            } else {
+                ops.push(Op::new("BMC", vec![Object::name("PCHard")]));
+            }
+            ops.push(Op::new("EMC", vec![]));
+        }
         if index > 0 || dx != 0.0 {
             ops.push(Op::new("Td", vec![n(dx - cursor.x), n(if index > 0 { -self.lead } else { 0.0 })]));
         }
@@ -633,8 +667,18 @@ impl LineWriter<'_> {
     }
 
     /// Writes every wrapped line, returning their underlines.
-    fn write_all(&self, wrapped: &[String], cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<Vec<(f64, f64, f64)>, EditError> {
-        wrapped.iter().enumerate().map(|(i, line)| self.write_line(i, line, i + 1 == wrapped.len(), cursor, ops)).collect()
+    fn write_all(&self, wrapped: &[(String, bool, usize)], cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<Vec<(f64, f64, f64)>, EditError> {
+        let mut row = 0usize;
+        wrapped
+            .iter()
+            .enumerate()
+            .map(|(i, (line, soft, gap))| {
+                if i > 0 && !soft {
+                    row = row.saturating_add(1);
+                }
+                self.write_line(i, line, (row, *soft, *gap), i + 1 == wrapped.len(), cursor, ops)
+            })
+            .collect()
     }
 }
 
@@ -653,16 +697,18 @@ struct BlockPlan<'a> {
     underline: bool,
 }
 
-fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[String], show_font: String) -> Result<Vec<Op>, EditError> {
+fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, bool, usize)], show_font: String) -> Result<Vec<Op>, EditError> {
     let n = pdfcraft_content::num;
     let mut ops = vec![Op::new("q", vec![])];
     ops.extend(reveal_ops(plan.block, plan.lines, plan.style, plan.emit.ctm)?);
     // Moved: a translation inside that state.
+    let mut ctm = Matrix(plan.emit.ctm);
     if let Some((ax, ay)) = plan.movement {
         ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
+        ctm = Matrix([1.0, 0.0, 0.0, 1.0, ax, ay]).then(&ctm);
     }
     // Painted as the paragraph was, including what its text object set before the first show.
-    ops.extend(plan.state.paint_ops(plan.after));
+    ops.extend(plan.state.paint_ops(plan.after, ctm.0));
     ops.push(Op::new("BT", vec![]));
     let mut state = plan.state.clone();
     state.word_spacing = 0.0;
@@ -703,18 +749,24 @@ struct ParaStyle {
     k: f64,
 }
 
-/// Spacing and scaling (text state), with the chosen values.
-fn paragraph_style(o: &Origin, style: &BlockStyle) -> Result<(String, ParaStyle), EditError> {
+/// Spacing and scaling (text state), with the chosen values. `phrase` is the size an OCR phrase
+/// is drawn at when none is chosen, in place of its first word's own (#3313).
+fn paragraph_style(o: &Origin, style: &BlockStyle, phrase: Option<f64>) -> Result<(String, ParaStyle), EditError> {
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
     // The size in text space: points ÷ the text-to-user scale.
-    let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1));
+    let size = style.size.or(phrase).map_or(old_size, |pt| (pt / k).max(0.1));
     let mut state = o.state.clone();
     if let Some(c) = style.char_spacing {
         state.char_spacing = c / k;
     }
     if let Some(sc) = style.scale {
         state.scale = (sc / 100.0).clamp(0.1, 10.0);
+    }
+    // At the phrase's size, the first word's text matrix still carries its own width: scale it
+    // back, so the line is as wide as the scan whatever size OCR guessed for that word.
+    if phrase.is_some() && style.size.is_none() && style.scale.is_none() {
+        state.scale = (state.scale * old_size / size).clamp(0.1, 10.0);
     }
     Ok((font_name, ParaStyle { state, size, old_size, k }))
 }
@@ -747,6 +799,23 @@ pub(crate) fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
+    // that operation before writing anything; whole-paragraph `align` remains supported.
+    if style.aligns.iter().any(Option::is_some) {
+        return Err(EditError::Invalid(
+            "selected-row alignment of existing paragraphs is not supported until it can be preserved across editing sessions".into(),
+        ));
+    }
+    // An alignment for a one-row paragraph is laid out across the column it sits in, as a
+    // paragraph of that width moved to its left edge.
+    let framed;
+    let style = match alignment_frame(&lines, &blocks, &b, style, text.unwrap_or(&b.editor_text)) {
+        Some([left, right]) => {
+            framed = BlockStyle { width: Some(right - left), offset: Some([left - b.rect[0], 0.0]), ..style.clone() };
+            &framed
+        }
+        None => style,
+    };
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
     let mut dropped = coincident_ops(&lines, &members);
@@ -755,15 +824,23 @@ pub(crate) fn rewrite_block_from(
     let first = members.first().copied().ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     members.iter().try_for_each(|line| line.ensure_editable())?;
     let p = page_dict(doc, page)?;
+    // Revealed OCR text may go on top of the page (see `revealed_under_paint`): a page that can't
+    // take that is refused here, before either rewrite path changes anything.
+    if b.invisible {
+        crate::check_on_top(doc, &p)?;
+    }
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
+    if dispatch.use_styled_path && style.align == Some(crate::added::Align::Justify) {
+        return Err(EditError::Invalid("justification of mixed-style existing paragraphs is not supported".into()));
+    }
     if dispatch.use_styled_path {
         return rewrite_styled_block(doc, page, &b, &lines, text, style, max_glyphs);
     }
     let upright = dispatch.upright;
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let text = paragraph_text(text.unwrap_or(&b.text));
     // The characters to show, for choosing fonts: the breaks are moves, not glyphs.
@@ -771,7 +848,7 @@ pub(crate) fn rewrite_block_from(
     let o = &first.origin;
     let last = members.last().copied().unwrap_or(first);
     let emit = &last.origin;
-    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style)?;
+    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style, b.phrase_size())?;
     let source = source_font(doc, &fonts_res, &font_name, first, &flat, style);
     let reuse = source.reuse;
     // The chosen style also determines the real Japanese fallback outlines and advances.
@@ -852,10 +929,11 @@ pub(crate) fn rewrite_block_from(
     };
     let writer = LineWriter {
         advance: &advance,
-        alignment: Alignment { align, width, k, anchored_right, right_edge, rtl },
+        alignment: Alignment { width, k, anchored_right, right_edge, rtl },
         encode: &font.encode,
         source: source_metrics,
-        justify: align == Some(crate::added::Align::Justify),
+        align,
+        aligns: &style.aligns,
         word_spacing_reaches_spaces,
         width,
         scale: o_state.scale,
@@ -865,9 +943,28 @@ pub(crate) fn rewrite_block_from(
         char_spacing: o_state.char_spacing,
         lead,
     };
-    let plan =
-        BlockPlan { block: &b, lines: &lines, style, emit, after, movement, state: o_state, tm, size, underline: style.underline == Some(true) };
+    let at = if split { start } else { emit.bt_op };
+    // Revealed OCR text that something is painted over goes on top of the page, where it starts
+    // from the initial state.
+    let widest = wrapped.iter().map(|(l, _, _)| advance.of(l)).fold(width, f64::max);
+    let reach = crate::Reach { rect: b.rect, offset: [dx, dy], width: widest, rows: wrapped.len(), pitch: lead * k, upright };
+    let over = crate::revealed_under_paint(doc, page, b.invisible, reach.bounds(), &ops, at);
+    let initial = TextState::initial();
+    let drawn_from = if over { &initial } else { after };
+    let plan = BlockPlan {
+        block: &b,
+        lines: &lines,
+        style,
+        emit,
+        after: drawn_from,
+        movement,
+        state: o_state,
+        tm,
+        size,
+        underline: style.underline == Some(true),
+    };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
+    let on_top = crate::lift_on_top(over, &mut block_ops);
     let n = pdfcraft_content::num;
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
@@ -875,12 +972,11 @@ pub(crate) fn rewrite_block_from(
         block_ops.push(Op::new("BT", vec![]));
         block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
     }
-    let at = if split { start } else { emit.bt_op };
     let new_data = splice(&pieces, &ops, |i| {
         let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
         (insert, !dropped.contains(&i))
     });
-    let contents = rewritten_contents(doc, &streams, new_data);
+    let contents = rewritten_contents(doc, &streams, new_data)?;
     let new_font = !reuse;
     if new_font {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
@@ -892,12 +988,14 @@ pub(crate) fn rewrite_block_from(
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }
     })?;
+    crate::draw_on_top(doc, &p, emit.ctm, &on_top)?;
     Ok(LineEdit { substituted: font.substituted })
 }
 
 /// The cover (when [`BlockStyle::cover`] asks for one) and visible rendering that start a
 /// rewritten invisible paragraph, drawn in the space whose CTM is `ctm`. Nothing for visible text.
-/// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it.
+/// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it; one
+/// painted over where it was is drawn on top of the page instead ([`crate::draw_on_top`]).
 pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockStyle, ctm: [f64; 6]) -> Result<Vec<Op>, EditError> {
     if !block.invisible {
         return Ok(Vec::new());
@@ -948,7 +1046,7 @@ pub(crate) fn selectable_blocks(
             !b.lines
                 .iter()
                 .filter_map(|i| lines.get(*i))
-                .any(|l| streams.get(l.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
+                .any(|l| streams.get(l.stream).and_then(|s| s.entry.as_ref()).is_some_and(|r| excluded.contains(&r)))
         })
         .collect())
 }
@@ -1019,6 +1117,36 @@ fn vertical_encoding(doc: &Document, font: &Dict) -> Result<bool, EditError> {
     Err(EditError::Invalid("the text encoding is nested too deeply".into()))
 }
 
+/// The text-showing operators of paragraphs `indexes` (from [`group_blocks`] of the page's
+/// lines), as indexes among the page's joined operators. `editable`: refuse a line that can't be
+/// edited (moving rewrites its operators; copying takes them as they are).
+pub(crate) fn paragraph_ops(doc: &Document, page: usize, indexes: &[usize], editable: bool) -> Result<std::collections::BTreeSet<usize>, EditError> {
+    let mut selected = std::collections::BTreeSet::new();
+    if indexes.is_empty() {
+        return Ok(selected);
+    }
+    let lines = text_lines(doc, page)?;
+    let blocks = group_blocks(&lines);
+    for index in indexes {
+        let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
+        for line in &b.lines {
+            let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
+            if editable {
+                l.ensure_editable()?;
+            }
+            selected.extend(l.ops.iter().copied());
+        }
+    }
+    Ok(selected)
+}
+
+/// Where each text-showing operator of `ops` (a page's joined operators, drawn with `resources`)
+/// starts its glyphs: the text matrix there, and its rendering mode (`Tr`).
+pub(crate) fn show_starts(doc: &Document, ops: &[Op], resources: &Dict) -> Result<HashMap<usize, (Matrix, i64)>, EditError> {
+    let shown = interpret(doc, ops, resources, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+    Ok(shown.into_iter().map(|s| (s.op, (s.tm, s.state.render_mode))).collect())
+}
+
 /// Translate paragraphs together without re-encoding glyphs, changing fonts or reflowing.
 /// Numeric TJ offsets and text rise temporarily move each selected show operation, then
 /// restore both advances and rise. The PDF reader advances the original glyph bytes itself:
@@ -1029,20 +1157,10 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     }
     let p = page_dict(doc, page)?;
     let streams = content_streams(doc, &p.dict)?;
-    let lines = text_lines(doc, page)?;
-    let blocks = group_blocks(&lines);
-    let mut selected = std::collections::BTreeSet::new();
-    for index in indexes {
-        let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
-        for line in &b.lines {
-            let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
-            l.ensure_editable()?;
-            selected.extend(l.ops.iter().copied());
-        }
-    }
+    let selected = paragraph_ops(doc, page, indexes, true)?;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
@@ -1113,7 +1231,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
-    let contents = rewritten_contents(doc, &streams, data);
+    let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }

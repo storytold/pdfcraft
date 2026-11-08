@@ -32,3 +32,4 @@ __pycache__/
 
 # Local-only reference material derived from third-party (Datalogics/Adobe PDF Library) docs; never commit
 /parity/apdfl-*
+.claude/

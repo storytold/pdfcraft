@@ -1,12 +1,13 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images, and JPEG images with
 //! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, CCITT, separations) are
+//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, separations) are
 //! reported, never silently left out.
 
 use std::collections::HashSet;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_DECODED, ObjRef, Object, Stream};
+use pdfcraft_filters::FilterError;
 
 /// One image, ready to write.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,12 +32,29 @@ pub struct ImageExport {
 /// Images larger than this many pixels are skipped (memory).
 const MAX_PIXELS: u64 = 100_000_000;
 
+/// What one export may hold of the files it makes: they are all in memory until it ends, and a file
+/// of a few KB can make gigabytes of PNG. Images past it are left out, with the reason.
+const MAX_EXPORT_BYTES: usize = 2 << 30;
+
+/// What an export of a file of `file_bytes` may hold: twice the file if that is more than
+/// [`MAX_EXPORT_BYTES`], so that a file of large images is exported whole.
+pub(crate) fn export_bytes(file_bytes: usize) -> usize {
+    MAX_EXPORT_BYTES.max(file_bytes.saturating_mul(2))
+}
+
 /// The images of `pages` (0-based; each image once, on the first page using it), skipping
 /// those with fewer than `min_side` pixels on their shorter side.
 pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageExport {
+    extract_images_within(doc, pages, min_side, &mut ImageBudget::new(doc), export_bytes(doc.bytes().len()))
+}
+
+/// [`extract_images`] within `budget`, and holding `max_bytes` of files. An image past either is
+/// left out, with the reason.
+pub(crate) fn extract_images_within(doc: &Document, pages: &[usize], min_side: u32, budget: &mut ImageBudget, max_bytes: usize) -> ImageExport {
     let all = pdfcraft_model::pages(doc);
     let mut out = ImageExport::default();
     let mut seen = HashSet::new();
+    let mut held = 0usize;
     for &p in pages {
         let Some(page) = all.get(p) else { continue };
         let mut refs = Vec::new();
@@ -53,8 +71,15 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
             if w <= 0 || h <= 0 || (w.min(h) as u64) < min_side as u64 {
                 continue;
             }
-            match image(doc, s) {
-                Ok((extension, data)) => out.images.push(ExtractedImage { page: p, object: r, width: w as u32, height: h as u32, extension, data }),
+            if held >= max_bytes {
+                out.skipped.push((p, r, "more images than one export can hold".into()));
+                continue;
+            }
+            match image(doc, s, budget) {
+                Ok((extension, data)) => {
+                    held = held.saturating_add(data.len());
+                    out.images.push(ExtractedImage { page: p, object: r, width: w as u32, height: h as u32, extension, data });
+                }
                 Err(why) => out.skipped.push((p, r, why)),
             }
         }
@@ -64,8 +89,13 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
 
 /// One image XObject as a file: JPEG as is, else PNG ("Save image as").
 pub fn image_file(doc: &Document, image: ObjRef) -> Result<(&'static str, Vec<u8>), String> {
+    image_file_within(doc, image, &mut ImageBudget::new(doc))
+}
+
+/// [`image_file`] within `budget`, for a caller making a file of many images.
+pub fn image_file_within(doc: &Document, image: ObjRef, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
     match &*doc.get(image) {
-        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s),
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s, budget),
         _ => Err("not an image".into()),
     }
 }
@@ -100,16 +130,24 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
     }
 }
 
+/// The samples of image `s`, decoded ([`ImageBudget::decode`]): through its filters, with a
+/// `/DecodeParms` dictionary given by reference, or as an array's entry, or with numbers inside by
+/// reference, read too (a predictor given so would otherwise be lost); a CCITT fax or JBIG2 image
+/// through its decoder too, behind other filters as well, a JBIG2 image with its `/JBIG2Globals`.
+/// A JBIG2 page has to be the image's size, which the caller checked against the export's limit,
+/// before the page is decoded.
+fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
+    budget.decode(doc, s, MAX_DECODED).map_err(|e| e.to_string())
+}
+
 /// The file for one image: its JPEG data as is, or a PNG. An image with transparency (a soft
 /// mask, a stencil `/Mask` or a colour-key `/Mask`) is always a PNG with that transparency as
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
-fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> {
+fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
     let f = filters(s);
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
     match f.last().map(Vec::as_slice) {
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
-        Some(b"JBIG2Decode") => return Err("JBIG2 images can't be exported yet".into()),
-        Some(b"CCITTFaxDecode" | b"CCF") => return Err("CCITT fax images can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
@@ -124,31 +162,49 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     };
     let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
-    let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
+    let refused = budget.refused();
+    let mut alpha = if mask { None } else { soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)) };
+    // Without its mask the image would come out opaque, showing what the mask hides.
+    if budget.refused() > refused {
+        return Err(FilterError::Spent.to_string());
+    }
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
+    let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
     let inverted = (jpeg || mask)
         && s.dict
             .get(b"Decode")
             .map(|d| doc.resolve(d))
-            .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
+            // Both ends have to be finite numbers, as for lossless images, or the default mapping stands.
+            .and_then(|d| {
+                let a = d.as_array()?;
+                Some(endpoint(a.first())? > endpoint(a.get(1))?)
+            })
             .unwrap_or(false);
     // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
-    // a negative.
-    let as_is_negative = jpeg && !inverted && matches!(space(doc, s.dict.get(b"ColorSpace")), Ok(Space::Cmyk));
+    // a negative. The space is read once: an indexed one's lookup table is paid for each time.
+    let read = (jpeg && !inverted).then(|| space(doc, s.dict.get(b"ColorSpace"), budget));
+    let as_is_negative = matches!(read, Some(Ok(Space::Cmyk)));
     if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
         return as_is();
     }
-    let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
+    let mut space = match read {
+        _ if mask => Space::Gray,
+        Some(read) => read?,
+        None => space(doc, s.dict.get(b"ColorSpace"), budget)?,
+    };
     let (samples, bpc) = if jpeg {
+        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
+            return Err(FilterError::Spent.to_string());
+        }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
         // indexed one (not valid), is written as is, without its transparency.
         let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else { return as_is() };
         space = decoded;
         (samples, 8)
     } else {
-        let data = s.decoded().map_err(|e| e.to_string())?;
+        let data = decoded(doc, s, budget)?;
         let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
@@ -239,6 +295,32 @@ fn size(w: i64, h: i64) -> Option<(usize, usize)> {
     (w > 0 && h > 0 && pixels <= MAX_PIXELS).then_some((w, h))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// JPEGs decoded whole, for the tests that keep one from being decoded for nothing.
+    pub(crate) static JPEGS_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The size a JPEG's header gives, which is what decoding it goes by, whatever its dictionary
+/// says: an image of one pixel can hold a header of 500 megapixels.
+fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
+    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    dec.decode_headers().ok()?;
+    dec.dimensions()
+}
+
+/// JPEG `data`, decoded, if its header says it is `w` × `h`.
+fn jpeg_of_size(data: &[u8], w: usize, h: usize) -> Option<image::DynamicImage> {
+    if jpeg_size(data)? != (w, h) {
+        return None;
+    }
+    #[cfg(test)]
+    JPEGS_DECODED.with(|n| n.set(n.get() + 1));
+    image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok()
+}
+
 /// A JPEG's samples (8 bits): grey for a grey image, CMYK as stored for a CMYK one, else RGB,
 /// with the space they are in.
 fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u8>, Space)> {
@@ -247,10 +329,7 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
         Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
-    let img = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok()?;
-    if img.width() as usize != w || img.height() as usize != h {
-        return None;
-    }
+    let img = jpeg_of_size(data, w, h)?;
     Some(match space {
         Space::Gray => (img.into_luma8().into_raw(), Space::Gray),
         _ => (img.into_rgb8().into_raw(), Space::Rgb),
@@ -362,7 +441,10 @@ impl Space {
 /// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
 const MAX_LOOKUP: usize = 64 << 10;
 
-fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
+/// The colour space `cs` names; an indexed one's lookup table is read within `budget`, as the
+/// image's samples are, since each image reads it again and its filters can do work that makes
+/// nothing.
+fn space(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
     let unsupported = |n: &[u8]| Err(format!("{} images can't be exported yet", String::from_utf8_lossy(n)));
@@ -396,15 +478,21 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
-                let base = space(doc, a.get(1))?;
+                let base = space(doc, a.get(1), budget)?;
                 let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),
                 };
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
+                    // Through its parameters given by reference too, as the image's samples.
                     Some(Object::Stream(t)) => {
-                        t.decoded_within(MAX_LOOKUP).map_err(|_| "an indexed colour space with an oversized or damaged lookup table".to_string())?
+                        let refused = budget.refused();
+                        match budget.decode_filters(doc, t, MAX_LOOKUP) {
+                            Ok(table) => table,
+                            Err(_) if budget.refused() > refused => return Err(FilterError::Spent.to_string()),
+                            Err(_) => return Err("an indexed colour space with an oversized or damaged lookup table".into()),
+                        }
                     }
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
@@ -449,34 +537,37 @@ fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
 }
 
 /// The soft mask (`/SMask`) as 8-bit alpha, scaled to the image's size when it has another.
-fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
+fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
     let r = s.dict.get(b"SMask")?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(m) = &*obj else { return None };
-    gray_plane(doc, m, w, h)
+    gray_plane(doc, m, w, h, budget)
 }
 
 /// A stencil `/Mask` (an image mask stream, 8.9.6.3) as 8-bit alpha: its 1 samples (0 with
 /// `/Decode [1 0]`) hide the image.
-fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
+fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
     let r = s.dict.get(b"Mask")?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(m) = &*obj else { return None };
-    Some(gray_plane(doc, m, w, h)?.into_iter().map(|v| 255 - v).collect())
+    Some(gray_plane(doc, m, w, h, budget)?.into_iter().map(|v| 255 - v).collect())
 }
 
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
-/// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
-fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
+/// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
+fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
     let f = filters(m);
     let mut px = match f.last().map(Vec::as_slice) {
         Some(b"DCTDecode" | b"DCT") if f.len() == 1 => {
-            let img = image::load_from_memory_with_format(&m.raw, image::ImageFormat::Jpeg).ok()?.into_luma8();
-            (img.width() as usize == mw && img.height() as usize == mh).then(|| img.into_raw())?
+            // Past the allowance the image goes too: `image` sees this one refused.
+            if !budget.pay_jpeg((mw as u64).saturating_mul(mh as u64), &m.raw) {
+                return None;
+            }
+            jpeg_of_size(&m.raw, mw, mh)?.into_luma8().into_raw()
         }
-        Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode" | b"CCF") => return None,
+        Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return None,
         _ => {
             let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
@@ -488,7 +579,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&m.decoded().ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&decoded(doc, m, budget).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {
@@ -501,7 +592,23 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
         return Some(px);
     }
     let img = image::GrayImage::from_raw(mw as u32, mh as u32, px)?;
-    Some(image::imageops::resize(&img, w as u32, h as u32, image::imageops::FilterType::Triangle).into_raw())
+    Some(scaled(&img, w as u32, h as u32).into_raw())
+}
+
+/// `img` scaled to `w` × `h`. Scaling goes down first, through a buffer of `img`'s width by `h` at
+/// 16 bytes a pixel, which a mask of other proportions than its image can make larger than any
+/// machine: 100,000 × 1 on an image of 1 × 100,000 asks for 160 GB, and that aborts the process.
+/// Such a mask is scaled across first, which holds no more pixels than one of the two has. Past a
+/// quarter over the larger of them, so that rounding leaves a mask of its image's shape as it was.
+pub(crate) fn scaled(img: &image::GrayImage, w: u32, h: u32) -> image::GrayImage {
+    use image::imageops::{FilterType, resize};
+    let (mw, mh) = (u64::from(img.width()), u64::from(img.height()));
+    let largest = (mw * mh).max(u64::from(w) * u64::from(h));
+    if (mw * u64::from(h)).saturating_mul(4) > largest.saturating_mul(5) {
+        resize(&resize(img, w, img.height(), FilterType::Triangle), w, h, FilterType::Triangle)
+    } else {
+        resize(img, w, h, FilterType::Triangle)
+    }
 }
 
 fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, String> {

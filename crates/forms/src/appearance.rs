@@ -40,9 +40,11 @@ pub fn fmt(v: f64) -> String {
 }
 
 /// The font size an auto-sized (`0 Tf`) text field uses for `text` in a `width` × `height` box
-/// (inside the padding), measured by `width_of(text, size)`: at most 12 pt and at least 4 pt.
-/// Single-line text shrinks until it fits the width; multiline text takes the largest size whose
-/// wrapped lines fit the height. The page appearance and the on-screen editor share this.
+/// (inside the padding), measured by `width_of(text, size)`, never under 4 pt. Single-line text
+/// takes the size the height gives, as Acrobat Reader draws it however tall the box (the size is
+/// implementation-defined, ISO 32000-2 §12.7.4.3), and shrinks until it fits the width; multiline
+/// text takes the largest size up to 12 pt whose wrapped lines fit the height. The page
+/// appearance and the on-screen editor share this.
 pub fn auto_text_size(text: &str, width: f64, height: f64, multiline: bool, width_of: impl Fn(&str, f64) -> f64) -> f64 {
     let wrap_width = if width.is_finite() { width.max(1.0) } else { 1.0 };
     auto_text_size_by(
@@ -53,6 +55,17 @@ pub fn auto_text_size(text: &str, width: f64, height: f64, multiline: bool, widt
         |size| wrap_with(text, size, wrap_width, &width_of).len() as f64 * size * 1.15,
     )
 }
+
+/// The automatic font size of a comb field (`Field::is_comb`) whose cells are `height` tall inside
+/// the padding: 4 to 12 pt, as only the height bounds a one-character cell. The page appearance
+/// and the on-screen editor share this.
+pub fn comb_auto_text_size(height: f64) -> f64 {
+    if height.is_finite() { (height / 1.15).clamp(4.0, 12.0) } else { 4.0 }
+}
+
+/// The tallest box single-line auto-size follows, as a sanity bound: the largest page side
+/// ISO 32000-1 Annex C recommends.
+pub(crate) const MAX_AUTO_HEIGHT: f64 = 14_400.0;
 
 /// [`auto_text_size`] with the text measured by the caller: `line_width(size)` is its width on
 /// one line, `wrapped_height(size)` its height wrapped at `width`. The screen measures in its
@@ -67,7 +80,7 @@ pub fn auto_text_size_by(width: f64, height: f64, multiline: bool, line_width: i
         }
         return size;
     }
-    let size = (height / 1.15).clamp(4.0, 12.0);
+    let size = (height.min(MAX_AUTO_HEIGHT) / 1.15).max(4.0);
     let tw = line_width(size);
     if tw.is_finite() && tw > width { (size * width / tw).max(4.0) } else { size }
 }
@@ -109,7 +122,7 @@ pub fn text_box(doc: &Document, f: &Field, w: &Widget) -> TextBox {
         size: (da.size > 0.0 && da.size.is_finite()).then_some(da.size),
         multiline,
         password: f.has(flags::PASSWORD),
-        comb: f.has(flags::COMB) && !multiline && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0),
+        comb: f.is_comb(),
     }
 }
 
@@ -586,7 +599,7 @@ fn comb_dividers(doc: &Document, wd: &Dict, w: f64, h: f64, cells: usize) -> Str
     let inset = border_width(doc, wd);
     let lw = line_width(doc, wd);
     let Some(bc) = color_array(doc, mk.as_ref(), b"BC") else { return String::new() };
-    if !(inset > 0.0 && inset.is_finite() && lw > 0.0 && lw.is_finite()) || !(2..=MAX_COMB_DIVIDERS).contains(&cells) {
+    if !(inset > 0.0 && inset.is_finite() && lw > 0.0 && lw.is_finite() && (2..=MAX_COMB_DIVIDERS).contains(&cells)) {
         return String::new();
     }
     let cell = w / cells as f64;
@@ -726,8 +739,18 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
+/// Whether `text` draws in widget `wd` of `f` with no `?`: in the field's `/DR` font when that
+/// holds it, as [`field_appearance_fit`] picks, or else in the Helvetica (WinAnsi) stand-in.
+fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let enc = dr_font(doc, &da.font).map(|(_, enc)| enc).filter(|enc| enc.can_encode(text)).unwrap_or(FontText::WinAnsi);
+    enc.first_unencodable(text).is_none()
+}
+
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
 fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -735,13 +758,16 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        formatted = vec![crate::af::format_value(&f.actions.format, &values[0])];
+        let shown = crate::af::format_value(&f.actions.format, &values[0]);
+        // Month and weekday names in the date language that no font here can draw ("окт." in
+        // Helvetica) are drawn in English rather than as `?` (#5303).
+        let english = || crate::af::format_value_in(&f.actions.format, &values[0], &crate::af::ENGLISH_DATE_NAMES);
+        let dated = matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_));
+        formatted = vec![if !dated || draws(doc, f, &wd, &shown) { shown } else { english() }];
         &formatted[..]
     } else {
         values
     };
-    let wobj = doc.get(w.obj);
-    let wd = wobj.as_dict().cloned().unwrap_or_default();
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
@@ -813,7 +839,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             }
         }
         _ => {
-            let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
+            let comb = f.is_comb();
             if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
                 if size == 0.0 {
                     size = auto_text_size(&text, inner_w, height - 2.0 * pad, true, width_of);
@@ -840,9 +866,8 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 }
             } else {
                 if size == 0.0 {
-                    // Comb cells hold one character each, so only the height limits them.
                     size = if comb {
-                        ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0)
+                        comb_auto_text_size(height - 2.0 * pad)
                     } else {
                         auto_text_size(&text, inner_w, height - 2.0 * pad, false, width_of)
                     };

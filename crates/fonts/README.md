@@ -59,7 +59,12 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   and shaped Thai Add Text content. Harfrust positions stacked vowel/tone marks and decomposes
   Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
   embeds outlines, so reopening does not depend on installed fonts.
+- `craft_glyph(face, ch)` and `face_has(bytes, ch)`: bounded outlines and glyph coverage for any bundled face.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
+- `TextPlan::for_words`: how the OCR output writes text beyond WinAnsi — per word the first
+  face (document face first) whose glyphs cover it, planned once per page into Type 3 fonts
+  (codes, advances, `?` stand-ins) that `pdfcraft-edit` registers and the `pdfcraft-ocr` layers
+  draw with; characters no face has are counted (`missing`) so the output reports them.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
 `FontDescriptor`. `pdf::Metrics::base_font` uses its `FontName` when the Type 3 dictionary has
@@ -72,7 +77,7 @@ needed.
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
-committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
+committed here (`AGENTS.md` §1.4).
 
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.
 
@@ -81,3 +86,11 @@ Document font inputs use `embedding`: bounded static TrueType/OpenType-CFF valid
 exact program preservation, Unicode/CID/GID mapping and full-face subset completion.
 `shaping` uses the same program with harfrust and UAX #9; source UI fallback fonts are
 never exported. See [existing-text editing](../../docs/editing-existing-text.md).
+
+`pdf::embedded_sfnt_within` reconstructs a missing Unicode cmap for Identity-H TrueType
+subsets from the PDF's ToUnicode and CID-to-glyph maps, and completes a THSarabunPSK subset's
+Latin-only one with them. Only the in-memory editor copy changes;
+the PDF's font program stays intact. `pdf::LegacyThaiFont` shapes verified THSarabunPSK
+positional glyphs into their original PDF codes, retaining the source face and weight. Missing
+contextual glyphs are refused. `pdf::recovered_thai_map` recognizes narrowly fingerprinted
+damaged exporter maps; callers must record repairs and apply them to page-owned font copies.
