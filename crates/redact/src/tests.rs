@@ -4283,4 +4283,37 @@ fn model_and_renderer_agree_on_numbers_with_no_finite_value() {
         assert!(!paints(&quad), "the renderer paints `10 10 {t} 50 re`");
         assert_eq!(rects(&quad), 0, "the model reads `10 10 {t} 50 re` as a rectangle");
     }
+
+    // A QuadPoints entry with no finite value: the quad is unusable and the mark falls
+    // back to its /Rect. The model side is read through redact's own mark reader. The
+    // renderer exposes no quad API, so its side is pinned as equivalence: a page whose
+    // quad holds `+nan` renders exactly like the same page with the quad absent — the
+    // fallback state — and never reads the token as a coordinate.
+    let annot_page = |quad: Option<&str>| -> Vec<u8> {
+        let quad_entry = quad.map(|q| format!(" /QuadPoints [{q}]")).unwrap_or_default();
+        Pdf::new()
+            .objs([
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] /Contents 4 0 R /Resources << >> >>".to_vec(),
+                stream("", b""),
+                format!("<< /Type /Annot /Subtype /Redact /Rect [0 90 50 115]{quad_entry} >>").into_bytes(),
+            ])
+            .build()
+    };
+    let mark_rects = |bytes: &[u8]| {
+        let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
+        marks(&doc).iter().map(|m| m.rects.clone()).collect::<Vec<_>>()
+    };
+    let pixels = |bytes: &[u8]| {
+        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes.to_vec()), pdfcraft_render::RenderConfig::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        out.rgba
+    };
+    let finite_quad = annot_page(Some("20 110 40 110 20 95 40 95"));
+    assert_eq!(mark_rects(&finite_quad), vec![vec![[20.0, 95.0, 40.0, 110.0]]], "control: a finite quad is the mark's area");
+    let nan_quad = annot_page(Some("20 110 +nan 110 20 95 40 95"));
+    assert_eq!(mark_rects(&nan_quad), vec![vec![[0.0, 90.0, 50.0, 115.0]]], "a +nan quad entry leaves the mark on its /Rect");
+    assert_eq!(pixels(&nan_quad), pixels(&annot_page(None)), "the renderer treats a +nan quad like an absent one");
 }
