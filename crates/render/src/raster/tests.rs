@@ -9801,3 +9801,47 @@ fn an_encrypted_file_with_a_cut_off_update_still_needs_its_password() {
     let (count, drawn, _) = open("user");
     assert!(count >= 1 && drawn, "the right one opens it");
 }
+
+/// An encrypted file whose cut-off update ends in a trailer dictionary without `/Encrypt`: the rebuild would take that
+/// later dictionary and read the encrypted content as plain bytes, so it is not taken. A wrong password is still
+/// refused, and the right one opens the table the last `startxref` names, its content decrypted and drawn.
+#[test]
+fn a_rebuild_whose_trailer_lacks_the_encryption_dictionary_is_not_taken() {
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let plain = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let mut doc = Document::open(Arc::new(plain)).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let root = doc.root().unwrap();
+    let mut file = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // The update: one object, past the 4 KiB footer window, and a trailer without `/Encrypt`, cut off before its
+    // `startxref`.
+    file.extend_from_slice(b"900 0 obj\n<< /Length 5000 >>\nstream\n");
+    file.extend(std::iter::repeat_n(b' ', 5000));
+    file.extend_from_slice(format!("\nendstream\nendobj\ntrailer\n<< /Size 901 /Root {} {} R >>\n", root.num, root.generation).as_bytes());
+    let file = Arc::new(file);
+    let open = |password: &str| {
+        let mut r = PageRenderer::new(file.clone(), RenderConfig { password: Some(Arc::from(password)), ..RenderConfig::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        page.error.is_none().then(|| rgb_at(&page.rgba, page.width as usize, 30, page.height as usize - 30))
+    };
+    assert_eq!(open("wrong"), None, "a wrong password opens nothing");
+    assert_eq!(open(""), None, "nor does none");
+    assert_eq!(open("user"), Some([0, 0, 255]), "the right one draws the decrypted content");
+}
