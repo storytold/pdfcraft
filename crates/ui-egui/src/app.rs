@@ -205,6 +205,10 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
             custom_actions: Vec::new(),
@@ -593,7 +597,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            // An OCR review not yet accepted or rejected is work the page would lose, too.
+            let dirty = self.work_at_risk();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
@@ -643,6 +648,11 @@ impl eframe::App for PdfCraftApp {
         // The OCR Verify screen's worker may have finished while no frame was drawn.
         if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
+        }
+        // A run or re-read asked for while the web build downloaded the models starts when they land.
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_verify.awaiting_models.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
         // So may a page or region re-read's worker.
         if self.ocr_verify.reread.is_some() {
@@ -704,10 +714,20 @@ impl eframe::App for PdfCraftApp {
         if self.draws_window_frame() {
             window_controls::resize_edges(&ctx);
         }
+        chrome::tab_strip(self, ui);
+        chrome::mode_bar(self, ui);
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
+        // recognized text brings it back with its review as it was.
+        if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
+            self.ocr_verify.open = false;
+        }
+        self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
         if self.ocr_verify.open {
-            // The OCR Verify screen owns the window (its four panes); dialogs and notices
+            // The OCR Verify screen takes the document area (its four panes) under the window's
+            // tabs, menus and toolbar, which stay (#6485); the palette, dialogs and notices
             // still show above it.
             workflows::ocr_verify::show(self, ui);
+            palette::show(self, &ctx);
             dialogs::show(self, &ctx);
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
@@ -718,8 +738,6 @@ impl eframe::App for PdfCraftApp {
             }
             return;
         }
-        chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
