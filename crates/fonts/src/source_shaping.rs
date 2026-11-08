@@ -68,7 +68,9 @@ fn shape_inner(bytes: &[u8], text: &str, legacy_thai: bool) -> Result<ShapedRun,
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    if !legacy_thai && text.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)) && !positions_thai_marks(&face) {
+    // Only a vowel or tone mark set on its base (or Sara Am, whose Nikhahit is) needs positioning:
+    // digits and bare letters shape the same without it.
+    if !legacy_thai && text.chars().any(|c| matches!(u32::from(c), 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e)) && !positions_thai_marks(&face) {
         return Err("the source subset has no Thai mark positioning (GPOS mark/mkmk); select its full font".into());
     }
     if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff))

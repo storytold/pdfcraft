@@ -89,7 +89,7 @@ subset its name or descriptor marks bold or italic needs an explicit replacement
 The bundled variable Thai face is written as bounded Type 3 glyph outlines, with shaped
 vowel/tone positions and logical Unicode text, rather than embedded as a static font.
 Saved paragraphs can be reopened and edited again without installing a font. Modern Thai
-shaping uses the source's GPOS mark positioning (a `mark` or `mkmk` feature in the script and language system the shaper
+shaping of vowels and tone marks uses the source's GPOS mark positioning (a `mark` or `mkmk` feature in the script and language system the shaper
 selects for Thai, not just a GPOS table); GSUB substitution is optional, as specified by
 [the OpenType Thai model](https://learn.microsoft.com/en-us/typography/script-development/thai).
 Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS; their

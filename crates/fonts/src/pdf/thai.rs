@@ -602,6 +602,19 @@ mod tests {
         assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('A'), Some(latin), "the program's own mappings stay");
     }
 
+    /// Only Thai with a mark to set on its base needs the program's mark positioning: digits and
+    /// bare letters shape without it.
+    #[test]
+    fn thai_without_marks_shapes_without_mark_positioning() {
+        let mut doc = Document::new_empty();
+        let font = thai_font(&mut doc, &without_tables(&thai_ordered_program(), &[b"cmap", b"GSUB", b"GPOS"]), INTACT);
+        let program = crate::pdf::embedded_sfnt(&doc, &font).unwrap();
+        let shaped = crate::source_shaping::shape(&program, "๑๒๓กข").expect("nothing to position");
+        assert_eq!(shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [290, 291, 292, 214, 215]);
+        let error = crate::source_shaping::shape(&program, "กิ่").unwrap_err();
+        assert!(error.contains("mark positioning"), "{error}");
+    }
+
     /// A THSarabunPSK program with its own Thai mark positioning is shaped by that layout; one
     /// without it only if every Thai glyph it keeps is where the legacy order has that character
     /// (the legacy shaper skips the positioning check). A subset needs no particular glyph.
