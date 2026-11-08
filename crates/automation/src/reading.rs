@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::{Args, Automation, Result, ToolError};
 
 /// The modes `ReadingColors::parse` accepts, for error messages.
-const MODES: &str = "off, black-on-white, white-on-black, yellow-on-black, green-on-black, custom";
+const MODES: &str = "off, black-on-white, white-on-black, yellow-on-black, green-on-black, color-preserving-dark, custom";
 
 impl Automation {
     /// Set the document's reading colours. Colours are only meaningful with `mode: "custom"`;

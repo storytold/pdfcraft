@@ -13,14 +13,15 @@ fn pdf() -> Vec<u8> {
 }
 
 fn pdf_pages(count: usize) -> Vec<u8> {
+    pdf_pages_with_content(count, b"BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj ET")
+}
+
+fn pdf_pages_with_content(count: usize, body: &[u8]) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
-        {
-            let body = b"BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj ET";
-            format!("<< /Length {} >>\nstream\n{}\nendstream", body.len(), String::from_utf8_lossy(body)).into_bytes()
-        },
+        format!("<< /Length {} >>\nstream\n{}\nendstream", body.len(), String::from_utf8_lossy(body)).into_bytes(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
     let mut kids = vec!["3 0 R".to_owned()];
@@ -57,6 +58,7 @@ fn pending_pages_use_document_reading_background() {
         (ReadingColors::WHITE_ON_BLACK, Color32::BLACK),
         (ReadingColors::YELLOW_ON_BLACK, Color32::BLACK),
         (ReadingColors::GREEN_ON_BLACK, Color32::BLACK),
+        (ReadingColors::COLOR_PRESERVING_DARK, Color32::from_rgb(31, 31, 31)),
         (custom, Color32::from_rgb(0x18, 0x24, 0x30)),
     ] {
         let mut app = PdfCraftApp::new();
@@ -136,6 +138,66 @@ fn reading_colours_preference_round_trips() {
     assert_eq!(fresh.reading_colors, ReadingColors::default());
     fresh.restore(r#"{"reading_colors": 7}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
+}
+
+#[test]
+fn color_preserving_dark_can_be_selected_persisted_and_seeded() {
+    let _gpu = super::gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1500.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let body = b"BT /F1 18 Tf 20 160 Td (Colour-preserving reading) Tj ET\n\
+                     0.733333333 0.188235294 0.152941176 rg BT /F1 14 Tf 20 125 Td (Red text keeps its hue) Tj ET\n\
+                     0.094117647 0.196078431 0.815686275 rg BT /F1 14 Tf 20 95 Td (Blue text stays blue) Tj ET\n\
+                     0.239215686 0.494117647 0.2 rg BT /F1 14 Tf 20 65 Td (Green remains recognizable) Tj ET";
+        app.open_bytes("colours.pdf", None, pdf_pages_with_content(1, body)).unwrap();
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(4);
+    let theme = h.state().theme_preference;
+    h.get_by(|node| node.role() == Role::Button && node.label().as_deref() == Some("Colour-preserving dark")).scroll_to_me();
+    h.run_steps(4);
+    h.get_by(|node| node.role() == Role::Button && node.label().as_deref() == Some("Colour-preserving dark")).click();
+    h.run_steps(2);
+    assert_eq!(h.state().reading_colors, ReadingColors::COLOR_PRESERVING_DARK);
+    assert_eq!(h.state().theme_preference, theme);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.reading_colors(id), Some(ReadingColors::COLOR_PRESERVING_DARK));
+
+    if let Some(path) = std::env::var_os("PDFCRAFT_COLOR_PRESERVING_SHOT") {
+        h.render().unwrap().save(&path).unwrap();
+        h.state_mut().set_option("dialog", "none").unwrap();
+        h.state_mut().set_option("mode", "read").unwrap();
+        h.state_mut().set_option("left", "closed").unwrap();
+        h.state_mut().set_option("zoom", "200").unwrap();
+        for (colors, name) in
+            [(ReadingColors::default(), "pdfcraft-reading-original.png"), (ReadingColors::COLOR_PRESERVING_DARK, "pdfcraft-reading-dark.png")]
+        {
+            h.state_mut().set_reading_colors(colors);
+            h.run_steps(4);
+            let timeout = std::time::Duration::from_secs(20);
+            let start = std::time::Instant::now();
+            while h.state().render_pending() && start.elapsed() < timeout {
+                h.run_steps(2);
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            assert!(!h.state().render_pending(), "screenshot waits for the page raster");
+            h.run_steps(3);
+            h.render().unwrap().save(std::path::Path::new(&path).with_file_name(name)).unwrap();
+        }
+    }
+
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.reading_colors, ReadingColors::COLOR_PRESERVING_DARK);
+    restored.open_bytes("after-restart.pdf", None, pdf()).unwrap();
+    assert_eq!(restored.session.reading_colors(restored.views[0].id), Some(ReadingColors::COLOR_PRESERVING_DARK));
+
+    // Settings written before this extension retain the existing luminance mapping.
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore(r#"{"reading_colors":{"params":{"text":[255,255,255],"background":[0,0,0],"only_black":false,"line_art":true}}}"#);
+    assert_eq!(legacy.reading_colors, ReadingColors::WHITE_ON_BLACK);
 }
 
 #[test]

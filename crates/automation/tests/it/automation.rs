@@ -10067,8 +10067,12 @@ fn architectural_and_iso_papers_through_tools() {
 /// "Page N" text on a white page; page 2 also draws a 4×4 uncompressed `/DeviceRGB` image,
 /// scaled to 40×40 pt at 120, 200.
 fn reading_colors_fixture() -> Vec<u8> {
-    let body1 = "BT /F1 48 Tf 20 150 Td (Page 1) Tj ET";
-    let body2 = "BT /F1 48 Tf 20 150 Td (Page 2) Tj ET\nq 40 0 0 40 120 200 cm /Im1 Do Q";
+    reading_colors_fixture_with_paint("")
+}
+
+fn reading_colors_fixture_with_paint(paint: &str) -> Vec<u8> {
+    let body1 = format!("{paint}BT /F1 48 Tf 20 150 Td (Page 1) Tj ET");
+    let body2 = format!("{paint}BT /F1 48 Tf 20 150 Td (Page 2) Tj ET\nq 40 0 0 40 120 200 cm /Im1 Do Q");
     // 16 opaque pure-red pixels; images are never remapped by the reading-colours setting.
     let image: Vec<u8> = (0..16).flat_map(|_| [0xff_u8, 0x00, 0x00]).collect();
     let mut objs: Vec<Vec<u8>> = vec![
@@ -10273,6 +10277,43 @@ fn reading_colors_through_tools() {
         json!({ "mode": "off", "text": null, "background": null, "only_black": false, "line_art": false })
     );
     assert_eq!(render(&mut a, 1), page1_off);
+}
+
+#[test]
+fn color_preserving_dark_through_tools_replaces_the_previous_reading_mode() {
+    let tool = tools().into_iter().find(|tool| tool.name == "view_reading_colors").unwrap();
+    assert!(tool.input_schema["properties"]["mode"]["enum"].as_array().unwrap().contains(&json!("color-preserving-dark")));
+    let dir = workdir("color-preserving-reading");
+    let source = reading_colors_fixture_with_paint("0.733333333 0.188235294 0.152941176 rg\n");
+    std::fs::write(dir.join("a.pdf"), &source).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation, page: u64| png_pixels(&a.call("page_render", &json!({"doc":doc,"page":page,"dpi":72})).unwrap()[0]);
+    let original = render(&mut a, 1);
+    let id = pdfcraft_engine::DocId(doc);
+    let original_export = pdfcraft_engine::export::Exporter::new(a.session().get(id).unwrap()).png(0, 72.0).unwrap();
+    // Same paper/ink endpoints: changing only the curve must invalidate the cached raster.
+    ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"custom","text":"#e6e6e6","background":"#1f1f1f"}));
+    let grayscale = render(&mut a, 1);
+    assert!(grayscale.chunks_exact(4).all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]));
+    let echo = ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"color-preserving-dark"}));
+    assert_eq!(echo, json!({"mode":"color-preserving-dark","text":"#e6e6e6","background":"#1f1f1f","only_black":false,"line_art":true}));
+    let colored = render(&mut a, 1);
+    assert_eq!(pixel(&colored, 10, 290), [31, 31, 31, 255]);
+    let text = (20..172u32)
+        .flat_map(|x| (116..160u32).map(move |y| (x, y)))
+        .map(|(x, y)| pixel(&colored, x, y))
+        .max_by_key(|p| i16::from(p[0]) - i16::from(p[2]))
+        .unwrap();
+    assert!(text[0] > text[1] + 60 && text[1].abs_diff(text[2]) < 10, "red text stays red: {text:?}");
+    assert_eq!(pixel(&render(&mut a, 2), 140, 80), [255, 0, 0, 255], "image remains original");
+    assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), source, "the view never writes the PDF");
+    let document = a.session().get(id).unwrap();
+    assert!(!document.dirty, "a reading choice is not an edit");
+    assert_eq!(document.bytes.as_ref(), &source, "the working PDF is unchanged");
+    assert!(pdfcraft_engine::export::Exporter::new(document).png(0, 72.0).unwrap() == original_export, "image export ignores reading colours");
+    ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"off"}));
+    assert_eq!(render(&mut a, 1), original);
 }
 
 #[test]

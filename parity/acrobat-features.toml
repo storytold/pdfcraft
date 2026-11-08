@@ -9349,6 +9349,18 @@ evidence = ["crates/automation/tests/it/automation.rs::reading_colors_through_to
 notes = "View only, off by default: Preferences ▸ Reading colours, directly below Appearance, offers colour samples and a live preview; the gear beside the theme button opens Preferences. Reading colours holds the app-wide preference, seeded into every document as it opens (including created ones), and view_reading_colors reads and sets it per document (Acrobat's Replace Document Colors). Solid text paints and, by default, line-art paints (including stencil-mask image paints) are remapped by luminance — each lerps between the preset's text and background colour by how dark or light the original paint is — while images, shadings and tiling patterns pass through untouched. Annotations keep the colours they were given (both /AP appearances and the no-/AP Highlight fallback), so a Multiply highlight over a dark background shows the marked-up words in the highlight's colour instead of a flat bar that hides them (#1548). Presets: black on white, white on black, yellow on black, green on black, or a custom #RRGGBB pair; only_black limits the mapping to near-black paints (a 10% luminance threshold — our choice; Acrobat's was not observed). Display only: the document is not changed and print and export are unaffected; print previews and view snapshots render with the document's true colours (a preview matches the uncoloured printout, and a snapshot is an export surface), so reading colours apply to the reading view only. Pending canvas pages use the configured reading background before their raster arrives (#2059). Closes #897 (duplicate #488)."
 
 [[feature]]
+id = "a11y.color-preserving-reading"
+title = "Colour-preserving dark reading (extension)"
+area = "M"
+tier = "P2"
+milestone = "M12"
+status = "shipped"
+commands = ["a11y.reading_options"]
+tools = ["view_reading_colors"]
+evidence = ["crates/render/src/reading.rs::color_preserving_dark_matches_sebyoshi_reference_colors", "crates/render/src/reading.rs::color_preserving_dark_respects_paint_flags", "crates/render/src/raster/tests.rs::color_preserving_dark_renders_hues_and_preserves_images_annotations_and_print", "crates/automation/tests/it/automation.rs::color_preserving_dark_through_tools_replaces_the_previous_reading_mode", "crates/ui-egui/tests/it/reading_colors.rs::color_preserving_dark_can_be_selected_persisted_and_seeded", "crates/ui-egui/tests/it/reading_colors.rs::pending_pages_use_document_reading_background"]
+notes = "Optional Preferences > Reading colours preset, also through view_reading_colors mode color-preserving-dark. Independently implemented from the Sebyoshi mathematical reference in #3281: HSL lightness inversion with hue-dependent lifting and low-chroma paper neutralization, soft grey paper and off-white ink. Existing image, shading, pattern and annotation exclusions apply. Uses the existing preference and render policy, so reading modes replace one another. Saved document bytes, printing and image exports retain original colours. Bright coloured backgrounds may have poor text contrast; not a general contrast guarantee. Raster graphic/photo classification and image-only scan processing are separate work."
+
+[[feature]]
 id = "a11y.reflow-tagged"
 title = "Reflow tagged content"
 area = "M"

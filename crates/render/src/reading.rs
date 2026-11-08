@@ -21,24 +21,60 @@ pub struct ReadingParams {
     pub only_black: bool,
     /// When `true`, line-art paints are mapped in addition to text paints.
     pub line_art: bool,
+    /// Hue-preserving night curve; older settings keep the luminance mapping.
+    #[serde(default)]
+    pub preserve_hues: bool,
 }
 
 impl ReadingColors {
     /// Black text on a white page.
-    pub const BLACK_ON_WHITE: Self =
-        Self { params: Some(ReadingParams { text: [0x00, 0x00, 0x00], background: [0xff, 0xff, 0xff], only_black: false, line_art: true }) };
+    pub const BLACK_ON_WHITE: Self = Self {
+        params: Some(ReadingParams {
+            text: [0x00, 0x00, 0x00],
+            background: [0xff, 0xff, 0xff],
+            only_black: false,
+            line_art: true,
+            preserve_hues: false,
+        }),
+    };
     /// White text on a black page.
-    pub const WHITE_ON_BLACK: Self =
-        Self { params: Some(ReadingParams { text: [0xff, 0xff, 0xff], background: [0x00, 0x00, 0x00], only_black: false, line_art: true }) };
+    pub const WHITE_ON_BLACK: Self = Self {
+        params: Some(ReadingParams {
+            text: [0xff, 0xff, 0xff],
+            background: [0x00, 0x00, 0x00],
+            only_black: false,
+            line_art: true,
+            preserve_hues: false,
+        }),
+    };
     /// Yellow text on a black page.
-    pub const YELLOW_ON_BLACK: Self =
-        Self { params: Some(ReadingParams { text: [0xff, 0xff, 0x00], background: [0x00, 0x00, 0x00], only_black: false, line_art: true }) };
+    pub const YELLOW_ON_BLACK: Self = Self {
+        params: Some(ReadingParams {
+            text: [0xff, 0xff, 0x00],
+            background: [0x00, 0x00, 0x00],
+            only_black: false,
+            line_art: true,
+            preserve_hues: false,
+        }),
+    };
     /// Green text on a black page.
-    pub const GREEN_ON_BLACK: Self =
-        Self { params: Some(ReadingParams { text: [0x00, 0xff, 0x00], background: [0x00, 0x00, 0x00], only_black: false, line_art: true }) };
+    pub const GREEN_ON_BLACK: Self = Self {
+        params: Some(ReadingParams {
+            text: [0x00, 0xff, 0x00],
+            background: [0x00, 0x00, 0x00],
+            only_black: false,
+            line_art: true,
+            preserve_hues: false,
+        }),
+    };
+
+    /// Soft dark paper and light ink with recognizable source hues (Sebyoshi curve).
+    pub const COLOR_PRESERVING_DARK: Self = Self {
+        params: Some(ReadingParams { text: [230, 230, 230], background: [31, 31, 31], only_black: false, line_art: true, preserve_hues: true }),
+    };
 
     /// Parses tool/settings input. `mode` is one of `off | black-on-white | white-on-black |
-    /// yellow-on-black | green-on-black | custom`; `custom` needs `text` and `background` as
+    /// yellow-on-black | green-on-black | color-preserving-dark | custom`; `custom` needs `text` and `background` as
     /// `#rrggbb`; the flags override the preset defaults when given. `off` ignores colours.
     /// Errors are actionable strings.
     pub fn parse(mode: &str, text: Option<&str>, background: Option<&str>, only_black: Option<bool>, line_art: Option<bool>) -> Result<Self, String> {
@@ -61,6 +97,7 @@ impl ReadingColors {
             "white-on-black" => Ok(with_flags(Self::WHITE_ON_BLACK)),
             "yellow-on-black" => Ok(with_flags(Self::YELLOW_ON_BLACK)),
             "green-on-black" => Ok(with_flags(Self::GREEN_ON_BLACK)),
+            "color-preserving-dark" => Ok(with_flags(Self::COLOR_PRESERVING_DARK)),
             "custom" => match (text, background) {
                 (None, None) => Err("custom needs text and background as #rrggbb".into()),
                 (None, Some(_)) => Err("custom needs text as #rrggbb".into()),
@@ -71,12 +108,13 @@ impl ReadingColors {
                         background: parse_hex("background", background)?,
                         only_black: false,
                         line_art: true,
+                        preserve_hues: false,
                     }),
                 })),
             },
-            other => {
-                Err(format!("unknown mode {other:?}; expected one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, custom"))
-            }
+            other => Err(format!(
+                "unknown mode {other:?}; expected one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, color-preserving-dark, custom"
+            )),
         }
     }
 
@@ -85,7 +123,9 @@ impl ReadingColors {
         match self.params {
             None => "off",
             Some(params) => {
-                if Some(params) == Self::BLACK_ON_WHITE.params {
+                if params.preserve_hues {
+                    "color-preserving-dark"
+                } else if Some(params) == Self::BLACK_ON_WHITE.params {
                     "black-on-white"
                 } else if Some(params) == Self::WHITE_ON_BLACK.params {
                     "white-on-black"
@@ -113,7 +153,13 @@ impl ReadingColors {
 
 impl From<ReadingParams> for hayro::ColorReplacement {
     fn from(p: ReadingParams) -> Self {
-        hayro::ColorReplacement { text: p.text, background: p.background, only_black: p.only_black, line_art: p.line_art }
+        hayro::ColorReplacement {
+            text: p.text,
+            background: p.background,
+            only_black: p.only_black,
+            line_art: p.line_art,
+            preserve_hues: p.preserve_hues,
+        }
     }
 }
 
@@ -142,6 +188,45 @@ fn hex(rgb: [u8; 3]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_preserving_dark_matches_sebyoshi_reference_colors() {
+        let colors = ReadingColors::parse("color-preserving-dark", None, None, None, None).unwrap();
+        assert_eq!(colors.mode_name(), "color-preserving-dark");
+        assert_eq!(colors.text_hex().as_deref(), Some("#e6e6e6"));
+        assert_eq!(colors.background_hex().as_deref(), Some("#1f1f1f"));
+        let replacement: hayro::ColorReplacement = colors.params.unwrap().into();
+        // Production Swift reference values; 1 level allows the stored 8-bit paper/ink endpoints.
+        for (input, expected) in [
+            ([255, 255, 255], [31, 31, 31]),
+            ([0, 0, 0], [230, 230, 230]),
+            ([187, 48, 39], [207, 125, 120]),
+            ([24, 50, 208], [128, 140, 218]),
+            ([61, 126, 51], [142, 191, 134]),
+            ([253, 244, 161], [109, 101, 32]),
+            ([240, 224, 48], [198, 185, 43]),
+            ([250, 246, 242], [39, 39, 39]),
+        ] {
+            for alpha in [0, 1, 127, 255] {
+                let actual = replacement.map([input[0], input[1], input[2], alpha], true);
+                for channel in 0..3 {
+                    assert!(actual[channel].abs_diff(expected[channel]) <= 1, "{input:?}: {actual:?}, expected {expected:?}");
+                }
+                assert_eq!(actual[3], alpha, "paint alpha is independent of the colour curve");
+            }
+        }
+    }
+
+    #[test]
+    fn color_preserving_dark_respects_paint_flags() {
+        let colors = ReadingColors::parse("color-preserving-dark", None, None, Some(true), Some(false)).unwrap();
+        assert_eq!(colors.mode_name(), "color-preserving-dark");
+        let replacement: hayro::ColorReplacement = colors.params.unwrap().into();
+        let red = [187, 48, 39, 128];
+        assert_eq!(replacement.map(red, true), red, "only-black leaves coloured text unchanged");
+        assert_eq!(replacement.map([0, 0, 0, 128], false), [0, 0, 0, 128], "line art can be excluded");
+        assert_eq!(replacement.map([0, 0, 0, 128], true), [230, 230, 230, 128]);
+    }
 
     #[test]
     fn parse_round_trips_every_mode() {
@@ -186,7 +271,7 @@ mod tests {
     fn parse_rejects_unknown_mode() {
         assert_eq!(
             ReadingColors::parse("nope", None, None, None, None),
-            Err("unknown mode \"nope\"; expected one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, custom".to_string())
+            Err("unknown mode \"nope\"; expected one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, color-preserving-dark, custom".to_string())
         );
     }
 

@@ -1,5 +1,15 @@
 # Vendored crates
 
+## Hue-preserving reading extension
+
+PdfCraft's `hayro::ColorReplacement` also accepts `preserve_hues`. The independent
+`hayro/src/color_preserving.rs` implementation follows the public mathematical reference from
+Sebyoshi linked in [colour-preserving reading](../docs/colour-preserving-reading.md). It maps
+solid paints before rasterization, retaining the existing image, pattern and annotation exclusions.
+Regression coverage: `pdfcraft-render` tests `color_preserving_dark_matches_sebyoshi_reference_colors`,
+`color_preserving_dark_respects_paint_flags`, and
+`color_preserving_dark_renders_hues_and_preserves_images_annotations_and_print`.
+
 ## Window-stack provenance after the egui 0.37 migration
 
 The checked-in, resolved Cargo graph pins `winit` to storytold/winit

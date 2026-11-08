@@ -3815,9 +3815,14 @@ fn image_exports_ignore_reading_colors_and_keep_unsaved_edits() {
         })
         .collect();
     let custom = ReadingColors::parse("custom", Some("#eeeeee"), Some("#102030"), None, None).unwrap();
-    for colors in
-        [ReadingColors::BLACK_ON_WHITE, ReadingColors::WHITE_ON_BLACK, ReadingColors::YELLOW_ON_BLACK, ReadingColors::GREEN_ON_BLACK, custom]
-    {
+    for colors in [
+        ReadingColors::BLACK_ON_WHITE,
+        ReadingColors::WHITE_ON_BLACK,
+        ReadingColors::YELLOW_ON_BLACK,
+        ReadingColors::GREEN_ON_BLACK,
+        custom,
+        ReadingColors::COLOR_PRESERVING_DARK,
+    ] {
         session.set_reading_colors(id, colors);
         let document = session.get(id).unwrap();
         let snapshot = document.export_source();

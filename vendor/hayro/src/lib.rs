@@ -59,6 +59,7 @@ use vello_cpu::color::palette::css::TRANSPARENT;
 use vello_cpu::color::palette::css::WHITE;
 use vello_cpu::{Level, Pixmap, RenderMode};
 
+mod color_preserving;
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
 pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
@@ -88,8 +89,8 @@ impl<'a> RenderCache<'a> {
 
 /// PdfCraft patch: replacement colours for the "reading colours" view setting (Acrobat's
 /// "Replace Document Colors"). Solid paints are mapped by luminance: dark paints move towards
-/// `text`, light paints towards `background`. Images, shadings and patterns never pass through
-/// the mapping.
+/// `text`, light paints towards `background`. `preserve_hues` selects a hue-preserving night
+/// curve instead. Images, shadings and patterns never pass through the mapping.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorReplacement {
     /// The sRGB colour that dark paints (low luminance) are mapped towards.
@@ -101,6 +102,8 @@ pub struct ColorReplacement {
     pub only_black: bool,
     /// When `true`, line-art paints are mapped in addition to text paints.
     pub line_art: bool,
+    /// PdfCraft extension: use the hue-preserving night curve instead of luminance interpolation.
+    pub preserve_hues: bool,
 }
 
 impl ColorReplacement {
@@ -115,6 +118,9 @@ impl ColorReplacement {
         let t = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0;
         if self.only_black && t > 0.10 {
             return rgba8;
+        }
+        if self.preserve_hues {
+            return color_preserving::map(rgba8, self.text, self.background);
         }
         let [text_r, text_g, text_b] = self.text;
         let [background_r, background_g, background_b] = self.background;
@@ -365,6 +371,7 @@ mod color_replacement_tests {
             background,
             only_black,
             line_art,
+            preserve_hues: false,
         }
     }
 
@@ -487,6 +494,7 @@ mod color_replacement_render_tests {
             background: [0x00, 0x00, 0x00],
             only_black: false,
             line_art,
+            preserve_hues: false,
         }
     }
 

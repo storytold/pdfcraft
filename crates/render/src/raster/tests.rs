@@ -7465,6 +7465,57 @@ fn reading_colors_map_solid_paints_and_leave_images() {
     assert_eq!(pixel(&on, 150, 55), &[255, 255, 255, 255], "the image's white quadrant stays white");
 }
 
+/// The new reading curve reaches the actual renderer, with the same colours in a tile and a
+/// whole page. Pictures and annotation appearances retain their source paints; printing is plain.
+#[test]
+fn color_preserving_dark_renders_hues_and_preserves_images_annotations_and_print() {
+    let content = "0.733333333 0.188235294 0.152941176 rg 10 10 20 20 re f\n\
+                   0.094117647 0.196078431 0.815686275 rg 35 10 20 20 re f\n\
+                   q 20 0 0 10 60 20 cm /Im Do Q";
+    let appearance = "0 1 0 rg 0 0 10 10 re f";
+    let pdf = Arc::new(format!(
+        "%PDF-1.4\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Contents 4 0 R /Resources << /XObject << /Im 6 0 R >> >> /Annots [7 0 R] >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 25 >> stream\nFF000000FF00000000FFFFFFFF>\nendstream endobj\n\
+         7 0 obj << /Type /Annot /Subtype /Square /Rect [85 10 95 20] /F 4 /AP << /N 8 0 R >> >> endobj\n\
+         8 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> /Length {} >> stream\n{appearance}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF", content.len(), appearance.len()
+    ).into_bytes());
+    let request = RenderRequest { page: 0, scale: 2.0, ..Default::default() };
+    let mut plain = PageRenderer::new(pdf.clone(), RenderConfig::default());
+    let original = plain.render(request);
+    let colors = ReadingColors::parse("color-preserving-dark", None, None, None, None).unwrap();
+    let mut renderer = PageRenderer::new(pdf, RenderConfig { reading_colors: colors, ..Default::default() });
+    let full = renderer.render(request);
+    assert!(original.error.is_none() && full.error.is_none(), "{:?} {:?}", original.error, full.error);
+    let pixel = |page: &RenderedPage, x: u32, y: u32| page.rgba[((y * page.width + x) * 4) as usize..][..4].to_vec();
+    assert_eq!(pixel(&full, 5, 5), [31, 31, 31, 255]);
+    let red = pixel(&full, 40, 60);
+    let blue = pixel(&full, 90, 60);
+    assert!(red[0] > red[1] + 60 && red[1].abs_diff(red[2]) < 10, "red retains its hue: {red:?}");
+    assert!(blue[2] > blue[0] + 60 && blue[2] > blue[1] + 60, "blue retains its hue: {blue:?}");
+    for y in 44..56 {
+        for x in 124..156 {
+            assert_eq!(pixel(&full, x, y), pixel(&original, x, y), "image {x},{y}");
+        }
+    }
+    assert_eq!(pixel(&full, 180, 70), [0, 255, 0, 255], "annotation appearance is not remapped");
+    let tile = Tile { x: 25, y: 35, w: 90, h: 40 };
+    let part = renderer.render(RenderRequest { tile: Some(tile), ..request });
+    assert!(part.error.is_none(), "{:?}", part.error);
+    for y in 0..tile.h {
+        for x in 0..tile.w {
+            assert_eq!(pixel(&part, x, y), pixel(&full, tile.x + x, tile.y + y), "tile {x},{y}");
+        }
+    }
+    let print = renderer.render(RenderRequest { tag: PRINT_TAG, ..request });
+    assert!(print.error.is_none(), "{:?}", print.error);
+    assert_eq!(print.rgba, original.rgba, "print ignores the reading curve");
+}
+
 /// #2975: a stencil mask (`/ImageMask true`) is painted in the fill colour at the fill
 /// opacity, once: at `ca 0.5` it is as opaque as a rectangle filled at `ca 0.5` beside it
 /// (it was a quarter as opaque, the opacity applied by both the image's group and its paint).
