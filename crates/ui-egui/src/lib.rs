@@ -603,6 +603,10 @@ pub struct PdfCraftApp {
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).
     pub comment_clipboard: Option<CommentClip>,
+    /// Objects copied together in Edit a PDF, to paste into this or another document (#5989).
+    pub object_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// What copying them put on the system clipboard (see [`app::ObjectClipMark`]).
+    pub(crate) object_clip_mark: app::ObjectClipMark,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the

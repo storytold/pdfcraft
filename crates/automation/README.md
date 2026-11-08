@@ -146,7 +146,10 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 `object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork and added items
 with generation-scoped kind/index references. `object_move {doc, page, objects, offset, generation?}`
 moves 1–1000 references atomically in displayed points (right/down), preserving source glyph bytes
-and fonts. A refusal changes nothing; success is one undo step. See
+and fonts. A refusal changes nothing; success is one undo step. `all: true` takes every object on the
+page instead, as ⌘A does. `object_copy {doc, page, objects | all, cut?}` copies them with every
+resource they use and `object_paste {doc, page}` pastes them as page content that draws the same,
+into the same or another open document, stepped as the app steps a paste. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
 
 ## Accessibility review record
