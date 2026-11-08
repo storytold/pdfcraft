@@ -156,7 +156,10 @@ impl Walker<'_> {
     fn attr(&mut self, d: &Dict, key: &[u8]) -> Option<String> {
         let o = self.doc.resolve(d.get(key)?);
         let s = o.as_string()?;
-        if s.bytes.len() > self.title_left {
+        // A text string decodes to at most three bytes per raw byte, so one whose worst case does
+        // not fit the remaining allowance is never decoded: the raw check alone let a string at
+        // the raw limit decode to three times it before the allowance was reduced.
+        if s.bytes.len().saturating_mul(3) > self.title_left {
             return None;
         }
         let text = s.to_text();
