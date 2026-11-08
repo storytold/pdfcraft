@@ -36,11 +36,11 @@ use crate::EditError;
 const MAX_FORM_BYTES: usize = 64 << 20;
 
 /// Resource categories a content stream refers to by name (ISO 32000-2 §7.8.3, Table 34).
-const CATEGORIES: [&[u8]; 7] = [b"Font", b"XObject", b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"Properties"];
+pub(crate) const CATEGORIES: [&[u8]; 7] = [b"Font", b"XObject", b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"Properties"];
 
 /// The `/ColorSpace` entries that remap device colours painted with the resources they are in
 /// (ISO 32000-2 §8.6.5.6).
-const DEFAULT_SPACES: [&[u8]; 3] = [b"DefaultGray", b"DefaultRGB", b"DefaultCMYK"];
+pub(crate) const DEFAULT_SPACES: [&[u8]; 3] = [b"DefaultGray", b"DefaultRGB", b"DefaultCMYK"];
 
 /// The most distinct patterns one ungrouped form may select; each becomes a new object.
 const MAX_MOVED_PATTERNS: usize = 256;
@@ -57,7 +57,7 @@ pub(crate) type Ungrouped = (Vec<Op>, Dict, Vec<(Vec<u8>, Object)>);
 /// at the `Do` is translucent, blended or soft-masked, which a transparency group composites as a
 /// whole. `page_space` is the page group's blending colour space ([`page_blend_space`]).
 /// `placement` maps the form's space to the page's default space at the `Do` (its `/Matrix`,
-/// then the CTM there).
+/// then the CTM there). A refusal starts with `refusal` (what can't be done).
 pub(crate) fn ungroup_ops(
     doc: &Document,
     resources: &Dict,
@@ -65,8 +65,9 @@ pub(crate) fn ungroup_ops(
     translucent: bool,
     page_space: Option<&Object>,
     placement: Matrix,
+    refusal: &str,
 ) -> Result<Ungrouped, EditError> {
-    let refuse = |why: &str| EditError::Invalid(format!("this artwork can't be ungrouped: {why}"));
+    let refuse = |why: &str| EditError::Invalid(format!("{refusal}: {why}"));
     let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).ok_or_else(|| refuse("it is missing"))?;
     let form = xobjects.get(name).ok_or_else(|| refuse("it is missing"))?;
     let Object::Stream(s) = &*doc.resolve(form) else { return Err(refuse("it is not a Form XObject")) };
@@ -371,7 +372,7 @@ struct BlendWalk {
 }
 
 /// An operator whose operands the renderer can't read as it expects, so it skips the operator.
-struct Unreadable;
+pub(crate) struct Unreadable;
 
 /// Which operand of `op` names a resource, and from which category, read as the renderer reads
 /// it: operands are taken from the end, so a surplus operand before them is ignored. `Do`, `gs`,
@@ -379,7 +380,7 @@ struct Unreadable;
 /// a name or an inline dictionary; `scn` and `SCN` numbers and the last name among them.
 /// `Ok(None)` when `op` names no resource; [`Unreadable`] when the renderer would skip it, which
 /// [`ungroup_ops`] refuses rather than guess at.
-fn resource_operand(op: &Op) -> Result<Option<(&'static [u8], usize)>, Unreadable> {
+pub(crate) fn resource_operand(op: &Op) -> Result<Option<(&'static [u8], usize)>, Unreadable> {
     let operands = &op.operands;
     let name_at = |i: Option<usize>| i.is_some_and(|i| matches!(operands.get(i), Some(Object::Name(_))));
     let last = operands.len().checked_sub(1);
