@@ -631,32 +631,69 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
         units.push(i..j);
         i = j;
     }
-    units.retain(|u| {
-        ops.get(u.clone()).is_some_and(|slice| {
-            let mut render_mode: i64 = 0;
-            let mut mode_stack: Vec<i64> = Vec::new();
-            slice.iter().any(|op| {
-                match op.op.as_slice() {
-                    b"q" if mode_stack.len() < 4096 => mode_stack.push(render_mode),
-                    b"Q" => {
-                        if let Some(prev) = mode_stack.pop() {
-                            render_mode = prev;
-                        }
+    // The rendering mode is graphics state: a `Tr` set before a unit (e.g. before its `q` or
+    // `BT`) is in force inside it, so snapshot it at each unit start instead of restarting at 0.
+    let mut mode_at_start = Vec::with_capacity(units.len());
+    {
+        let mut render_mode: i64 = 0;
+        let mut mode_stack: Vec<i64> = Vec::new();
+        let mut unit_idx = 0usize;
+        for i in scan_start..scan_end {
+            while unit_idx < units.len() && units[unit_idx].start == i {
+                mode_at_start.push(render_mode);
+                unit_idx += 1;
+            }
+            let Some(op) = ops.get(i) else { break };
+            match op.op.as_slice() {
+                b"q" if mode_stack.len() < 4096 => mode_stack.push(render_mode),
+                b"Q" => {
+                    if let Some(prev) = mode_stack.pop() {
+                        render_mode = prev;
                     }
-                    b"Tr" => {
-                        if let Some(m) = op.num(0) {
-                            render_mode = m as i64;
-                        }
+                }
+                b"Tr" => {
+                    if let Some(m) = op.num(0) {
+                        render_mode = m as i64;
                     }
-                    _ => {}
                 }
-                if matches!(op.op.as_slice(), b"Do" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") {
-                    return true;
-                }
-                matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && text_mode_is_visible(render_mode)
+                _ => {}
+            }
+        }
+        while mode_at_start.len() < units.len() {
+            mode_at_start.push(render_mode);
+        }
+    }
+    units = units
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, u)| {
+            ops.get(u.clone()).is_some_and(|slice| {
+                let mut render_mode: i64 = mode_at_start.get(*idx).copied().unwrap_or(0);
+                let mut mode_stack: Vec<i64> = Vec::new();
+                slice.iter().any(|op| {
+                    match op.op.as_slice() {
+                        b"q" if mode_stack.len() < 4096 => mode_stack.push(render_mode),
+                        b"Q" => {
+                            if let Some(prev) = mode_stack.pop() {
+                                render_mode = prev;
+                            }
+                        }
+                        b"Tr" => {
+                            if let Some(m) = op.num(0) {
+                                render_mode = m as i64;
+                            }
+                        }
+                        _ => {}
+                    }
+                    if matches!(op.op.as_slice(), b"Do" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") {
+                        return true;
+                    }
+                    matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && text_mode_is_visible(render_mode)
+                })
             })
         })
-    });
+        .map(|(_, u)| u)
+        .collect();
     units
 }
 
