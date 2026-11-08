@@ -415,10 +415,13 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             merge_op(doc, op_id, base, epoch, Target::Field { name: name.clone() }, field_value_payload_expecting(&previous, &expect))
         }
         "page.rotate" => {
+            // `degrees` is a turn *by* that much (`RotatePages` adds it), so the
+            // inverse is the opposite turn, not the previous angle.
             let page = page_target(op)?;
             let previous = document.info.pages.get(page.index as usize).map(|p| i64::from(p.rotation)).ok_or(ProjectionError::Missing("page"))?;
-            let expect = op.payload.get("degrees").and_then(Value::as_i64).unwrap_or_default();
-            structural_op(doc, op_id, base, epoch, Target::Page(page), rotate_payload_expecting(previous, expect))
+            let degrees = op.payload.get("degrees").and_then(Value::as_i64).unwrap_or_default();
+            let expect = (previous + degrees).rem_euclid(360);
+            structural_op(doc, op_id, base, epoch, Target::Page(page), rotate_payload_expecting((360 - degrees).rem_euclid(360), expect))
         }
         "page.move" => {
             let page = page_target(op)?;
@@ -683,7 +686,7 @@ mod tests {
         let ops = super::ops_for_edit(document, &rotate, doc()?, "client", 1, 0, &mut counter)?;
         let inverse = super::inverse_for(document, &ops[0], OpId::new("inv-2")?)?;
         let inverse = inverse.ok_or("a rotation can be undone")?;
-        assert_eq!(inverse.payload["degrees"], 0);
+        assert_eq!(inverse.payload["degrees"], 270, "the opposite quarter turn: `degrees` is a turn by, not an angle");
         assert_eq!(inverse.payload["expect"], 90);
         Ok(())
     }

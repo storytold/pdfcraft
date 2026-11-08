@@ -20,9 +20,13 @@ use pdfcraft_collab_proto::{
 };
 use std::collections::{BTreeMap, VecDeque};
 
-/// The same address in another page epoch. Merge intents are identified by name
+/// The same address in another page epoch. A merge intent is identified by name
 /// (`/NM`, a field's full name), so only the epoch that framed the address
-/// changes; structural intents keep the address they were built on.
+/// changes. A structural intent is re-addressed too: its `baseVersion` is pinned
+/// to the head, so no other structural operation has been accepted since it was
+/// built and the page set is still the one the user saw — while leaving the old
+/// epoch on the target would make every undo of a page operation stale (the
+/// adapter refuses a page addressed to an epoch that has passed).
 fn with_epoch(target: Target, epoch: u64) -> Target {
     match target {
         Target::Page(page) => Target::Page(PageRef { index: page.index, epoch }),
@@ -179,12 +183,11 @@ impl ClientSession {
     /// Queue a local operation. `base_version` and `epoch` are taken from the
     /// client's current view: an intent is always built on what the user saw.
     ///
-    /// A merge intent re-addressed after a resync keeps its target but takes the
-    /// new epoch: a comment, a field and a reply are identified by `/NM` or by a
-    /// name, so the address is still the same thing, and leaving the old epoch
-    /// on it would make the retry stale for ever. A structural intent is not
-    /// re-addressed at all (the page order it was built on may be gone), which
-    /// is why `enqueue` rejects one whose `base_version` is not the head.
+    /// An intent re-addressed after a resync keeps its target but takes the new
+    /// epoch, for both classes: leaving the old epoch on the address makes the
+    /// retry (and every structural undo, which is built on the epoch before its
+    /// original) stale for ever, while the page set only changes under a
+    /// structural operation, and one is only accepted with `baseVersion == head`.
     pub fn enqueue(&mut self, mut op: Op) -> Result<Op, ClientError> {
         if !self.joined {
             return Err(ClientError::NotJoined);
@@ -203,9 +206,7 @@ impl ClientSession {
         }
         op.base_version = self.version;
         op.epoch = self.epoch;
-        if op.class == pdfcraft_collab_proto::ConflictClass::Merge {
-            op.target = with_epoch(op.target, self.epoch);
-        }
+        op.target = with_epoch(op.target, self.epoch);
         op.validate().map_err(|e| ClientError::Invalid(e.to_string()))?;
         self.pending.push_back(Pending { op: op.clone(), applied_locally: true });
         self.outgoing.push_back(ClientMessage::Op(op.clone()));
@@ -565,7 +566,11 @@ mod tests {
         structural.class = ConflictClass::Structural;
         structural.target = Target::Page(PageRef { index: 0, epoch: 0 });
         let queued = client.enqueue(structural)?;
-        assert_eq!(queued.target, Target::Page(PageRef { index: 0, epoch: 0 }), "a page edit is not re-addressed onto a new page order");
+        assert_eq!(
+            queued.target,
+            Target::Page(PageRef { index: 0, epoch: 3 }),
+            "a structural undo is built on the epoch before its original; the target follows the head"
+        );
         Ok(())
     }
 

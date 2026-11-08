@@ -502,6 +502,11 @@ Undo of deletions (RFC §6.1, ADR-0010):
   `annotation.set_contents`, `field.set_value` and `page.rotate`; the adapter
   answers `conflict` when the value changed since, never overwriting someone
   else's edit. Structural inverses are CAS through `baseVersion == head`.
+- A rotation's inverse is the *opposite turn*: `RotatePages` adds `degrees` to
+  the page's angle, so the old inverse (which sent the previous angle as if it
+  were absolute) was a no-op from 0 and a doubled turn otherwise. It now sends
+  `(360 - degrees) % 360` and `expect`s the angle the operation left. The e2e
+  test undoes a turn and checks both replicas are upright.
 - The client re-addresses a merge intent's target to the current epoch when it
   is re-queued after a resync (`with_epoch`); before this a retried comment was
   stale for ever.

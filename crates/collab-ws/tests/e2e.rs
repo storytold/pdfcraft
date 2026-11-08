@@ -452,5 +452,34 @@ fn two_clients_undo_a_deleted_comment_and_a_deleted_page() -> Result<(), Box<dyn
         let document = peer.session.get(peer.id).expect("open");
         assert_eq!(document.info.pages.len(), 2, "the page is back on every replica");
     }
+
+    // A rotation undoes through the same path, and its target follows the epoch
+    // the head is on (the inverse is built on the epoch before the turn).
+    let rotate = structural_op(doc.clone(), OpId::new("op-rotate")?, ada.version, ada.epoch, page(0, ada.epoch), rotate_payload(90));
+    // An inverse is built from the document as it was *before* the operation, as
+    // the app does when it queues one.
+    let undo = pdfcraft_collab_client_pdf::inverse_for(ada.session.get(ada.id).ok_or("open")?, &rotate, OpId::new("op-rotate-undo")?)?
+        .ok_or("a rotation can be undone")?;
+    ada.send(rotate)?;
+    let mut turned = None;
+    for peer in [&mut ada, &mut bo] {
+        match peer.settle()? {
+            ServerMessage::Applied(applied) => turned = Some(applied),
+            other => return Err(format!("expected an applied rotate, got {other:?}").into()),
+        }
+    }
+    let turned = turned.ok_or("no applied rotate")?;
+    assert_eq!(turned.epoch, ada.epoch);
+    // The inverse is built on the epoch before the turn; the client re-addresses
+    // it to the head when it queues it (`ClientSession::enqueue`), and this peer
+    // sends raw frames.
+    let undo = Op { base_version: ada.version, epoch: ada.epoch, target: Target::Page(PageRef { index: 0, epoch: ada.epoch }), ..undo };
+    ada.send(undo)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)), "the undo is accepted, not stale");
+    }
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.rotation(), 0, "the page is upright on every replica");
+    }
     Ok(())
 }
