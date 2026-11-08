@@ -94,7 +94,11 @@ impl TextBackground {
         }
         if let Some(ed) = editor {
             let draft_key = (ed.text.clone(), ed.style());
-            if self.draft_key.as_ref() != Some(&draft_key) {
+            // A draft that keeps words has its measure from the engine's word plan already.
+            if ed.current_words().is_some() {
+                self.draft_rect = None;
+                self.draft_key = None;
+            } else if self.draft_key.as_ref() != Some(&draft_key) {
                 self.draft_rect = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok().and_then(|layout| layout.draft_rect);
                 self.draft_key = Some(draft_key);
             }

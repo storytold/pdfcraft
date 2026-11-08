@@ -119,6 +119,20 @@ impl Document {
         })?
     }
 
+    /// What applying the text-only draft `text` to OCR phrase `block` will cover and draw, from the
+    /// same fit Apply runs; `None` when it would redraw the whole phrase. Changes nothing.
+    pub fn ocr_word_preview(&self, page: usize, block: usize, text: &str) -> Option<pdfcraft_edit::text::WordPreview> {
+        guard(|| pdfcraft_edit::text::word_preview(&self.editor.as_ref()?.cos, page, block, text)).ok().flatten()
+    }
+
+    /// The paper and ink colours of invisible paragraph `block` on `page`, as Apply samples them
+    /// to cover the old words and draw the new ones.
+    pub fn scan_colours(&self, page: usize, block: usize) -> Option<([f64; 3], [f64; 3])> {
+        let info = self.info.pages.get(page)?;
+        let paragraph = self.text_blocks(page).into_iter().nth(block)?;
+        guard(|| crate::scan_colours::sample(&self.editor.as_ref()?.cos, info, page, &paragraph)).ok().flatten()
+    }
+
     /// Embedded source faces for a text editor, bounded and validated as sfnt programs.
     /// This is read-only; no source font is installed or exported.
     pub fn text_editor_fonts(&self, page: usize) -> Vec<pdfcraft_edit::text::TextEditorFont> {
