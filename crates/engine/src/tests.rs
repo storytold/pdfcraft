@@ -3799,6 +3799,56 @@ fn export_images_and_text_follow_the_working_file() {
 }
 
 #[test]
+fn image_exports_ignore_reading_colors_and_keep_unsaved_edits() {
+    use export::{Exporter, ImageFormat};
+
+    let (mut session, id) = session_with(2);
+    session.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    let document = session.get(id).unwrap();
+    let working_bytes = document.bytes.clone();
+    let formats = [ImageFormat::Png, ImageFormat::Jpeg { quality: 85 }, ImageFormat::Tiff];
+    let expected: Vec<Vec<Vec<u8>>> = formats
+        .iter()
+        .map(|&format| {
+            let mut exporter = Exporter::new(document);
+            (0..2).map(|page| exporter.image(page, 72.0, format).unwrap()).collect()
+        })
+        .collect();
+    let custom = ReadingColors::parse("custom", Some("#eeeeee"), Some("#102030"), None, None).unwrap();
+    for colors in
+        [ReadingColors::BLACK_ON_WHITE, ReadingColors::WHITE_ON_BLACK, ReadingColors::YELLOW_ON_BLACK, ReadingColors::GREEN_ON_BLACK, custom]
+    {
+        session.set_reading_colors(id, colors);
+        let document = session.get(id).unwrap();
+        let snapshot = document.export_source();
+        assert_eq!(snapshot.config.reading_colors, ReadingColors::default(), "output snapshot has original colours");
+        assert_eq!(snapshot.bytes, document.display, "unsaved document content is preserved");
+        assert!(document.dirty, "export must keep the unsaved rotation");
+        assert_eq!(document.bytes, working_bytes);
+        for (&format, expected) in formats.iter().zip(&expected) {
+            // A direct caller may hand the factory a snapshot with view colours still set.
+            let mut source = snapshot.clone();
+            source.config.reading_colors = colors;
+            let mut exporter = Exporter::from_source(source);
+            let first = exporter.image(0, 72.0, format).unwrap();
+            assert!(first == expected[0], "single-page {} export with {}", format.label(), colors.mode_name());
+            let mut pages = Vec::new();
+            exporter
+                .images_on(2, &[0, 1], 72.0, format, |page, bytes| {
+                    pages.push((page, bytes));
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(pages.len(), expected.len(), "every page was exported");
+            for ((page, actual), expected) in pages.into_iter().zip(expected) {
+                assert!(actual == *expected, "worker {} export, page {page}, with {}", format.label(), colors.mode_name());
+            }
+        }
+        assert_eq!(session.reading_colors(id), Some(colors), "export leaves the reader choice alone");
+    }
+}
+
+#[test]
 fn create_and_reduce() {
     let mut s = Session::new();
     let blank = s.create_blank(612.0, 792.0, 2).unwrap();
