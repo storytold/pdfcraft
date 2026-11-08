@@ -552,7 +552,7 @@ impl PdfCraftApp {
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
             PASTE => {
-                self.menu_paste_asked = Some(ctx.input(|i| i.time));
+                self.menu_paste_asked = Some((ctx.cumulative_pass_nr(), ctx.input(|i| i.time)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
             }
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),

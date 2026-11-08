@@ -4476,6 +4476,27 @@ fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_commen
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
+/// Full screen hides the hotbar and closes its tools window, which doesn't come back with the
+/// hotbar: back from full screen, a Delete on the pass that shows the hotbar again removes the
+/// selected comment with nothing over it. The window came back, drawn after that pass's keys.
+#[test]
+fn full_screen_closes_the_hotbar_tools_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    // Back, as a native menu's click is, between passes.
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(!h.state().full_screen, "back from full screen");
+    assert!(h.query_by_label("Close menu").is_none(), "the Hotbar tools window came back");
+    assert!(comments(&h).is_empty(), "Delete removed the comment");
+}
+
 /// A square drawn and selected, then the update prompt a check at start shows when it finds a
 /// newer release (the check waits until the square is selected).
 fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {

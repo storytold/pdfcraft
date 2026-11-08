@@ -58,6 +58,11 @@ pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     h.run_steps(2);
 }
 
+/// Whether the last frame asked the platform for the clipboard (`RequestPaste`, Edit ▸ Paste's).
+pub fn asked_for_the_clipboard(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::RequestPaste))
+}
+
 /// The menu row labelled `label` in an open menu.
 pub fn menu_row<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> egui_kittest::Node<'h> {
     use egui_kittest::kittest::Queryable;

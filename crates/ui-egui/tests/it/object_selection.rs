@@ -615,3 +615,34 @@ fn a_newer_copy_elsewhere_wins_over_the_copied_objects() {
     h.run_steps(4);
     assert_eq!(can_undo(&h, 0).as_deref(), Some("Paste"));
 }
+
+/// A picture the platform answers a native Edit ▸ Paste with lands on the page with a context menu
+/// open, as a text answer does: here a picture copied since the objects were. It was dropped: only
+/// a text paste was taken for the menu's.
+#[test]
+fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page() {
+    let mut h = harness();
+    h.state_mut().system_clipboard = false;
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    keys(&mut h, Modifiers::COMMAND, Key::C);
+    assert!(h.state().object_clipboard.is_some(), "the objects are copied, so Edit ▸ Paste is on");
+    let p = at(&h, 55.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is open");
+    let before = can_undo(&h, 0);
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
+    h.run_steps(3);
+    assert_ne!(can_undo(&h, 0), before, "the picture was dropped");
+    assert_eq!(can_undo(&h, 0).as_deref(), Some("Add image"), "the picture landed on the page");
+}

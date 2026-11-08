@@ -34,6 +34,16 @@ impl Hotbar {
     pub(crate) fn picker_over_pages(&self, ctx: &egui::Context) -> bool {
         self.picker_open && self.picker_shown.is_some_and(|pass| pass.saturating_add(1) >= ctx.cumulative_pass_nr())
     }
+
+    /// Closes the Hotbar tools window when the last pass didn't draw it (Read mode, full screen or
+    /// Organize hid the hotbar). Left open, it would come back over the pages on the pass that
+    /// shows the hotbar again, after that pass's page keys had been read without it.
+    pub(crate) fn close_hidden_picker(&mut self, ctx: &egui::Context) {
+        if self.picker_open && !self.picker_over_pages(ctx) {
+            self.picker_open = false;
+            self.picker_shown = None;
+        }
+    }
 }
 
 impl Default for Hotbar {

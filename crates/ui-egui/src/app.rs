@@ -35,6 +35,21 @@ impl Default for PdfCraftApp {
 /// delivery budget; a second more covers the pass that carries it.
 const MENU_PASTE_WAIT: f64 = 4.0;
 
+/// The user doing something: a key or a button pressed, a touch begun, text typed, a copy or a
+/// cut, or the window gaining or losing focus (copying in another application).
+fn user_acts(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::Key { pressed: true, .. }
+            | egui::Event::PointerButton { pressed: true, .. }
+            | egui::Event::Touch { phase: egui::TouchPhase::Start, .. }
+            | egui::Event::Text(_)
+            | egui::Event::Copy
+            | egui::Event::Cut
+            | egui::Event::WindowFocused(_)
+    )
+}
+
 impl PdfCraftApp {
     /// The window's title and, on the web, the page's, from the active document (#3640). Done in
     /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
@@ -374,23 +389,29 @@ impl PdfCraftApp {
 
     /// Adds the keys a menu click stands for to this pass's input, and says whether this pass
     /// carries a menu click's input: those keys (Edit ▸ Copy, Cut, Select all, Delete), or the
-    /// first paste to come within `MENU_PASTE_WAIT` of Edit ▸ Paste asking the platform for the
-    /// clipboard. A native menu's click runs in `logic` before this, so its keys come on its own
-    /// pass; an in-window menu's runs as the bar is drawn, so they come on the next one, when the
-    /// bar still reads as open (craft-menu stores the menu as open on the pass its click closes
-    /// it). A native menu's click leaves egui's popups, the Hotbar tools window and the full-screen
-    /// and update prompts open too. That input is the pages' even so; the user's own keys on the
-    /// passes after it are not.
+    /// paste (text or a picture) the platform answers Edit ▸ Paste with, the first to come within
+    /// `MENU_PASTE_WAIT` before the user does anything else. A native menu's click runs in `logic`
+    /// before this, so its keys come on its own pass; an in-window menu's runs as the bar is
+    /// drawn, so they come on the next one, when the bar still reads as open (craft-menu stores
+    /// the menu as open on the pass its click closes it). A native menu's click leaves egui's
+    /// popups, the Hotbar tools window and the full-screen and update prompts open too. That input
+    /// is the pages' even so; the user's own keys on the passes after it are not.
     fn take_menu_input(&mut self, ctx: &egui::Context) -> bool {
+        // egui-winit answers ⌘V exactly as it answers the menu, so a paste after the user's own
+        // key, click or copy is theirs, not the menu's: those end the wait. Read before the
+        // menu's keys join the input, and only after the pass that asked.
+        let (pass, now) = (ctx.cumulative_pass_nr(), ctx.input(|i| i.time));
+        let acted = ctx.input(|i| i.events.iter().any(user_acts));
         let keys = !self.menu_input.is_empty();
         if keys {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
-        let now = ctx.input(|i| i.time);
-        let asked = self.menu_paste_asked.filter(|asked| now - asked <= MENU_PASTE_WAIT);
-        let paste = asked.is_some() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
-        if paste || asked.is_none() {
+        let asked = self.menu_paste_asked.filter(|&(_, at)| now - at <= MENU_PASTE_WAIT);
+        let pasted = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_))));
+        let paste = asked.is_some() && pasted;
+        let moved_on = asked.is_some_and(|(on, _)| pass > on && acted);
+        if paste || moved_on || asked.is_none() {
             self.menu_paste_asked = None;
         }
         keys || paste
@@ -673,6 +694,7 @@ impl eframe::App for PdfCraftApp {
         // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
         // bar, so the chord runs in the same press, the pages' as well as the registry's.
         craft_menu::bar::leave_for_shortcut(ctx);
+        self.hotbar.close_hidden_picker(ctx);
         self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx));
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,

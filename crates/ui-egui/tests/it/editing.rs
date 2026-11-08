@@ -11006,11 +11006,39 @@ fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page
     assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
     let ctx = h.ctx.clone();
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.run_steps(4);
+    h.step();
+    assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.run_steps(3);
     assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(3);
     assert_eq!(pages(&h), 4, "the late paste pasted the page");
+}
+
+/// A paste that comes after the user does something else is theirs, not Edit ▸ Paste's: egui-winit
+/// answers ⌘V as it answers the menu. With Edit ▸ Paste's paste not come yet, a right-click
+/// opening a page's context menu ends the wait, and the paste then (⌘V's) stays behind the menu.
+/// It was taken for the menu's and pasted the page.
+#[test]
+fn a_paste_after_the_user_opens_a_context_menu_is_not_edit_pastes() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(2);
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    // Well within the 4 seconds Edit ▸ Paste waits for its paste.
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 3, "the paste behind the context menu pasted the page");
 }
 
 /// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The platform
@@ -11030,6 +11058,7 @@ fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
     support::open_menu(&mut h, "Edit");
     support::menu_row(&h, "Paste").click();
     h.run_steps(1);
+    assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     assert!(craft_menu::bar::is_open(&h.ctx), "the bar still reads as open as the paste comes");
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(4);
