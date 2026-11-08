@@ -26,6 +26,8 @@ use draw::{GLYPHS_PER_FONT, LaidLine, draw_laid_shaped};
 use layout::Piece;
 #[cfg(test)]
 pub(crate) use layout::WRAP_CALLS;
+#[cfg(test)]
+pub(crate) use layout::shaped_width;
 pub use layout::{PASTE_STEP, first_undrawable, lines, paste_place, paste_rect, text_rect, text_width};
 #[cfg(test)]
 use pdfcraft_fonts::ShapedCluster;

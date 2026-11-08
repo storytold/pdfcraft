@@ -278,6 +278,18 @@ mod tests {
     }
 
     #[test]
+    fn thai_text_wraps_between_dictionary_words_and_keeps_marks_on_their_word() {
+        // Without word breaks the whole run is one word and overflows a single row.
+        assert_eq!(wrapped("ภาษาไทยไม่มีช่องว่าง", 8.0), ["ภาษาไทย", "ไม่มี", "ช่องว่าง"]);
+        // Mai Yamok stays with the word it repeats; pieces join without a space, words keep theirs.
+        assert_eq!(wrapped("เด็กๆชอบกิน ขนม", 6.0), ["เด็กๆ", "ชอบกิน", "ขนม"]);
+        assert_eq!(wrapped("ไฟล์ PDF ประปาส่วนภูมิภาค", 9.0), ["ไฟล์ PDF", "ประปาส่วน", "ภูมิภาค"]);
+        // A wrap between Thai words consumed no separator, so a rejoin puts back no space.
+        let rows = wrap("ภาษาไทยไม่มีช่องว่าง", 8.0, |s| s.chars().count() as f64);
+        assert_eq!(rows.iter().map(|(_, soft, gap)| (*soft, *gap)).collect::<Vec<_>>(), [(false, 0), (true, 0), (true, 0)]);
+    }
+
+    #[test]
     fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
         static JPAN: &[&str] = &["Jpan"];
         let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
