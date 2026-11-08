@@ -979,8 +979,14 @@ impl Metrics {
     }
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or
-    /// no glyph in it (the caller then substitutes another font).
+    /// no glyph in it, or the metrics were read past their allowance (the caller then substitutes
+    /// another font). Empty text needs no verified glyph and always encodes.
     pub fn encode(&self, text: &str) -> Option<Vec<u8>> {
+        // A refused read cannot establish the mappings or glyphs needed to write new text.
+        // Empty text needs neither and remains usable for erasing existing text.
+        if self.past_allowance && !text.is_empty() {
+            return None;
+        }
         // The lowest code showing each wanted character. Explicit entries and the encoding are
         // checked one by one; each range is asked for the wanted characters it can show.
         let wanted: HashSet<char> = text.chars().collect();

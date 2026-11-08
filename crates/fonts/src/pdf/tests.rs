@@ -1173,3 +1173,26 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
+
+#[test]
+fn refused_subset_reads_do_not_encode_unverified_glyphs() {
+    let mut doc = Document::new_empty();
+    let (mut f, sizes) = subset_type0(&mut doc, b"");
+    f.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+    f.set(b"ToUnicode".to_vec(), Object::name("Identity-H"));
+    if let Some(Object::Array(descendants)) = f.get_mut(b"DescendantFonts")
+        && let Some(Object::Dict(descendant)) = descendants.first_mut()
+    {
+        descendant.set(b"DW".to_vec(), Object::Int(1000));
+    }
+    let whole = Metrics::from_dict(&doc, &f);
+    assert!(!whole.past_allowance && !whole.outlined_cids.is_empty());
+    assert!(whole.encode("\u{ffff}").is_none());
+    // Refuse the program, then the CID map after reading the complete program.
+    for allowance in [0, sizes[1]] {
+        let partial = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(allowance, 0));
+        assert!(partial.past_allowance);
+        assert_eq!(partial.encode(""), Some(Vec::new()));
+        assert!(partial.encode("\u{ffff}").is_none(), "allowance {allowance} must not turn /DW into proof of a glyph");
+    }
+}
