@@ -349,6 +349,11 @@ pub(super) fn held_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> 
         Object::Name(n) => node.saturating_add(n.len()),
         Object::Stream(s) => dict(&s.dict, node.saturating_add(if s.raw.shares(data) { 0 } else { s.raw.len() })),
         Object::Array(a) => a.iter().fold(node, |n, v| n.saturating_add(held_bytes(v, data, depth + 1))),
+        // A dictionary other objects use too is not this one's to free. The large ones that recur
+        // in many objects (`SharedDicts`) are bounded by that table's own cap; counted for each of
+        // its copies, one would fill the cache's allowance alone, and be walked once per copy as
+        // each goes in. One the table only offers, used by this object alone, counts in full.
+        Object::Dict(d) if d.is_reused() => node,
         Object::Dict(d) => dict(d, node),
         _ => node,
     }

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
 use crate::object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream};
-use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
+use crate::parser::{EndstreamIndex, Lexer, SharedDicts, is_whitespace, parse_indirect, parse_indirect_shared, parse_indirect_sharing};
 
 mod objects;
 mod open;
@@ -59,6 +59,8 @@ pub struct Document {
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,
+    /// Large nested dictionaries parsed once for all their copies (see [`SharedDicts`]).
+    shared_dicts: Arc<SharedDicts>,
     stream_limit: usize,
     overlay: BTreeMap<u32, Slot>,
     next_num: u32,

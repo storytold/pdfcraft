@@ -7,6 +7,7 @@ use super::state::{
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
     Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
+    parse_indirect_sharing,
 };
 
 /// The most decoded `/JBIG2Globals` a document keeps for its images to share (see
@@ -692,7 +693,7 @@ impl Document {
                     length
                 };
                 let off = offset as usize;
-                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
+                let at = |off: usize| match parse_indirect_sharing(&self.data, off, &resolve, &self.endstreams, &self.shared_dicts) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
                     _ => None,
                 };
@@ -711,7 +712,7 @@ impl Document {
                 // The member at the entry's position, else wherever the stream lists `num`.
                 let at = usize::try_from(index).ok().and_then(|i| stm.index.get(i)).copied().flatten().filter(|(n, _)| *n == num);
                 let (_, off) = at.or_else(|| stm.index.iter().flatten().find(|(n, _)| *n == num).copied()).ok_or(CosError::MissingObject(num))?;
-                Lexer::new(&stm.data, off).object()
+                Lexer::new(&stm.data, off).sharing(&self.shared_dicts).object()
             }
         }
     }
@@ -781,7 +782,9 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
+            // Through the shared dictionaries as `load` reads: a recovered file whose objects repeat
+            // one large resource list parses it once here too.
+            if let Ok((id, o)) = parse_indirect_sharing(data, p, &|_| None, &self.endstreams, &self.shared_dicts)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition
