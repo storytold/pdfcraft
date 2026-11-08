@@ -286,6 +286,23 @@ mod tests {
         assert_eq!(p.display_size(&d), (300.0, 400.0));
     }
 
+    /// The box can come from further up: a grandparent `/Pages` node's `/MediaBox`, through a
+    /// `/Pages` node without one, with its origin away from 0 0 kept in the crop and view matrix.
+    #[test]
+    fn a_page_inherits_a_grandparents_media_box_with_its_origin() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [100 200 400 600] >>".to_string(),
+            "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 3 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [100.0, 200.0, 400.0, 600.0]);
+        assert_eq!(p.display_size(&d), (300.0, 400.0));
+        assert_eq!(p.view_matrix(&d), view_matrix_for(0, [100.0, 200.0, 400.0, 600.0]));
+        assert_ne!(p.view_matrix(&d), view_matrix_for(0, [0.0, 0.0, 300.0, 400.0]), "the origin is kept");
+    }
+
     /// A `/MediaBox` without area (`[0 0 0 0]`) is US Letter too, as the renderer draws it.
     #[test]
     fn a_page_whose_media_box_has_no_area_is_letter() {
