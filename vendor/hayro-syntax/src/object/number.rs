@@ -73,22 +73,36 @@ impl Skippable for Number {
         // covers the token `read_inner` reads or refuses. Two signs used to be the limit,
         // and a skip that stops short of the read puts the reader back where it started
         // (#3630 review, #6601 review).
+        let run_start = r.offset();
         let mut has_sign = false;
         while r.forward_if(|b| b == b'+' || b == b'-').is_some() {
             has_sign = true;
         }
+        // PdfCraft patch (38): whether the sign run is one the model parser refuses
+        // (patch (37)'s rule in `read_inner`), and whether the body turns out dotted;
+        // together they decide the trailing-character check below.
+        let refused = r.range(run_start..r.offset()).is_some_and(|run| {
+            let mut body = run;
+            while body.first() == Some(&b'+') {
+                body = &body[1..];
+            }
+            !(body.len() <= 2 && body.iter().all(|b| *b == b'-'))
+        });
+        let mut dotted = false;
 
 
         // Some PDFs have weird trailing minuses, so try to accept those as well.
         match r.peek_byte()? {
             b'.' => {
                 r.read_byte()?;
+                dotted = true;
                 // See PDFJS-9252 - treat a single . as 0.
                 r.forward_while(is_digit_or_minus);
             }
             b'0'..=b'9' | b'-' => {
                 r.forward_while_1(is_digit_or_minus)?;
                 if let Some(()) = r.forward_tag(b".") {
+                    dotted = true;
                     r.forward_while(is_digit_or_minus);
                 }
             }
@@ -101,7 +115,14 @@ impl Skippable for Number {
 
         // See issue 994. Don't accept numbers that are followed by a regular character.
         if r.peek_byte().is_some_and(is_regular_character) {
-            return None;
+            // PdfCraft patch (38): a refused sign run over a dotted body reads as
+            // zero however the token ends (patch (38) in `read_inner`), so skipping
+            // covers it whole too; every other number keeps the refusal above.
+            if refused && dotted {
+                r.forward_while(is_regular_character);
+            } else {
+                return None;
+            }
         }
 
         Some(())
@@ -142,8 +163,18 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     let sign_ok = sign_body.len() <= 2 && sign_body.iter().all(|b| *b == b'-');
     let negative = sign_ok && !sign_body.is_empty();
     if !sign_ok {
+        // PdfCraft patch (38): over a dotted body a refused run is still a number to
+        // the model parser: its real branch collapses the first `--` and takes the
+        // longest real prefix, which is empty here, so `---1.5abc` and `---280.0`
+        // read as 0.0 there and the container survives (#6601 review). Read zero
+        // here too, consuming the whole token as `Number::skip` does.
+        let body_start = r.offset();
         r.forward_while(|b| b.is_ascii_digit() || b == b'-' || b == b'.');
+        let dotted = r.range(body_start..r.offset()).is_some_and(|t| t.contains(&b'.'));
         r.forward_while(is_regular_character);
+        if dotted {
+            return Some(Number(InternalNumber::Integer(0)));
+        }
         return None;
     }
 
@@ -487,7 +518,7 @@ mod tests {
     /// (#3565). The COS lexer reads these the same way since #3299.
     #[test]
     fn a_doubled_sign_is_one_number() {
-        for (src, want) in [("--280", -280), ("+-280", -280), ("-+280", -280), ("++280", 280), ("-280", -280), ("+280", 280)] {
+        for (src, want) in [("--280", -280), ("+-280", -280), ("++280", 280), ("-280", -280), ("+280", 280)] {
             let mut r = Reader::new(src.as_bytes());
             assert_eq!(r.read_without_context::<i32>().unwrap(), want, "{src}");
             assert!(r.at_end(), "{src}: the whole number was read, leaving nothing for a second one");
@@ -530,6 +561,17 @@ mod tests {
             let mut r = Reader::new(src.as_bytes());
             assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
             assert!(r.at_end(), "{src}: only part of the number was skipped");
+        }
+        // A refused run over a dotted body is the model parser's real branch: zero,
+        // the whole token consumed, trailing garbage included (patch (38)). `-+5.5`
+        // is the same case the object parser's real-prefix fallback reads as 0.0.
+        for src in ["---280.0", "---1.5abc", "-+5.5"] {
+            let mut r = Reader::new(src.as_bytes());
+            assert_eq!(r.read_without_context::<f64>().unwrap(), 0.0, "{src}");
+            assert!(r.at_end(), "{src}: the whole token was read");
+            let mut r = Reader::new(src.as_bytes());
+            assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
+            assert!(r.at_end(), "{src}: only part of the token was skipped");
         }
         // The token from the #6601 review: three signs, 400 nines and a trailing minus.
         // Skip accepts it as one token; read refuses it whole (the model parser refuses

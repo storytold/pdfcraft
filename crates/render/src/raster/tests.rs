@@ -591,6 +591,20 @@ fn number_with_a_sign_run_reads_as_one_array_element() {
     assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{:?}", items[1]);
 }
 #[test]
+fn dotted_token_with_a_refused_sign_run_reads_as_zero() {
+    // #6601 review, patch (38): a refused sign run over a dotted body is a zero, not
+    // an absent slot -- the model parser's real branch reads `---1.5abc` as 0.0 and
+    // keeps the array, trailing garbage included, and `---280.0` is the same zero.
+    use hayro_syntax::object::{Array, FromBytes, MaybeRef, Object};
+    for src in ["[---1.5abc 7]", "[---280.0 7]"] {
+        let a = Array::from_bytes(src.as_bytes()).unwrap();
+        let items: Vec<_> = a.raw_iter().collect();
+        assert_eq!(items.len(), 2, "{src}: {items:?}");
+        assert!(matches!(items[0], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 0.0), "{src}: {:?}", items[0]);
+        assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{src}: {:?}", items[1]);
+    }
+}
+#[test]
 fn function_limits_public_construction_work_and_depth() {
     use hayro::hayro_interpret::Function;
     use hayro_syntax::object::{FromBytes, Object};
