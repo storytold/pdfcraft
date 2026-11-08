@@ -38,9 +38,42 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
     apply_appearance(doc, r, &d, stream)
 }
 
-/// The visible region (`Page::crop`) of the first page that lists `r` among its annotations.
+/// The visible region (`Page::crop`) of the page that lists `r` among its annotations: the page
+/// its `/P` names when that page lists it, read up its own `/Parent` chain, else the first page
+/// of the tree that lists it. An annotation is listed by one page only (ISO 32000-2 §12.5.2), so
+/// both find the same page, and the first reads one page instead of walking the whole tree for
+/// every comment redrawn.
 fn page_box_listing(doc: &Document, r: ObjRef) -> Option<[f64; 4]> {
+    let named = annot_dict(doc, r).reference(b"P").filter(|p| annots(doc, *p).iter().any(|a| a.as_ref() == Some(r)));
+    if let Some(page) = named {
+        return Some(page_with_inherited_boxes(doc, page).crop(doc));
+    }
     pdfcraft_model::pages(doc).into_iter().find(|p| annots(doc, p.obj).iter().any(|a| a.as_ref() == Some(r))).map(|p| p.crop(doc))
+}
+
+/// The page `page` with the `/MediaBox` and `/CropBox` it inherits from its ancestors filled in
+/// (ISO 32000-2 §7.7.3.4), enough for [`pdfcraft_model::Page::crop`]. Follows at most 64
+/// `/Parent` links and stops at a loop.
+fn page_with_inherited_boxes(doc: &Document, page: ObjRef) -> pdfcraft_model::Page {
+    let mut dict = doc.get(page).as_dict().cloned().unwrap_or_default();
+    let mut seen = std::collections::HashSet::from([page]);
+    let mut up = dict.reference(b"Parent");
+    while let Some(node) = up {
+        if seen.len() > 64 || !seen.insert(node) {
+            break;
+        }
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { break };
+        for key in [&b"MediaBox"[..], b"CropBox"] {
+            if !dict.contains(key)
+                && let Some(v) = d.get(key)
+            {
+                dict.set(key.to_vec(), v.clone());
+            }
+        }
+        up = d.reference(b"Parent");
+    }
+    pdfcraft_model::Page { obj: page, dict }
 }
 
 /// Draw the appearance for an annotation dictionary on a page whose visible region is `page`
@@ -111,7 +144,9 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
 /// refreshes) and keep it for content-only ones.
 #[derive(Clone, Debug, Default)]
 pub struct AppearanceCache {
-    entries: std::collections::HashMap<ObjRef, Stream>,
+    /// Each appearance with the page region it was drawn for (see [`appearance::build_on_page`]):
+    /// a changed crop box draws it again.
+    entries: std::collections::HashMap<ObjRef, (Option<[f64; 4]>, Stream)>,
     bytes: usize,
     hits: u64,
     builds: u64,
@@ -126,20 +161,20 @@ impl AppearanceCache {
         *self = Self::default();
     }
 
-    fn get(&mut self, r: ObjRef) -> Option<Stream> {
-        let stream = self.entries.get(&r)?.clone();
+    fn get(&mut self, r: ObjRef, crop: Option<[f64; 4]>) -> Option<Stream> {
+        let stream = self.entries.get(&r).filter(|(drawn_for, _)| *drawn_for == crop)?.1.clone();
         self.hits += 1;
         Some(stream)
     }
 
-    fn insert(&mut self, r: ObjRef, stream: &Stream) {
+    fn insert(&mut self, r: ObjRef, crop: Option<[f64; 4]>, stream: &Stream) {
         self.builds += 1;
         if self.entries.len() >= 1_000_000 {
             self.clear();
         }
         if self.bytes.saturating_add(stream.raw.len()) <= Self::MAX_BYTES {
             self.bytes += stream.raw.len();
-            self.entries.insert(r, stream.clone());
+            self.entries.insert(r, (crop, stream.clone()));
         }
         // Else over budget: keep serving the entries already cached instead of growing.
     }
@@ -188,7 +223,10 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
             if has_normal {
                 continue;
             }
-            if let Some(stream) = cache.get(r) {
+            let crop = appearance::is_drawn_from_points(&d)
+                .then(|| crops.get_or_insert_with(|| pdfcraft_model::pages(doc).iter().map(|p| (p.obj, p.crop(doc))).collect()).get(&page).copied())
+                .flatten();
+            if let Some(stream) = cache.get(r, crop) {
                 // Fails only when `r` isn't a dictionary, which the cached build ruled out.
                 apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
                 continue;
@@ -200,11 +238,8 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let crop = appearance::is_drawn_from_points(&d)
-                .then(|| crops.get_or_insert_with(|| pdfcraft_model::pages(doc).iter().map(|p| (p.obj, p.crop(doc))).collect()).get(&page).copied())
-                .flatten();
             let Some(stream) = build_appearance(doc, &d, crop).or_else(other_stamp) else { continue };
-            cache.insert(r, &stream);
+            cache.insert(r, crop, &stream);
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
             apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
         }

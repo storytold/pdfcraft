@@ -120,6 +120,29 @@ pub fn smooth_segments(pts: &[(f64, f64)]) -> Vec<[(f64, f64); 3]> {
         .collect()
 }
 
+/// The points where the cubic Bézier segment from `p0` (control points `c1`, `c2`) to `p3` turns
+/// back in x or in y, strictly between its ends: with its ends, they bound the segment.
+fn cubic_extremes(p0: (f64, f64), c1: (f64, f64), c2: (f64, f64), p3: (f64, f64)) -> Vec<(f64, f64)> {
+    let at = |t: f64| {
+        let u = 1.0 - t;
+        let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+        (w[0] * p0.0 + w[1] * c1.0 + w[2] * c2.0 + w[3] * p3.0, w[0] * p0.1 + w[1] * c1.1 + w[2] * c2.1 + w[3] * p3.1)
+    };
+    let mut out = Vec::new();
+    for (q0, q1, q2, q3) in [(p0.0, c1.0, c2.0, p3.0), (p0.1, c1.1, c2.1, p3.1)] {
+        // The derivative over 3: a t² + 2 b t + c.
+        let (a, b, c) = (-q0 + 3.0 * q1 - 3.0 * q2 + q3, q0 - 2.0 * q1 + q2, q1 - q0);
+        let roots = if a.abs() < 1e-12 {
+            if b.abs() < 1e-12 { vec![] } else { vec![-c / (2.0 * b)] }
+        } else {
+            let disc = b * b - a * c;
+            if disc < 0.0 { vec![] } else { vec![(-b + disc.sqrt()) / a, (-b - disc.sqrt()) / a] }
+        };
+        out.extend(roots.into_iter().filter(|t| *t > 0.0 && *t < 1.0).map(at));
+    }
+    out
+}
+
 /// `c` operators for [`smooth_segments`] (the path already starts at the first point).
 fn smooth_curve(pts: &[(f64, f64)]) -> String {
     smooth_segments(pts).iter().map(|[a, b, e]| format!("{} {} {} {} {} {} c\n", n(a.0), n(a.1), n(b.0), n(b.1), n(e.0), n(e.1))).collect()
@@ -566,13 +589,17 @@ fn drawn_points(d: &Dict) -> Option<(Vec<f64>, f64)> {
     let w = border_width(d);
     let has_ending = || d.get(b"LE").and_then(Object::as_array).is_some_and(|e| e.iter().any(|e| e.as_name().is_some_and(|e| e != b"None")));
     let (points, margin) = match d.name(b"Subtype")? {
-        b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly" => {
+        subtype @ (b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly") => {
             // Counted before the numbers are read.
             let count = d.get(b"QuadPoints")?.as_array()?.len();
             if count == 0 || count % 8 != 0 || count / 8 > MAX_MARKUP_QUADS {
                 return None;
             }
-            (nums(d, b"QuadPoints")?, 0.0)
+            let quads = nums(d, b"QuadPoints")?;
+            // How far each quad's stroke reaches past it: half the line's width, and a squiggle's
+            // peaks above a quad lower than they are (`draw_markup`).
+            let margin = quads.as_chunks::<8>().0.iter().map(|q| markup_overreach(subtype, (q[0] - q[4]).hypot(q[1] - q[5]))).fold(0.0, f64::max);
+            (quads, margin)
         }
         b"Ink" => {
             let strokes = d.get(b"InkList")?.as_array()?;
@@ -580,11 +607,21 @@ fn drawn_points(d: &Dict) -> Option<(Vec<f64>, f64)> {
             if count / 2 > MAX_REACH_POINTS {
                 return None;
             }
-            let mut points = Vec::with_capacity(count);
+            let mut points = Vec::with_capacity(count.saturating_mul(3));
             for s in strokes {
                 let stroke: Vec<f64> = s.as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
                 // A stroke's odd last number is no point (`draw_ink` skips it too).
-                points.extend(stroke.as_chunks::<2>().0.iter().flatten());
+                let pts: Vec<(f64, f64)> = stroke.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
+                points.extend(pts.iter().flat_map(|p| [p.0, p.1]));
+                // The smooth curve through three or more points (`smooth_segments`) can bulge
+                // past them: its turning points count too.
+                if pts.len() > 2 {
+                    let mut start = pts.first().copied().unwrap_or_default();
+                    for [c1, c2, end] in smooth_segments(&pts) {
+                        points.extend(cubic_extremes(start, c1, c2, end).iter().flat_map(|p| [p.0, p.1]));
+                        start = end;
+                    }
+                }
             }
             (points, w / 2.0)
         }
@@ -610,8 +647,16 @@ fn drawn_points(d: &Dict) -> Option<(Vec<f64>, f64)> {
             // Leader lines move the line off `/L` (§12.5.6.7, Table 178).
             let layout = line_layout(d, [(x0, y0), (x1, y1)], w);
             let mut points = vec![x0, y0, x1, y1];
-            for (x, y) in layout.line.iter().chain(layout.leaders.iter().flatten()) {
+            for (x, y) in layout.line.iter().chain(layout.leaders.iter().flatten()).chain(layout.tick.iter().flatten()) {
                 points.extend([*x, *y]);
+            }
+            // The caption's box: its width along the text matrix, from the descender to the
+            // cap height and a little over (Helvetica, as `draw_line` sets it).
+            if let Some((text, m)) = &layout.caption {
+                let width = text_width(text, CAPTION_SIZE);
+                for (x, y) in [(0.0, -0.25), (width, -0.25), (0.0, 1.0), (width, 1.0)].map(|(x, y)| (x, y * CAPTION_SIZE)) {
+                    points.extend([m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
+                }
             }
             (points, w / 2.0 + if has_ending() { arrow_size(w) } else { 0.0 })
         }
@@ -641,14 +686,18 @@ fn point_reach(d: &Dict, rect: [f64; 4], page: [f64; 4]) -> Option<[f64; 4]> {
     }
     let clip = |b: [f64; 4]| [b[0].max(page[0]), b[1].max(page[1]), b[2].min(page[2]), b[3].min(page[3])];
     let shown = clip(reach);
-    // Points wholly off the page widen nothing, and neither do points `/Rect` already holds.
-    if shown[0] > shown[2] || shown[1] > shown[3] {
+    // Strokes wholly off the page widen nothing. Points `/Rect` already holds don't either, and
+    // points off the page whose strokes reach onto it only as far as `/Rect` holds.
+    let stroked = clip([reach[0] - margin, reach[1] - margin, reach[2] + margin, reach[3] + margin]);
+    if stroked[0] > stroked[2] || stroked[1] > stroked[3] {
         return None;
     }
-    if rect[0] <= shown[0] && rect[1] <= shown[1] && shown[2] <= rect[2] && shown[3] <= rect[3] {
+    let inside = |b: [f64; 4]| rect[0] <= b[0] && rect[1] <= b[1] && b[2] <= rect[2] && b[3] <= rect[3];
+    let on_page = shown[0] <= shown[2] && shown[1] <= shown[3];
+    if inside(if on_page { shown } else { stroked }) {
         return None;
     }
-    let reach = clip([reach[0] - margin, reach[1] - margin, reach[2] + margin, reach[3] + margin]);
+    let reach = stroked;
     let out = [rect[0].min(reach[0]), rect[1].min(reach[1]), rect[2].max(reach[2]), rect[3].max(reach[3])];
     // A `/Rect` of its own can still be too wide for a width or height (`-1e308` to `1e308`).
     let usable = (out[2] - out[0]).is_finite() && (out[3] - out[1]).is_finite();
@@ -701,6 +750,30 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
     Some(form(context.rect, &out, drawing.resources))
 }
 
+/// The line width of an underline or strike-out over a quad `h` high.
+fn markup_line_width(h: f64) -> f64 {
+    (h * 0.07).clamp(0.5, 3.0)
+}
+
+/// A squiggle's line width and amplitude over a quad `h` high: its peaks stand twice the
+/// amplitude above the quad's bottom edge.
+fn squiggle(h: f64) -> (f64, f64) {
+    ((h * 0.05).clamp(0.5, 2.0), (h * 0.06).max(0.75))
+}
+
+/// How far a text markup of `subtype` drawn over a quad `h` high reaches past the quad: half its
+/// line's width, and for a squiggle, how far its peaks stand above a quad lower than they are.
+fn markup_overreach(subtype: &[u8], h: f64) -> f64 {
+    match subtype {
+        b"Underline" | b"StrikeOut" => markup_line_width(h) / 2.0,
+        b"Squiggly" => {
+            let (lw, amp) = squiggle(h);
+            lw / 2.0 + (amp * 2.0 - h).max(0.0)
+        }
+        _ => 0.0,
+    }
+}
+
 fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
     let d = context.dict;
     let subtype = context.subtype;
@@ -720,15 +793,14 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
                 c.push_str(&format!("{} {} m {} {} l {} {} l {} {} l h f\n", n(p1.0), n(p1.1), n(p2.0), n(p2.1), n(p4.0), n(p4.1), n(p3.0), n(p3.1)));
             }
             b"Underline" | b"StrikeOut" => {
-                let lw = (h * 0.07).clamp(0.5, 3.0);
+                let lw = markup_line_width(h);
                 let t = if subtype == b"Underline" { 0.08 } else { 0.42 };
                 let (a, b) = (at(p3, p1, t), at(p4, p2, t));
                 c.push_str(&format!("{}{} w\n{} {} m {} {} l S\n", rg_stroke(col), n(lw), n(a.0), n(a.1), n(b.0), n(b.1)));
             }
             _ => {
                 // Squiggly: a zigzag along the bottom of the quad.
-                let lw = (h * 0.05).clamp(0.5, 2.0);
-                let amp = (h * 0.06).max(0.75);
+                let (lw, amp) = squiggle(h);
                 let len = (p4.0 - p3.0).hypot(p4.1 - p3.1);
                 let step = (h / 4.0).max(1.5);
                 let steps = ((len / step).ceil() as usize).clamp(1, 10_000);

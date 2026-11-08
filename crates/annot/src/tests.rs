@@ -2811,12 +2811,13 @@ fn text_markup_whose_quads_reach_past_its_rect_is_drawn_over_them() {
     assert_eq!(rect(&shown[0]), [324.6, 277.0, 471.0, 471.78], "the highlight's /Rect takes in its text");
     assert_eq!(bbox(&shown[0]), rect(&shown[0]));
     assert!(ap_content(&display, &shown[0]).contains("370 287 m 471 287 l 471 277 l 370 277 l h f"), "the quad is filled");
-    assert_eq!(rect(&shown[1]), [10.0, 10.0, 200.0, 120.0], "an underline's too");
+    // Half the underline's width (0.07 × 20 / 2) past the quad.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 200.7, 120.7], "an underline's too");
     assert_eq!(bbox(&shown[1]), rect(&shown[1]));
     assert_eq!(rect(&shown[2]), [50.0, 50.0, 150.0, 70.0], "a /Rect that holds the quads stays as it is");
-    assert_eq!(rect(&shown[3]), [10.0, 10.0, 200.0, 220.0], "a strikeout's too");
+    assert_eq!(rect(&shown[3]), [10.0, 10.0, 200.7, 220.7], "a strikeout's too");
     assert_eq!(bbox(&shown[3]), rect(&shown[3]));
-    assert_eq!(rect(&shown[4]), [10.0, 10.0, 200.0, 320.0], "a squiggly's too");
+    assert_eq!(rect(&shown[4]), [10.0, 10.0, 200.5, 320.5], "a squiggly's too");
     assert_eq!(bbox(&shown[4]), rect(&shown[4]));
     assert_eq!(rect(&shown[5]), [0.0, 10.0, 612.0, 20.0], "quads far past the page reach only as far as it shows");
     // A /Rect too wide for its width to be a number keeps its size: the on-page quad above it
@@ -2902,7 +2903,7 @@ fn restyled_text_markup_saves_the_rect_its_appearance_covers() {
     assert_eq!(ap_bbox(&saved, &shown[0]), rect(&shown[0]));
     assert!(ap_content(&saved, &shown[0]).contains("370 287 m 471 287 l 471 277 l 370 277 l h f"), "the quad is filled");
     assert_eq!(rect(&shown[1]), [150.0, 70.0, 50.0, 50.0], "a /Rect that holds the quads is kept as written");
-    assert_eq!(rect(&shown[2]), [10.0, 10.0, 612.0, 120.0], "the saved /Rect stops at the page");
+    assert_eq!(rect(&shown[2]), [10.0, 10.0, 612.0, 120.7], "the saved /Rect stops at the page");
     assert_eq!(ap_bbox(&saved, &shown[2]), rect(&shown[2]));
 }
 
@@ -2931,7 +2932,8 @@ fn ink_whose_strokes_reach_past_its_rect_is_drawn_through_them() {
     ]);
     let shown = list(&display, 0);
     let rect = |d: &Dict| nums_of(d, b"Rect");
-    assert_eq!(rect(&shown[0]), [21.25, 260.01, 331.5, 538.5], "the ink's /Rect takes in its strokes");
+    // The smooth curve rises past its highest point (537) to 537.33; half the width (1.5) more.
+    assert_rect_near(&rect(&shown[0]), [21.25, 260.01, 331.5, 538.825], "the ink's /Rect takes in its strokes");
     assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
     assert!(ap_content(&display, &shown[0]).contains("260 502.75 m"), "the stroke is drawn");
     assert_eq!(rect(&shown[1]), [0.0, 0.0, 100.0, 100.0], "a /Rect that holds the points stays as it is");
@@ -3014,8 +3016,100 @@ fn path_reach_stops_at_the_point_cap_and_is_saved_on_restyle() {
     set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
     let saved = reopen(&doc);
     let shown = list(&saved, 0);
-    assert_eq!(rect(&shown[0]), [21.25, 260.01, 331.5, 538.5], "the saved /Rect takes in the strokes");
+    assert_rect_near(&rect(&shown[0]), [21.25, 260.01, 331.5, 538.825], "the saved /Rect takes in the strokes");
     assert_eq!(ap_bbox(&saved, &shown[0]), rect(&shown[0]));
+}
+
+/// A squiggle's peaks stand 1.5 above a quad's bottom edge however low the quad is, so over a quad
+/// 1 high they reach past it: the widened box takes them in, with half the line's width.
+#[test]
+fn squiggly_peaks_over_a_low_quad_are_inside_the_widened_box() {
+    let (_, display) =
+        displayed(&[b"<< /Type /Annot /Subtype /Squiggly /Rect [10 10 20 20] /C [0 1 0] /QuadPoints [100 301 200 301 100 300 200 300] >>"]);
+    let shown = list(&display, 0);
+    // Peak 300 + 1.5, half the 0.5 line width: 301.75; the sides reach 0.75 past the quad.
+    assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 200.75, 301.75]);
+    assert_eq!(ap_bbox(&display, &shown[0]), nums_of(&shown[0], b"Rect"));
+}
+
+/// A line's caption (`/Cap`, ISO 32000-2 Table 178) is drawn beside `/L`: the widened box takes
+/// in the caption's text as well as the line.
+#[test]
+fn a_line_caption_is_inside_the_widened_box() {
+    let (_, display) = displayed(&[
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /L [100 100 200 100] /Cap true /CP /Top /Contents (Caption) >>",
+    ]);
+    let shown = list(&display, 0);
+    let rect = nums_of(&shown[0], b"Rect");
+    // The caption sits on top of the line: its 10-point text rises well past the stroke's 101.
+    assert!(rect[3] > 108.0, "{rect:?}");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect);
+}
+
+/// A line just above the crop box whose wide stroke reaches down onto the page is drawn as far as
+/// the page shows, not cut to its `/Rect`.
+#[test]
+fn a_stroke_that_reaches_onto_the_page_from_points_off_it_widens_the_box() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /CropBox [0 0 300 400] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 20 20] /BS << /W 6 >> /C [0 0 1] /L [100 401 200 401] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the line needs an appearance");
+    let shown = list(&display, 0);
+    // The stroke spans 398 to 404 across and 97 to 203 along; the page shows up to 400.
+    assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 203.0, 400.0]);
+}
+
+/// A cached display appearance was drawn for its page's crop box: once the crop box grows, the
+/// next refresh draws the annotation again for the larger region.
+#[test]
+fn a_cached_appearance_is_redrawn_for_a_changed_crop_box() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /CropBox [0 0 300 400] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 380 500 380 100 360 500 360] >>",
+    ]);
+    let mut cache = AppearanceCache::default();
+    let display = with_missing_appearances_cached(&doc, &mut cache).expect("drawn");
+    assert_eq!(nums_of(&list(&display, 0)[0], b"Rect"), [10.0, 10.0, 300.0, 380.0]);
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"CropBox".to_vec(), Object::Array([0, 0, 612, 792].map(Object::Int).to_vec()))).unwrap();
+    let display = with_missing_appearances_cached(&doc, &mut cache).expect("drawn");
+    let shown = list(&display, 0);
+    assert_eq!(nums_of(&shown[0], b"Rect"), [10.0, 10.0, 500.0, 380.0], "drawn for the larger crop box");
+    assert_eq!(ap_bbox(&display, &shown[0]), nums_of(&shown[0], b"Rect"));
+}
+
+/// Redrawing a comment drawn through its points finds its page through `/P` when that page
+/// lists it, reading that one page's `/Annots` rather than every page's: here the last of 300.
+#[test]
+fn restyling_a_comment_drawn_through_its_points_reads_only_its_page() {
+    let pages = 300;
+    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 612 792] >>", kids.join(" ")));
+    for i in 0..pages {
+        let (page, annot) = (3 + 2 * i, 4 + 2 * i);
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{annot} 0 R] >>"));
+        objs.push(format!(
+            "<< /Type /Annot /Subtype /Highlight /P {page} 0 R /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 200 100] >>"
+        ));
+    }
+    let bytes: Vec<&[u8]> = objs.iter().map(|o| o.as_bytes()).collect();
+    let mut doc = document_of(&bytes);
+    let last = pages - 1;
+    ANNOTS_ENTRIES_COPIED.with(|c| c.set(0));
+    set_style(&mut doc, last, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    let copied = ANNOTS_ENTRIES_COPIED.with(std::cell::Cell::get);
+    assert!(copied < 20, "{copied} annotation entries copied for one restyle");
+    assert_eq!(nums_of(&list(&doc, last)[0], b"Rect"), [10.0, 10.0, 200.0, 120.0], "drawn for its page");
+}
+
+/// `got` is `want` to within 0.001 in every coordinate.
+fn assert_rect_near(got: &[f64], want: [f64; 4], what: &str) {
+    assert!(got.len() == 4 && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "{what}: {got:?}");
 }
 
 fn nums_of(d: &Dict, key: &[u8]) -> Vec<f64> {
