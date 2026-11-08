@@ -11359,3 +11359,28 @@ fn a_comment_imported_without_its_appearance_is_said_in_the_repair_log() {
     s.apply(id, Edit::PasteComments { xfdf: xfdf.into(), page: 0, offset: None }).unwrap();
     assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
 }
+
+/// Six comments without their appearances: one line naming five and counting the sixth, a name
+/// holding a line break stays on that line, and a long name is cut short.
+#[test]
+fn many_comments_imported_without_their_appearances_are_summed_up_in_one_line() {
+    let long = "L".repeat(1000);
+    let names = ["a&#10;imported 9 comments", "b", "c", "d", long.as_str(), "f"];
+    let stamps: String = names
+        .iter()
+        .map(|nm| format!(r#"<stamp page="0" name="{nm}" rect="10,10,110,60" icon="Draft"><appearance>@@@</appearance></stamp>"#))
+        .collect();
+    let xfdf = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).unwrap().repair_log().len();
+    s.apply(id, Edit::PasteComments { xfdf, page: 0, offset: None }).unwrap();
+    let log = s.get(id).unwrap().repair_log();
+    let added = log.get(before..).unwrap_or_default();
+    assert_eq!(added.len(), 1, "{added:?}");
+    let line = &added[0];
+    assert!(line.starts_with("imported 6 comments without the appearance"), "{line}");
+    assert!(line.ends_with("; and 1 more"), "{line}");
+    assert!(!line.contains('\n') && line.contains(r"a\nimported 9 comments: "), "{line}");
+    assert!(line.contains(&format!("{}…", "L".repeat(200))) && !line.contains(&"L".repeat(201)), "{line}");
+    assert_eq!(line.matches(": the appearance").count(), 4, "five named, the long one cut before its reason: {line}");
+}

@@ -825,6 +825,14 @@ fn an_exported_appearance_always_fits_what_import_reads() {
         let mut budget = appearance::MAX_IMPORT_APPEARANCE_BYTES;
         appearance::decode(&text, &mut budget).expect("what export writes, import reads");
     }
+    // Just under the limit once the line breaks are counted (one per 80 hexadecimal digits): it
+    // is written, and read back.
+    let mut src = pages(1);
+    content_stamp(&mut src, "near", vec![0u8; appearance::MAX_APPEARANCE_BYTES / 2 * 80 / 81 - 4096]);
+    let d = named(&src, "near");
+    let text = appearance::encode(&src, &d, &mut appearance::MAX_IMPORT_APPEARANCE_BYTES.clone()).expect("under the limit");
+    let mut budget = appearance::MAX_IMPORT_APPEARANCE_BYTES;
+    appearance::decode(&text, &mut budget).expect("what export writes, import reads");
 }
 
 /// A page whose `/Type` is a reference is still the source page: written in place it would carry
@@ -1039,7 +1047,7 @@ fn the_import_budget_is_shared_by_every_comment() {
         .collect();
     let xml = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
     let mut dst = pages(1);
-    let report = xfdf::import_xfdf_with(&mut dst, &xml, None, None, None, size * 5 / 2).unwrap();
+    let report = xfdf::import_xfdf_with(&mut dst, &xml, None, None, None, size * 5 / 2, false).unwrap();
     assert_eq!(report.comments, 3);
     assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
     assert!(report.skipped[0].starts_with("c: "), "{:?}", report.skipped);
@@ -1074,6 +1082,62 @@ fn export_writes_no_more_appearance_than_import_reads() {
     let mut budget = size * 3 / 2;
     assert_eq!(appearance::encode(&src, &d, &mut budget), Some(one));
     assert_eq!(appearance::encode(&src, &d, &mut budget), None, "past what import reads");
+}
+
+/// The export loop shares one budget over all of its comments: of five stamps whose appearances
+/// together are past what import reads, the fifth goes out without one, and import reads every
+/// appearance that was written.
+#[test]
+fn the_export_loop_writes_no_more_appearance_than_import_reads() {
+    let mut src = pages(1);
+    // About 14 MiB of XML each (hexadecimal): four fit in 64 MiB, five do not.
+    let form = content_stamp(&mut src, "s1", vec![0u8; 7 << 20]);
+    for nm in ["s2", "s3", "s4", "s5"] {
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(form));
+        let mut d = annot("Stamp", nm, [100.0, 500.0, 200.0, 550.0]);
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+        put(&mut src, d);
+    }
+    let xml = export_xfdf(&src, true, false, "src.pdf");
+    assert_eq!(xml.matches("<appearance>").count(), 4);
+    let mut dst = pages(1);
+    let report = xfdf::import_xfdf(&mut dst, &xml).unwrap();
+    assert_eq!(report.comments, 5);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+}
+
+/// Printable data is written as it is, so a budget it fits as text takes it (the size check
+/// counted it as hexadecimal, twice as long, and left the appearance out).
+#[test]
+fn printable_appearance_data_that_fits_the_budget_as_text_is_written() {
+    let mut src = pages(1);
+    // Printable as XFDF 3.0 counts it: no spaces.
+    content_stamp(&mut src, "a", "q\nQ\n".repeat(500).into_bytes());
+    let d = named(&src, "a");
+    let mut probe = usize::MAX;
+    let one = appearance::encode(&src, &d, &mut probe).unwrap();
+    let mut budget = usize::MAX - probe;
+    assert!(budget < 3000, "written as text, not hexadecimal: {budget}");
+    assert_eq!(appearance::encode(&src, &d, &mut budget), Some(one), "fits exactly");
+    assert_eq!(budget, 0);
+}
+
+/// A copied redaction mark goes without its appearance (import draws the mark itself and never
+/// reads one), so it leaves the shared budget to the comments whose appearances are read.
+#[test]
+fn a_copied_redaction_mark_spends_no_appearance_budget() {
+    let mut src = pages(1);
+    let form = content_stamp(&mut src, "st", b"0 0 m 1 1 l S".to_vec());
+    let mut ap = Dict::new();
+    ap.set(b"N".to_vec(), Object::Ref(form));
+    let mut rd = annot("Redact", "rd", [300.0, 10.0, 400.0, 30.0]);
+    rd.set(b"AP".to_vec(), Object::Dict(ap));
+    put(&mut src, rd);
+    let copy = export_xfdf_comments(&src, &[(0, 0), (0, 1)], "src.pdf");
+    assert_eq!(copy.matches("<appearance>").count(), 1, "{copy}");
+    let redact = copy.split("<redact").nth(1).unwrap().split("</redact>").next().unwrap();
+    assert!(!redact.contains("<appearance>"), "{copy}");
 }
 
 /// A page an FDF stamp's appearance reaches (its /Type a reference here) is not copied in with
@@ -1115,6 +1179,30 @@ fn rich_text_keeps_an_inherited_default_namespace() {
     let rc = text(&dst, &named(&dst, "w"), b"RC").unwrap();
     assert!(common::parse_form_xml(&rc).is_ok(), "{rc}");
     assert!(!rc.contains(r#"xmlns:a="urn:a""#), "{rc}");
+}
+
+/// A declaration written inside another attribute's value declares nothing, so the prefix the
+/// rich text inherits is still declared on it; and a prefixed root keeps the default (XHTML)
+/// namespace its unprefixed descendants inherit. A `>` in an attribute value is not the end of
+/// the start tag.
+#[test]
+fn rich_text_namespaces_come_from_attributes_and_the_scope() {
+    let xml = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/" xmlns:b="urn:b" xmlns:c="urn:c"><annots>
+<text page="0" rect="10,10,30,30" name="v"><contents>hi</contents><contents-richtext><body xmlns="http://www.w3.org/1999/xhtml" title=" xmlns:b='unused'" b:x="1"><p>hi</p></body></contents-richtext></text>
+<text page="0" rect="70,10,90,30" name="g"><contents>hi</contents><contents-richtext><body xmlns="http://www.w3.org/1999/xhtml" title=">" xmlns:c="urn:c2" c:x="1" b:y="2"><p>hi</p></body></contents-richtext></text>
+<text page="0" rect="40,10,60,30" name="p"><contents>hi</contents><contents-richtext xmlns="http://www.w3.org/1999/xhtml"><h:body xmlns:h="http://www.w3.org/1999/xhtml"><p>hi</p></h:body></contents-richtext></text>
+</annots></xfdf>"#;
+    let mut dst = pages(1);
+    import(&mut dst, xml.as_bytes()).unwrap();
+    let rc = text(&dst, &named(&dst, "v"), b"RC").unwrap();
+    let parsed = common::parse_form_xml(&rc).unwrap_or_else(|e| panic!("{e}: {rc}"));
+    assert!(parsed.root_element().attributes().any(|a| a.namespace() == Some("urn:b")), "{rc}");
+    let rc = text(&dst, &named(&dst, "g"), b"RC").unwrap();
+    assert!(common::parse_form_xml(&rc).is_ok(), "a `>` in a value does not end the start tag: {rc}");
+    let rc = text(&dst, &named(&dst, "p"), b"RC").unwrap();
+    let parsed = common::parse_form_xml(&rc).unwrap();
+    let p = parsed.descendants().find(|n| n.has_tag_name("p")).unwrap();
+    assert_eq!(p.tag_name().namespace(), Some("http://www.w3.org/1999/xhtml"), "{rc}");
 }
 
 /// A redaction mark whose /Rect has no area shows its quads all the same: the /Rect grows to hold

@@ -158,8 +158,15 @@ impl Writer<'_> {
             }
             Object::Dict(d) => self.dict(key, d, depth)?,
             Object::Stream(s) => {
-                // The data plus its hexadecimal form must fit what is left of the budget.
-                if s.raw.len().saturating_mul(2).saturating_add(self.out.len()) > self.limit {
+                // XFDF 3.0 counts a carriage return as printable, but XML reads one, alone or before
+                // a line feed, as a line feed (XML 1.0 §2.11): data holding one is written as
+                // hexadecimal so it comes back byte for byte (the 4 KiB rule "is not a rule").
+                let printable = s.raw.iter().all(|&b| (b > 32 && b < 127) || b == b'\n');
+                let ascii = s.raw.len() < ASCII_DATA_LIMIT && printable && !s.dict.contains(b"Filter");
+                // The data, in the encoding it is written in, must fit what is left of the budget
+                // (as text it is at least its own length; the finished XML is checked again).
+                let size = if ascii { s.raw.len() } else { s.raw.len().saturating_mul(2) };
+                if size.saturating_add(self.out.len()) > self.limit {
                     return None;
                 }
                 self.out.push_str(&format!("<STREAM{k}>\n"));
@@ -167,11 +174,7 @@ impl Writer<'_> {
                 for (dk, dv) in s.dict.iter().filter(|(dk, _)| dk.as_slice() != b"Length") {
                     self.value(Some(dk), dv, depth + 1)?;
                 }
-                // XFDF 3.0 counts a carriage return as printable, but XML reads one, alone or before
-                // a line feed, as a line feed (XML 1.0 §2.11): data holding one is written as
-                // hexadecimal so it comes back byte for byte (the 4 KiB rule "is not a rule").
-                let printable = s.raw.iter().all(|&b| (b > 32 && b < 127) || b == b'\n');
-                if s.raw.len() < ASCII_DATA_LIMIT && printable && !s.dict.contains(b"Filter") {
+                if ascii {
                     // Printable ASCII is valid UTF-8.
                     let text = String::from_utf8_lossy(&s.raw);
                     self.out.push_str(&format!("<DATA MODE=\"FILTERED\" ENCODING=\"ASCII\">{}</DATA>\n", esc_data(&text)));

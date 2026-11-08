@@ -518,9 +518,12 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
             }
             let _ = write!(out, "<{tag}{attrs}>");
             // XFDF 3.0 carries a stamp's appearance, and none for a rect with no area; a copy and
-            // paste (`own`) carries every comment's, so the copy looks the same.
+            // paste (`own`) carries every comment's, so the copy looks the same, except a
+            // redaction mark's, which import never reads (PdfCraft draws the mark) and which would
+            // only use up the budget the others share.
             let has_area = rect.len() == 4 && rect[0] != rect[2] && rect[1] != rect[3];
-            xfdf_annot_children(doc, out, &d, pi, (has_area && (own || sub == b"Stamp")).then_some(&mut appearance_budget));
+            let carried = has_area && sub != b"Redact" && (own || sub == b"Stamp");
+            xfdf_annot_children(doc, out, &d, pi, carried.then_some(&mut appearance_budget));
             let _ = writeln!(out, "</{tag}>");
         }
     }
@@ -985,7 +988,7 @@ fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
     let source = rich.document().input_text();
     let Some(markup) = source.get(first.range().start..last.range().end) else { return };
     let markup = match elements.as_slice() {
-        [only] => standalone(rich, *only, markup),
+        [_] => standalone(rich, markup),
         _ => markup.to_string(),
     };
     // Rich text is an XML document of its own; export left its declaration out.
@@ -995,29 +998,61 @@ fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
     }
 }
 
-/// Whether start tag `tag` declares attribute `name` (white space may come before the `=`).
+/// Whether start tag `tag` (from `<` up to its closing `>`) declares attribute `name` (white
+/// space may come before the `=`). Attribute values are skipped: `title=" xmlns:b='x'"` declares
+/// nothing.
 fn declares(tag: &str, name: &str) -> bool {
-    tag.match_indices(name).any(|(i, _)| {
-        let before = tag.get(..i).and_then(|b| b.chars().next_back());
-        let after = tag.get(i + name.len()..).map(str::trim_start);
-        before.is_some_and(char::is_whitespace) && after.is_some_and(|a| a.starts_with('='))
-    })
+    let mut quote = None;
+    let mut after_space = false;
+    for (i, c) in tag.char_indices() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+        } else if after_space && tag.get(i..).and_then(|rest| rest.strip_prefix(name)).is_some_and(|a| a.trim_start().starts_with('=')) {
+            return true;
+        }
+        after_space = c.is_whitespace();
+    }
+    false
 }
 
-/// The one element `markup` (`element`, cut out of `rich`, a `<contents-richtext>`) as an XML
+/// Where the start tag at the beginning of `markup` ends: its first `>` outside an attribute
+/// value (the end of `markup` when there is none).
+fn start_tag_end(markup: &str) -> usize {
+    let mut quote = None;
+    for (i, c) in markup.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '>' => return i,
+            None => {}
+        }
+    }
+    markup.len()
+}
+
+/// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML
 /// document of its own: the namespaces it inherits from the XFDF around it are declared on it,
 /// the default one (XHTML declared on `<contents-richtext>`, say; not XFDF's own, which a
 /// standalone document has no use for) and the prefixes it uses. Unchanged when nothing is
 /// inherited, or when the declarations would not make it parse.
-fn standalone(rich: roxmltree::Node, element: roxmltree::Node, markup: &str) -> String {
+fn standalone(rich: roxmltree::Node, markup: &str) -> String {
     // The start tag's name ends at white space, `/` or `>`.
     let Some(name_end) = markup.get(1..).and_then(|t| t.find(|c: char| c.is_whitespace() || c == '/' || c == '>')).map(|i| i + 1) else {
         return markup.to_string();
     };
-    let start_tag = markup.get(..markup.find('>').unwrap_or(markup.len())).unwrap_or(markup);
+    let start_tag = markup.get(..start_tag_end(markup)).unwrap_or(markup);
     let mut declared = String::new();
-    if let Some(uri) = element.tag_name().namespace()
-        && !markup.get(1..name_end).is_some_and(|n| n.contains(':'))
+    // The default namespace in scope where the element sits: its own when it has no prefix, and
+    // its unprefixed descendants' when it has one.
+    if let Some(uri) = rich.namespaces().find(|ns| ns.name().is_none()).map(|ns| ns.uri())
+        && !uri.is_empty()
         && uri != XFDF_NS
         && !declares(start_tag, "xmlns")
     {
@@ -1218,16 +1253,18 @@ pub fn import_comments(
         fresh,
         offset.filter(|o| o.iter().all(|v| v.is_finite())),
         super::appearance::MAX_IMPORT_APPEARANCE_BYTES,
+        true,
     )?;
     *doc = work;
     Ok(report)
 }
 
 pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, None, None, None, super::appearance::MAX_IMPORT_APPEARANCE_BYTES)
+    import_xfdf_with(doc, text, None, None, None, super::appearance::MAX_IMPORT_APPEARANCE_BYTES, false)
 }
 
-/// The import, with `appearance_budget` decoded bytes of appearance for all of its comments.
+/// The import, with `appearance_budget` decoded bytes of appearance for all of its comments;
+/// `comments_only` leaves the file's field values out (comments placed as copies).
 pub(crate) fn import_xfdf_with(
     doc: &mut Document,
     text: &str,
@@ -1235,6 +1272,7 @@ pub(crate) fn import_xfdf_with(
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
     mut appearance_budget: usize,
+    comments_only: bool,
 ) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -1326,7 +1364,7 @@ pub(crate) fn import_xfdf_with(
         }
     }
     // Comments placed as copies: the file's field values are not part of the paste.
-    if fresh.is_some() || target_page.is_some() || offset.is_some() {
+    if comments_only {
         return Ok(report);
     }
     // Fields.

@@ -2157,6 +2157,19 @@ fn importing_comments_as_copies_adds_them_on_the_page_with_fresh_names() {
     assert_eq!(summaries(&other).len(), 4, "the named import replaced its own earlier copy");
 }
 
+/// Comment import never takes the file's field values, whatever the placement (a non-finite
+/// offset, which is ignored, and no page or prefix made it the full import).
+#[test]
+fn comment_import_leaves_field_values_alone() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" rect="10,10,30,30" name="n"/></annots><fields><field name="Name"><value>from the file</value></field></fields></xfdf>"#;
+    for offset in [Some([f64::NAN, 0.0]), None] {
+        let mut doc = one_field_named("Name", "mine");
+        let r = import_comments(&mut doc, xfdf, None, None, offset).unwrap();
+        assert_eq!((r.comments, r.fields), (1, 0), "{offset:?}: {r:?}");
+        assert_eq!(values(&doc), [("Name".to_string(), vec!["mine".to_string()])], "{offset:?}");
+    }
+}
+
 /// Other tools write comments straight into the page's `/Annots` array, without an object of
 /// their own: they copy like any other, and two source comments sharing a name give two copies.
 #[test]

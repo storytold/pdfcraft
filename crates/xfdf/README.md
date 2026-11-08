@@ -26,8 +26,8 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   stamps, base 64 of the dictionary written as `DICT`/`STREAM`/`ARRAY`/`NAME`/`INT`/`FIXED`/`BOOL`/
   `STRING`/`NULL` elements with stream data in `DATA` (XFDF 3.0 "Stream encoding": `filtered`/`ascii`
   or `raw`/`hex`), the shape XFDF files from other tools carry. Copy and paste carries every
-  comment's appearance. Import keeps an appearance it can read (except on a redaction mark, which
-  PdfCraft always draws) and otherwise draws the comment and records the reason in
+  comment's appearance but a redaction mark's, which PdfCraft always draws and import never
+  reads. Import keeps an appearance it can read and otherwise draws the comment and records the reason in
   `Report::skipped` (the engine puts it in the repair log); it refuses one over 16 MiB, 64 MiB per
   import, 64 nesting levels or 100,000 values. Export leaves out one past those limits or whose
   rect has no area, and stops at the 64 MiB an import reads; where `/AS` selects one of several
