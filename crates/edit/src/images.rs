@@ -1,7 +1,7 @@
 //! Edit a PDF ▸ edit existing images and grouped artwork (Image/Form XObjects painted by `Do`
 //! in its own content streams), and changing one: move/resize/rotate/flip (the `Do` is wrapped in
 //! `q … cm … Q` with the extra transform), replace (it draws another XObject in the same place),
-//! or delete. Only the stream that draws it is rewritten, as a new object.
+//! delete, or ungroup grouped artwork (its content drawn in place, see `ungroup`). Only the stream that draws it is rewritten, as a new object.
 
 use kurbo::{BezPath, Point, Shape};
 use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
@@ -49,7 +49,7 @@ pub struct PageImage {
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
     /// operators of the page's streams joined ([`pdfcraft_content::Pieces`]).
     pub stream: usize,
-    op: usize,
+    pub(crate) op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
     draw_matrix: [f64; 6],
     clips: Vec<ClipPath>,
@@ -465,6 +465,9 @@ pub enum ImageChange {
     Arrange(ArrangeOrder),
     /// Remove any private crop on the image.
     RemoveCrop,
+    /// Grouped Form artwork only: draw the form's content in place of its `Do`, so its text and
+    /// pictures become the page's own and can be edited one by one (#2964).
+    Ungroup,
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
@@ -1659,6 +1662,26 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         }
         ImageChange::Crop(keep) => {
             return crop_image_impl(doc, &p, &all, &img, *keep);
+        }
+        ImageChange::Ungroup => {
+            if !img.is_form {
+                return Err(EditError::Invalid("only grouped Form artwork can be ungrouped".into()));
+            }
+            let res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+            let space = crate::ungroup::page_blend_space(doc, &p.dict);
+            // One allowance for the form and everything it draws.
+            let mut budget = pdfcraft_cos::DecodeBudget::new(crate::ungroup::MAX_FORM_BYTES, 0);
+            let crate::ungroup::Ungrouped { ops: inline, resources: mut merged, patterns, .. } =
+                crate::ungroup::ungroup_ops(doc, &res, &ops, img.op, space.as_ref(), Matrix(img.matrix), &mut budget).map_err(|r| r.error)?;
+            if !patterns.is_empty() {
+                let mut table = merged.get(b"Pattern").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+                for (name, copy) in patterns {
+                    table.set(name, Object::Ref(doc.add(copy)));
+                }
+                merged.set(b"Pattern".to_vec(), Object::Dict(table));
+            }
+            resources = Some(merged);
+            inline
         }
         ImageChange::Replace(r) => {
             if img.is_form {
