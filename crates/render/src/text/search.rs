@@ -7,18 +7,22 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         return Vec::new();
     }
     let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
-    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
+    let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
         return Vec::new();
     }
     let mut chars: Vec<(char, usize)> = Vec::new();
     for (i, glyph) in page.glyphs.iter().enumerate() {
         let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
-        let gap = page.space_before.get(i).copied().unwrap_or(false) || line_break;
+        // A soft hyphen marks where a word may be divided at a line end (ISO 32000-2 §14.8.2.3), so
+        // a line that ends in one runs on to the next with no word break between them.
+        let soft_break = line_break && i.checked_sub(1).and_then(|previous| page.glyphs.get(previous)).is_some_and(|g| g.text.ends_with('\u{AD}'));
+        let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !soft_break);
         if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
             chars.push((' ', i));
         }
-        for c in fold(&glyph.text).chars() {
+        for c in fold(&glyph.text).chars().filter(|&c| !is_invisible(c)) {
             let c = if c.is_whitespace() { ' ' } else { c };
             if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
                 chars.push((c, i));
@@ -66,6 +70,16 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
     }
     hits
+}
+
+/// A character that draws nothing inside a word and only tells layout where a line may break or
+/// letters may join: SOFT HYPHEN, ZERO WIDTH SPACE, ZERO WIDTH NON-JOINER and JOINER, WORD JOINER
+/// and ZERO WIDTH NO-BREAK SPACE. All six are Unicode default-ignorable format characters, so
+/// find skips them in the page text and in the query alike: "Mitarbeiterinnen" matches a word
+/// stored with soft hyphens. A visible word gap is its own space in the page text, so skipping a
+/// zero width space next to one still keeps the two words apart.
+fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
 }
 
 /// Extend a prefix, falling back through strictly shorter proper prefixes on a mismatch.
