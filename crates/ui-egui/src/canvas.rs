@@ -418,6 +418,63 @@ pub struct Snapshot {
     pub from: String,
 }
 
+/// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
+/// or whether a signature's appearance draws it.
+pub(crate) fn signature_states_changed(before: &[pdfcraft_engine::SignatureInfo], after: &[pdfcraft_engine::SignatureInfo]) -> bool {
+    before.len() != after.len()
+        || before.iter().zip(after).any(|(b, a)| b.field != a.field || b.status != a.status || b.verdict_shown != a.verdict_shown)
+}
+
+/// The mark's side as a share of the widget's shorter side.
+const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points: a widget whose shorter side is under
+/// `MARK_SIDE_MIN / MARK_SIDE_SHARE` (32 points) keeps only its outline. A field over that at 100%
+/// can fall under it when the page is zoomed out to fit.
+const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+const MARK_ICON_SHARE: f32 = 0.64;
+
+/// The screen position of a widget's bottom-right corner on the page (`rect`, user space): where
+/// its validation mark goes, wherever the page's /Rotate and the view turn it.
+fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Pos2 {
+    let [_, bottom, right, _] = rect.map(|v| v as f32);
+    xf.user_rect(info, page, [right, bottom, right, bottom]).min
+}
+
+/// Where the validation mark sits in the part of a signature widget's screen rectangle that is on
+/// the page (`page`, on screen too), or `None` when that part is too small for a legible one. It
+/// goes in the corner nearest `anchor`, the screen position of the widget's bottom-right corner on
+/// the page, so it turns with the page and the view: off the middle, where a signer's artwork
+/// usually is, and clear of the state a named-layer appearance captions across its top.
+fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    // A widget past the crop box's edge shows its mark on the page, not beside it.
+    let widget = widget.intersect(page);
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    // A NaN anchor compares false either way and takes the bottom-right corner.
+    let left = anchor.x - widget.min.x < widget.max.x - anchor.x;
+    let top = anchor.y - widget.min.y < widget.max.y - anchor.y;
+    let x = if left { widget.min.x + inset } else { widget.max.x - inset - side };
+    let y = if top { widget.min.y + inset } else { widget.max.y - inset - side };
+    Some(Rect::from_min_size(pos2(x, y), vec2(side, side)))
+}
+
 /// The name shown for a document tab, the window title and the Combine picker.
 /// A snapshot reads like its source document, plus the snapshot suffix that tells
 /// the tabs apart. Without a title the file name (which already carries the suffix)
