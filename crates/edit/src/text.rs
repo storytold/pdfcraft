@@ -31,6 +31,7 @@ pub use session::TextSession;
 mod blocks;
 mod editor;
 mod fallback;
+pub mod forms;
 mod interp;
 mod lines;
 mod rewrite;
@@ -42,8 +43,8 @@ pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
-use editor::layout_draft;
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
+use editor::{builtin_thai_choice, layout_draft};
 #[cfg(test)]
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
@@ -52,9 +53,13 @@ use fallback::{
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
+pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
 use lines::page_dict;
-pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
+pub(crate) use lines::{
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
+    joined, resource_dict, rewritten_contents, splice,
+};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
