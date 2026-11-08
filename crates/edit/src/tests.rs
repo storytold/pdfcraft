@@ -11202,3 +11202,21 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+#[test]
+fn page_rules_refuse_unread_graphics_state() {
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("UnsupportedFilter"));
+    let unread = Stream::from_raw(dict, b"2 0 0 2 0 0 cm".to_vec());
+    let damaged = damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    for stream in [unread, damaged] {
+        let mut doc = image_page_with("10 10 m 100 10 l S");
+        let incomplete = doc.add(Object::Stream(stream));
+        doc.update_dict(ObjRef::new(3, 0), |page| {
+            page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(incomplete), Object::Ref(ObjRef::new(4, 0))]));
+        })
+        .unwrap();
+        assert!(page_rules(&doc, 0).is_err(), "later geometry cannot be trusted after unread graphics state");
+    }
+    assert_eq!(page_rules(&image_page_with("10 10 m 100 10 l S"), 0).unwrap(), [[10.0, 10.0, 100.0, 10.0]]);
+}
