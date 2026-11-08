@@ -2454,6 +2454,48 @@ fn marks_do_not_decide_a_lines_direction() {
     };
     // Compared on the letters alone: the points' own word gaps are not what this is about.
     let letters = |s: String| s.chars().filter(|&c| c != '\u{5B8}' && c != '\u{5B4}' && c != ' ').collect::<String>();
-    assert_eq!(letters(line(true)), letters(line(false)));
+    let marked = line(true);
+    for point in ['\u{5B8}', '\u{5B4}'] {
+        assert_eq!(marked.chars().filter(|&c| c == point).count(), 3, "every point is kept: {marked:?}");
+    }
+    assert_eq!(letters(marked), letters(line(false)));
     assert!(letters(line(true)).starts_with("abcd"), "a mostly Latin line reads Latin first");
+}
+
+/// A ligature glyph counts each of its letters toward a line's direction: a line of an "ffi" ligature, a word gap and
+/// a two-letter Hebrew word reads as the same line with "f", "f" and "i" drawn one by one, Latin first.
+#[test]
+fn a_ligature_counts_each_of_its_letters_toward_a_lines_direction() {
+    let line = |latin: &[&str]| {
+        let mut v: Vec<TextGlyph> = Vec::new();
+        let step = 12.0 / latin.len() as f32;
+        for (k, t) in latin.iter().enumerate() {
+            let x = step * k as f32;
+            v.push(em_box(t, x, 0.0, x + step, 11.0));
+        }
+        v.push(em_box("ל", 16.0, 0.0, 22.5, 11.0));
+        v.push(em_box("ש", 22.5, 0.0, 29.0, 11.0));
+        layout(v).plain_text()
+    };
+    let split = line(&["f", "f", "i"]);
+    assert_eq!(split, "ffi של");
+    assert_eq!(line(&["ffi"]), split);
+}
+
+/// A mark of a left-to-right script that rides on no letter has no direction of its own: U+0345 (alphabetic, bidi
+/// class NSM) drawn on the last letter of a Hebrew word, left of it and right after a Latin word, reads with the
+/// Hebrew word, after that letter, as a Hebrew point drawn there does.
+#[test]
+fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0)];
+    let mut x = 12.0;
+    for c in ["ם", "ו", "ל", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        if c == "ם" {
+            v.push(em_box("\u{345}", 11.9, 0.0, 11.9, 11.0));
+        }
+        x += 6.5;
+    }
+    let text = layout(v).plain_text();
+    assert_eq!(text, "שלום\u{345}ab");
 }

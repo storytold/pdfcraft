@@ -369,10 +369,8 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
     if !placed.iter().any(|&i| glyphs.get(i).is_some_and(|g| g.text.chars().any(is_rtl))) {
         return;
     }
-    // The line's direction, as `reverse_rtl` takes it: right-to-left when it has more right-to-left letters than
-    // left-to-right ones. A line's edge has that direction (UAX #9 X10: sos and eos).
-    let count = |b: Bidi| placed.iter().filter(|&&i| glyphs.get(i).is_some_and(|g| !is_nonspacing_mark(&g.text) && bidi_class(&g.text) == b)).count();
-    let line_rtl = count(Bidi::R) > count(Bidi::L);
+    // The line's direction, as `reverse_rtl` takes it. A line's edge has that direction (UAX #9 X10: sos and eos).
+    let line_rtl = is_rtl_line(glyphs, placed.iter().copied());
     // Whether the nearest glyph with a strong direction from position `from` on, stepping by `step`, is right-to-left,
     // or the line is when there is none before its edge.
     let rtl_side = |placed: &[usize], from: Option<usize>, step: fn(usize) -> Option<usize>| {
@@ -586,11 +584,33 @@ fn bidi_class(text: &str) -> Bidi {
         Bidi::R
     } else if text.chars().any(char::is_numeric) {
         Bidi::Num
+    } else if is_nonspacing_mark(text) {
+        // A mark of a left-to-right script that rides on no letter (`resolve_marks`) has no direction of its own: NSM
+        // is a weak class (UAX #9 Table 4), so it reads with the glyphs around its drawn position, as a neutral does,
+        // even when it is alphabetic (U+0345, Other_Alphabetic).
+        Bidi::N
     } else if text.chars().any(char::is_alphabetic) {
         Bidi::L
     } else {
         Bidi::N
     }
+}
+
+/// Whether a line of the glyphs `line` is right-to-left: it has more right-to-left letters than left-to-right ones.
+/// Letters are counted one by one, so a ligature glyph ("ffi") counts each of its letters, and nonspacing marks count
+/// toward neither direction: a mark has the direction of the letter it sits on.
+fn is_rtl_line(glyphs: &[&TextGlyph], line: impl Iterator<Item = usize>) -> bool {
+    let (mut rtl, mut ltr) = (0usize, 0usize);
+    for g in line.filter_map(|i| glyphs.get(i)) {
+        for c in g.text.chars().filter(|&c| unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM) {
+            if is_rtl(c) && !c.is_numeric() {
+                rtl = rtl.saturating_add(1);
+            } else if c.is_alphabetic() && !is_rtl(c) {
+                ltr = ltr.saturating_add(1);
+            }
+        }
+    }
+    rtl > ltr
 }
 
 /// Whether `text` is only nonspacing marks (bidi class NSM). Such a glyph counts toward neither direction of a line:
@@ -622,7 +642,7 @@ fn resolve_marks(glyphs: &[&TextGlyph], anchor: &[usize], items: &mut [(Option<u
 
 /// Reorders a line of `idx` from visual to logical order with a simplified bidi level pass (#2667), carrying the
 /// word gaps along: `spaces[w]` is a gap left of `idx[w]` (#1062). The paragraph is right-to-left when it has
-/// more right-to-left than left-to-right glyphs; numbers keep their left-to-right order, and neutrals
+/// more right-to-left than left-to-right letters ([`is_rtl_line`]); numbers keep their left-to-right order, and neutrals
 /// (punctuation, gaps) take the direction of their neighbours, or the paragraph's between opposite ones.
 pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], anchor: &[usize], idx: &mut [usize], spaces: &mut [bool]) {
     // Glyphs and word gaps (None) in visual order.
@@ -635,11 +655,8 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], anchor: &[usize], idx: &mut [us
     }
     let texts: Vec<&str> = items.iter().map(|it| it.0.map_or("", |i| glyphs[i].text.as_str())).collect();
     let text = |k: usize| texts.get(k).copied().unwrap_or("");
-    // The paragraph's direction counts letters as they are, before marks take their letter's class, as
-    // `keep_taken_back_blanks` counts them.
-    let count =
-        |b: Bidi| items.iter().filter(|it| it.1 == b && !it.0.and_then(|i| glyphs.get(i)).is_some_and(|g| is_nonspacing_mark(&g.text))).count();
-    let para = if count(Bidi::R) > count(Bidi::L) { Bidi::R } else { Bidi::L };
+    // The paragraph's direction, as `keep_taken_back_blanks` takes it.
+    let para = if is_rtl_line(glyphs, idx.iter().copied()) { Bidi::R } else { Bidi::L };
     resolve_marks(glyphs, anchor, &mut items);
     let n = items.len();
     // W4: a single separator between two digits belongs to the number.
