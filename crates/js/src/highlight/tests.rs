@@ -274,6 +274,56 @@ fn past_a_reserved_word_spelled_with_escapes_nothing_counts_as_code() {
     assert!(in_literal(script, script.len()));
 }
 
+/// Outside a literal or a comment, a `\` is only a name's `\u` escape. Any other the parser refuses,
+/// which leaves what follows a guess, as after an escaped reserved word.
+#[test]
+fn past_a_backslash_the_parser_refuses_nothing_counts_as_code() {
+    for script in [
+        "\\u{110000}eturn /`/;\nx = `a  b`;",
+        "\\uzzzz /`/;\nx = `a  b`;",
+        "\\u{72 /`/;\nx = `a  b`;",
+        "\\u /`/;\nx = `a  b`;",
+        "\\u0020 /`/;\nx = `a  b`;",
+        "\\u0031x /`/;\nx = `a  b`;",
+        "a\\u002Bb /`/;\nx = `a  b`;",
+        "x.\\uzzzz /`/;\nx = `a  b`;",
+        "\\x /`/;\nx = `a  b`;",
+        "a\\x /`/;\nx = `a  b`;",
+        // Not an escape, but `²` is a number's character, not a name's.
+        "x\u{b2} /`/;\nx = `a  b`;",
+    ] {
+        assert!(!parses(script), "{script}");
+        let at = script.find("a  b").expect("the template") + 2;
+        assert!(in_literal(script, at), "{script}");
+    }
+}
+
+/// A name holds what the parser takes in one: a combining accent is part of it, so a `/` after it
+/// divides.
+#[test]
+fn a_name_is_what_the_parser_takes_as_one() {
+    use TokenKind::*;
+    for script in ["y = cafe\u{301} / 2 / 3;", "y = \u{2118} / 2 / 3;", "y = \\u0061\\u0301 / 2 / 3;", "y = _\\u200C\\u{24} / 2 / 3;"] {
+        assert!(parses(script), "{script}");
+        assert_eq!(kinds(script), vec![(Number, "2"), (Number, "3")], "{script}");
+        assert!(!in_literal(script, script.len()), "{script}");
+    }
+}
+
+/// Unicode's ID_Start and ID_Continue are the parser's: for each character, spelled as an escape first
+/// in a name and later in one, the lexer is unsure exactly where the parser refuses it. The planes
+/// left out (4 to 13, 15 and 16) hold no name's characters.
+#[test]
+fn a_name_holds_the_characters_the_parser_takes() {
+    assert!(!(0x4_0000..0xE_0000).chain(0xF_0000..=0x10_FFFF).filter_map(char::from_u32).any(is_name_part));
+    for c in (0..=0x3_FFFF).chain(0xE_0000..=0xE_FFFF).filter_map(char::from_u32) {
+        let code = u32::from(c);
+        for script in [format!("var \\u{{{code:x}}} = 1;"), format!("var a\\u{{{code:x}}} = 1;")] {
+            assert_eq!(lex(&script).1.is_some(), !parses(&script), "{script}");
+        }
+    }
+}
+
 /// Which words are reserved is the parser's to say: spelled with escapes, each one it refuses makes
 /// the lexer unsure and is coloured as nothing, and the others are what they spell.
 #[test]

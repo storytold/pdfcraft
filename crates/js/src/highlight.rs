@@ -3,11 +3,14 @@
 //! the script nor the engine's parser, so showing a script from any document reaches neither.
 //!
 //! A wrong colour is only that, but editing mustn't change what a script holds on a guess, so what
-//! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of, or a reserved
-//! word spelled with escapes.
+//! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of, or a `\` the
+//! parser refuses.
 
 use std::borrow::Cow;
 use std::ops::Range;
+
+use icu_properties::CodePointSetData;
+use icu_properties::props::{IdContinue, IdStart};
 
 /// What a stretch of script is, for colouring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,9 +131,10 @@ pub fn highlight(source: &str) -> Vec<Token> {
 /// expression or divide: `{ valueOf() { return 6; } } / 2` is valid. Read the wrong way, it hides what
 /// follows on its line, a template's opening `` ` `` among them, or turns a `/*` in a regular
 /// expression into a comment to the end. So past the first such `/`, this is always true: it errs
-/// towards leaving the text alone rather than guess. So it is past a reserved word spelled with
-/// escapes (`\u0072eturn`): the parser refuses it, so whether it was meant as the keyword, and what a
-/// `/` after it is, is a guess too.
+/// towards leaving the text alone rather than guess. So it is past a `\` the parser refuses: one
+/// outside a name (`\x`), an escape that spells no name (`\uzzzz`, `\u0020`), and a reserved word
+/// spelled with escapes (`\u0072eturn`). What the script was meant to say there, and so what a `/`
+/// after it is, is a guess too.
 pub fn in_literal(source: &str, at: usize) -> bool {
     let (tokens, doubt) = lex(source);
     doubt.is_some_and(|slash| slash < at)
@@ -151,7 +155,7 @@ fn closed_by(token: &str, end: &str) -> bool {
 }
 
 /// The tokens of `source`, and where the lexer first stops being sure of them: a `/` read as starting
-/// a regular expression that could be dividing, or a reserved word spelled with escapes.
+/// a regular expression that could be dividing, or a `\` the parser refuses.
 fn lex(source: &str) -> (Vec<Token>, Option<usize>) {
     let mut lexer = Lexer {
         s: source,
@@ -196,7 +200,7 @@ struct Lexer<'a> {
     /// Whether a `/` here, read as starting a regular expression, could instead be dividing what
     /// came last: an object's `}` rather than a block's, or `of` as a name.
     may_be_value: bool,
-    /// Where the first such `/` is, or a reserved word spelled with escapes if one comes first.
+    /// Where the first such `/` is, or a `\` the parser refuses if one comes first.
     doubt: Option<usize>,
 }
 
@@ -303,6 +307,8 @@ impl Lexer<'_> {
                     }
                     '(' => self.parens.push(self.keyword_paren),
                     ')' => regex_ok = self.parens.pop().unwrap_or(false),
+                    // Outside a literal or a comment, the parser takes a `\` only in a name's `\u` escape.
+                    '\\' => self.doubt = self.doubt.or(Some(start)),
                     _ => {}
                 }
                 if is_line_end(c) {
@@ -447,21 +453,22 @@ impl Lexer<'_> {
         while self.name_part() {}
         let word = self.s.get(start..self.i).unwrap_or_default();
         let label = self.label_next && !self.line_start;
+        // A name spelled with escapes is the name it spells (`\u0061pp` is `app`). The parser refuses
+        // one that spells no name (`\uzzzz`, `\u0020`, `\u0031x`), and a reserved word spelled so other
+        // than as a property's name, but reads `of`, `yield`, `let` and the like spelled so as names.
+        let name = unescaped(word);
+        let refused = word.contains('\\') && !name.as_deref().is_some_and(|name| is_name(name) && (self.after_dot || !reserved(name)));
+        if refused {
+            // The parser takes a reserved word as a key (`{ \u0074his: 1 }`), which this can't tell:
+            // there, it costs only the indentation.
+            self.doubt = self.doubt.or(Some(start));
+        }
         if self.after_dot {
             // A property: `x.default`, `this.event` …
             self.after(false, false);
             return;
         }
-        // A name spelled with escapes is the name it spells (`\u0061pp` is `app`), but a reserved word
-        // spelled so is neither keyword nor name: the parser refuses it. It reads `of`, `yield`, `let`
-        // and the like spelled so as names.
-        let name = unescaped(word).unwrap_or_default();
-        let refused = word.contains('\\') && reserved(&name);
-        if refused {
-            // The parser takes one as a key (`{ \u0074his: 1 }`), which this can't tell: there, it costs
-            // only the indentation.
-            self.doubt = self.doubt.or(Some(start));
-        }
+        let name = name.unwrap_or_default();
         let kind = if KEYWORDS.contains(&word) {
             Some(TokenKind::Keyword)
         } else if refused {
@@ -528,12 +535,22 @@ fn is_line_end(c: char) -> bool {
     matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
+/// Whether a name may start with `c`: ECMAScript's IdentifierStartChar, by Unicode's ID_Start, as the
+/// parser reads it (`\u00b2` can't start a name, `\u2118` can).
 fn is_name_start(c: char) -> bool {
-    c == '$' || c == '_' || c.is_alphabetic()
+    c == '$' || c == '_' || CodePointSetData::new::<IdStart>().contains(c)
 }
 
+/// Whether `name` is all a name's characters, as its first and the rest.
+fn is_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(is_name_start) && chars.all(is_name_part)
+}
+
+/// Whether a name may hold `c` after its first character: ECMAScript's IdentifierPartChar, by
+/// Unicode's ID_Continue (`_`, digits and combining marks among them).
 fn is_name_part(c: char) -> bool {
-    is_name_start(c) || c.is_alphanumeric() || c == '\u{200C}' || c == '\u{200D}'
+    c == '$' || c == '\u{200C}' || c == '\u{200D}' || CodePointSetData::new::<IdContinue>().contains(c)
 }
 
 #[cfg(test)]

@@ -15,6 +15,9 @@ boa_engine = { version = "0.22.0", default-features = false, features = ["annex-
 # FormCalc Date/Num2Date calendar conversion goes through chrono (no hand-rolled calendar code);
 # std-only, so it stays wasm-safe.
 chrono = { workspace = true }
+# Already in the graph (through boa, and the engine): the script editors read a name's characters
+# by Unicode's ID_Start and ID_Continue, as the parser does.
+icu_properties = "2.3"
 
 [dev-dependencies]
 proptest = { workspace = true }
