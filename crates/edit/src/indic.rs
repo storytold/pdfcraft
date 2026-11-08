@@ -285,6 +285,26 @@ mod tests {
         let malayalam_visual = "\u{0D46}\u{0D02}\u{0D15}";
         assert_eq!(to_logical(malayalam_visual), malayalam_logical);
         assert_eq!(to_visual(malayalam_logical), malayalam_visual);
+
+        // Devanagari inverted candrabindu (U+0900)
+        let dev_logical = "\u{0915}\u{093F}\u{0900}";
+        let dev_visual = "\u{093F}\u{0900}\u{0915}";
+        assert_eq!(to_logical(dev_visual), dev_logical);
+        assert_eq!(to_visual(dev_logical), dev_visual);
+
+        // Telugu (U+0C00..=U+0C04) and Kannada (U+0C80..=U+0C83) vowel modifiers
+        for m in ['\u{0C00}', '\u{0C01}', '\u{0C04}'] {
+            let logical = format!("\u{0C15}\u{0BC6}{m}");
+            let visual = format!("\u{0BC6}{m}\u{0C15}");
+            assert_eq!(to_logical(&visual), logical);
+            assert_eq!(to_visual(&logical), visual);
+        }
+        for m in ['\u{0C80}', '\u{0C81}', '\u{0C83}'] {
+            let logical = format!("\u{0C95}\u{0BC6}{m}");
+            let visual = format!("\u{0BC6}{m}\u{0C95}");
+            assert_eq!(to_logical(&visual), logical);
+            assert_eq!(to_visual(&logical), visual);
+        }
     }
 
     #[test]
@@ -297,12 +317,17 @@ mod tests {
             assert_eq!(to_visual(&logical), visual);
         }
 
-        // Oriya ୱি (wi): U+0B71 + U+0B3F, Gujarati ૹિ (zhi): U+0AF9 + U+0ABF
+        // Oriya ୱି (wi): U+0B71 + U+0B3F, Gujarati ૹિ (zhi): U+0AF9 + U+0ABF
         assert_eq!(to_logical("\u{0B3F}\u{0B71}"), "\u{0B71}\u{0B3F}");
         assert_eq!(to_visual("\u{0B71}\u{0B3F}"), "\u{0B3F}\u{0B71}");
         assert_eq!(to_logical("\u{0ABF}\u{0AF9}"), "\u{0AF9}\u{0ABF}");
         assert_eq!(to_visual("\u{0AF9}\u{0ABF}"), "\u{0ABF}\u{0AF9}");
 
+        // Kannada consonant (U+0C95) + nukta (U+0CBC) + pre-base vowel reorders as one cluster
         assert!(is_indic_nukta('\u{0CBC}'));
+        let kn_logical = "\u{0C95}\u{0CBC}\u{0BC6}";
+        let kn_visual = "\u{0BC6}\u{0C95}\u{0CBC}";
+        assert_eq!(to_logical(kn_visual), kn_logical);
+        assert_eq!(to_visual(kn_logical), kn_visual);
     }
 }
