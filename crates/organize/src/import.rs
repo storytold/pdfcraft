@@ -444,19 +444,31 @@ pub(crate) const MAX_NAME_TREE_KEY_BYTES: usize = 64 << 20;
 /// named by many entries is copied once per entry).
 pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: &mut Seen, out: &mut Vec<(Vec<u8>, Object)>) {
     let mut key_bytes = out.iter().map(|(k, _)| k.len()).fold(0usize, usize::saturating_add);
-    name_tree_entries_within(src, node, depth, seen, out, &mut key_bytes);
+    name_tree_entries_within(src, node, depth, seen, out, &mut key_bytes, &mut std::collections::HashSet::new());
 }
 
-fn name_tree_entries_within(src: &Document, node: &Object, depth: u8, seen: &mut Seen, out: &mut Vec<(Vec<u8>, Object)>, key_bytes: &mut usize) {
+fn name_tree_entries_within(
+    src: &Document,
+    node: &Object,
+    depth: u8,
+    seen: &mut Seen,
+    out: &mut Vec<(Vec<u8>, Object)>,
+    key_bytes: &mut usize,
+    emitted: &mut std::collections::HashSet<ObjRef>,
+) {
     if depth > 32 || node.as_ref().is_some_and(|r| !first_at(seen, r, depth)) {
         return;
     }
     #[cfg(test)]
     crate::work(1);
+    // A node read again from a shallower path (where `first_at` lets it through) has already
+    // listed its entries: listing them again would copy each name and value twice, and the
+    // shallower revisit is only there to reach the descendants the depth limit cut.
+    let names_once = node.as_ref().is_none_or(|r| emitted.insert(r));
     let node = src.resolve(node);
     let Some(d) = node.as_dict() else { return };
     let names = d.get(b"Names").map(|n| src.resolve(n));
-    if let Some(names) = names.as_deref().and_then(Object::as_array) {
+    if let (true, Some(names)) = (names_once, names.as_deref().and_then(Object::as_array)) {
         for pair in names.chunks(2) {
             if let [k, v] = pair
                 && let Some(k) = src.resolve(k).as_string()
@@ -471,7 +483,7 @@ fn name_tree_entries_within(src: &Document, node: &Object, depth: u8, seen: &mut
     }
     let kids = name_tree_kids(src, d, depth, seen);
     for k in kids.as_deref().and_then(Object::as_array).into_iter().flatten() {
-        name_tree_entries_within(src, k, depth + 1, seen, out, key_bytes);
+        name_tree_entries_within(src, k, depth + 1, seen, out, key_bytes, emitted);
     }
 }
 
