@@ -181,8 +181,8 @@ impl CharacterPreparation<'_> {
                         "the bundled Thai font ({thai_choice}) is not in this build, which has no craft-fonts Thai face; load a complete Thai font or choose one the page lists"
                     ))
                 })?;
-                if !pdfcraft_fonts::embedding::covers(face.bytes, span) {
-                    let missing = span.chars().find(|c| !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
+                if !covers_rows(face.bytes, span) {
+                    let missing = span.chars().find(|&c| !row_break(c) && !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
                     return Err(EditError::Invalid(match missing {
                         Some(c) => format!("{} has no glyph for {c} (U+{:04X}); choose a font that covers the text", face.family, u32::from(c)),
                         None => format!("{} cannot show every character in this selection; choose a font that covers the text", face.family),
@@ -924,7 +924,7 @@ fn legacy_thai_font(
     if !has_thai_source_face(cache, &family) {
         return Ok(None);
     }
-    let rows = || span.split(['\n', '\r']).filter(|row| !row.is_empty());
+    let rows = || span.split(row_break).filter(|row| !row.is_empty());
     for row in rows() {
         if let Err(error) = shape_existing_thai(cache, &source.font, row) {
             // Not in the face's existing codes. A complete program of the face that shapes every
@@ -1098,7 +1098,7 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
     }
     if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
         || !pdfcraft_fonts::embedding::matching_faces(&source.base_font).iter().any(|f| std::ptr::eq(*f, face))
-        || !pdfcraft_fonts::embedding::covers(face.bytes, span)
+        || !covers_rows(face.bytes, span)
     {
         return false;
     }
@@ -1113,16 +1113,22 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
             && pdfcraft_fonts::pdf::embedded_sfnt(doc, &font).is_some_and(|bytes| {
                 pdfcraft_fonts::embedding::validate(&bytes).is_ok()
                     && pdfcraft_fonts::source_shaping::has_thai_layout(&bytes)
-                    && pdfcraft_fonts::embedding::covers(&bytes, span)
-                    && span.split(['\n', '\r']).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
+                    && covers_rows(&bytes, span)
+                    && span.split(row_break).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
             })
     })
+}
+
+/// Whether a complete program draws every row of `span`. [`row_break`] characters move to the next
+/// row and are never drawn, so they need no glyph (#6272); `embedding::covers` exempts only CR and LF.
+fn covers_rows(bytes: &[u8], span: &str) -> bool {
+    span.split(row_break).all(|row| pdfcraft_fonts::embedding::covers(bytes, row))
 }
 
 /// Use the same Thai script selection and mark/cluster positioning as Add Text, including
 /// rows beginning with Latin or digits (guessing from their first character would select Latin).
 fn shape_thai_row(text: &str) -> Result<pdfcraft_fonts::source_shaping::ShapedRun, EditError> {
-    if text.len() > 262_144 || text.contains(['\n', '\r']) {
+    if text.len() > 262_144 || text.contains(row_break) {
         return Err(EditError::Invalid("shape one bounded text row at a time".into()));
     }
     let clusters =
