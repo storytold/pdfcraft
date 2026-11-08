@@ -93,7 +93,7 @@ pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset
             // Checked before a span is expanded, so the list never grows past the limit.
             let mut take = |from: usize, to: usize| {
                 selected = selected.saturating_add(from.abs_diff(to).saturating_add(1));
-                if selected > limit { Err(PrintError::Invalid(format!("the range selects more than {limit} pages"))) } else { Ok(()) }
+                if selected > limit { Err(PrintError::TooManySelected(limit)) } else { Ok(()) }
             };
             for part in r.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
                 // A complete label (e.g. "A-1") still wins over interpreting it as a range.
