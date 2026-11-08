@@ -1,4 +1,8 @@
 //! Literal search in normalized page text, retaining the original glyph owners.
+//!
+//! Words and lines are separated by one space, except where a line of Chinese or Japanese runs on
+//! to the next: a break between two such characters is no word break, so it reads as nothing and
+//! "検知機構" is found when the line ends after "検知".
 use super::{PageText, fold_case};
 use std::ops::Range;
 
@@ -13,19 +17,37 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         return Vec::new();
     }
     let mut chars: Vec<(char, usize)> = Vec::new();
+    // Whether a skipped ZERO WIDTH SPACE came right before each character: it draws nothing, but
+    // it is a word boundary (UAX #29 breaks on both sides of it), which Thai and Khmer write between words
+    // with no visible gap, so whole-word search still sees two words there.
+    let mut zero_width_space: Vec<bool> = Vec::new();
+    let mut pending_zero_width_space = false;
     for (i, glyph) in page.glyphs.iter().enumerate() {
+        let text = fold(&glyph.text);
         let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
         // A soft hyphen marks where a word may be divided at a line end (ISO 32000-2 §14.8.2.3), so
         // a line that ends in one runs on to the next with no word break between them.
         let soft_break = line_break && i.checked_sub(1).and_then(|previous| page.glyphs.get(previous)).is_some_and(|g| g.text.ends_with('\u{AD}'));
-        let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !soft_break);
+        // So does a line of Chinese or Japanese that runs on to the next. The characters on both
+        // sides of the break are the visible ones: invisible characters are skipped below.
+        let joined =
+            line_break && chars.last().is_some_and(|before| unspaced(before.0)) && first_visible(page, i).is_some_and(unspaced) && wraps(page, i);
+        let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !(joined || soft_break));
         if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
             chars.push((' ', i));
+            zero_width_space.push(false);
+            pending_zero_width_space = false;
         }
-        for c in fold(&glyph.text).chars().filter(|&c| !is_invisible(c)) {
+        for c in text.chars() {
+            if is_invisible(c) {
+                pending_zero_width_space |= c == '\u{200B}';
+                continue;
+            }
             let c = if c.is_whitespace() { ' ' } else { c };
             if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
                 chars.push((c, i));
+                zero_width_space.push(pending_zero_width_space && c != ' ');
+                pending_zero_width_space = false;
             }
         }
     }
@@ -52,7 +74,9 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
         let end = i.saturating_add(1);
         let start = end.saturating_sub(needle.len());
-        let bounded = !whole_words || (!word(start.checked_sub(1)) && !word(Some(end)));
+        // A skipped zero width space before the first character or after the last is a boundary.
+        let after_break = |i: usize| zero_width_space.get(i).copied().unwrap_or(false);
+        let bounded = !whole_words || ((after_break(start) || !word(start.checked_sub(1))) && (after_break(end) || !word(Some(end))));
         if bounded {
             if let Some((_, first)) = chars.get(start)
                 && let Some(last) = owner.checked_add(1)
@@ -80,6 +104,58 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
 /// zero width space next to one still keeps the two words apart.
 fn is_invisible(c: char) -> bool {
     matches!(c, '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
+}
+
+/// Whether `c` is set solid, with no spaces between words, in text that a line break may divide
+/// anywhere: East Asian Width Wide, Fullwidth or Halfwidth (Unicode Standard Annex #11) Han,
+/// kana, bopomofo, CJK symbols and punctuation and fullwidth forms other than Latin letters and
+/// digits. Hangul is left out: Korean separates its words with spaces, so a line end there is a
+/// word break. A line break between two such characters is the CSS segment-break rule's case for removing the break, not turning
+/// it into a space (CSS Text Module, segment break transformation).
+fn unspaced(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x2FFF // CJK radicals, Kangxi radicals, ideographic description characters
+        | 0x3001..=0x303E // CJK symbols and punctuation (U+3000 is a space; U+303F is narrow)
+        | 0x3041..=0x30FF // Hiragana, Katakana
+        | 0x3105..=0x312F // Bopomofo
+        | 0x3190..=0x31FF // Kanbun, Bopomofo extended, CJK strokes, Katakana phonetic extensions
+        | 0x3200..=0x4DBF // Enclosed CJK letters, CJK compatibility, Han extension A
+        | 0x4E00..=0x9FFF // Han
+        | 0xF900..=0xFAFF // CJK compatibility ideographs
+        | 0xFE10..=0xFE19 | 0xFE30..=0xFE6F // vertical, compatibility and small forms
+        // Fullwidth forms, less the fullwidth digits and Latin letters (U+FF10-U+FF19, U+FF21-U+FF3A,
+        // U+FF41-U+FF5A): those are Latin text set wide, whose words still end at a line end.
+        | 0xFF01..=0xFF0F | 0xFF1A..=0xFF20 | 0xFF3B..=0xFF40 | 0xFF5B..=0xFF60 | 0xFFE0..=0xFFE6
+        | 0xFF61..=0xFF9F // halfwidth CJK punctuation and Katakana (not halfwidth Hangul)
+        | 0x16FE0..=0x16FFF | 0x1AFF0..=0x1B2FF // ideographic symbols, kana supplements and extensions
+        | 0x20000..=0x3FFFD // Han extensions B and later, compatibility supplement
+    ) && !matches!(c as u32, 0x3200..=0x321E | 0x3260..=0x327E) // parenthesised and circled Hangul
+}
+
+/// Whether glyph `i` starts the line that the text of glyph `i - 1` runs on to: it sits past that
+/// glyph across the lines, by more than half the glyph's line height, and starts back behind it
+/// along the line, as a wrapped line does. Text set side by side on one line (table cells, labels),
+/// a cell set lower and further along the row, and a column that starts back at the top keep their
+/// word break.
+fn wraps(page: &PageText, i: usize) -> bool {
+    let Some((before, after)) = i.checked_sub(1).and_then(|p| page.glyphs.get(p)).zip(page.glyphs.get(i)) else { return false };
+    let centre = |q: &[[f32; 2]; 4]| [q.iter().map(|p| p[0]).sum::<f32>() / 4.0, q.iter().map(|p| p[1]).sum::<f32>() / 4.0];
+    let (a, b) = (centre(&before.quad), centre(&after.quad));
+    // Towards the next line: the writing direction turned a quarter clockwise in y-down view space.
+    let [dx, dy] = before.direction;
+    let across = (b[0] - a[0]) * -dy + (b[1] - a[1]) * dx;
+    let along = (b[0] - a[0]) * dx + (b[1] - a[1]) * dy;
+    let [near, far] = [before.quad[0], before.quad[3]];
+    let height = (near[0] - far[0]).hypot(near[1] - far[1]);
+    // NaN compares false: no join.
+    across > height * 0.5 && along < 0.0
+}
+
+/// The first visible character on the line that glyph `i` starts, skipping the invisible characters
+/// that find drops, so a line that opens with a zero width character still joins on its first letter.
+fn first_visible(page: &PageText, i: usize) -> Option<char> {
+    let line = page.line_of.get(i)?;
+    page.glyphs.iter().zip(&page.line_of).skip(i).take_while(|(_, l)| *l == line).flat_map(|(g, _)| g.text.chars()).find(|&c| !is_invisible(c))
 }
 
 /// Extend a prefix, falling back through strictly shorter proper prefixes on a mismatch.
