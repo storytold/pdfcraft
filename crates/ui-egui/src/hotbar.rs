@@ -664,7 +664,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                                 }
                             });
                         });
-                        settings_clicked |= settings_button(ui, cell, &mut picker_open);
+                        // At the column's edge, where the tool buttons are: centred, it would
+                        // follow a frame that a wider control below them has grown (#6614).
+                        settings_clicked |=
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| settings_button(ui, cell, &mut picker_open)).inner;
                     } else {
                         core_tool_buttons(ui, app, cell, popup_align, &t);
                         active_tool_controls(ui, app, &t, false, cell);
