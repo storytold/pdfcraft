@@ -74,7 +74,7 @@ pub use canvas::{DocView, RasterMemory};
 /// bar, tab strip and notice bars adapt below the old 820 minimum (#1913).
 pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 520.0];
 pub use editing::{CloseRequest, SaveTarget};
-pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
+pub use files::{BLANK_PAPERS, BlankPageDraft, ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionary_dir};
 use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
@@ -510,6 +510,8 @@ pub struct PdfCraftApp {
     pub split_draft: SplitDraft,
     pub extract_draft: ExtractDraft,
     pub rotate_draft: RotateDraft,
+    /// Insert blank page… settings.
+    pub blank_draft: BlankPageDraft,
     /// Summarize Comments: sort order.
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.

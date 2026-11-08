@@ -1,13 +1,15 @@
 use super::{Align, Align2, Color32, CornerRadius, DocInfo, Layout, Nav, Rect, Sense, Stroke, Tokens, icons, pos2, theme, vec2};
 
 /// Page tools in the Pages panel's header (#4415): a menu, as Bookmark options is in its panel,
-/// to insert a blank page or pages from a file, rotate, extract and delete. Each runs its
-/// command on the selected pages (the current page when none is), so it does what Pages ▸ …
-/// does; the items say so, apart from the thumbnails' own menu. `enabled` is false while the
-/// document may not be assembled or a dialog is open. Returns the command a click asks for.
+/// to insert a blank page (at once, or where and how large in a dialog) or pages from a file,
+/// rotate, extract and delete. Each runs its command on the selected pages (the current page
+/// when none is), so it does what Pages ▸ … does; the items say so, apart from the thumbnails'
+/// own menu. `enabled` is false while the document may not be assembled or a dialog is open.
+/// Returns the command a click asks for.
 pub(super) fn page_tools(ui: &mut egui::Ui, enabled: bool) -> Option<&'static str> {
-    let tools: [(&'static str, &str); 6] = [
+    let tools: [(&'static str, &str); 7] = [
         ("page.insert_blank", tl!("Insert a blank page after the selection")),
+        ("page.insert_blank_dialog", tl!("Insert a blank page before or after the selection…")),
         ("page.insert", tl!("Insert pages from a file after the selection…")),
         ("page.rotate_ccw", tl!("Rotate the selected pages counterclockwise")),
         ("page.rotate", tl!("Rotate the selected pages clockwise")),
@@ -199,6 +201,10 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
                         view.select_pages(&[i]);
                     }
                     view.pending_action = Some(crate::canvas::ViewAction::SplitBeforeSelected);
+                    ui.close();
+                }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Insert blank page…"))).clicked() {
+                    view.pending_action = Some(crate::canvas::ViewAction::InsertBlank);
                     ui.close();
                 }
                 if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {

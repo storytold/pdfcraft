@@ -147,6 +147,8 @@ pub enum Dialog {
     /// Organize ▸ Extract (options), Rotate Pages.
     Extract,
     RotatePages,
+    /// Pages ▸ Insert blank page…: before or after the selection, in its size or on a paper.
+    InsertBlank,
     /// Remove Hidden Information and Sanitize Document.
     RemoveHidden,
     Sanitize,
