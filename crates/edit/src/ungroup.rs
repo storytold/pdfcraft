@@ -13,11 +13,12 @@
 //! a blend mode other than Normal inside, or a group drawn translucent, blended or under a soft
 //! mask, or a group with a blending colour space (`/CS`) other than the page's: its contents
 //! composite in that space and are then converted (ISO 32000-2 §11.6.6), inline they would
-//! composite in the page's. Those are refused rather than changed, as is a form whose
-//! `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` the page doesn't share (it remaps the form's
-//! device colours, §8.6.5.6, and inline the page's resources apply), tagged form content (its
-//! structure link would be lost) and content whose marked content or text objects don't balance
-//! (inlined, they would change the scope of the page's own). A form in a layer (`/OC`) keeps its membership as `/OC … BDC … EMC`.
+//! composite in the page's. Those are refused rather than changed, as is a form with resources
+//! of its own whose `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` differs from the page's, one
+//! having it and the other not included (it remaps the device colours painted with it,
+//! §8.6.5.6, and inline the page's resources apply), tagged form content (its structure link
+//! would be lost) and content whose marked content or text objects don't balance (inlined, they
+//! would change the scope of the page's own). A form in a layer (`/OC`) keeps its membership as `/OC … BDC … EMC`.
 //!
 //! A pattern's matrix maps pattern space to the default space of the content stream that uses it
 //! (ISO 32000-2 §8.7.2): inside the form that is the form's space at the `Do`, on the page it is
@@ -182,10 +183,14 @@ pub(crate) fn ungroup_ops(
     // A form's default colour space remaps its device colours (ISO 32000-2 §8.6.5.6); inline,
     // the page's resources are the current ones (§7.8.3).
     if own.is_some()
-        && let Some(key) = unshared_default_space(doc, &form_res, resources)
+        && let Some((key, form_has)) = unshared_default_space(doc, &form_res, resources)
     {
         let key = String::from_utf8_lossy(key);
-        return Err(refuse(&format!("it remaps its device colours with a /{key} the page doesn't share")));
+        return Err(refuse(&if form_has {
+            format!("it remaps its device colours with a /{key} the page doesn't share")
+        } else {
+            format!("the page's /{key} would remap its device colours, which it draws as they are")
+        }));
     }
 
     // Merge the form's resources into a copy of the page's, renaming what clashes.
@@ -401,14 +406,23 @@ pub(crate) fn merges_without_renaming(doc: &Document, resources: &Dict, name: &[
     })
 }
 
-/// The first of `/DefaultGray`, `/DefaultRGB` and `/DefaultCMYK` in the form's `/ColorSpace`
-/// resources that the page's don't have with an equal value (the same object, or the same value
-/// resolved). A default colour space remaps the device colours painted with the resource
-/// dictionary it is in (ISO 32000-2 §8.6.5.6, §7.8.3), so inline only the page's would apply.
-fn unshared_default_space(doc: &Document, form: &Dict, page: &Dict) -> Option<&'static [u8]> {
+/// The first of `/DefaultGray`, `/DefaultRGB` and `/DefaultCMYK` that the form's and the page's
+/// `/ColorSpace` resources don't share with an equal value (the same object, or the same value
+/// resolved), and whether the form has it (else only the page does). A default colour space
+/// remaps the device colours painted with the resource dictionary it is in (ISO 32000-2
+/// §8.6.5.6, §7.8.3), so inline only the page's would apply: the form's would no longer remap
+/// its colours, and the page's would start to.
+fn unshared_default_space(doc: &Document, form: &Dict, page: &Dict) -> Option<(&'static [u8], bool)> {
     let spaces = |res: &Dict| res.get(b"ColorSpace").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     let (theirs, mine) = (spaces(form), spaces(page));
-    DEFAULT_SPACES.into_iter().find(|key| theirs.get(key).is_some_and(|v| !mine.get(key).is_some_and(|p| *doc.resolve(p) == *doc.resolve(v))))
+    let differs = |key: &[u8]| match (theirs.get(key), mine.get(key)) {
+        (None, None) => false,
+        (Some(v), Some(p)) => *doc.resolve(p) != *doc.resolve(v),
+        _ => true,
+    };
+    // The form's own entries are named first.
+    let form_has = DEFAULT_SPACES.into_iter().find(|key| theirs.get(key).is_some() && differs(key)).map(|key| (key, true));
+    form_has.or_else(|| DEFAULT_SPACES.into_iter().find(|key| differs(key)).map(|key| (key, false)))
 }
 
 /// A copy of pattern `entry` whose `/Matrix` maps its space to the page's default space instead

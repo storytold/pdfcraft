@@ -5144,7 +5144,9 @@ fn spaces(entries: &[(&str, Object)]) -> Dict {
 /// A form's `/DefaultRGB` (likewise `/DefaultGray`, `/DefaultCMYK`) remaps the device colours it
 /// paints (ISO 32000-2 §8.6.5.6), looked up in the current resource dictionary (§7.8.3). Inline,
 /// that is the page's: renamed into it, the form's entry would no longer remap anything and its
-/// red would draw in another colour, so Ungroup refuses unless the page has the same entry.
+/// red would draw in another colour, so Ungroup refuses unless the page has the same entry. A
+/// page's entry that the form's own resources lack would remap the form's colours inline, so that
+/// is refused too.
 #[test]
 fn ungroup_refuses_a_form_with_its_own_default_colour_space() {
     let refused = |r: Result<(), EditError>, key: &str| match r {
@@ -5159,6 +5161,9 @@ fn ungroup_refuses_a_form_with_its_own_default_colour_space() {
     // Only an entry of the same name counts: the page's DefaultRGB doesn't stand for a DefaultCMYK.
     let r = ungroup_with_spaces(|_| (spaces(&[("DefaultCMYK", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())])))).0;
     refused(r, "/DefaultCMYK");
+    // The other way round: the page's DefaultRGB would remap the red of a form whose own
+    // resources have none, which draws it as DeviceRGB red.
+    refused(ungroup_with_spaces(|_| (spaces(&[]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())])))).0, "/DefaultRGB");
 }
 
 /// When the page's resources have the same default colour space (the same object, or an equal
