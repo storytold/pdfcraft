@@ -714,7 +714,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
         ctx.label_primary(ui, tl!("Default tool"), t);
         ctx.pill_choice(ui, t, &mut app.default_tool, &[(crate::DefaultTool::Select, tl!("Select")), (crate::DefaultTool::Hand, tl!("Hand"))]);
     });
-    ctx.label_secondary(ui, tl!("The tool PdfCraft starts with, and the one Read mode uses. V and H still switch."), t);
+    ctx.label_secondary(ui, tl!("The tool PdfCraft starts with, and the one Read mode uses (full screen keeps Select). Applies from the next start, or when you next switch to Read. V and H still switch."), t);
     ui.add_space(6.0);
 
     let defaults = &mut app.view_defaults;

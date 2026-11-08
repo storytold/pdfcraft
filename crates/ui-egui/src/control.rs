@@ -37,7 +37,8 @@
 //!   `default-mode=all|read|edit|convert|sign` applies to future PDF opens; `mode` overrides it
 //!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
 //!   `default-tool=select|hand` is the tool PdfCraft starts with and the one Read mode leaves
-//!   active; `ui.state.default_tool` reports it.
+//!   active (in full screen Select stays, and the default tool comes back when it ends). Setting
+//!   it leaves the current tool as it is; `ui.state.default_tool` reports it.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
