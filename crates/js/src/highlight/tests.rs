@@ -324,12 +324,79 @@ fn a_name_holds_the_characters_the_parser_takes() {
     }
 }
 
-/// Which words are reserved is the parser's to say: spelled with escapes, each one it refuses makes
-/// the lexer unsure and is coloured as nothing, and the others are what they spell.
+/// ECMAScript's reserved words, and the words it reserves only in strict code or gives a meaning only
+/// in some places: the next test checks them besides the lexer's own lists, so that a reserved word
+/// missing from those shows.
+const SPEC_WORDS: &[&str] = &[
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "import",
+    "in",
+    "instanceof",
+    "new",
+    "null",
+    "return",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+    "let",
+    "static",
+    "implements",
+    "interface",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "arguments",
+    "as",
+    "async",
+    "eval",
+    "from",
+    "get",
+    "meta",
+    "of",
+    "set",
+    "target",
+];
+
+/// Which words are reserved is the parser's to say. Spelled plainly, each one it refuses as a name is
+/// coloured as a keyword or a literal. Spelled with escapes, each one it refuses makes the lexer unsure
+/// and is coloured as nothing, and the others are what they spell.
 #[test]
 fn the_reserved_words_are_the_ones_the_parser_refuses_spelled_with_escapes() {
-    for word in KEYWORDS.iter().chain(LITERALS) {
+    for word in KEYWORDS.iter().chain(LITERALS).chain(SPEC_WORDS) {
         assert_eq!(lex(&format!("var {word} = 1;")).1, None, "{word} spelled plainly");
+        if !parses(&format!("var {word} = 1;")) {
+            let colour = if LITERALS.contains(word) { TokenKind::Literal } else { TokenKind::Keyword };
+            assert_eq!(kinds(&format!("x = {word};")), vec![(colour, *word)], "{word} spelled plainly");
+        }
         let first = word.chars().next().map_or(0, u32::from);
         let rest = word.get(1..).unwrap_or_default();
         for escaped in [format!("\\u{first:04x}{rest}"), format!("\\u{{{first:x}}}{rest}")] {

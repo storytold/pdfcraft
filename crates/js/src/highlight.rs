@@ -54,6 +54,7 @@ const KEYWORDS: &[&str] = &[
     "delete",
     "do",
     "else",
+    "enum",
     "export",
     "extends",
     "finally",
