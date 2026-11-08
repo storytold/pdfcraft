@@ -6199,6 +6199,55 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
     }
 }
 
+/// Thai in a header, footer or text watermark is drawn from the Thai face as Add text draws it:
+/// Type 3 glyphs with a ToUnicode map, one set of fonts shared by every page the mark goes on,
+/// beside the mark's standard face. A build without a Thai face refuses it, saying what to do.
+#[test]
+fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
+    let blank = String::new;
+    let footer = HeaderFooter {
+        text: [blank(), "หน้า <<1>> บุญฤทธิ์".into(), blank(), blank(), blank(), "น้ำ <<Bates Number#3#1#ก-#>>".into()],
+        ..HeaderFooter::default()
+    };
+    let wm = Watermark { text: "ลับ ปั้น\nDRAFT".into(), ..Watermark::default() };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        let mut doc = fixture();
+        for err in [add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap_err(), add_watermark(&mut doc, &[0], &wm, false).unwrap_err()] {
+            assert!(matches!(&err, EditError::Invalid(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+        }
+        assert!(!doc.is_modified(), "nothing is written when the font is missing");
+        assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (Some('ห'), Some('ล')));
+        return;
+    }
+    assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (None, None));
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0, 1], &footer, false, &cx()).unwrap();
+    add_watermark(&mut doc, &[0, 1], &wm, false).unwrap();
+    let doc = reopen(&doc);
+    let mut shared = Vec::new();
+    for page in 0..2 {
+        let drawn = streams(&doc, page).concat();
+        assert!(drawn.contains("/PCTh") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{drawn}");
+        let p = &pdfcraft_model::pages(&doc)[page];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+        let thai: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCTh")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        assert_eq!(thai.len(), 2, "the footer's fonts and the watermark's");
+        let mut mapped = String::new();
+        for (_, f) in &thai {
+            let f = doc.resolve(f).as_dict().unwrap().clone();
+            assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+            mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+        }
+        // น้ำ, ก (the Bates prefix) and ปั้น copy as typed.
+        for text in ["<0E190E490E33>", "<0E01>", "<0E1B0E310E49>"] {
+            assert!(mapped.contains(text), "{text} in {mapped}");
+        }
+        shared.push(thai);
+    }
+    assert_eq!(shared[0], shared[1], "every page draws with the same fonts");
+}
+
 /// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
 /// and leave the document untouched.
 #[test]
