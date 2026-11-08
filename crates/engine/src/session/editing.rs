@@ -77,7 +77,7 @@ impl Session {
         // over the page as the renderer shows it, so the renderer has the last word: on every
         // apply the edit ran, a batch's included.
         if !cx.redaction_marks.is_empty() {
-            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that

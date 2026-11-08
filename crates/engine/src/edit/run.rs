@@ -188,7 +188,9 @@ pub(crate) struct EditCtx {
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
     /// The marks the edit's applied redactions took out (a batch's included), as they were when
     /// each apply ran, for the renderer's check.
-    pub(crate) redaction_marks: Vec<pdfcraft_redact::Mark>,
+    /// Each applied mark with the page object it was drawn on, which a later page move changes the
+    /// index of but not the identity.
+    pub(crate) redaction_marks: Vec<(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)>,
 }
 
 impl EditCtx {
@@ -782,7 +784,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_marks.extend(pdfcraft_redact::marks(doc).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))));
+            let model = pdfcraft_model::pages(doc);
+            cx.redaction_marks.extend(
+                pdfcraft_redact::marks(doc)
+                    .into_iter()
+                    .filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page)))
+                    .filter_map(|m| model.get(m.page).map(|p| (p.obj, m))),
+            );
             cx.redaction_overlays.extend(pdfcraft_redact::apply(doc, pages.as_deref())?.overlays);
         }
         Edit::ClearRedactions => {

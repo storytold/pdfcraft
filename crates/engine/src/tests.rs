@@ -2978,9 +2978,10 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     mark_shown_text(&mut s, id, "SECRET42");
     let doc = s.get(id).unwrap();
     let mut cos = doc.editor.as_ref().unwrap().cos.clone();
-    let marks = pdfcraft_redact::marks(&cos);
+    let model = pdfcraft_model::pages(&cos);
+    let marks: Vec<_> = pdfcraft_redact::marks(&cos).into_iter().filter_map(|m| model.get(m.page).map(|p| (p.obj, m))).collect();
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None);
+        let shown = shown_under_redactions(cos, &marks, &[], None);
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));

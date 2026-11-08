@@ -736,30 +736,35 @@ pub(crate) fn recovered_render_password(cos: &pdfcraft_cos::Document) -> Option<
 /// the document as it was.
 pub(crate) fn shown_under_redactions(
     after: &pdfcraft_cos::Document,
-    marks: &[pdfcraft_redact::Mark],
+    marks: &[(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)],
     overlays: &[pdfcraft_cos::ObjRef],
-    pages: &[pdfcraft_render::PageInfo],
     password: Option<&str>,
 ) -> Result<(), EditError> {
     use pdfcraft_cos::Object;
     use pdfcraft_redact::RedactError;
-    let mut marked: Vec<usize> = marks.iter().map(|m| m.page).collect();
+    let mut shown = after.clone();
+    let model = pdfcraft_model::pages(&shown);
+    // A batch can move pages after the marks were collected: a mark is found by the page object it
+    // was placed on, not by the index that page had when it was drawn.
+    let page_of = |obj: pdfcraft_cos::ObjRef, then: usize| model.iter().position(|p| p.obj == obj).unwrap_or(then);
+    let mut marked: Vec<usize> = marks.iter().map(|(obj, m)| page_of(*obj, m.page)).collect();
     marked.sort_unstable();
     marked.dedup();
     if marked.is_empty() {
         return Ok(());
     }
-    let mut shown = after.clone();
-    let model = pdfcraft_model::pages(&shown);
     for &pi in &marked {
         let Some(page) = model.get(pi) else { continue };
         let Some(Object::Array(list)) = page.dict.get(b"Contents").map(|c| (*shown.resolve(c)).clone()) else { continue };
         let kept: Vec<Object> = list.into_iter().filter(|o| !o.as_ref().is_some_and(|r| overlays.contains(&r))).collect();
         shown.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept))).map_err(|e| EditError::Write(e.to_string()))?;
     }
-    let bytes = write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
+    let bytes = Arc::new(write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?);
+    // Page geometry comes from the document as it is now written: a page moved earlier in the batch
+    // brings its own size and rotation with it.
+    let pages = pdfcraft_render::inspect(bytes.clone(), password).map_err(|e| EditError::Write(e.to_string()))?.pages;
     let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
-    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), config);
+    let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
     let mut residue = 0;
     for &pi in &marked {
         let request = pdfcraft_render::RenderRequest { page: pi, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() };
@@ -767,8 +772,8 @@ pub(crate) fn shown_under_redactions(
         let (Some(info), Some(text)) = (pages.get(pi), renderer.render(request).text) else { return Err(RedactError::Unreadable(pi + 1).into()) };
         let rects: Vec<[f64; 4]> = marks
             .iter()
-            .filter(|m| m.page == pi)
-            .flat_map(|m| m.rects.iter())
+            .filter(|(obj, m)| page_of(*obj, m.page) == pi)
+            .flat_map(|(_, m)| m.rects.iter())
             .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])])
             .collect();
         for glyph in text.glyphs.iter().filter(|g| !g.text.trim().is_empty()) {
