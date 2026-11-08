@@ -561,14 +561,27 @@ impl<'a, 'b> Runner<'a, 'b> {
             wanted.sort();
             wanted.dedup();
             let mut comparisons = 0usize;
+            let mut cut = false;
             let mut matched = |som: &str| {
                 let have = som_parts(som);
                 wanted.iter().any(|w| {
+                    if cut {
+                        return false;
+                    }
                     comparisons = comparisons.saturating_add(have.len());
+                    if comparisons > MAX_RESET_COMPARISONS {
+                        // The rest of the form is not matched: the reset is only part done, which
+                        // has to show rather than read as a name that matched nothing.
+                        cut = true;
+                    }
                     comparisons <= MAX_RESET_COMPARISONS && have.windows(w.len()).any(|x| x == w.as_slice())
                 })
             };
-            Some(by_som.iter().filter(|(som, _)| matched(som)).map(|(_, f)| f.clone()).collect())
+            let listed: Vec<String> = by_som.iter().filter(|(som, _)| matched(som)).map(|(_, f)| f.clone()).collect();
+            if cut {
+                self.skipped += 1;
+            }
+            Some(listed)
         };
         if listed.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
