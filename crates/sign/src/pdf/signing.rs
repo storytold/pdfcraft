@@ -119,12 +119,28 @@ fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), S
 /// Placeholder `/ByteRange` values: fixed width, patched after writing.
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
+/// Whether `doc` already holds a signature or a document timestamp: a signature dictionary whose
+/// `/Contents` is not empty (a field whose `/V` has an empty `/Contents` is not signed yet). A
+/// signature field without a name (`/T`) counts too: indirect signature dictionaries are found by
+/// their `/ByteRange`, not through the field tree.
+pub fn has_signatures(doc: &Document) -> bool {
+    let signed = |d: &Dict| {
+        let contents = d.get(b"Contents").map(|c| doc.resolve(c));
+        contents.as_deref().and_then(Object::as_string).is_some_and(|s| !s.bytes.is_empty())
+    };
+    super::validate::signature_contents(doc).iter().any(|der| !der.is_empty())
+        || doc.scan_objects().any(|(_, o)| o.as_dict().is_some_and(|d| d.contains(b"ByteRange") && signed(d)))
+}
+
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
 ///
-/// The document's first signature removes the AcroForm's `/NeedAppearances` flag: Acrobat does
-/// not recognise a signature while it is set. Later signatures leave the flag as it is.
-/// A field that has a value but no appearance stream of its own then shows empty in viewers that
-/// only drew it because of the flag.
+/// The document's first signature (no [`has_signatures`]) removes the AcroForm's
+/// `/NeedAppearances` flag: Acrobat does not recognise a signature while it is set. Later
+/// signatures leave the flag as it is. This function draws no field appearances: once the flag is
+/// gone, viewers show each field's stored normal appearance (`/AP /N`), so a filled field whose
+/// stored appearance draws no text (an empty placeholder such as `/Tx BMC EMC`, or a look left
+/// from an earlier value) shows that instead of its value. A caller that wants the values kept
+/// draws the fields first, as `Session::sign` in the engine does.
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
     sign_inner(doc, id, opts, None)
 }
@@ -159,8 +175,7 @@ fn sign_inner(
     }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
-    // A signature field whose /V holds an empty /Contents is not a signature yet.
-    let earlier_signatures = super::validate::signature_contents(&doc).iter().any(|der| !der.is_empty());
+    let earlier_signatures = has_signatures(&doc);
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
@@ -304,8 +319,9 @@ fn sign_inner(
     // Acrobat does not recognise a signature in a form that asks viewers to redraw its fields
     // (`/NeedAppearances true`): redrawing would change what the signature covers. The first
     // signature drops the flag; a later one leaves it, as removing it would count as a change
-    // to the earlier signatures. The cost: a field with a value but no appearance stream of its
-    // own, which viewers only drew because of the flag, now shows empty in them.
+    // to the earlier signatures. Without the flag viewers draw each field's stored `/AP /N`, so
+    // a filled field whose stored appearance draws no text (an empty placeholder, or a stale
+    // look) shows that instead of its value unless the caller drew the fields first (see `sign`).
     if !earlier_signatures {
         if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
             doc.update_dict(r, |af| {

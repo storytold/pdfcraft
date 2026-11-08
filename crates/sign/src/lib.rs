@@ -29,7 +29,7 @@ pub use graphic::Graphic;
 pub use keys::{DigestAlg, PrivateKey, PublicKey};
 pub use pdf::{
     Appearance, AppearanceLabels, Detail, DigestCache, Fill, Modification, SignOptions, SignatureInfo, Status, TrustStore, WORDINGS, Words,
-    in_english, kind, list as signatures, sign, sign_with_timestamp, timestamp_document, validate,
+    has_signatures, in_english, kind, list as signatures, sign, sign_with_timestamp, timestamp_document, validate,
 };
 pub use pkcs12::DigitalId;
 pub use timestamp::{TimestampAuthority, TimestampQuery, TimestampToken};
