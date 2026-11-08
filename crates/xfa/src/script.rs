@@ -562,13 +562,20 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
         r: pdfcraft_cos::ObjRef,
         prefix: &str,
         out: &mut HashMap<String, String>,
-        seen: &mut std::collections::HashSet<pdfcraft_cos::ObjRef>,
+        seen: &mut std::collections::HashMap<pdfcraft_cos::ObjRef, usize>,
         depth: usize,
     ) {
-        // A field reached again (a shared Kids array, a cycle) is walked once: a graph of shared
-        // children would otherwise be expanded once per path.
-        if depth > MAX_DEPTH || out.len() > 100_000 || seen.len() > MAX_FORM_NODES || !seen.insert(r) {
+        if depth > MAX_DEPTH || out.len() > 100_000 || seen.len() > MAX_FORM_NODES {
             return;
+        }
+        // A field reached again (a shared Kids array, a cycle) is walked again only when this path
+        // is shallower than the one before: its descendants' SOM names are shorter here, and a SOM
+        // mapped through the longer path first would keep the longer name.
+        match seen.get(&r) {
+            Some(&at) if depth >= at => return,
+            _ => {
+                seen.insert(r, depth);
+            }
         }
         let o = doc.get(r);
         let Some(d) = o.as_dict() else { return };
@@ -592,7 +599,7 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let Some((_, acro)) = acroform(doc) else { return out };
     let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::HashMap::new();
     for f in fields.iter().filter_map(Object::as_ref) {
         walk(doc, f, "", &mut out, &mut seen, 0);
     }
