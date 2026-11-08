@@ -450,6 +450,66 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
     }
 }
 
+/// The first annotation's `/Rect` and the box a viewer fits to it (ISO 32000-2 §12.5.5): its
+/// normal appearance's `/BBox` corners through `/Matrix`, their hull.
+fn first_annotation_boxes(session: &Session, id: DocId) -> ([f64; 4], [f64; 4]) {
+    let doc = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap());
+    let annot = doc.get(annots.as_array().unwrap()[0].as_ref().unwrap());
+    let annot = annot.as_dict().unwrap();
+    let nums =
+        |o: &pdfcraft_cos::Object| -> Vec<f64> { doc.resolve(o).as_array().unwrap().iter().filter_map(pdfcraft_cos::Object::as_f64).collect() };
+    let r = nums(annot.get(b"Rect").unwrap());
+    let ap = doc.resolve(annot.get(b"AP").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap()).as_ref().clone() else {
+        panic!("an appearance stream")
+    };
+    let b = nums(normal.dict.get(b"BBox").unwrap());
+    let m = normal.dict.get(b"Matrix").map_or_else(|| vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], nums);
+    let corners = [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+    let hull = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |h, &(x, y)| [h[0].min(x), h[1].min(y), h[2].max(x), h[3].max(y)]);
+    ([r[0], r[1], r[2], r[3]], hull)
+}
+
+/// #5428: an image signature, an image stamp and a PDF page stamp need no fitting into `/Rect`,
+/// which macOS Preview and Quick Look don't do: their appearance turns onto it exactly on a turned
+/// page (one whose turned box had its sides swapped was drawn small and squashed), and still after
+/// a resize (one that kept its old appearance was drawn at its old size). They read upright.
+#[test]
+fn picture_stamps_need_no_fitting_into_their_rectangle() {
+    let png = quadrant_png();
+    let pdf = Arc::new(half_red_page());
+    for degrees in [0, 90, 180, 270] {
+        for (name, file) in [("Signature", "quadrants.png"), ("Original quadrants", "quadrants.png"), ("Half red", "half.pdf")] {
+            let (mut session, id) = rotated_blank(degrees);
+            let info = session.get(id).unwrap().info.pages[0].clone();
+            let rect = displayed_rect(&info, 100.0, 100.0, 80.0, 40.0);
+            let bytes = if file.ends_with(".pdf") { pdf.clone() } else { png.clone() };
+            let file = MarkFile { name: file.into(), bytes, page: 0 };
+            session.apply(id, Edit::AddCustomStamp { page: 0, rect, name: name.into(), file, author: "Test".into() }).unwrap();
+            let (placed, hull) = first_annotation_boxes(&session, id);
+            let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+            assert!(
+                placed.iter().zip(hull).all(|(a, b)| near(*a, b)),
+                "{name}, rotation {degrees}: the turned /BBox {hull:?} is not /Rect {placed:?}"
+            );
+            if name != "Half red" {
+                assert_upright_quadrants(&session, id, degrees);
+            }
+            // Half as big again about its middle: drawn again into the new rectangle.
+            let (cx, cy, w, h) = ((placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0, placed[2] - placed[0], placed[3] - placed[1]);
+            let bigger = [cx - w * 0.75, cy - h * 0.75, cx + w * 0.75, cy + h * 0.75];
+            session.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: bigger }).unwrap();
+            let (resized, hull) = first_annotation_boxes(&session, id);
+            assert!(
+                resized.iter().zip(bigger).all(|(a, b)| (a - b).abs() < 1e-3) && resized.iter().zip(hull).all(|(a, b)| near(*a, b)),
+                "{name}, rotation {degrees}: resized to {resized:?}, its turned /BBox is {hull:?}"
+            );
+        }
+    }
+}
+
 /// A visible digital signature reads upright as the page is displayed on every page rotation:
 /// its picture, alone in the box, shows its quadrants where they are in the image.
 #[test]

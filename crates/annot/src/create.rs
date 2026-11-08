@@ -1,5 +1,5 @@
 use super::draw::draw_appearance;
-use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
+use super::lookup::{annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{free_text_da, n, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
@@ -293,13 +293,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
             d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
-            // An image signature's rectangle is in user space; on a turned page its appearance is
-            // turned back (see `appearance::build`), so it reads upright as displayed.
-            if *image && matches!(clean.as_str(), "Signature" | "Initials") {
-                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
-                if turn != 0 {
-                    d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
-                }
+            // The rectangle is in user space; on a turned page the picture is turned back (see
+            // `appearance::build`), so it reads upright as displayed.
+            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            if turn != 0 {
+                d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
             }
         }
         Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
@@ -462,33 +460,5 @@ fn add_popup(doc: &mut Document, parent: ObjRef, rect: Option<[f64; 4]>, annots:
     let popup_ref = doc.add(Object::Dict(popup));
     doc.update_dict(parent, |dict| dict.set(b"Popup".to_vec(), Object::Ref(popup_ref)))?;
     annots.push(Object::Ref(popup_ref));
-    Ok(())
-}
-
-/// Counterrotate a newly placed picture stamp's appearance into displayed-page axes.
-/// The picture may be an image or a PDF page. The normal appearance's transformed bounding
-/// box is fitted to `/Rect` by PDF viewers.
-pub fn orient_image_stamp(doc: &mut Document, page: usize, index: usize, rotation: i64) -> Result<(), AnnotError> {
-    let matrix = match rotation {
-        90 => [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],
-        180 => [-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
-        270 => [0.0, -1.0, 1.0, 0.0, 0.0, 0.0],
-        _ => return Ok(()),
-    };
-    let (_, r) = annot_ref(doc, page, index)?;
-    let d = annot_dict(doc, r);
-    if d.name(b"Subtype") != Some(b"Stamp") || d.get(b"PCPicture").is_none() {
-        return Err(AnnotError::Invalid("only a picture stamp can be oriented".into()));
-    }
-    let normal = d
-        .get(b"AP")
-        .map(|ap| doc.resolve(ap))
-        .and_then(|ap| ap.as_dict().and_then(|ap| ap.reference(b"N")))
-        .ok_or_else(|| AnnotError::Invalid("the stamp has no normal appearance".into()))?;
-    let Object::Stream(mut stream) = doc.get(normal).as_ref().clone() else {
-        return Err(AnnotError::Invalid("the stamp's normal appearance is not a stream".into()));
-    };
-    stream.dict.set(b"Matrix".to_vec(), num_array(&matrix));
-    doc.set(normal, Object::Stream(stream));
     Ok(())
 }
