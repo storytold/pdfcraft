@@ -163,6 +163,23 @@ fn edit_script<T: PartialEq>(a: &[T], b: &[T], max: usize) -> Option<Vec<Step>> 
     None
 }
 
+/// For each of `old`'s words, the index in `new` of the word it stays as in the shortest edit from
+/// one to the other (`None` when it goes), or `None` overall past [`MAX_CHANGED_WORDS`] changes.
+pub(crate) fn kept_words<T: PartialEq>(old: &[T], new: &[T]) -> Option<Vec<Option<usize>>> {
+    let mut kept = vec![None; old.len()];
+    let (mut o, mut n) = (0usize, 0usize);
+    for step in edit_script(old, new, MAX_CHANGED_WORDS)? {
+        if step == Step::Keep
+            && let Some(slot) = kept.get_mut(o)
+        {
+            *slot = Some(n);
+        }
+        o = o.saturating_add(usize::from(step != Step::Insert));
+        n = n.saturating_add(usize::from(step != Step::Delete));
+    }
+    Some(kept)
+}
+
 /// Walk Myers' saved frontiers back from the end to the edit script.
 fn backtrack(trace: &[Vec<isize>], n: isize, m: isize, max: isize) -> Vec<Step> {
     let at = |v: &[isize], k: isize| usize::try_from(k + max + 1).ok().and_then(|i| v.get(i).copied()).unwrap_or(0);
@@ -435,6 +452,10 @@ pub struct BlockStyle {
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
+    /// For an invisible paragraph whose formatting nobody asked to change: cover and redraw only
+    /// the words the draft changes, and leave the rest as the scan shows them (#3313). The session
+    /// sets this; a caller that sets it should also give `cover`.
+    pub changed_words_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

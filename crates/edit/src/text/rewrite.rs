@@ -7,7 +7,7 @@ use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, joined, page_dict, rewritten_contents, splice, text_lines};
 use super::{
     Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks, is_centred,
-    parse, rewrite_styled_block,
+    parse, rewrite_changed_words, rewrite_styled_block,
 };
 
 /// What replacing a line did.
@@ -828,6 +828,9 @@ pub(crate) fn rewrite_block_from(
     // take that is refused here, before either rewrite path changes anything.
     if b.invisible {
         crate::check_on_top(doc, &p)?;
+    }
+    if let Some(edit) = text.and_then(|draft| rewrite_changed_words(doc, page, &b, &lines, draft, style, max_glyphs)) {
+        return Ok(edit);
     }
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();

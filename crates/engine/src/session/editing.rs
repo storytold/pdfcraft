@@ -59,6 +59,7 @@ impl Session {
         // in the paper's colour and draw the new text in the ink's.
         let edit = match edit {
             Edit::EditTextBlock { page, block, text, mut style } => {
+                let plain = style == pdfcraft_edit::BlockStyle::default();
                 // Only invisible text is sampled; the blocks are usually cached from opening it.
                 if style.cover.is_none()
                     && let Some(info) = doc.info.pages.get(page)
@@ -67,6 +68,8 @@ impl Session {
                 {
                     style.cover = Some(paper);
                     style.color = style.color.or(Some(ink));
+                    // A text edit alone leaves the words it doesn't change as the scan shows them.
+                    style.changed_words_only = plain;
                 }
                 Edit::EditTextBlock { page, block, text, style }
             }
