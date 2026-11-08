@@ -33,14 +33,18 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+mod store;
+
+pub use store::{JournalRecord, Store};
+
 /// One authoritative PDF, opened through the engine façade.
 pub struct PdfAdapter {
     session: Session,
     id: DocId,
     epoch: u64,
-    /// Where a commit writes the working file, atomically. `None` keeps bytes in
-    /// memory only (tests, headless adapters).
-    commit_path: Option<std::path::PathBuf>,
+    /// The durable base and journal. `None` keeps the document in memory only
+    /// (tests, headless adapters).
+    store: Option<Store>,
 }
 
 impl PdfAdapter {
@@ -64,7 +68,7 @@ impl PdfAdapter {
                 false,
             ));
         }
-        Ok(Self { session, id, epoch: 0, commit_path: None })
+        Ok(Self { session, id, epoch: 0, store: None })
     }
 
     pub fn session(&self) -> &Session {
@@ -79,10 +83,13 @@ impl PdfAdapter {
         self.epoch
     }
 
-    /// Write every commit to this path (temporary file + rename, so a reader
-    /// never sees half a PDF).
-    pub fn set_commit_path(&mut self, path: impl Into<std::path::PathBuf>) {
-        self.commit_path = Some(path.into());
+    /// Make the room durable: every accepted operation is appended to the
+    /// store's journal and every commit writes a versioned base. The current
+    /// epoch comes from the store, so a resumed document keeps accepting merge
+    /// operations that were addressed to its pages.
+    pub fn attach_store(&mut self, store: Store) {
+        self.epoch = store.base_state().1;
+        self.store = Some(store);
     }
 
     fn apply_edit(&mut self, edit: Edit) -> Result<(), AdapterError> {
@@ -298,18 +305,18 @@ impl Adapter for PdfAdapter {
         Ok(ApplyOutcome { result, op: effective, epoch: self.epoch })
     }
 
-    fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+    fn record(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
+        let Some(store) = self.store.as_mut() else { return Ok(()) };
+        store.append(version, actor, op)
+    }
+
+    fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
         let bytes = self.session.save_bytes(self.id).map_err(map_edit)?;
-        if let Some(path) = &self.commit_path {
-            let Some(dir) = path.parent() else {
-                return Err(AdapterError::new(ErrorCode::Invalid, "the commit path has no directory", false));
-            };
-            std::fs::create_dir_all(dir).map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not create {dir:?}: {e}"), false))?;
-            let temporary = path.with_extension("pdf.tmp");
-            std::fs::write(&temporary, bytes.as_slice())
-                .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not write the commit: {e}"), true))?;
-            std::fs::rename(&temporary, path)
-                .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not replace the working file: {e}"), true))?;
+        if let Some(store) = self.store.as_mut() {
+            store.write_base(version, epoch, bytes.as_slice())?;
+            // Entries the new base contains are skipped at replay by version, so
+            // a failed truncation costs disk, not correctness.
+            let _ = store.truncate(version);
         }
         Ok(CommitOutcome { sha256: sha256_hex(&bytes), bytes: bytes.len() as u64, conflict: false })
     }
@@ -363,41 +370,43 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// The author the adapter records when an operation names none.
 pub const DEFAULT_AUTHOR: &str = "PdfCraft";
 
+/// A synthetic document with `n` pages, for adapter and store tests.
+#[cfg(test)]
+pub(crate) fn fixture(n: usize) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
+    objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i).into_bytes());
+        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_AUTHOR, PdfAdapter};
+    use super::{DEFAULT_AUTHOR, PdfAdapter, fixture};
     use pdfcraft_collab_proto::{
         ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
     use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
     use serde_json::json;
-
-    fn fixture(n: usize) -> Vec<u8> {
-        let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
-        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
-        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
-        objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
-        for i in 0..n {
-            objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i).into_bytes());
-            let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
-            objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
-        }
-        let mut out = b"%PDF-1.7\n".to_vec();
-        let mut offsets = Vec::new();
-        for (i, o) in objs.iter().enumerate() {
-            offsets.push(out.len());
-            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-            out.extend_from_slice(o);
-            out.extend_from_slice(b"\nendobj\n");
-        }
-        let xref = out.len();
-        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-        for o in offsets {
-            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-        }
-        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-        out
-    }
 
     fn op(
         id: &str,
@@ -561,7 +570,7 @@ mod tests {
     #[test]
     fn adapter_commit_is_a_valid_pdf() -> Result<(), Box<dyn std::error::Error>> {
         let mut adapter = PdfAdapter::open("fixture.pdf", fixture(1).into())?;
-        let outcome = adapter.commit()?;
+        let outcome = adapter.commit(0, 0)?;
         assert!(!outcome.sha256.is_empty());
         assert_eq!(outcome.sha256.len(), 64);
         assert!(adapter.base().is_some());

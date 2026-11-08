@@ -445,7 +445,7 @@ mod tests {
         fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
             Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: 0 })
         }
-        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
             Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
         }
         fn base(&self) -> Option<BlobRef> {

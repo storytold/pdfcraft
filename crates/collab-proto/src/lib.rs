@@ -366,6 +366,9 @@ pub enum ErrorCode {
     Invalid,
     Limit,
     Unsupported,
+    /// The server could not complete an operation for a reason the client
+    /// cannot fix: the request is not retryable and repeating it will not help.
+    Internal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

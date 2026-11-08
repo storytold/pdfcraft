@@ -57,7 +57,18 @@ pub trait Adapter {
     /// Apply `op` on behalf of `actor`. The author recorded in the document is
     /// the verified actor, never a client-supplied string (ADR-0008 §7).
     fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError>;
-    fn commit(&mut self) -> Result<CommitOutcome, AdapterError>;
+    /// Persist an accepted operation before it is acknowledged. The default is
+    /// a no-op: an adapter whose document lives only in memory (tests, a
+    /// headless session) has nothing to replay. An adapter that returns an
+    /// error here has already changed the document, so the room is poisoned:
+    /// see [`Room::apply`].
+    fn record(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
+        let _ = (version, actor, op);
+        Ok(())
+    }
+    /// Write the document as it stands at `version`/`epoch` and make it the
+    /// new recovery base. Called after the room has acknowledged the head.
+    fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError>;
     /// The current base bytes, when the journal no longer covers a resync.
     fn base(&self) -> Option<BlobRef>;
 }
@@ -115,24 +126,36 @@ pub struct Room<A: Adapter> {
     committed_version: u64,
     applied_order: VecDeque<String>,
     applied: HashMap<String, Applied>,
+    /// Set when the adapter could not persist an accepted operation. The
+    /// document in memory is ahead of the durable state, so no further write is
+    /// accepted; resync and commit still work.
+    poisoned: Option<String>,
 }
 
 impl<A: Adapter> Room<A> {
     pub fn new(session_id: SessionId, doc: DocKey, adapter: A, config: RoomConfig) -> Self {
+        Self::resume(session_id, doc, adapter, 0, 0, config)
+    }
+
+    /// A room opened from a committed base: the document already contains
+    /// `version` operations and its structural epoch is `epoch`. The journal
+    /// entries after `version` are replayed with [`Self::replay`].
+    pub fn resume(session_id: SessionId, doc: DocKey, adapter: A, version: u64, epoch: u64, config: RoomConfig) -> Self {
         Self {
             session_id,
             doc,
             adapter,
             config,
-            version: 0,
-            epoch: 0,
+            version,
+            epoch,
             participants: HashMap::new(),
             op_windows: HashMap::new(),
             lease: None,
             journal: VecDeque::new(),
-            committed_version: 0,
+            committed_version: version,
             applied_order: VecDeque::new(),
             applied: HashMap::new(),
+            poisoned: None,
         }
     }
 
@@ -155,6 +178,11 @@ impl<A: Adapter> Room<A> {
 
     pub fn journal_len(&self) -> usize {
         self.journal.len()
+    }
+
+    /// Why the room refuses writes, if the durable journal failed.
+    pub fn poisoned(&self) -> Option<&str> {
+        self.poisoned.as_deref()
     }
 
     /// Join. The role comes from the verified token, never from the body.
@@ -249,6 +277,9 @@ impl<A: Adapter> Room<A> {
         if role == Role::Viewer {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "viewers cannot change the document"));
         }
+        if let Some(reason) = &self.poisoned {
+            return Err(self.reject(&op.op_id, ErrorCode::Internal, false, format!("the room is read-only: {reason}")));
+        }
         if let Some(applied) = self.applied.get(op.op_id.as_str()) {
             return Ok(applied.clone());
         }
@@ -277,11 +308,13 @@ impl<A: Adapter> Room<A> {
             Ok(outcome) => outcome,
             Err(e) => return Err(self.reject(&op.op_id, e.code, e.retryable, e.message)),
         };
-        if op.class == ConflictClass::Structural && outcome.epoch <= self.epoch {
-            return Err(self.reject(&op.op_id, ErrorCode::Invalid, false, "a structural operation must advance the epoch"));
-        }
-        if outcome.epoch < self.epoch {
-            return Err(self.reject(&op.op_id, ErrorCode::Invalid, false, "the epoch cannot move backwards"));
+        // A structural operation must advance the epoch. An adapter that breaks
+        // that contract has already changed the document, so the room cannot
+        // keep a coherent head: it is poisoned, not merely rejecting.
+        if (op.class == ConflictClass::Structural && outcome.epoch <= self.epoch) || outcome.epoch < self.epoch {
+            let message = format!("the adapter applied version {} but returned epoch {}", self.version.saturating_add(1), outcome.epoch);
+            self.poisoned = Some(message.clone());
+            return Err(self.reject(&op.op_id, ErrorCode::Internal, false, message));
         }
         self.version = self.version.saturating_add(1);
         self.epoch = outcome.epoch;
@@ -300,6 +333,15 @@ impl<A: Adapter> Room<A> {
             }
         }
         self.remember(applied.clone());
+        // The operation is acknowledged only once it is durable: a crash may
+        // lose the document's last edits, but never one the client was told
+        // about. The adapter has already changed the document, so a failure
+        // here cannot be retried on top of it.
+        if let Err(e) = self.adapter.record(self.version, actor, &applied.op) {
+            self.poisoned = Some(e.message.clone());
+            let hint = Some(VersionHint { version: self.version, epoch: self.epoch });
+            return Err(Rejected { op_id: applied.op_id, code: ErrorCode::Internal, retryable: false, hint, message: e.message });
+        }
         Ok(applied)
     }
 
@@ -312,6 +354,42 @@ impl<A: Adapter> Room<A> {
                 self.applied.remove(&old);
             }
         }
+    }
+
+    /// Rebuild the head from a durable journal after a restart.
+    ///
+    /// The entries were accepted before the crash, so membership, role, lease
+    /// and de-duplication checks are skipped; the operation is applied as it
+    /// was accepted, and `version` must be the stored one (a gap means the
+    /// journal and the base disagree about the document). The adapter's
+    /// document is at the base, so its epoch is advanced by the replayed
+    /// structural operations, not by the caller.
+    pub fn replay(&mut self, actor: ActorId, op: Op, version: u64) -> Result<(), ServerError> {
+        if version != self.version.saturating_add(1) {
+            return Err(server_error(ErrorCode::Invalid, format!("the journal jumps from version {} to {version}", self.version), false));
+        }
+        if op.doc != self.doc {
+            return Err(server_error(ErrorCode::Invalid, "a journal entry belongs to another document", false));
+        }
+        let class = op.class;
+        let outcome = self
+            .adapter
+            .apply(&actor, &op)
+            .map_err(|e| server_error(ErrorCode::Invalid, format!("replaying version {version}: {}", e.message), false))?;
+        if (class == ConflictClass::Structural && outcome.epoch <= self.epoch) || outcome.epoch < self.epoch {
+            return Err(server_error(ErrorCode::Invalid, format!("replaying version {version} breaks the epoch"), false));
+        }
+        self.version = version;
+        self.epoch = outcome.epoch;
+        let applied = Applied { op_id: op.op_id.clone(), actor_id: actor, version, epoch: self.epoch, op: outcome.op, result: outcome.result };
+        if let Ok(op_value) = serde_json::to_value(&applied.op) {
+            self.journal.push_back(JournalEntry { version, op: op_value });
+            while self.journal.len() > self.config.journal_len {
+                self.journal.pop_front();
+            }
+        }
+        self.remember(applied);
+        Ok(())
     }
 
     /// What a reconnecting client needs after `last_version`. If the journal no
@@ -364,7 +442,7 @@ impl<A: Adapter> Room<A> {
         if expected_version != self.version {
             return Err(server_error(ErrorCode::Stale, "the document changed; resync and commit again", true));
         }
-        let outcome = self.adapter.commit().map_err(|e| server_error(e.code, e.message, e.retryable))?;
+        let outcome = self.adapter.commit(self.version, self.epoch).map_err(|e| server_error(e.code, e.message, e.retryable))?;
         self.committed_version = self.version;
         Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
     }
@@ -377,7 +455,7 @@ impl<A: Adapter> Room<A> {
     /// The server commits on its own (last participant leaving, RFC §8). No
     /// actor or expected version: the room's head is what is written.
     pub fn commit_now(&mut self) -> Result<CommitResult, ServerError> {
-        let outcome = self.adapter.commit().map_err(|e| server_error(e.code, e.message, e.retryable))?;
+        let outcome = self.adapter.commit(self.version, self.epoch).map_err(|e| server_error(e.code, e.message, e.retryable))?;
         self.committed_version = self.version;
         Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
     }
@@ -423,6 +501,15 @@ mod tests {
     struct Fake {
         epoch: u64,
         applied: usize,
+        /// Accepted operations as the room persisted them, when recording works.
+        recorded: Vec<(u64, String, String)>,
+        record_error: Option<&'static str>,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self { epoch: 0, applied: 0, recorded: Vec::new(), record_error: None }
+        }
     }
 
     impl Adapter for Fake {
@@ -437,7 +524,15 @@ mod tests {
             Ok(ApplyOutcome { result: json!({"n": self.applied}), op: op.clone(), epoch: self.epoch })
         }
 
-        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+        fn record(&mut self, version: u64, actor: &ActorId, op: &Op) -> Result<(), AdapterError> {
+            if let Some(message) = self.record_error {
+                return Err(AdapterError::new(ErrorCode::Internal, message, false));
+            }
+            self.recorded.push((version, actor.as_str().to_owned(), op.op_id.as_str().to_owned()));
+            Ok(())
+        }
+
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
             Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
         }
 
@@ -447,12 +542,7 @@ mod tests {
     }
 
     fn room() -> Result<Room<Fake>, Box<dyn std::error::Error>> {
-        Ok(Room::new(
-            SessionId::new("session-1")?,
-            DocKey::new("file-1")?,
-            Fake { epoch: 0, applied: 0 },
-            RoomConfig { journal_len: 2, ..RoomConfig::default() },
-        ))
+        Ok(Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), RoomConfig { journal_len: 2, ..RoomConfig::default() }))
     }
 
     fn actor(name: &str) -> Result<ActorId, Box<dyn std::error::Error>> {
@@ -488,7 +578,7 @@ mod tests {
         let mut room = Room::new(
             SessionId::new("session-1")?,
             DocKey::new("file-1")?,
-            Fake { epoch: 0, applied: 0 },
+            Fake::new(),
             RoomConfig { limits: Limits { max_participants: 2, max_ops_per_sec: 2, ..Limits::default() }, ..RoomConfig::default() },
         );
         let hello = hello()?;
@@ -676,6 +766,108 @@ mod tests {
         assert!(matches!(room.apply(&b, &structural, 0), Err(e) if e.code == ErrorCode::Lease));
         room.disconnect(&a);
         assert!(room.apply(&b, &structural, 0).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn an_accepted_operation_is_recorded_before_it_is_acknowledged() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = room()?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("r1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        room.apply(&editor, &op("r2", OpKind::Structural, ConflictClass::Structural, 1, 0)?, 0)?;
+        assert_eq!(
+            room.adapter().recorded,
+            vec![(1, "editor".to_owned(), "r1".to_owned()), (2, "editor".to_owned(), "r2".to_owned())],
+            "the room hands the accepted operation to the adapter with its version and author"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_journal_write_poisons_the_room_but_commit_still_works() -> Result<(), Box<dyn std::error::Error>> {
+        let mut adapter = Fake::new();
+        adapter.record_error = Some("the disk is full");
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        let first = op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
+        assert!(matches!(room.apply(&editor, &first, 0), Err(e) if e.code == ErrorCode::Internal && !e.retryable));
+        assert_eq!(room.poisoned(), Some("the disk is full"));
+        // The document changed before the journal failed; a second write must not
+        // build on it.
+        let second = op("p2", OpKind::Primitive, ConflictClass::Merge, 1, 0)?;
+        assert!(matches!(room.apply(&editor, &second, 0), Err(e) if e.code == ErrorCode::Internal));
+        assert_eq!(room.version(), 1);
+        // Committing writes the base at the current head, which is how an
+        // operator rescues what the journal lost.
+        assert!(room.commit(&editor, 1).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn an_adapter_that_breaks_the_epoch_contract_poisons_the_room() -> Result<(), Box<dyn std::error::Error>> {
+        struct Frozen(Fake);
+        impl Adapter for Frozen {
+            fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+                let mut outcome = self.0.apply(actor, op)?;
+                // The document changed, but a structural operation did not move
+                // the epoch: the room cannot describe the resulting head.
+                outcome.epoch = 0;
+                Ok(outcome)
+            }
+            fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+                self.0.commit(version, epoch)
+            }
+            fn base(&self) -> Option<BlobRef> {
+                self.0.base()
+            }
+        }
+
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, Frozen(Fake::new()), RoomConfig::default());
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        let structural = op("s1", OpKind::Structural, ConflictClass::Structural, 0, 0)?;
+        assert!(matches!(room.apply(&editor, &structural, 0), Err(e) if e.code == ErrorCode::Internal));
+        assert!(room.poisoned().is_some(), "the head is not coherent, so no later operation may be accepted");
+        assert_eq!(room.version(), 0, "a broken contract must not advance the version");
+        Ok(())
+    }
+
+    #[test]
+    fn replay_rebuilds_the_head_epoch_and_the_retry_window() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = Room::resume(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), 0, 0, RoomConfig::default());
+        let editor = actor("editor")?;
+        room.replay(editor.clone(), op("a1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 1)?;
+        room.replay(editor.clone(), op("s1", OpKind::Structural, ConflictClass::Structural, 1, 0)?, 2)?;
+        assert_eq!(room.version(), 2);
+        assert_eq!(room.epoch(), 1);
+        assert_eq!(room.journal_len(), 2);
+        assert!(room.is_dirty(), "the replayed entries are not in the base yet");
+
+        // After a join, a retry of a replayed opId is answered from the window
+        // instead of being applied a second time, even though its epoch is old.
+        let hello = hello()?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        let retried = op("a1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
+        let applied = room.apply(&editor, &retried, 0)?;
+        assert_eq!(applied.version, 1);
+        assert_eq!(room.version(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn a_journal_gap_or_a_foreign_document_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = Room::resume(SessionId::new("session-1")?, DocKey::new("file-1")?, Fake::new(), 4, 2, RoomConfig::default());
+        let editor = actor("editor")?;
+        assert!(room.replay(editor.clone(), op("a2", OpKind::Primitive, ConflictClass::Merge, 4, 2)?, 3).is_err(), "version 3 is behind the base");
+        let mut foreign = op("a5", OpKind::Primitive, ConflictClass::Merge, 4, 2)?;
+        foreign.doc = DocKey::new("file-2")?;
+        assert!(room.replay(editor, foreign, 5).is_err());
+        assert_eq!(room.version(), 4);
         Ok(())
     }
 }

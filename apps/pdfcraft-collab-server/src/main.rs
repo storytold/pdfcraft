@@ -1,10 +1,11 @@
 //! The PdfCraft collaboration server.
 //!
-//! One room per `<fileId>.pdf` in the documents directory. The room's working
-//! copy lives in the data directory and is replaced on every commit (manual, or
-//! when the last participant leaves and the room is dirty). Session tokens are
-//! RS256 JWTs verified with the cabinet's public key; no token, comment text or
-//! PDF byte is logged.
+//! One room per `<fileId>.pdf` in the documents directory. Each room has a
+//! directory under `--data` with a versioned committed base and a journal of the
+//! operations accepted since it: an acknowledged edit survives a crash, and a
+//! restart replays the tail onto the last base. Session tokens are RS256 JWTs
+//! verified with the cabinet's public key; no token, comment text or PDF byte is
+//! logged.
 //!
 //! ```text
 //! pdfcraft-collab-server \
@@ -13,15 +14,14 @@
 //!   --listen 127.0.0.1:8787 --health 127.0.0.1:8788
 //! ```
 //!
-//! `/health` returns JSON, `/metrics` a small Prometheus text. Restart recovery
-//! uses the last committed working copy; a crash loses the edits accepted since
-//! that commit (the journal is not persisted yet — see `docs/collab/rfc.md`).
+//! `/health` returns JSON, `/metrics` a small Prometheus text. A room whose
+//! journal failed becomes read-only and is listed under `poisoned`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_hub::Hub;
-use pdfcraft_collab_pdf::PdfAdapter;
-use pdfcraft_collab_proto::DocKey;
+use pdfcraft_collab_pdf::{PdfAdapter, Store};
+use pdfcraft_collab_proto::{ActorId, DocKey};
 use pdfcraft_collab_server::RoomConfig;
 use pdfcraft_collab_ws::{Config, JwtVerifier, WsServer};
 use std::io::{BufRead, BufReader, Write};
@@ -111,8 +111,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(parsed)
 }
 
-/// Open one room per PDF. A file that already has a working copy is opened from
-/// it, so a restart continues from the last commit.
+/// Open one room per PDF. A room directory in `--data` holds the committed
+/// base and the journal since it; a restart loads that base and replays the
+/// journal, so an acknowledged edit survives the process (see
+/// `pdfcraft_collab_pdf::Store`).
 fn open_rooms(hub: &mut Hub<PdfAdapter>, args: &Args) -> Result<usize, String> {
     let entries = std::fs::read_dir(&args.documents).map_err(|e| format!("could not read {:?}: {e}", args.documents))?;
     std::fs::create_dir_all(&args.data).map_err(|e| format!("could not create {:?}: {e}", args.data))?;
@@ -125,16 +127,28 @@ fn open_rooms(hub: &mut Hub<PdfAdapter>, args: &Args) -> Result<usize, String> {
         }
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
         let doc = DocKey::new(stem).map_err(|e| format!("{stem:?} is not a valid document id: {e}"))?;
-        let working = args.data.join(format!("{stem}.pdf"));
-        let source = if working.exists() { &working } else { &path };
-        let bytes = std::fs::read(source).map_err(|e| format!("could not read {source:?}: {e}"))?;
-        if source == &path {
-            // The first run starts from the cabinet's copy and keeps it untouched.
-            std::fs::write(&working, &bytes).map_err(|e| format!("could not write {working:?}: {e}"))?;
-        }
+        let mut store = Store::open(args.data.join(stem)).map_err(|e| format!("{stem}: {e}"))?;
+        let (version, epoch) = store.base_state();
+        let bytes = match store.base().map_err(|e| format!("{stem}: {e}"))? {
+            Some(bytes) => bytes,
+            None => {
+                // The first run starts from the cabinet's copy, keeps it
+                // untouched and seeds version 0.
+                let bytes = std::fs::read(&path).map_err(|e| format!("could not read {path:?}: {e}"))?;
+                store.write_base(0, 0, &bytes).map_err(|e| format!("{stem}: {e}"))?;
+                bytes
+            }
+        };
+        let records = store.journal().map_err(|e| format!("{stem}: {e}"))?;
         let mut adapter = PdfAdapter::open(format!("{stem}.pdf"), bytes.into()).map_err(|e| format!("{stem}: {e}"))?;
-        adapter.set_commit_path(working);
-        hub.open_room(doc, adapter).map_err(|e| format!("{stem}: {e}"))?;
+        adapter.attach_store(store);
+        hub.open_room_at(doc.clone(), adapter, version, epoch).map_err(|e| format!("{stem}: {e}"))?;
+        let room = hub.room_mut(&doc).ok_or_else(|| format!("{stem}: the room was not registered"))?;
+        for record in records.into_iter().filter(|record| record.version > version) {
+            let actor = ActorId::new(record.actor.clone()).map_err(|e| format!("{stem}: journal actor {:?}: {e}", record.actor))?;
+            let replay_version = record.version;
+            room.replay(actor, record.op, replay_version).map_err(|e| format!("{stem}: {e}"))?;
+        }
         opened += 1;
     }
     Ok(opened)
@@ -143,15 +157,26 @@ fn open_rooms(hub: &mut Hub<PdfAdapter>, args: &Args) -> Result<usize, String> {
 /// The health and metrics bodies. No document content, token or comment text.
 fn render(path: &str, metrics: Result<pdfcraft_collab_ws::Metrics, pdfcraft_collab_ws::TransportError>) -> (&'static str, &'static str, String) {
     match metrics {
-        Ok(metrics) if path == "/health" => {
-            ("200 OK", "application/json", serde_json::json!({"ok": true, "rooms": metrics.rooms, "clients": metrics.clients}).to_string())
-        }
+        Ok(metrics) if path == "/health" => (
+            "200 OK",
+            "application/json",
+            serde_json::json!({
+                "ok": metrics.poisoned.is_empty(),
+                "rooms": metrics.rooms,
+                "clients": metrics.clients,
+                "poisoned": metrics.poisoned,
+            })
+            .to_string(),
+        ),
         Ok(metrics) if path == "/metrics" => {
             let mut body = format!("pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\n", metrics.rooms, metrics.clients);
             for (room, version, epoch) in metrics.versions {
                 body.push_str(&format!(
                     "pdfcraft_collab_room_version{{room=\"{room}\"}} {version}\npdfcraft_collab_room_epoch{{room=\"{room}\"}} {epoch}\n"
                 ));
+            }
+            for room in metrics.poisoned {
+                body.push_str(&format!("pdfcraft_collab_room_read_only{{room=\"{room}\"}} 1\n"));
             }
             ("200 OK", "text/plain; version=0.0.4", body)
         }
@@ -230,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn a_document_directory_becomes_rooms_with_working_copies() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_document_directory_becomes_rooms_with_a_committed_base() -> Result<(), Box<dyn std::error::Error>> {
         let root = std::env::temp_dir().join(format!("pdfcraft-collab-test-{}", std::process::id()));
         let documents = root.join("documents");
         let data = root.join("data");
@@ -240,7 +265,8 @@ mod tests {
         let mut hub = Hub::new(RoomConfig::default());
         assert_eq!(open_rooms(&mut hub, &args)?, 1);
         assert_eq!(hub.rooms(), 1);
-        assert!(data.join("file-1.pdf").exists(), "the working copy is created");
+        assert!(data.join("file-1/versions/0/file.pdf").exists(), "version 0 is the cabinet's copy");
+        assert!(data.join("file-1/CURRENT").exists());
         assert!(documents.join("file-1.pdf").exists(), "the source is untouched");
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -264,47 +290,66 @@ mod tests {
             client: ClientInfo { name: "test".into(), version: "0".into() },
         };
         let editor = ActorId::new("editor")?;
+        let add = |id: &str, nm: &str, base: u64| -> Result<Op, Box<dyn std::error::Error>> {
+            Ok(Op {
+                op_id: OpId::new(id)?,
+                doc: DocKey::new("file-1")?,
+                base_version: base,
+                epoch: 0,
+                kind: OpKind::Primitive,
+                class: ConflictClass::Merge,
+                target: Target::Page(PageRef { index: 0, epoch: 0 }),
+                payload: serde_json::json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "kept", "nm": nm}),
+                preview: None,
+            })
+        };
         {
             let mut hub = Hub::new(RoomConfig::default());
             open_rooms(&mut hub, &args)?;
             let room = hub.room_mut(&doc).ok_or("no room")?;
             room.hello(editor.clone(), Role::Editor, &hello, 0)?;
-            let op = Op {
-                op_id: OpId::new("a1")?,
-                doc: doc.clone(),
-                base_version: 0,
-                epoch: 0,
-                kind: OpKind::Primitive,
-                class: ConflictClass::Merge,
-                target: Target::Page(PageRef { index: 0, epoch: 0 }),
-                payload: serde_json::json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "kept", "nm": "restart-note"}),
-                preview: None,
-            };
-            room.apply(&editor, &op, 0)?;
+            room.apply(&editor, &add("a1", "committed-note", 0)?, 0)?;
             room.commit(&editor, 1)?;
+            // Accepted after the commit: the journal, not the base, holds it.
+            room.apply(&editor, &add("a2", "journal-note", 1)?, 0)?;
         }
-        // A new process: the working copy is the base and still has the comment.
+        // A new process: the base plus the replayed journal, in that order.
         let mut hub = Hub::new(RoomConfig::default());
         open_rooms(&mut hub, &args)?;
         let room = hub.room(&doc).ok_or("no room after restart")?;
         let document = room.adapter().document().ok_or("no document")?;
-        assert!(document.info.annotations.iter().any(|a| a.name.as_deref() == Some("restart-note")));
+        assert!(document.info.annotations.iter().any(|a| a.name.as_deref() == Some("committed-note")));
+        assert!(
+            document.info.annotations.iter().any(|a| a.name.as_deref() == Some("journal-note")),
+            "an operation acknowledged after the last commit survives a crash"
+        );
+        assert_eq!(room.version(), 2, "the head continues past the committed version");
+        assert!(room.is_dirty(), "the replayed operation is not in the base yet, so the room must commit again");
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
 
     #[test]
     fn health_and_metrics_say_what_they_are() {
-        let metrics = pdfcraft_collab_ws::Metrics { rooms: 2, clients: 3, versions: vec![("file-1".into(), 7, 1)] };
+        let metrics = pdfcraft_collab_ws::Metrics { rooms: 2, clients: 3, versions: vec![("file-1".into(), 7, 1)], poisoned: Vec::new() };
         let (status, content_type, body) = render("/health", Ok(metrics.clone()));
         assert_eq!(status, "200 OK");
         assert_eq!(content_type, "application/json");
-        assert_eq!(body, r#"{"clients":3,"ok":true,"rooms":2}"#);
+        assert_eq!(body, r#"{"clients":3,"ok":true,"poisoned":[],"rooms":2}"#);
         let (status, _, body) = render("/metrics", Ok(metrics));
         assert_eq!(status, "200 OK");
         assert!(body.contains("pdfcraft_collab_rooms 2"));
         assert!(body.contains(r#"pdfcraft_collab_room_version{room="file-1"} 7"#));
-        let (status, _, _) = render("/nope", Ok(pdfcraft_collab_ws::Metrics { rooms: 0, clients: 0, versions: Vec::new() }));
+        assert!(!body.contains("read_only"), "a healthy room is not reported as read-only");
+
+        let poisoned = pdfcraft_collab_ws::Metrics { rooms: 1, clients: 0, versions: Vec::new(), poisoned: vec!["file-2".into()] };
+        let (_, _, body) = render("/health", Ok(poisoned.clone()));
+        assert!(body.contains(r#""ok":false"#));
+        assert!(body.contains(r#""poisoned":["file-2"]"#));
+        let (_, _, body) = render("/metrics", Ok(poisoned));
+        assert!(body.contains(r#"pdfcraft_collab_room_read_only{room="file-2"} 1"#));
+
+        let (status, _, _) = render("/nope", Ok(pdfcraft_collab_ws::Metrics { rooms: 0, clients: 0, versions: Vec::new(), poisoned: Vec::new() }));
         assert_eq!(status, "404 Not Found");
     }
 

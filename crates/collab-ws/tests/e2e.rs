@@ -263,8 +263,8 @@ fn leaving_the_last_client_commits_the_room() -> Result<(), Box<dyn std::error::
         fn apply(&mut self, actor: &pdfcraft_collab_proto::ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
             self.inner.apply(actor, op)
         }
-        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
-            let outcome = self.inner.commit();
+        fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            let outcome = self.inner.commit(version, epoch);
             if outcome.is_ok() {
                 self.commits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }

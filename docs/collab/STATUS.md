@@ -13,14 +13,14 @@
 | Path | Role |
 |---|---|
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
-| `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits |
+| `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only state |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete; atomic commit to a path |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete; durable `Store` (versioned bases + journal) |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | Background worker: socket, reconnect with backoff, heartbeat ping, resend of unconfirmed merges after a snapshot |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): rooms from a directory, JWT verifier, commits, `/health`, `/metrics` |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): rooms from a directory, startup replay, JWT verifier, commits, `/health`, `/metrics` |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`: start from env, apply events, send edits, participants window, presence, commit, inverse undo |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
 
@@ -68,9 +68,24 @@ an empty crate on wasm; `collab-client` and `collab-client-pdf` are wasm-safe.
    has no actor/version check; it is the server-initiated commit of RFC §8.
    `commit_if_dirty` is called by the transport after the last sink is removed.
 10. **The daemon provisions rooms from a directory.** There is no control plane
-    yet: `<fileId>.pdf` in `--documents` becomes a room, and
-    `--data/<fileId>.pdf` is the working copy that commits replace atomically.
-    Restart recovery starts from that working copy (tested).
+    yet: `<fileId>.pdf` in `--documents` becomes a room, and `--data/<fileId>/`
+    holds its durable state: `CURRENT` (base version and epoch),
+    `versions/<N>/file.pdf` and `journal.jsonl`.
+11. **An operation is acknowledged only after its journal line is synced.**
+    `Adapter::record` runs after the adapter changed the document and before
+    `applied` leaves the server; a failure poisons the room (writes get
+    `error_code:"internal"`, `/health` says `ok:false`, `/metrics` marks it
+    `read_only`) because retrying on top of the changed document would diverge.
+    Commit stays allowed: it writes the head as the new base, which is how an
+    operator rescues the edit the journal lost.
+12. **`replay` bypasses the acceptance checks on purpose.** Membership, role,
+    lease and `opId` de-duplication were checked when the operation was
+    accepted; replaying them again would drop history (the lease is long gone
+    after a restart). The version must be contiguous, the document must match
+    and the epoch rules still hold, so a corrupted journal stops startup rather
+    than half-applying. `epoch` is persisted in `CURRENT`, otherwise merged
+    comments addressed to a post-rotation page would be replayed into the
+    wrong epoch.
 
 ## 3. Running it
 
@@ -87,7 +102,14 @@ cargo run -p pdfcraft-collab-daemon --release -- \
 - JWT: RS256, claims `{iss, sub, aud, fileId, app, role, sessionId, iat, exp,
   ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` with 30 s leeway;
   `fileId` must equal `hello.doc`; `app` must equal `--app`.
-- `/health` → `{"ok":true,"rooms":N,"clients":M}`; `/metrics` → Prometheus text.
+- `/health` → `{"ok":true,"rooms":N,"clients":M,"poisoned":[]}`; `ok` is false
+  when a room's journal failed and it refuses writes. `/metrics` adds
+  `pdfcraft_collab_room_read_only{room="…"} 1` for those rooms.
+- `--data/<fileId>/` is the durable state: `CURRENT`,
+  `versions/<N>/file.pdf`, `journal.jsonl`. Delete the directory to reset the
+  room to the copy in `--documents`. The flat `--data/<fileId>.pdf` working copy
+  of earlier sessions is not migrated: nothing was deployed, so only local
+  scratch data is affected.
 - No token, comment text or PDF byte is logged.
 
 Client (desktop):
@@ -119,8 +141,9 @@ cargo check -p pdfcraft --features collab
 cargo test -p pdfcraft-ui-egui --features collab
 ```
 
-Counts: proto 12, server 10, hub 4, client 11, client-pdf 7, session 2,
-ws 6 unit + 3 e2e, pdf 5 (including a 500-page document), daemon 5.
+Counts: proto 12, server 15, hub 4, client 11, client-pdf 7, session 2,
+ws 6 unit + 3 e2e, pdf 12 (including a 500-page document and the store), daemon
+5.
 
 - `crates/collab-ws/tests/e2e.rs` is the end-to-end proof: three clients over a
   real socket and one PDF; comment + reply converge under the same `/NM`; a
@@ -142,10 +165,11 @@ ws 6 unit + 3 e2e, pdf 5 (including a 500-page document), daemon 5.
 
 Ordered by the risk they pose to production.
 
-1. **The journal does not survive a restart.** The working copy is written on
-   commit, and a restart recovers that copy (tested), but operations accepted
-   after the last commit are lost if the process dies. `Room` keeps its journal
-   in memory only.
+1. **Crash recovery is not crash-tested against the real process.** The layout
+   and both crash windows are reasoned about in RFC §8.1 and the pieces are
+   tested (`Store`, `Room::replay`, a restart from the journal, a torn last
+   line), but nothing kills the daemon mid-commit; a fault-injection test would
+   close that gap.
 2. **No web client.** The cabinet embeds the web build, but the server transport
    and the app wiring are native-only. The host bridge
    (`pdfcraft:session`, `session-state`, `presence`, `commit`, `committed`) is
@@ -170,41 +194,41 @@ Ordered by the risk they pose to production.
    inspection cost and batching remote applies are not measured.
 10. **No automation tool/parity entry yet.** The feature is behind a flag; when
     it becomes user-facing, `crates/automation` and `parity/` need an entry.
+11. **Journal growth is bounded only by commits.** A room that never commits
+    keeps every accepted operation on disk; the last-client-leave commit and the
+    manual button are the only compaction. A size-based forced commit is not
+    implemented. Bases are pruned to the one `CURRENT` names, so disk is one
+    PDF plus the journal, not one PDF per commit.
 
 ## 6. Next session: plan
 
 Work in this order unless the owner says otherwise.
 
-### 6.1 Durable journal (highest priority)
+### 6.1 Durable journal — done in this branch
 
-Goal: a crash loses no acknowledged operation; recovery is tested.
+Implemented as designed (RFC §8.1): per-room `data/<fileId>/` with `CURRENT`
+(`{"version","epoch"}`), `versions/<N>/file.pdf` and `journal.jsonl`.
+`Store` (in `collab-pdf/src/store.rs`) writes a base with fsync + rename and
+replaces `CURRENT` atomically; `Adapter::record` appends and syncs the accepted
+operation before the room acknowledges it; `Room::replay` rebuilds version,
+epoch, the tail and the `opId` window at startup; a failed `record` poisons the
+room and `/health`/`/metrics` say so. The trivia to remember: the epoch must be
+persisted with the base, or a replayed comment addressed to a rotated page lands
+in the wrong epoch; and `truncate` runs after `CURRENT`, so a crash leaves stale
+entries that replay skips by version.
 
-Design that avoids the “commit then crash before truncate” double-apply:
+Tests: `store::tests` (reopen, truncate, torn last line, corrupt `CURRENT`,
+base pruning, replay after a crash on both sides of the `CURRENT` rename), `collab-server`
+(recorded-before-ack, poison and commit-still-works, adapter epoch contract,
+replay rebuilds head/epoch/dedup, gap/foreign document), `collab-daemon`
+(`a_restart_recovers_the_last_commit` now also covers an operation accepted
+*after* the commit).
 
-- Layout `data/<fileId>/`:
-  - `versions/<N>/file.pdf` — committed bases, one per commit;
-  - `CURRENT` — the version of the base to load, replaced atomically
-    (`CURRENT.tmp` + `rename`);
-  - `journal.jsonl` — accepted operations appended as
-    `{"version":N,"actor":"…","op":{…}}`, flushed before the op is acknowledged.
-- Commit: write `versions/<N+1>/file.pdf`, fsync, atomically replace `CURRENT`,
-  then drop journal entries with `version <= N+1` (rewrite/truncate).
-- Startup: read `CURRENT`, open that PDF, replay journal entries with
-  `version > CURRENT` through a new `Room::replay(actor, op)` that bypasses
-  membership/role/lease/dedup but rebuilds version, epoch, journal and the
-  `applied` map.
-- Crash windows: before `CURRENT` → old base plus full journal; after `CURRENT`
-  → new base plus stale entries that are skipped by version. Neither replays an
-  applied operation.
-- A journal write failure after the adapter changed the document must poison the
-  room (reject further operations, report on `/health`) instead of silently
-  diverging; document that the last operation may be lost on restart.
-- Tests: append/replay; crash before `CURRENT`; crash after `CURRENT`; duplicate
-  `opId` after restart; `xtask layers` and clippy.
+Still open here: a fault-injection test that kills the *real* daemon between
+the base write and the `CURRENT` rename (the windows are covered at the `Store`
+level), and a size-based forced commit (limitation 11).
 
-Files: `crates/collab-pdf` (journal writer/commit path), `crates/collab-server`
-(`replay`), `apps/pdfcraft-collab-server` (layout/startup), new tests.
-
+### 6.2 Shared annotation shapes
 ### 6.2 Shared annotation shapes
 
 - Add a typed shape/style payload (a small `collab-annot` crate depending on

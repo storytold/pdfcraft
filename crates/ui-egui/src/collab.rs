@@ -382,6 +382,7 @@ fn code_name(code: ErrorCode) -> &'static str {
         ErrorCode::Invalid => "Invalid request",
         ErrorCode::Limit => "Limit reached",
         ErrorCode::Unsupported => "Not shared yet",
+        ErrorCode::Internal => "Server error",
     }
 }
 

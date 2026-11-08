@@ -288,18 +288,24 @@ pub struct Metrics {
     pub rooms: usize,
     pub clients: usize,
     pub versions: Vec<(String, u64, u64)>,
+    /// Rooms that refuse writes because their durable journal failed.
+    pub poisoned: Vec<String>,
 }
 
 impl<A: Adapter> WsServer<A> {
     pub fn metrics(&self) -> Result<Metrics, TransportError> {
         let shared = lock(&self.shared)?;
         let mut versions = Vec::new();
+        let mut poisoned = Vec::new();
         for doc in shared.hub.docs() {
             if let Some(room) = shared.hub.room(doc) {
                 versions.push((doc.as_str().to_owned(), room.version(), room.epoch()));
+                if room.poisoned().is_some() {
+                    poisoned.push(doc.as_str().to_owned());
+                }
             }
         }
-        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions })
+        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions, poisoned })
     }
 }
 
@@ -428,7 +434,7 @@ mod tests {
             Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
         }
 
-        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
             Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
         }
 

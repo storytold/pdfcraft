@@ -367,7 +367,7 @@ mod tests {
             Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
         }
 
-        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
             Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
         }
 

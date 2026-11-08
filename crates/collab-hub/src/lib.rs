@@ -44,12 +44,19 @@ impl<A: Adapter> Hub<A> {
     /// Open the authoritative document for `doc`. A room outlives its members
     /// (reconnect and resync), so it is only removed by [`Self::close_room`].
     pub fn open_room(&mut self, doc: DocKey, adapter: A) -> Result<(), ServerError> {
+        self.open_room_at(doc, adapter, 0, 0)
+    }
+
+    /// Open a room that resumes from a committed base: the document already
+    /// contains `version` operations and its structural epoch is `epoch`.
+    /// [`pdfcraft_collab_server::Room::replay`] adds the journal tail.
+    pub fn open_room_at(&mut self, doc: DocKey, adapter: A, version: u64, epoch: u64) -> Result<(), ServerError> {
         if self.rooms.contains_key(&doc) {
             return Err(error(ErrorCode::Invalid, "the document already has a room", false));
         }
         let session = SessionId::new(format!("session-{}", self.next)).map_err(|e| error(ErrorCode::Invalid, e.to_string(), false))?;
         self.next = self.next.saturating_add(1);
-        let room = Room::new(session, doc.clone(), adapter, self.config.clone());
+        let room = Room::resume(session, doc.clone(), adapter, version, epoch, self.config.clone());
         self.rooms.insert(doc, RoomEntry { room, members: Vec::new() });
         Ok(())
     }
@@ -214,7 +221,7 @@ mod tests {
             Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
         }
 
-        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
             Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
         }
 
