@@ -992,6 +992,27 @@ mod tests {
         assert!(cut.settings(4, &[]).is_err(), "cut and stack needs single-sided sheets, which a dropped duplex ticket cannot guarantee");
     }
 
+    /// A manual booklet pass needs single-sided sheets, which a dropped duplex ticket cannot
+    /// guarantee for a printer reported as not two-sided, so it is refused like cut and stack.
+    #[test]
+    fn manual_booklet_pass_refused_for_printer_without_two_sided_ticket() {
+        let printer = spool::Printer { name: "Office PS".into(), default: true, two_sided: Some(false), description: String::new() };
+        for subset in [BookletSubset::FrontOnly, BookletSubset::BackOnly] {
+            let draft = PrintDraft {
+                printers: vec![printer.clone()],
+                printer: Some(printer.name.clone()),
+                handling: Handling::Booklet,
+                booklet_subset: subset,
+                ..PrintDraft::default()
+            };
+            assert_eq!(draft.job("report.pdf").duplex, None);
+            assert!(
+                draft.settings(4, &[]).is_err(),
+                "a manual booklet pass needs single-sided sheets, which a dropped duplex ticket cannot guarantee: {subset:?}"
+            );
+        }
+    }
+
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
     /// them; the card goes when the job ends and its answer arrives as a notice. A card another
     /// long job is showing is left alone.
