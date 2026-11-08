@@ -44,11 +44,15 @@ pub(crate) fn page_input(
             view.pending_pick = None;
             return;
         }
-        if resp.clicked() && pick {
-            let (vx, vy) = xf.screen_to_view(p);
-            let u = info_page.view_to_user(vx, vy);
-            view.picked_image = None;
-            view.pending_pick = Some((page, [f64::from(u[0]), f64::from(u[1])], generation));
+        if resp.clicked() {
+            // A link's click picks nothing, and takes back an earlier click still being looked into.
+            view.pending_pick = None;
+            if pick {
+                let (vx, vy) = xf.screen_to_view(p);
+                let u = info_page.view_to_user(vx, vy);
+                view.picked_image = None;
+                view.pending_pick = Some((page, [f64::from(u[0]), f64::from(u[1])], generation));
+            }
         }
     }
     // The click's picture, as soon as the page's pictures are known: the window stays live until then.
@@ -153,10 +157,13 @@ mod picture_tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn a_slow_page_does_not_hold_up_the_window() {
         let (release, wait) = std::sync::mpsc::channel::<()>();
-        // Lets the search go in the end, should it run on this thread.
+        // Lets the search go in the end, should it run on this thread or be waited for.
         let late = release.clone();
+        let let_go = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watchdog = let_go.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(2));
+            watchdog.store(true, std::sync::atomic::Ordering::SeqCst);
             let _ = late.send(());
         });
         let mut pictures = PagePictures::default();
@@ -168,6 +175,7 @@ mod picture_tests {
             Vec::new()
         });
         pictures.poll();
+        assert!(!let_go.load(std::sync::atomic::Ordering::SeqCst), "starting and polling the search must not wait for it");
         // A search that never ran (its thread couldn't start) fails the test rather than hanging it.
         let ran_on = ran.recv_timeout(std::time::Duration::from_secs(10)).expect("the search ran");
         assert_ne!(ran_on, caller, "the search must not run on the calling thread");
@@ -194,6 +202,111 @@ mod picture_tests {
             .run_ui(egui::RawInput { events: vec![escape], ..Default::default() }, |ui| app.image_pick_keys(i, ui.ctx()))
             .drop_without_applying_deltas();
         assert_eq!(app.views[i].pending_pick, None);
+    }
+
+    /// A page (200 × 300) with a square comment over 20..80 × 20..80 and a link over 120..180 ×
+    /// 220..280.
+    fn page_with_a_comment_and_a_link() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] /C [1 0 0] /Border [0 0 2] >>",
+            "<< /Type /Annot /Subtype /Link /Rect [120 220 180 280] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// The page open with the Select tool, once it is on screen, and where a point on it is.
+    fn open_page() -> (egui_kittest::Harness<'static, PdfCraftApp>, impl Fn(f32, f32) -> egui::Pos2) {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
+            app
+        });
+        let mut on_screen = None;
+        for _ in 0..600 {
+            h.run_steps(2);
+            on_screen = h.state().views[0].page_screen_rect(0);
+            if on_screen.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let r = on_screen.expect("the page is on screen");
+        let k = r.width() / 200.0;
+        (h, move |x, y| r.min + egui::vec2(x * k, (300.0 - y) * k))
+    }
+
+    /// An earlier click on the page whose pictures are still being found, as on a dense drawing:
+    /// they don't come while the returned sender lives.
+    fn click_still_being_looked_into(
+        h: &mut egui_kittest::Harness<'static, PdfCraftApp>,
+    ) -> std::sync::mpsc::Sender<Vec<pdfcraft_engine::PagePicture>> {
+        let id = h.state().views[0].id;
+        let generation = h.state().session.get(id).expect("the document").edit_generation();
+        let (send, answer) = std::sync::mpsc::channel();
+        let view = &mut h.state_mut().views[0];
+        view.pictures = PagePictures { ready: None, job: Some(((0, generation), answer)) };
+        view.pending_pick = Some((0, [150.0, 150.0], generation));
+        send
+    }
+
+    fn click(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, p: egui::Pos2) {
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(4);
+    }
+
+    /// Another tool lets go of the click, even while its page isn't drawn (Organize pages).
+    #[test]
+    fn another_tool_takes_back_a_click_on_a_page_not_drawn() {
+        let (mut h, _) = open_page();
+        let _keep = click_still_being_looked_into(&mut h);
+        assert!(h.state_mut().execute("page.organize"));
+        h.run_steps(2);
+        assert!(h.state().views[0].pending_pick.is_some(), "the click waits while the page isn't drawn");
+        h.state_mut().quick_tool = crate::QuickTool::Hand;
+        h.run_steps(1);
+        h.state_mut().quick_tool = crate::QuickTool::Select;
+        h.run_steps(1);
+        assert_eq!(h.state().views[0].pending_pick, None);
+    }
+
+    /// A click a comment takes lets go of the earlier click: its picture isn't picked after the
+    /// comment is selected.
+    #[test]
+    fn a_click_on_a_comment_takes_back_the_earlier_click() {
+        let (mut h, at) = open_page();
+        let _keep = click_still_being_looked_into(&mut h);
+        click(&mut h, at(50.0, 50.0));
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+        assert_eq!(h.state().views[0].pending_pick, None);
+    }
+
+    /// A click on a link follows it and lets go of the earlier click too.
+    #[test]
+    fn a_click_on_a_link_takes_back_the_earlier_click() {
+        let (mut h, at) = open_page();
+        let _keep = click_still_being_looked_into(&mut h);
+        click(&mut h, at(150.0, 250.0));
+        assert!(h.state().pending_link.is_some(), "the link is followed");
+        assert_eq!(h.state().views[0].pending_pick, None);
     }
 }
 

@@ -835,6 +835,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         view.pending_pick = None;
     } else if pick_sees && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, input.press == PagePress::Free, view);
+    } else if resp.clicked() || ptr.drag_started {
+        // Another owner took the press: an earlier click's picture, still being found, isn't picked.
+        view.pending_pick = None;
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
