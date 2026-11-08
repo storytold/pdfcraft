@@ -66,6 +66,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -245,6 +246,9 @@ impl PdfCraftApp {
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
+            html_clipboard_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            os_clipboard: None,
             clipboard_override: None,
             attach_override: None,
             duplicate_draft: None,
@@ -459,6 +463,7 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        self.apply_status_captions(lang);
         // Form date fields name months in the date language (Preferences ▸ Date format), which
         // follows the interface language until one is picked (#5303).
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
@@ -605,9 +610,15 @@ impl eframe::App for PdfCraftApp {
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
-            view.objects.set_input_blocked(blocked || self.active != Some(index));
-            if blocked || self.active != Some(index) {
+            let shut = blocked || self.active != Some(index);
+            view.objects.set_input_blocked(shut);
+            if shut {
                 view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing
