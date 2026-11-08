@@ -917,7 +917,9 @@ pub(crate) fn cut_off_update_follows(data: &[u8]) -> bool {
 
 /// PdfCraft patch: (hayro-syntax (43)) whether `data` holds an `N G obj` header: two runs of
 /// digits and the keyword, separated by white space, at the start of the data or after white
-/// space or `>`. One linear pass, no allocation.
+/// space or `>`, the keyword ended by white space, a delimiter or the end of the data (ISO
+/// 32000-2 §7.2.2), as the document model's repair scan reads it: `1 0 obj_name` is no header.
+/// One linear pass, no allocation.
 fn has_object_header(data: &[u8]) -> bool {
     let digits = |from: usize| {
         data.get(from..).map_or(0, |rest| {
@@ -953,7 +955,10 @@ fn has_object_header(data: &[u8]) -> bool {
             && g > 0
             && s2 > 0
             && data.get(at..).is_some_and(|rest| rest.starts_with(b"obj"))
-            && data.get(at + 3).is_none_or(|&b| !b.is_ascii_alphanumeric())
+            && data.get(at + 3).is_none_or(|&b| {
+                is_white_space_character(b)
+                    || matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+            })
         {
             return true;
         }

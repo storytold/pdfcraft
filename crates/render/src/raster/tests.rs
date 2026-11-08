@@ -9181,7 +9181,7 @@ fn a_complete_update_reads_as_before() {
 #[test]
 fn trailing_data_without_objects_reads_as_before() {
     let mut junk = one_page_file_with(true);
-    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj</p>");
+    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name</p>");
     junk.extend(std::iter::repeat_n(b' ', 5000));
     junk.extend_from_slice(b"</html>\n");
     let ((count, size), model) = renderer_and_model_pages(junk);
