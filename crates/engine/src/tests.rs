@@ -8969,6 +8969,58 @@ fn copy_image_copies_a_jbig2_picture_behind_another_filter() {
     assert_eq!(grey, expected, "the picture, black as 0");
 }
 
+/// Copy Image and Copy Image in Original Format take a JPEG 2000 picture as its pixels and as a
+/// PNG file (#6121), in the colours its codestream gives: a pixel copy of the file couldn't read a
+/// JPEG 2000 file, and the clipboard takes none.
+#[test]
+fn copy_image_copies_a_jpeg_2000_picture() {
+    // Contributor-original codestream, 3 × 2: three components of 1, 8 and 2 bits, one tile, no
+    // decomposition, reversible wavelet and an empty packet each, so every sample is its midpoint.
+    let mut cs = vec![0xff, 0x4f, 0xff, 0x51, 0, 47, 0, 0];
+    for v in [3u32, 2, 0, 0, 3, 2, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&[0, 3, 0, 1, 1, 7, 1, 1, 1, 1, 1]);
+    cs.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1, 0xff, 0x5c, 0, 4, 0x40, 0x40]);
+    cs.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 17, 0, 1, 0xff, 0x93, 0, 0, 0, 0xff, 0xd9]);
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>".to_vec(),
+        b"<< /Length 32 >>\nstream\nq 160 0 0 20 20 100 cm /Im1 Do Q\nendstream".to_vec(),
+        [
+            format!("<< /Type /XObject /Subtype /Image /Width 3 /Height 2 /Filter /JPXDecode /Length {} >>\nstream\n", cs.len()).into_bytes(),
+            cs,
+            b"\nendstream".to_vec(),
+        ]
+        .concat(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("archive.pdf", None, Arc::new(out), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_image_at(0, [30.0, 115.0]), Some(0));
+    let (ext, file) = d.page_image_copy_file(0, 0).unwrap();
+    assert_eq!(ext, "png");
+    assert_eq!(image::load_from_memory(&file).unwrap().into_rgb8().into_raw(), [255, 128, 170].repeat(6));
+    let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
+    assert_eq!((w, h), (3, 2));
+    assert_eq!(rgba, [255, 128, 170, 255].repeat(6));
+}
+
 /// `fixture(2)` with the catalog pointing at a page tree object the file does not have (#1656).
 fn fixture_without_page_tree() -> Vec<u8> {
     let bytes = fixture(2);
