@@ -365,6 +365,7 @@ impl Session {
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,
+            xfa_exited: Default::default(),
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
