@@ -305,7 +305,6 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     } else {
         collide(glyphs, height, s.h, sc);
     }
-    keep_taken_back_blanks(glyphs, &mut sc.placed);
     // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
     // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
     // over `placed` puts all of them in.
@@ -323,7 +322,14 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         sc.merged.extend_from_slice(&sc.placed[next..]);
         std::mem::swap(&mut sc.placed, &mut sc.merged);
     }
+    // After the marks: their merge relies on `placed` being in x order, which this breaks on purpose.
+    keep_taken_back_blanks(glyphs, &mut sc.placed);
 }
+
+/// How many glyphs [`keep_taken_back_blanks`] looks at past a blank: marks between it and its letter, in drawing order
+/// and in x order, and glyphs without a strong direction on each side of a taken-back neutral. Each scan stops there,
+/// so the pass stays linear in the line's glyphs.
+const TAKEN_BACK_SCAN: usize = 8;
 
 /// Puts a blank glyph (a space) back before the glyph drawn right after it on a line with right-to-left text, when that
 /// glyph's adjustment took the blank's advance back: it starts at or left of the blank's own start and covers at least
@@ -333,26 +339,93 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
 /// letter it belongs on, and sorting by x split "המדינה" as "המדינ ה". The space is a word break in the character
 /// stream (§14.8.2.6.2), and drawing order is the only evidence of its place.
 ///
-/// Only a right-to-left letter or a neutral (punctuation, a symbol) after the blank counts: left-to-right text has no
-/// reverse-order show strings, and in scanned pages' invisible text layers its spaces overlap letters at random. A
-/// glyph that only touches the blank's start was drawn beside it, as text set letter by letter leftwards is, and x
-/// order already reads it right. A blank that a glyph placed before them also reaches over sits inside a cluster (a
-/// letter and the marks drawn on it), where its place is no clearer, so it stays where x order put it.
+/// Combining marks (bidi class NSM) drawn between the blank and its letter are passed over, and the blank, those marks
+/// and the letter keep drawing order, which puts each mark after its letter once the line is reversed, as Unicode
+/// stores it. Only a right-to-left letter or a neutral (punctuation, a symbol) after the blank counts: left-to-right
+/// text has no reverse-order show strings, and in scanned pages' invisible text layers its spaces overlap letters at
+/// random. A neutral counts only inside right-to-left text: the nearest glyph with a strong direction before it, and
+/// the nearest after the blank, is right-to-left or the line's edge. A parenthesis that opens Latin text then stays
+/// where x order puts it, as on a line without right-to-left text. A glyph that only touches the blank's start was
+/// drawn beside it, as text set letter by letter leftwards is, and x order already reads it right. A blank that a
+/// glyph placed before them also reaches over sits inside a cluster (a letter and the marks drawn on it), where its
+/// place is no clearer, so it stays where x order put it.
 fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
+    let glyph = |placed: &[usize], p: usize| placed.get(p).and_then(|&i| glyphs.get(i)).copied();
     let blank = |g: &TextGlyph| !g.text.is_empty() && g.text.chars().all(char::is_whitespace);
-    let left_to_right = |g: &TextGlyph| g.text.chars().any(|c| c.is_alphanumeric() && !is_rtl(c));
+    let mark = |g: &TextGlyph| !g.text.is_empty() && g.text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM);
+    // Some(true) for right-to-left text, Some(false) for left-to-right text (Latin letters, European digits), None for
+    // a glyph without a strong direction.
+    let strong = |g: &TextGlyph| {
+        if g.text.chars().any(|c| c.is_alphanumeric() && !is_rtl(c)) {
+            Some(false)
+        } else if g.text.chars().any(|c| c.is_alphanumeric()) {
+            Some(true)
+        } else {
+            None
+        }
+    };
     if !placed.iter().any(|&i| glyphs.get(i).is_some_and(|g| g.text.chars().any(is_rtl))) {
         return;
     }
+    // Whether the nearest glyph with a strong direction from position `from` on, stepping by `step`, is right-to-left,
+    // or there is none before the line's edge.
+    let rtl_side = |placed: &[usize], from: Option<usize>, step: fn(usize) -> Option<usize>| {
+        let mut p = from;
+        for _ in 0..TAKEN_BACK_SCAN {
+            let Some(g) = p.and_then(|p| glyph(placed, p)) else { return true };
+            if let Some(rtl) = strong(g) {
+                return rtl;
+            }
+            p = p.and_then(step);
+        }
+        false
+    };
     for p in 1..placed.len() {
-        let (Some(&ink), Some(&space)) = (placed.get(p - 1), placed.get(p)) else { continue };
-        let (Some(s), Some(g)) = (glyphs.get(space), glyphs.get(ink)) else { continue };
+        let Some(&space) = placed.get(p) else { continue };
+        let Some(s) = glyphs.get(space).copied() else { continue };
+        if !blank(s) {
+            continue;
+        }
+        // The glyph drawn after the blank, past any marks drawn between them.
+        let mut next = space.checked_add(1);
+        for _ in 0..TAKEN_BACK_SCAN {
+            match next.and_then(|i| glyphs.get(i)) {
+                Some(g) if mark(g) => next = next.and_then(|i| i.checked_add(1)),
+                _ => break,
+            }
+        }
+        let Some(ink) = next.filter(|&i| glyphs.get(i).is_some_and(|g| !mark(g))) else { continue };
+        // The marks drawn between them, wherever x order put them next to the blank, go with them.
+        let between = |i: usize| i > space && i < ink;
+        let mut q = p.checked_sub(1);
+        for _ in 0..TAKEN_BACK_SCAN {
+            match q.and_then(|q| placed.get(q)) {
+                Some(&i) if between(i) => q = q.and_then(|q| q.checked_sub(1)),
+                _ => break,
+            }
+        }
+        let Some(q) = q.filter(|&q| placed.get(q) == Some(&ink)) else { continue };
+        let mut r = p;
+        for _ in 0..TAKEN_BACK_SCAN {
+            match r.checked_add(1).and_then(|r| placed.get(r)) {
+                Some(&i) if between(i) => r += 1,
+                _ => break,
+            }
+        }
+        let Some(g) = glyphs.get(ink).copied() else { continue };
         let width = s.rect[2] - s.rect[0];
         let covered = g.rect[2].min(s.rect[2]) - s.rect[0];
         let taken_back = g.rect[0] <= s.rect[0] && width > 0.0 && covered >= 0.5 * width;
-        let alone = p.checked_sub(2).and_then(|q| placed.get(q)).and_then(|&q| glyphs.get(q)).is_none_or(|q| q.rect[2] <= s.rect[0]);
-        if space.checked_add(1) == Some(ink) && blank(s) && !blank(g) && !left_to_right(g) && taken_back && alone {
-            placed.swap(p - 1, p);
+        let alone = q.checked_sub(1).and_then(|b| glyph(placed, b)).is_none_or(|before| before.rect[2] <= s.rect[0]);
+        let direction = match strong(g) {
+            Some(rtl) => rtl,
+            None => rtl_side(placed, q.checked_sub(1), |p| p.checked_sub(1)) && rtl_side(placed, r.checked_add(1), |p| p.checked_add(1)),
+        };
+        if !blank(g) && direction && taken_back && alone {
+            // The blank, its marks and its letter in drawing order.
+            if let Some(group) = placed.get_mut(q..=r) {
+                group.sort_unstable();
+            }
         }
     }
 }

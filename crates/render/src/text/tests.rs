@@ -1248,6 +1248,170 @@ fn a_space_taken_back_under_the_next_letter_stays_before_it() {
     assert_eq!(layout(v).plain_text(), "a bc");
 }
 
+/// A neutral taken back over a space keeps the space before it only inside right-to-left text. On a right-to-left line
+/// drawn in logical order, a parenthesis that opens Latin text and is kerned back into the space before it stays
+/// where its position puts it, as it would on a line without the Hebrew word.
+#[test]
+fn a_taken_back_neutral_beside_latin_text_keeps_its_place() {
+    // Drawn right to left: "שלום", the space, "(" pulled back into the space, then "AB" to its left.
+    let mut v = Vec::new();
+    let mut x = 60.0;
+    for c in ["ש", "ל", "ו", "ם"] {
+        v.push(em_box(c, x - 6.5, 0.0, x, 11.0));
+        x -= 6.5;
+    }
+    v.push(em_box(" ", x - 3.5, 0.0, x, 11.0));
+    x -= 3.5;
+    v.push(em_box("(", x - 2.0, 0.0, x + 2.0, 11.0));
+    x -= 2.0;
+    v.push(em_box("A", x - 13.0, 0.0, x - 6.5, 11.0));
+    v.push(em_box("B", x - 6.5, 0.0, x, 11.0));
+    assert_eq!(layout(v).plain_text(), "שלום (AB");
+}
+
+/// A mark drawn between a space and the letter taken back over it does not keep them apart: the space still ends the
+/// word before, and the mark follows its letter, whether its box starts right or left of the space's start.
+#[test]
+fn a_mark_between_a_space_and_its_taken_back_letter_keeps_the_space_before_both() {
+    let line = |mark_x0: f32| {
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("\u{5B8}", mark_x0, 0.0, 17.5, 11.0), em_box("ה", 9.9, 0.0, 17.5, 11.0)];
+        let mut x = 17.5;
+        for c in ["נ", "י", "ד", "מ", "ה"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        x += 3.5;
+        for c in ["ר", "ק", "ב", "מ"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        layout(v).plain_text()
+    };
+    assert_eq!(line(12.0).trim_end(), "מבקר המדינה\u{5B8}");
+    assert_eq!(line(9.95).trim_end(), "מבקר המדינה\u{5B8}");
+}
+
+/// Two taken-back spaces on one line each stay before their letter, and a second space drawn before a taken-back one
+/// stays with it.
+#[test]
+fn two_taken_back_spaces_on_a_line_each_stay_before_their_letter() {
+    // Drawn left to right: " הנידמה" and " רקבמ", each space's advance taken back by its next letter, then " לע".
+    let word = |v: &mut Vec<TextGlyph>, x: &mut f32, first: &str, rest: &[&str]| {
+        v.push(em_box(" ", *x, 0.0, *x + 3.5, 11.0));
+        v.push(em_box(first, *x - 0.1, 0.0, *x + 6.4, 11.0));
+        *x += 6.4;
+        for c in rest {
+            v.push(em_box(c, *x, 0.0, *x + 6.5, 11.0));
+            *x += 6.5;
+        }
+    };
+    let mut v = Vec::new();
+    let mut x = 10.0;
+    word(&mut v, &mut x, "ה", &["נ", "י", "ד", "מ", "ה"]);
+    word(&mut v, &mut x, "ר", &["ק", "ב", "מ"]);
+    // The last word's space keeps its advance.
+    v.push(em_box(" ", x, 0.0, x + 3.5, 11.0));
+    x += 3.5;
+    for c in ["ל", "ע"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim(), "על מבקר המדינה");
+    // Two spaces in a row, the second taken back: both stay before the letter.
+    let mut v = vec![em_box(" ", 6.5, 0.0, 10.0, 11.0), em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("ה", 9.9, 0.0, 17.5, 11.0)];
+    let mut x = 17.5;
+    for c in ["נ", "י", "ד", "מ", "ה"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim(), "המדינה");
+}
+
+/// pdf.js issue 11656 (https://github.com/mozilla/pdf.js/issues/11656): its content stream rebuilt with the same
+/// codes, widths, adjustments and `/ToUnicode` on an unembedded font. Each right-to-left show string starts with a
+/// space taken back under the next letter or punctuation; copied text keeps whole words and punctuation after its
+/// word, and the parentheses of "15(ב)(4)" read as before.
+#[test]
+fn issue_11656_layout_reads_whole_words() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let shows: [(f32, f32, &str); 10] = [
+        (
+            386.83,
+            708.96,
+            "[<0003>324<0022>-3<02AD>11<02AC02A5>4<02AB0003>10<02AD02A502AC>4<02B90003>8<02A402AE000302AD>9<02AC02A5>4<02B2>-3<000302AD02A502AC02B9>] TJ",
+        ),
+        (380.71, 708.96, "<0003> Tj"),
+        (
+            329.69,
+            686.62,
+            "[<0003>324<001102A902BA>3<02A902AE02A0000302A302AC>4<02A9000302B8>4<02A102AB>11<000302A902B0>10<02A00003>-2<000F02AD02A902A8>4<02A502A7>13<02A4000302AF02AE000302A302B8>6<02A502A9>5<000302A902B002A0>] TJ",
+        ),
+        (323.57, 686.62, "<0003> Tj"),
+        (446.35, 664.3, "[<0011>10<02AD02A902A3>6<02AC02A9>4<02A4000302AC02AB000302A502AE02AB>] TJ"),
+        (
+            378.19,
+            641.98,
+            "[<000302B3>-2<02A902B202B1>11<000302A902B402AC0003>10<02A402AC02A0000302BA02A5>3<02AC02A5>4<02B2>7<02B4000302A1>-3<02A502A9>5<02A702AC>] TJ",
+        ),
+        (366.19, 641.98, "-0.0278 Tc [<00140018>] TJ 0 Tc"),
+        (346.51, 641.98, "[<000C000B>5<02A1000C>] TJ"),
+        (340.49, 641.98, "[<0017>] TJ"),
+        (236.33, 641.98, "[<0003>324<02A402B002A902A3>4<02AE02A4000302B802B7>16<02A102AE0003>-2<02B7>3<02A502A7>13<02AC0003000B>] TJ"),
+    ];
+    let ops: String = shows.iter().map(|(x, y, show)| format!("BT /F1 11.04 Tf 1 0 0 1 {x} {y} Tm {show} ET\n")).collect();
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Adobe-Identity-UCS def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0003> <0020> endbfchar 1 beginbfrange <000B> <000C> [<0029> <0028>] endbfrange 3 beginbfchar <000F> <002C> <0011> <002E> <0014> <0031> endbfchar 1 beginbfrange <0017> <0018> <0034> endbfrange 1 beginbfchar <0022> <003F> endbfchar 5 beginbfrange <02A0> <02A1> <05D0> <02A3> <02A5> <05D3> <02A7> <02A9> <05D7> <02AB> <02B4> <05DB> <02B7> <02BA> <05E7> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    let ranges: [(i64, &[i64]); 13] = [
+        (0, &[1000]),
+        (3, &[313]),
+        (11, &[383, 383]),
+        (15, &[303]),
+        (17, &[303]),
+        (20, &[546]),
+        (23, &[546, 546]),
+        (34, &[474]),
+        (672, &[673, 640]),
+        (675, &[601, 685, 274]),
+        (679, &[685, 699, 274]),
+        (683, &[621, 621, 685, 685, 362, 401, 730, 648, 662, 652]),
+        (695, &[677, 569, 815, 709]),
+    ];
+    let w: Vec<Object> = ranges
+        .iter()
+        .flat_map(|(first, widths)| [Object::Integer(*first), Object::Array(widths.iter().map(|&n| Object::Integer(n)).collect())])
+        .collect();
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.as_bytes().to_vec()));
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestHebrew",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "DW" => 1000, "W" => w, "CIDToGIDMap" => "Identity"
+    });
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestHebrew", "Encoding" => "Identity-H", "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+    let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(612), Object::Integer(792)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let text = extract_page(&Pdf::new(std::sync::Arc::new(bytes)).unwrap(), 0, &InterpreterSettings::default()).unwrap();
+    let plain = text.plain_text();
+    let lines: Vec<&str> = plain.lines().map(str::trim).collect();
+    assert_eq!(
+        lines,
+        [
+            "שלום עולם מה שלום כולם?",
+            "אני יורד מן החוטים, אני כבר ילד אמיתי.",
+            "כמו כל הילדים.",
+            "לחיוב פעולות אלה לפי סעיף 15(ב)(4) לחוק מבקר המדינה"
+        ]
+    );
+    for word in ["המדינה", "כולם?", "אמיתי.", "15(ב)(4)", "(ב)"] {
+        assert_eq!(text.find(word).len(), 1, "{word:?} in {lines:?}");
+    }
+}
+
 /// #2667: a number or punctuation on a right-to-left line must not split it into separately reversed words.
 #[test]
 fn rtl_line_with_number_and_punctuation_reads_in_logical_order() {
