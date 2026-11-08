@@ -122,6 +122,122 @@ fn signing_then_validating_with_and_without_trust() {
     }
 }
 
+/// The form dictionary of `bytes`, with the catalog's reference resolved.
+fn form_of(bytes: &[u8]) -> Dict {
+    let doc = open(bytes);
+    let form = doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a))).unwrap();
+    form.as_dict().unwrap().clone()
+}
+
+/// A form with `/NeedAppearances true` makes Acrobat ignore the signature (#5939): the first
+/// signature drops the flag, whether the AcroForm is inline or indirect, and keeps /Fields and
+/// sets /SigFlags.
+#[test]
+fn signing_drops_need_appearances() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let inline = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true >> >>", &[]);
+    let indirect =
+        fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>", &[b"<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) >>"]);
+    for (what, bytes) in [("inline", inline), ("indirect", indirect)] {
+        assert_eq!(form_of(&bytes).get(b"NeedAppearances"), Some(&Object::Bool(true)), "{what}");
+        let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        let form = form_of(&signed);
+        assert!(form.get(b"NeedAppearances").is_none(), "{what}");
+        assert_eq!(form.get(b"SigFlags"), Some(&Object::Int(3)), "{what}");
+        assert!(form.get(b"Fields").is_some(), "{what}");
+        let doc = open(&signed);
+        assert!(signatures(&doc, &signed, &TrustStore::default()).iter().any(|s| s.field == "Approval" && s.signed), "{what}");
+    }
+}
+
+/// A field whose /V has an empty /Contents is no earlier signature: the first real one still
+/// drops `/NeedAppearances`.
+#[test]
+fn an_empty_signature_value_does_not_count_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let bytes = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+        &[
+            b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Empty) /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>",
+            b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /Contents <> >>",
+        ],
+    );
+    assert!(!pdfcraft_sign::has_signatures(&open(&bytes)));
+    let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert!(form_of(&signed).get(b"NeedAppearances").is_none());
+}
+
+/// A signature dictionary whose /Contents is still the zero-filled placeholder (hex or literal
+/// hex text, with a /ByteRange) is not signed either: the first real signature drops the flag.
+#[test]
+fn a_zero_filled_signature_placeholder_does_not_count_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    for contents in [&b"<0000000000000000>"[..], b"(00000000)"] {
+        let sig = [&b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 10 20 10] /Contents "[..], contents, b" >>"]
+            .concat();
+        let bytes = fixture_with(
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+            &[b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Pending) /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>", &sig],
+        );
+        assert!(!pdfcraft_sign::has_signatures(&open(&bytes)), "{}", String::from_utf8_lossy(contents));
+        let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        assert!(form_of(&signed).get(b"NeedAppearances").is_none());
+        assert!(pdfcraft_sign::has_signatures(&open(&signed)));
+    }
+}
+
+/// A document timestamp outside the field tree counts by its /Contents alone, even without a
+/// /ByteRange; a zero-filled one does not.
+#[test]
+fn a_document_timestamp_counts_unless_its_contents_are_zero_filled() {
+    for (contents, stamped) in [(&b"<3080>"[..], true), (b"<0000>", false)] {
+        let ts = [&b"<< /Type /DocTimeStamp /SubFilter /ETSI.RFC3161 /Contents "[..], contents, b" >>"].concat();
+        let bytes = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true >> >>", &[&ts]);
+        assert_eq!(pdfcraft_sign::has_signatures(&open(&bytes)), stamped, "{}", String::from_utf8_lossy(contents));
+    }
+}
+
+/// A signed field without a name (`/T` is optional) is an earlier signature too: signing another
+/// field leaves `/NeedAppearances` as it is.
+#[test]
+fn an_unnamed_signed_field_counts_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let bytes = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+        &[
+            b"<< /Type /Annot /Subtype /Widget /FT /Sig /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>",
+            b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 10 20 10] /Contents <3080> >>",
+        ],
+    );
+    assert!(pdfcraft_sign::has_signatures(&open(&bytes)));
+    let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert_eq!(form_of(&signed).get(b"NeedAppearances"), Some(&Object::Bool(true)));
+}
+
+/// A second signer leaves the form's flags alone: changing them would count as a change to
+/// what the first signature covered.
+#[test]
+fn a_later_signature_does_not_change_need_appearances() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let first = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let mut doc = open(&first);
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        if let Some(Object::Dict(af)) = c.get_mut(b"AcroForm") {
+            af.set(b"NeedAppearances".to_vec(), Object::Bool(true));
+        }
+    })
+    .unwrap();
+    if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
+        doc.update_dict(r, |af| af.set(b"NeedAppearances".to_vec(), Object::Bool(true))).unwrap();
+    }
+    let flagged = write_incremental(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let second = pdfcraft_sign::sign(&open(&flagged), &id, &opts()).unwrap();
+    assert_eq!(form_of(&second).get(b"NeedAppearances"), Some(&Object::Bool(true)));
+    let doc = open(&second);
+    assert!(signatures(&doc, &second, &TrustStore::default()).iter().any(|s| s.field == "Approval" && s.signed));
+}
+
 #[test]
 fn signing_an_existing_field_and_counter_signing() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
