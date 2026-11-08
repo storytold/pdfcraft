@@ -7,6 +7,8 @@
   known environment flakes. The slice after that head (commit publication
   outside the hub lock, §6.4) is committed locally and **not pushed**; the PR
   body draft is `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
+  Limitation 1 (crash recovery against the real process) is closed locally at
+  `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4).
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -197,6 +199,48 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
+### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
+
+`apps/pdfcraft-collab-server/tests/crash_recovery.rs`
+`a_sigkill_between_the_journal_and_the_base_loses_nothing_and_duplicates_nothing`
+runs the real `pdfcraft-collab-server` binary (built by cargo for the test),
+signs its own RS256 token as the cabinet would, and drives it over a socket:
+`annotation.add` (merge, version 1), `page.rotate` (structural, version 2,
+epoch 1), then `commit`. The window between the acknowledged journal record and
+the base write is made deterministic by a fault point in
+`PdfAdapter::commit` (`crates/collab-pdf/src/store.rs::park_at_fault`,
+`PDFCRAFT_COLLAB_FAULT=commit-before-base`): the daemon writes a marker file and
+parks, the test asserts what is on disk (two journal lines for versions 1 and 2,
+no `versions/2`, `CURRENT` still `{"version":0,"epoch":0}`) and sends `SIGKILL`
+(`Child::kill`, asserted as signal 9). The point is compiled out of a release
+build, where the test prints that it was skipped instead of passing silently.
+
+The restart is the evidence: the welcome carries version 2 and epoch 1 rebuilt
+from the journal; the retried `opId crash-a1` returns its stored acknowledgement
+(version 1, epoch 0) instead of applying again; a new merge operation addressed
+to epoch 1 lands on version 3 (a duplicate would have made it 4); a commit then
+writes `versions/3/file.pdf` with `CURRENT {"version":3,"epoch":1}`, an empty
+journal, both comments once and the page still rotated 90°.
+
+```
+cargo test -p pdfcraft-collab-daemon --test crash_recovery
+running 1 test
+test a_sigkill_between_the_journal_and_the_base_loses_nothing_and_duplicates_nothing ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+```
+
+Run three times in a row, same result (0.85–1.6 s). The same-session gates:
+`cargo test` on the collab package list — proto 12, server 18, hub 4, client 12,
+client-pdf 13, session 2, ws 6 unit + 6 e2e, pdf 20, annot 10, daemon 27 unit
+**+ 1 crash test** (125 without e2e), all pass; `cargo clippy -p
+pdfcraft-collab-pdf -p pdfcraft-collab-daemon --all-targets -- -D warnings` and
+`cargo fmt --all --check` pass.
+
+What this does *not* cover: a kill between the base write and the `CURRENT`
+rename, and a torn journal line, stay `Store`-level tests; a kill during the
+cabinet publication itself is still only reasoned about (the room restarts
+dirty and the next commit retries — limitation 7).
+
 ### Gate run at `5eb6bea8` — the §6.6 acceptance pass (2026-11-08)
 
 Working tree clean; `feature/realtime-collaboration` at `5eb6bea8`
@@ -374,11 +418,16 @@ ws 6 unit + 6 e2e, pdf 20, annot 10, daemon 27.
 
 Ordered by the risk they pose to production.
 
-1. **Crash recovery is not crash-tested against the real process.** The layout
-   and both crash windows are reasoned about in RFC §8.1 and the pieces are
-   tested (`Store`, `Room::replay`, a restart from the journal, a torn last
-   line), but nothing kills the daemon mid-commit; a fault-injection test would
-   close that gap.
+1. ~~**Crash recovery is not crash-tested against the real process.**~~ Closed
+   by `apps/pdfcraft-collab-server/tests/crash_recovery.rs` at `999da5ec`
+   (§4): the daemon accepts a merge and a structural operation over a socket,
+   the commit parks between the journal record and the base write, the process
+   is SIGKILLed, and the restart comes back at version 2 / epoch 1, returns the
+   stored acknowledgement for the retried `opId`, and commits each edit once.
+   The layout and the other two windows (base written but `CURRENT` not yet
+   renamed, torn last line) stay covered at the `Store` level. A kill during
+   the cabinet publication itself is still not crash-tested: it only leaves the
+   room dirty and is retried by the next commit (limitation 7).
 2. **No web client.** The cabinet embeds the web build, but the server transport
    and the app wiring are native-only. The host bridge
    (`pdfcraft:session`, `session-state`, `presence`, `commit`, `committed`) is
@@ -460,11 +509,14 @@ base pruning, replay after a crash on both sides of the `CURRENT` rename), `coll
 (recorded-before-ack, poison and commit-still-works, adapter epoch contract,
 replay rebuilds head/epoch/dedup, gap/foreign document), `collab-daemon`
 (`a_restart_recovers_the_last_commit` now also covers an operation accepted
-*after* the commit).
+*after* the commit; `tests/crash_recovery.rs` SIGKILLs the real process between
+the journal record and the base write and replays it, §4).
 
-Still open here: a fault-injection test that kills the *real* daemon between
-the base write and the `CURRENT` rename (the windows are covered at the `Store`
-level), and a size-based forced commit (limitation 11).
+Still open here: a size-based forced commit (limitation 11). The fault
+injection limitation 1 asked for is done for the real process in the
+journal→base window (`apps/pdfcraft-collab-server/tests/crash_recovery.rs`,
+`999da5ec`, §4); a kill between the base write and the `CURRENT` rename is still
+covered at the `Store` level only.
 
 ### 6.2 Shared annotation shapes — done in this branch
 
