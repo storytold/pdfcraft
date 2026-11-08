@@ -32,8 +32,12 @@ pub enum Needs {
     FillForms,
     /// The document has comments and allows changes.
     HasComments,
+    /// Comments that may be exported: exporting copies them out of the document.
+    HasCommentsCopying,
     /// The document has form fields and allows changes.
     HasFields,
+    /// Form data that may be exported: exporting copies it out of the document.
+    HasFieldsCopying,
     /// The document has redaction marks and allows changes.
     HasRedactions,
     /// The document has page marks of this kind and allows changes.
@@ -280,11 +284,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.flatten", "Flatten comments", None, None, HasComments, "layers"),
     c("comment.import", "Import comments…", None, None, Modification, "file-input"),
     c("comment.stamp", "Add a stamp", None, None, Annotate, "stamp"),
-    c("comment.export", "Export all comments to data file…", None, None, HasComments, "file-output"),
+    c("comment.export", "Export all comments to data file…", None, None, HasCommentsCopying, "file-output"),
     c("comment.hide_all", "Hide all comments", None, None, Document, "eye-off"),
     c("comment.summarize", "Summarize comments", None, None, HasComments, "file-text"),
     c("form.import_data", "Import form data…", None, None, HasFields, "file-input"),
-    c("form.export_data", "Export form data…", None, None, HasFields, "file-output"),
+    c("form.export_data", "Export form data…", None, None, HasFieldsCopying, "file-output"),
     c("standards.pdfa", "PDF/A…", None, None, Document, "file-check"),
     c("actions.wizard", "Action Wizard…", None, None, Nothing, "list-checks"),
     c("actions.distribution", "Prepare for distribution…", None, None, Nothing, "send"),
@@ -431,6 +435,10 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks().contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
+        // Exporting comments or form data copies the document's content out of it (Table 22,
+        // bit 5), which is what `export_data` checks, so the entry must not offer it otherwise.
+        HasCommentsCopying => doc.is_some_and(|d| d.allows_modification() && d.allows_copying() && !d.info.annotations.is_empty()),
+        HasFieldsCopying => doc.is_some_and(|d| d.allows_modification() && d.allows_copying() && !d.form.is_empty()),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
         Security => doc.is_some_and(|d| d.allows_security_change() || d.can_unlock()),
         ProtectedSecurity => doc.is_some_and(|d| (d.allows_security_change() || d.can_unlock()) && d.security_summary().is_some()),
