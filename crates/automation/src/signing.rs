@@ -186,6 +186,9 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "certificate": cert_json(&id.certificate) }))
     }
 
+    /// The digital ID named by `id`: a macOS Keychain or Windows store identity (`keychain:` and
+    /// `windows:` prefixes, on those systems only), else a .p12/.pfx file under the roots opened
+    /// with `password`. A wrong password is a bad-argument error the caller can act on.
     pub(crate) fn open_id(&self, a: &Args) -> Result<DigitalId> {
         // A macOS Keychain identity: "keychain:<fingerprint>" or "keychain:<common name>".
         if let Some(r) = a.str("id")?.strip_prefix("keychain:") {

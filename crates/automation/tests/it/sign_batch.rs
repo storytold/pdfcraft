@@ -4,10 +4,12 @@ use pdfcraft_automation::{Automation, Content};
 use pdfcraft_engine::Session;
 use serde_json::{Value, json};
 
+/// A one-page PDF holding `text`, made in a fresh session.
 fn pdf(text: &str) -> Vec<u8> {
     Session::new().create_from_text("Doc", text).unwrap().as_ref().clone()
 }
 
+/// Runs `sign_batch` with `args` and returns its report, or the error text.
 fn call(auto: &mut Automation, args: Value) -> Result<Value, String> {
     match auto.call("sign_batch", &args).map_err(|e| e.to_string())?.remove(0) {
         Content::Json(value) => Ok(value),
@@ -27,6 +29,7 @@ fn workspace() -> tempfile::TempDir {
     dir
 }
 
+/// The arguments of a recursive run over `in` into `out` with the test ID, plus `extra`.
 fn args(extra: Value) -> Value {
     let mut base = json!({"paths": ["in"], "out_dir": "out", "id": "id.p12", "password": "test", "recursive": true});
     base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
