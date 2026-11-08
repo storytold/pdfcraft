@@ -87,6 +87,8 @@ impl Glyph<'_> {
     /// 1. `ToUnicode` cmap
     /// 2. Glyph name → Unicode (via Adobe Glyph List)
     /// 3. Unicode naming conventions (e.g., "uni0041", "u0041")
+    /// 4. PdfCraft patch (100), Type1 and CFF fonts only: a name that only numbers its glyph, as
+    ///    for Type3 fonts below
     ///
     /// **For CID Fonts (Type0):**
     /// 1. `ToUnicode` cmap
@@ -152,9 +154,7 @@ impl OutlineGlyph {
         }
     }
 
-    /// Returns the Unicode code point for this glyph, if available: the `ToUnicode` cmap, then
-    /// the `/Encoding` glyph name, a printable ASCII code, and a numbered glyph name at its own
-    /// code (PdfCraft patches).
+    /// Returns the Unicode code point for this glyph, if available.
     ///
     /// See [`Glyph::as_unicode`] for details on the fallback chain used.
     pub fn as_unicode(&self) -> Option<BfString> {
@@ -224,9 +224,11 @@ impl<'a> Type3Glyph<'a> {
             .render_glyph(self, transform, glyph_transform, paint, device);
     }
 
-    /// Returns the Unicode code point for this glyph, if available.
+    /// Returns the Unicode code point for this glyph, if available: the `ToUnicode` cmap, then
+    /// the `/Encoding` glyph name, a printable ASCII code, and a numbered glyph name at its own
+    /// code (PdfCraft patches).
     ///
-    /// Note: Type3 fonts can only provide Unicode via `ToUnicode` cmap.
+    /// See [`Glyph::as_unicode`] for details on the fallback chain used.
     pub fn as_unicode(&self) -> Option<BfString> {
         self.font.char_code_to_unicode(self.char_code)
     }
