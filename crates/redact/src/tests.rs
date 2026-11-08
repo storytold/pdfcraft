@@ -4316,4 +4316,45 @@ fn model_and_renderer_agree_on_numbers_with_no_finite_value() {
     let nan_quad = annot_page(Some("20 110 +nan 110 20 95 40 95"));
     assert_eq!(mark_rects(&nan_quad), vec![vec![[0.0, 90.0, 50.0, 115.0]]], "a +nan quad entry leaves the mark on its /Rect");
     assert_eq!(pixels(&nan_quad), pixels(&annot_page(None)), "the renderer treats a +nan quad like an absent one");
+
+    // Sign runs follow the model parser's rule in both readers. A doubled sign is
+    // tolerated: `+-280` is -280, and a box holding it is the same box on both sides.
+    let doubled = page("/MediaBox [+-280 0 100 100]", "");
+    let doubled_box = ([-280.0, 0.0, 100.0, 100.0], (380.0, 100.0));
+    assert_eq!(model(&doubled), doubled_box, "model, /MediaBox [+-280 0 100 100]");
+    assert_eq!(render(&doubled), doubled_box, "renderer, /MediaBox [+-280 0 100 100]");
+
+    // In a media box, the renderer falls back as it does for a box that is not a box;
+    // it used to absorb every sign, read -280, and use the box (#6601 review). The
+    // model drops a page whose dictionary holds a bad number at all -- its standing
+    // behaviour for any unparseable token, pinned here as policy, not agreement.
+    let no_box = page("/MediaBox /NotABox", "");
+    let refused = page("/MediaBox [---280 0 100 100]", "");
+    assert_eq!(render(&refused), render(&no_box), "renderer, /MediaBox [---280 0 100 100]");
+    let refused_doc = Document::open(Arc::new(refused)).unwrap();
+    assert!(pdfcraft_model::pages(&refused_doc).is_empty(), "the model drops a page whose box holds a bad number");
+
+    // The renderer's side of the quad, pinned through a Highlight: with no usable
+    // appearance it is drawn from its /QuadPoints and /C (hayro-interpret patch 13), so
+    // a finite quad paints its own area, and one holding `+nan` renders exactly like
+    // the same page with the quad absent. The Redact page above cannot show this: the
+    // renderer does not draw Redact annotations at all.
+    let highlight = |quad: Option<&str>| -> Vec<u8> {
+        let quad_entry = quad.map(|q| format!(" /QuadPoints [{q}]")).unwrap_or_default();
+        Pdf::new()
+            .objs([
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] /Contents 4 0 R /Resources << >> >>".to_vec(),
+                stream("", b""),
+                format!("<< /Type /Annot /Subtype /Highlight /Rect [0 90 50 115] /C [1 0 0]{quad_entry} >>").into_bytes(),
+            ])
+            .build()
+    };
+    // The quad covers the left half of the /Rect, so the fallback draws a different area.
+    let hl_finite = highlight(Some("0 115 25 115 0 90 25 90"));
+    assert!(paints(&hl_finite), "a Highlight with a finite quad paints");
+    let hl_nan = highlight(Some("0 115 +nan 115 0 90 25 90"));
+    assert_eq!(pixels(&hl_nan), pixels(&highlight(None)), "the renderer treats a +nan Highlight quad like an absent one");
+    assert_ne!(pixels(&hl_finite), pixels(&highlight(None)), "the finite quad paints its own area, not the /Rect fallback");
 }

@@ -69,14 +69,15 @@ impl Number {
 
 impl Skippable for Number {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
-        let has_sign = r.forward_if(|b| b == b'+' || b == b'-').is_some();
-        // PdfCraft patch: one more sign, so that skipping a number covers what `read_inner`
-        // reads. `--280` was already covered by the `b'-'` arm below, but `-+280` and `++280`
-        // were not, and a skip that fails where a read succeeds puts the reader back where it
-        // started (#3630 review).
-        if has_sign {
-            r.forward_if(|b| b == b'+' || b == b'-');
+        // PdfCraft patch (37): the whole sign run, however long, so skipping a number
+        // covers the token `read_inner` reads or refuses. Two signs used to be the limit,
+        // and a skip that stops short of the read puts the reader back where it started
+        // (#3630 review, #6601 review).
+        let mut has_sign = false;
+        while r.forward_if(|b| b == b'+' || b == b'-').is_some() {
+            has_sign = true;
         }
+
 
         // Some PDFs have weird trailing minuses, so try to accept those as well.
         match r.peek_byte()? {
@@ -120,23 +121,30 @@ impl Readable<'_> for Number {
 
 #[inline(always)]
 fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
-    // PdfCraft patch: a doubled sign is one number, not two. `--280` left `negative` set with no
-    // digits read, so it returned 0 and the reader stopped on `-280`, which became a second
-    // number: a `cm` with it got seven operands, kept the last six, and the matrix
-    // `0 0 1 0 -280 10` hid everything drawn under it (#3565). `Number::skip` above already
-    // consumes the whole token, so read and skip disagreed about where the number ended.
-    //
-    // Every leading sign is absorbed and the value is negative if any sign was a minus, which
-    // is what the COS lexer does since #3299 (`--280` and `+-280` are both -280). Absorbing
-    // only two left a third sign to stop the digit loop before any digit: `---` followed by
-    // 400 nines and a trailing minus read as 0 plus a second number, where `Number::skip`
-    // accepts the whole token as one, so an array holding it gained an element and every
-    // later element shifted (#6601 review).
+    // PdfCraft patch (37): the sign prefix follows the model parser's rule, not a free
+    // absorption. The COS lexer takes a run of signs as one token, and its number reader
+    // tolerates a doubled sign -- `--280` and `+-280` are -280, `++280` is 280 (#3565,
+    // #3299) -- but a longer or mixed run (`---280`, `-+280`) is a bad number there.
+    // Absorbing every sign read `---280` as -280, so the two parsers disagreed about
+    // whole boxes (#6601 review). A refused run is no number here either; read and
+    // `Number::skip` still consume the same whole-token extent, so a container holding
+    // one keeps its shape.
     let token_start = r.offset();
-    let mut negative = false;
-    while let Some(b @ (b'-' | b'+')) = r.peek_byte() {
+    while matches!(r.peek_byte(), Some(b'-' | b'+')) {
         r.forward();
-        negative |= b == b'-';
+    }
+    let run = r.range(token_start..r.offset()).unwrap_or(&[]);
+    let mut sign_body = run;
+    while sign_body.first() == Some(&b'+') {
+        sign_body = &sign_body[1..];
+    }
+    // After any leading '+'s, nothing, one '-' or two is a number's sign.
+    let sign_ok = sign_body.len() <= 2 && sign_body.iter().all(|b| *b == b'-');
+    let negative = sign_ok && !sign_body.is_empty();
+    if !sign_ok {
+        r.forward_while(|b| b.is_ascii_digit() || b == b'-' || b == b'.');
+        r.forward_while(is_regular_character);
+        return None;
     }
 
     // PdfCraft patch: high-precision float mantissa overflow (jsPDF double-precision coordinates).
@@ -434,15 +442,38 @@ fn decimal_len(s: &[u8]) -> usize {
 /// array holding it survives with that one slot absent, where a direct `1e400`, `-inf` or `+nan`
 /// used to make its whole dictionary unreadable (#6477). Scanning with the reader, not the
 /// bytes, keeps the end-of-window flag of streamed content (`Reader::looked_past_end`) honest.
+///
+/// PdfCraft patch (37): a token whose sign run the model parser refuses
+/// ([`has_refused_sign_run`]) steps over the same way, for the same reason: `Number::skip`
+/// accepts it as one token, so an object read must yield a slot for it -- null -- or the
+/// array iterator, which unwraps what skip accepted, panics (#6601 review).
 pub(crate) fn skip_non_finite(r: &mut Reader<'_>) -> Option<()> {
     let start = r.offset();
     r.forward_while(is_regular_character);
-    if r.range(start..r.offset()).is_some_and(has_no_finite_value) {
+    if r.range(start..r.offset()).is_some_and(|t| has_no_finite_value(t) || has_refused_sign_run(t)) {
         Some(())
     } else {
         r.jump(start);
         None
     }
+}
+
+/// PdfCraft patch (37): whether `token`'s sign prefix is one the model parser refuses --
+/// after any leading '+'s, something other than nothing, one '-' or two -- while the rest
+/// of the token is a number's body (digits, '.', '-'). `---280` is such a token; `--280`
+/// (a tolerated doubled sign) and `---nan` (no finite value, patch 36) are not.
+fn has_refused_sign_run(token: &[u8]) -> bool {
+    let run_len = token.iter().take_while(|b| matches!(b, b'+' | b'-')).count();
+    if run_len == 0 {
+        return false;
+    }
+    let (run, body) = token.split_at(run_len);
+    let mut sign_body = run;
+    while sign_body.first() == Some(&b'+') {
+        sign_body = &sign_body[1..];
+    }
+    let refused = !(sign_body.len() <= 2 && sign_body.iter().all(|b| *b == b'-'));
+    refused && !body.is_empty() && body.iter().all(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.')
 }
 
 #[cfg(test)]
@@ -475,14 +506,16 @@ mod tests {
         }
     }
 
-    /// PdfCraft patch: a run of signs is one number, however long the run. Read used to absorb
-    /// only two signs, so a third stopped the digit loop before any digit and the token read as
-    /// 0 plus a second number, where `Number::skip` accepts the whole token as one (#6601
-    /// review).
+    /// PdfCraft patch (37): a sign run is one token, and its value follows the model
+    /// parser: a doubled sign is tolerated (`--280` and `+-280` are -280, `++280` is
+    /// 280), a longer or mixed run is no number at all. Read used to absorb every sign,
+    /// so `---280` read as -280 where pdfcraft-cos refuses the token (#6601 review).
+    /// Either way skip consumes the whole token, so a container holding one keeps its
+    /// shape.
     #[test]
-    fn a_sign_run_is_one_number() {
+    fn sign_runs_follow_the_model_parser() {
         use alloc::format;
-        for (src, want) in [("---280", -280), ("----280", -280), ("-+-280", -280), ("+++280", 280)] {
+        for (src, want) in [("--280", -280), ("+-280", -280), ("++280", 280), ("+++280", 280), ("+280", 280), ("-280", -280)] {
             let mut r = Reader::new(src.as_bytes());
             assert_eq!(r.read_without_context::<i32>().unwrap(), want, "{src}");
             assert!(r.at_end(), "{src}: the whole number was read, leaving nothing for a second one");
@@ -490,14 +523,20 @@ mod tests {
             assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
             assert!(r.at_end(), "{src}: only part of the number was skipped");
         }
-        assert_eq!(Reader::new("---280.5".as_bytes()).read_without_context::<f64>().unwrap(), -280.5);
-        // The token from the #6601 review: three signs, 400 nines and a trailing minus. Skip
-        // accepts it as one number; read must consume the same extent (saturating, as a token
-        // of digits with a trailing minus did before), not split it in two.
+        assert_eq!(Reader::new("--280.5".as_bytes()).read_without_context::<f64>().unwrap(), -280.5);
+        for src in ["---280", "----280", "-+-280", "-+280"] {
+            let mut r = Reader::new(src.as_bytes());
+            assert_eq!(r.read_without_context::<Number>(), None, "{src}: a run the model refuses is no number");
+            let mut r = Reader::new(src.as_bytes());
+            assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
+            assert!(r.at_end(), "{src}: only part of the number was skipped");
+        }
+        // The token from the #6601 review: three signs, 400 nines and a trailing minus.
+        // Skip accepts it as one token; read refuses it whole (the model parser refuses
+        // it too), it does not split it in two.
         let huge = format!("---{}-", "9".repeat(400));
         let mut r = Reader::new(huge.as_bytes());
-        assert_eq!(r.read_without_context::<f64>().unwrap(), -f64::MAX);
-        assert!(r.at_end(), "the whole token was read");
+        assert_eq!(r.read_without_context::<Number>(), None);
         let mut r = Reader::new(huge.as_bytes());
         assert!(r.skip::<Number>(false).is_some(), "the token is skipped");
         assert!(r.at_end(), "the whole token was skipped");
