@@ -845,10 +845,11 @@ fn damaged_masks_and_sizes_never_panic() {
 }
 
 #[test]
-fn a_jpeg_with_thousands_of_extended_xmp_chunks_is_exported_without_decoding() {
-    // Export decodes a JPEG with a soft mask, or a JPEG soft mask, to make a PNG with alpha: a JPEG
-    // whose Extended XMP chunks would take the decoder quadratic time is written as it is instead,
-    // and such a mask is left out, without reaching the decoder.
+fn a_jpeg_with_thousands_of_extended_xmp_chunks_keeps_its_mask() {
+    // Export decodes a JPEG with a soft mask, or a JPEG soft mask, to make a PNG with alpha. A JPEG
+    // whose Extended XMP chunks would take the decoder quadratic time is decoded without them,
+    // which is linear in what is left, so the mask survives; a JPEG mask past the same bound is
+    // still left out, without reaching the decoder.
     let flood = crate::upright_image::tests::with_extended_xmp_chunks(&real_jpeg(), 5_000);
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
     with_image(&mut doc, |doc| {
@@ -860,7 +861,12 @@ fn a_jpeg_with_thousands_of_extended_xmp_chunks_is_exported_without_decoding() {
     });
     crate::extract::JPEGS_DECODED.with(|n| n.set(0));
     let out = extract_images(&doc, &[0], 0);
-    assert_eq!((out.images[0].extension, &out.images[0].data), ("jpg", &flood));
+    assert_eq!(out.images[0].extension, "png");
+    assert_eq!(crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), 1);
+    // The chunks themselves are gone, so the decoder never saw them.
+    assert!(!out.images[0].data.windows(5).any(|w| w == b"http:"));
+
+    crate::extract::JPEGS_DECODED.with(|n| n.set(0));
 
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
     with_image(&mut doc, |doc| {

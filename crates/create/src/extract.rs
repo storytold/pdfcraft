@@ -329,6 +329,15 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
         Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
+    // Past the decoder's metadata bound, drop the Extended XMP chunks rather than the mask:
+    // decoded as it stands, an over-chunked JPEG is written as is, without its /SMask.
+    let stripped;
+    let data = if crate::upright_image::decodable_metadata(data) {
+        data
+    } else {
+        stripped = crate::upright_image::without_extended_xmp(data);
+        &stripped[..]
+    };
     let img = jpeg_of_size(data, w, h)?;
     Some(match space {
         Space::Gray => (img.into_luma8().into_raw(), Space::Gray),

@@ -82,7 +82,11 @@ fn extended_xmp_chunks(bytes: &[u8]) -> usize {
 /// JPEG `bytes` without their Extended XMP chunks, which nothing here reads: what is left decodes
 /// in time linear in its size however many chunks the file carried.
 pub(crate) fn without_extended_xmp(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
+    // Only the bytes that are kept: a CMYK JPEG can be mostly Extended XMP, and reserving the
+    // whole file for the little that remains aborts the export under a tight address-space limit.
+    let mut removed = 0usize;
+    each_extended_xmp(bytes, |r| removed = removed.saturating_add(r.len()));
+    let mut out = Vec::with_capacity(bytes.len().saturating_sub(removed));
     let mut at = 0;
     each_extended_xmp(bytes, |r| {
         out.extend_from_slice(bytes.get(at..r.start).unwrap_or_default());
@@ -114,7 +118,9 @@ fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
                 let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
                 let len = usize::from(u16::from_be_bytes([hi, lo]));
                 let end = i.saturating_add(2).saturating_add(len.max(2));
-                if marker == 0xE1 && bytes.get(i.saturating_add(4)..).is_some_and(|seg| seg.starts_with(PREFIX)) {
+                // The prefix must start the APP1 segment's own payload: a zero-length header
+                // followed by prefix bytes is not a chunk.
+                if marker == 0xE1 && bytes.get(i.saturating_add(4)..end.min(bytes.len())).is_some_and(|seg| seg.starts_with(PREFIX)) {
                     f(i..end.min(bytes.len()));
                 }
                 i = end;
