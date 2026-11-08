@@ -920,6 +920,7 @@ fn re_resolve_image_selection(
 fn content_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::MoveObjects { page, .. }
+        | Edit::DeleteObjects { page, .. }
         | Edit::EditTextLine { page, .. }
         | Edit::EditTextBlock { page, .. }
         | Edit::EditPageImage { page, .. }
@@ -927,7 +928,8 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::AddImage { page, .. }
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
-        | Edit::ReplaceImage { page, .. } => Some(*page),
+        | Edit::ReplaceImage { page, .. }
+        | Edit::PasteObjects { page, .. } => Some(*page),
         _ => None,
     }
 }
