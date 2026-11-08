@@ -4758,8 +4758,9 @@ fn hotbar_vertical_size_and_docking() {
 #[test]
 fn hotbar_settings_button_stays_in_the_tool_column_with_tool_controls() {
     use pdfcraft_ui_egui::comments::CommentTool;
+    use pdfcraft_ui_egui::fill_sign::FillTool;
     for side in ["float", "bottom"] {
-        for tool in ["select", "highlight", "note"] {
+        for tool in ["select", "highlight", "note", "fill-text", "fill-date"] {
             let mut h = harness(move |app| {
                 app.set_option("hotbar-side", side).unwrap();
                 app.set_option("quick", tool).unwrap();
@@ -4767,7 +4768,9 @@ fn hotbar_settings_button_stays_in_the_tool_column_with_tool_controls() {
             let (want, name) = match tool {
                 "select" => (QuickTool::Select, "Select"),
                 "highlight" => (QuickTool::Comment(CommentTool::Highlight), "Highlight"),
-                _ => (QuickTool::Comment(CommentTool::Note), "Sticky note"),
+                "note" => (QuickTool::Comment(CommentTool::Note), "Sticky note"),
+                "fill-text" => (QuickTool::Fill(FillTool::Text), "Fill Text"),
+                _ => (QuickTool::Fill(FillTool::Date), "Date"),
             };
             assert_eq!(h.state().quick_tool, want, "{name} is the active tool");
             h.run_steps(3);
