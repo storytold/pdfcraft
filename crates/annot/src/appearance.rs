@@ -1,10 +1,10 @@
 //! Appearance streams (§12.5.5) for the comment types PdfCraft creates, execution plan M5.2.
 //!
-//! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary alone, so the
-//! same code serves new comments and restyled ones. Drawings are in page space with
+//! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary and the
+//! objects it points at, so the same code serves new comments and restyled ones. Drawings are in page space with
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
-//! endings, indirect geometry), so callers never replace an appearance with a worse one.
+//! endings), so callers never replace an appearance with a worse one.
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
@@ -15,7 +15,7 @@ use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
 pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
 
-use crate::{NOTE_SIZE, Rgb, n};
+use crate::{Document, NOTE_SIZE, Rgb, n};
 
 mod symbols;
 
@@ -165,6 +165,18 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
 
 fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
+}
+
+/// The usable `/QuadPoints` quads, by the rule redaction apply reads them with
+/// ([`pdfcraft_geom::quad_points::usable_quads`]): a malformed or non-finite quad is not drawn (it
+/// would write `NaN` into the stream) and the others still are. The array and its entries are
+/// resolved first, as the other readers resolve them, so an indirect quad is drawn too. `None`
+/// when none is usable.
+fn quads(context: &AppearanceContext<'_>) -> Option<Vec<[f64; 8]>> {
+    let doc = context.doc;
+    let q =
+        pdfcraft_geom::quad_points::usable_quads(doc.resolve(context.dict.get(b"QuadPoints")?).as_array()?.iter().map(|x| doc.resolve(x).as_f64()));
+    (!q.is_empty()).then_some(q)
 }
 
 /// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
@@ -459,6 +471,7 @@ fn caret_layout(d: &Dict, rect: [f64; 4]) -> ([f64; 4], Option<(f64, f64, f64)>)
 
 #[derive(Clone, Copy)]
 struct AppearanceContext<'a> {
+    doc: &'a Document,
     dict: &'a Dict,
     subtype: &'a [u8],
     rect: [f64; 4],
@@ -495,20 +508,15 @@ impl AppearanceDrawing {
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
-pub fn build(d: &Dict) -> Option<Stream> {
-    build_in(d, None)
-}
-
-/// [`build`], with the face a text box's `/DA` font names in the form's `/DR`
-/// ([`crate::text_style::dr_face`]).
-pub(crate) fn build_in(d: &Dict, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
-    let context = appearance_context(d)?;
+pub fn build(doc: &Document, d: &Dict) -> Option<Stream> {
+    let context = appearance_context(doc, d)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
         b"FileAttachment" => return draw_icon(&context, "PushPin", [0.0, 0.47, 0.84], drawing),
         b"Stamp" => return draw_stamp(&context, drawing),
-        b"FreeText" => return draw_free_text(&context, drawing, dr_face),
+        // The face a text box's `/DA` font names in the form's `/DR`, when it names one.
+        b"FreeText" => return draw_free_text(&context, drawing, crate::text_style::dr_face(doc, d)),
         _ => {}
     }
     let mut drawing = drawing;
@@ -516,7 +524,7 @@ pub(crate) fn build_in(d: &Dict, dr_face: Option<pdfcraft_fonts::Std14>) -> Opti
     finish_appearance(&context, drawing)
 }
 
-fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
+fn appearance_context<'a>(doc: &'a Document, d: &'a Dict) -> Option<AppearanceContext<'a>> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
@@ -531,6 +539,7 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         return None;
     }
     Some(AppearanceContext {
+        doc,
         dict: d,
         subtype,
         rect,
@@ -578,13 +587,12 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
 }
 
 fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
-    let d = context.dict;
     let subtype = context.subtype;
     let stroke = context.stroke;
     let c = &mut drawing.content;
-    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+    let q = quads(context)?;
     let col = stroke?;
-    for quad in q.as_chunks::<8>().0.iter() {
+    for quad in q.iter() {
         let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
         let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
         let h = (p1.0 - p3.0).hypot(p1.1 - p3.1);
@@ -639,19 +647,19 @@ fn draw_redaction(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawi
     });
     // Quadrilaterals are outlined in the `/OC` colour, else in `/C` as they always were.
     let (q, col) = match d.get(b"QuadPoints") {
-        Some(_) => (nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?, outline.or(stroke)),
+        Some(_) => (quads(context)?, outline.or(stroke)),
         // Without `/QuadPoints`, `/Rect` is the area (Table 195): outlined just inside its
         // edges when the mark names an outline colour, else not drawn while marked.
         None => {
             let outline = outline?;
             let rect = context.rect;
             let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
-            (vec![x0, y1, x1, y1, x0, y0, x1, y0], Some(outline))
+            (vec![[x0, y1, x1, y1, x0, y0, x1, y0]], Some(outline))
         }
     };
     let col = col.unwrap_or([0.89, 0.13, 0.13]);
     c.push_str(&format!("{}1 w\n", rg_stroke(col)));
-    for quad in q.as_chunks::<8>().0.iter() {
+    for quad in q.iter() {
         c.push_str(&format!(
             "{} {} m {} {} l {} {} l {} {} l h S\n",
             n(quad[0]),

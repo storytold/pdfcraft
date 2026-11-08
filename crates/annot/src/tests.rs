@@ -1350,6 +1350,12 @@ fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Ink")));
 }
 
+/// A document holding only a catalog, for appearance builds from a bare dictionary whose
+/// values are all direct.
+fn bare_doc() -> Document {
+    document_of(&[b"<< /Type /Catalog /Pages << /Type /Pages /Kids [] /Count 0 >> >>"])
+}
+
 /// A one-page document from object bodies (object 1 is the catalog, 3 the page).
 fn document_of(objs: &[&[u8]]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -1445,7 +1451,7 @@ fn malformed_optional_interior_color_does_not_hide_shape_strokes() {
     polyline.set(b"IC".to_vec(), malformed);
 
     for (name, annotation) in [("Square", square), ("Circle", circle), ("Polygon", polygon), ("Line", line), ("PolyLine", polyline)] {
-        assert!(appearance::build(&annotation).is_some(), "malformed optional /IC must not hide a valid {name} stroke");
+        assert!(appearance::build(&bare_doc(), &annotation).is_some(), "malformed optional /IC must not hide a valid {name} stroke");
     }
 
     let doc = document_of(&[
@@ -1540,7 +1546,7 @@ fn a_stamp_without_an_appearance_draws_the_stamp_it_names() {
     // A stamp's own artwork is never replaced, and the drawing is for display only: edits
     // (restyling, flattening) still find nothing they may write.
     assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /AP << /N 9 0 R >>")).is_none());
-    assert!(appearance::build(&stamp_dict("/Name /Draft")).is_none());
+    assert!(appearance::build(&bare_doc(), &stamp_dict("/Name /Draft")).is_none());
     assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /PCStamp true")).is_none(), "PdfCraft's own stamps are drawn by `build`");
     assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /Rect [5 5 5 50]")).is_none(), "no width");
 }
@@ -1643,8 +1649,8 @@ fn every_line_ending_is_drawn() {
     assert_eq!(call.name(b"LE"), Some(b"Diamond".as_slice()));
     assert!(ap_content(&doc, call).contains("h B"), "diamond callout");
 
-    assert!(appearance::build(&line_dict([f64::NAN, 0.0, 10.0, 0.0], "OpenArrow")).is_none(), "a non-finite endpoint is rejected");
-    assert!(appearance::build(&line_dict([0.0, 0.0, 10.0, 0.0], "Foo")).is_none(), "an unknown ending is not replaced");
+    assert!(appearance::build(&bare_doc(), &line_dict([f64::NAN, 0.0, 10.0, 0.0], "OpenArrow")).is_none(), "a non-finite endpoint is rejected");
+    assert!(appearance::build(&bare_doc(), &line_dict([0.0, 0.0, 10.0, 0.0], "Foo")).is_none(), "an unknown ending is not replaced");
 }
 
 #[test]
@@ -2186,7 +2192,7 @@ fn note_drawing(name: Option<&str>, color: [f64; 3]) -> Vec<u8> {
     if let Some(n) = name {
         d.set(b"Name".to_vec(), Object::name(n));
     }
-    crate::appearance::build(&d).expect("a note is drawn").decoded().unwrap()
+    crate::appearance::build(&bare_doc(), &d).expect("a note is drawn").decoded().unwrap()
 }
 
 /// ISO 32000-2 §12.5.6.4, Table 175: a viewer shall provide icons for the seven standard names,
@@ -2234,7 +2240,7 @@ fn a_star_note_keeps_its_star_when_recoloured() {
 fn content_of(src: &str) -> String {
     let doc = document_of(&[src.as_bytes()]);
     let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().expect("a dictionary");
-    let stream = appearance::build(&d).expect("drawn");
+    let stream = appearance::build(&bare_doc(), &d).expect("drawn");
     String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned()
 }
 
@@ -2286,7 +2292,7 @@ fn bad_dash_arrays_draw_solid() {
     for w in [f64::NAN, f64::INFINITY, -2.0] {
         let dash = Object::Array([f64::NAN, 2.0].map(Object::Real).to_vec());
         d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(w), dash]));
-        let c = String::from_utf8_lossy(&appearance::build(&d).unwrap().decoded().unwrap()).into_owned();
+        let c = String::from_utf8_lossy(&appearance::build(&bare_doc(), &d).unwrap().decoded().unwrap()).into_owned();
         assert!(c.contains("1 w") && !c.contains(" d\n") && !c.contains("NaN") && !c.contains("inf"), "{w}: {c}");
     }
 }
@@ -2308,7 +2314,7 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
     let caret = |extra: &str| {
         let doc = document_of(&[format!("<< /Subtype /Caret /Rect [30 30 60 60] /C [0.9 0.1 0.1] {extra} >>").as_bytes()]);
         let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
-        let s = appearance::build(&d).unwrap();
+        let s = appearance::build(&bare_doc(), &d).unwrap();
         (s.decoded().unwrap(), s.dict.get(b"Resources").and_then(Object::as_dict).is_some_and(|r| r.contains(b"Font")))
     };
     let has_pilcrow = |c: &[u8]| c.windows(5).any(|w| w == b"(\xb6) T");
@@ -2336,7 +2342,7 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
     }
     let doc = document_of(&[b"<< /Subtype /Caret /Rect [30 30 30 30] /Sy /P >>"]);
     let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
-    assert!(appearance::build(&d).is_some());
+    assert!(appearance::build(&bare_doc(), &d).is_some());
 }
 
 // ── Line annotations: leader lines and captions (ISO 32000-2 §12.5.6.7, Table 178) ──────────
@@ -2356,7 +2362,7 @@ fn table_178_line(l: [f64; 4], extra: &[(&str, Object)]) -> Dict {
 
 /// The built appearance's content.
 fn line_drawing(d: &Dict) -> String {
-    let s = crate::appearance::build(d).expect("the line is drawn");
+    let s = crate::appearance::build(&bare_doc(), d).expect("the line is drawn");
     String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
 }
 
@@ -2509,7 +2515,7 @@ fn a_diagonal_lines_leaders_are_perpendicular_and_its_caption_turns_with_it() {
 fn a_caption_from_rich_text_and_one_the_font_cant_draw() {
     let rc = "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\"><p>Dim &amp; <b>5</b>0&#x20;mm &lt;x&gt;</p></body>";
     let d = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("RC", Object::String(PdfString::text(rc)))]);
-    let s = crate::appearance::build(&d).unwrap().decoded().unwrap();
+    let s = crate::appearance::build(&bare_doc(), &d).unwrap().decoded().unwrap();
     assert!(s.windows(17).any(|w| w == b"(Dim & 50 mm <x>)"), "{}", String::from_utf8_lossy(&s));
     let cjk = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("長さ")))]);
     assert_eq!(crate::appearance::undrawable_text(&cjk), Some(("the line's caption", '長')));
@@ -3144,4 +3150,84 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     };
     check(&doc);
     check(&reopen(&doc));
+}
+
+const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// The appearance a `subtype` with `/QuadPoints` `quads` draws, as text.
+fn quad_appearance(subtype: &str, quads: Vec<Object>) -> Option<String> {
+    quad_appearance_with(&bare_doc(), subtype, Object::Array(quads))
+}
+
+fn quad_appearance_with(doc: &Document, subtype: &str, quad_points: Object) -> Option<String> {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name(subtype));
+    d.set(b"Rect".to_vec(), Object::Array([20, 95, 40, 110].map(Object::Int).to_vec()));
+    d.set(b"C".to_vec(), Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0)]));
+    d.set(b"QuadPoints".to_vec(), quad_points);
+    appearance::build(doc, &d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// Appearance drawing reads `/QuadPoints` by the rule the other readers do, indirect objects
+/// included: entries by reference, and the array itself by reference, draw the same quads as
+/// the direct values.
+#[test]
+fn appearances_draw_indirect_quads_like_direct_ones() {
+    for subtype in ["Redact", "Highlight"] {
+        let clean = quad_appearance(subtype, reals(&QUAD)).unwrap();
+        let mut doc = bare_doc();
+        let by_ref: Vec<Object> = QUAD.iter().map(|v| Object::Ref(doc.add(Object::Real(*v)))).collect();
+        assert_eq!(quad_appearance_with(&doc, subtype, Object::Array(by_ref)).as_deref(), Some(clean.as_str()), "{subtype}: entries by reference");
+        let array_ref = Object::Ref(doc.add(Object::Array(reals(&QUAD))));
+        assert_eq!(quad_appearance_with(&doc, subtype, array_ref).as_deref(), Some(clean.as_str()), "{subtype}: the array by reference");
+    }
+}
+
+/// Redaction outlines and text markup draw the quads redaction apply would use, no more: a NaN
+/// quad wrote `NaN` into the stream, and one non-number or a trailing partial quad left the other,
+/// usable quads undrawn.
+#[test]
+fn appearances_draw_only_usable_quads() {
+    let mut one_nan = QUAD;
+    one_nan[3] = f64::NAN;
+    for subtype in ["Redact", "Highlight"] {
+        let clean = quad_appearance(subtype, reals(&QUAD)).unwrap();
+        assert!(!clean.contains("NaN"), "{clean}");
+        let mut name_first = reals(&[QUAD, QUAD].concat());
+        name_first[2] = Object::name("oops");
+        let same =
+            [reals(&[one_nan, QUAD].concat()), name_first, reals(&[&QUAD[..], &QUAD[..4]].concat()), reals(&[QUAD, [f64::INFINITY; 8]].concat())];
+        for (i, quads) in same.into_iter().enumerate() {
+            assert_eq!(quad_appearance(subtype, quads).as_deref(), Some(clean.as_str()), "{subtype} case {i}");
+        }
+        // No usable quad draws nothing, as with no /QuadPoints.
+        assert_eq!(quad_appearance(subtype, reals(&[f64::NAN; 8])), None, "{subtype}");
+    }
+}
+
+/// The comment list reads `/QuadPoints` by the rule redaction apply does: unusable quads are left
+/// out, not read as zeros, and an indirect number is followed.
+#[test]
+fn summaries_list_only_usable_quads() {
+    let mut doc = fixture();
+    let forty = Object::Ref(doc.add(Object::Int(40)));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    // A non-number in the first quad, an indirect 40 in the second, NaN in the third, and four
+    // entries of a fourth.
+    let mut quads = reals(&[QUAD, QUAD, QUAD, QUAD].concat());
+    quads[1] = Object::name("oops");
+    quads[10] = forty;
+    quads[17] = Object::Real(f64::NAN);
+    quads.truncate(28);
+    annotation.set(b"Subtype".to_vec(), Object::name("Redact"));
+    annotation.set(b"QuadPoints".to_vec(), Object::Array(quads));
+    set_annots(&mut doc, page, entries).unwrap();
+    let summary = summaries(&doc).into_iter().find(|a| a.page == 0 && a.index == 0).unwrap();
+    assert_eq!(summary.quads, vec![QUAD.map(|v| v as f32)]);
 }
