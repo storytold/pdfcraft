@@ -1700,7 +1700,7 @@ mod dimension_tests {
         dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
         let image = Stream::flate(dict, &samples);
-        let read = (image.raw.len() + samples.len()) as u64 + 256 * 256;
+        let read = (image.raw.len() + samples.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * image.raw.len() as u64 + 256 * 256;
         let original = doc.add(Object::Stream(image.clone()));
         let mut xobjects = Dict::new();
         xobjects.set(b"I0".to_vec(), Object::Ref(original));
@@ -1792,7 +1792,7 @@ mod dimension_tests {
         };
         let mut doc = Document::new_empty();
         let mask = image("DeviceGray");
-        let cost = (mask.raw.len() + noise.len()) as u64 + 256 * 256;
+        let cost = (mask.raw.len() + noise.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * mask.raw.len() as u64 + 256 * 256;
         let masked = doc.add(Object::Stream(mask));
         let mut with_mask = image("DeviceGray");
         with_mask.dict.set(b"SMask".to_vec(), Object::Ref(masked));

@@ -11,7 +11,9 @@ use crate::{CosError, Document, ObjRef, Object, Stream};
 /// 16 ns, so this is 2 to 5 minutes, and about as long again for what an operation does with the
 /// pixels. A page scanned at 300 dpi takes about 17 million, 8.4 for its pixels and that again to
 /// decode them, so this alone reads about 1,000 of them. A byte into or out of a filter is a step
-/// too, and takes less: 3 ns at most, or up to 19 ns through a predictor on samples of a bit.
+/// too, and takes less: 3 ns at most, or up to 19 ns through a predictor on samples of a bit. A
+/// byte Flate reads is [`pdfcraft_filters::FLATE_READ_WORK`] steps besides, since inflating blocks
+/// that make nothing takes up to 21 ns a byte: about 7 ns a step.
 const IMAGE_WORK: u64 = 1 << 34;
 /// The steps each byte of the file adds to [`IMAGE_WORK`], so that a long scan is read whole: such a
 /// page pays for itself with about 2 KB of the file, about the smallest a page of text is stored
@@ -386,6 +388,11 @@ mod image_tests {
         Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())
     }
 
+    /// What a Flate stage pays to read `n` bytes, besides what it makes.
+    fn read(n: usize) -> u64 {
+        pdfcraft_filters::FLATE_READ_WORK * n as u64
+    }
+
     /// Each image spends what it took from one allowance, and those past it are refused and
     /// counted, whatever their filters. What can't be decoded here costs nothing, and fails
     /// without being one of these.
@@ -432,7 +439,7 @@ mod image_tests {
         let mut dict = Dict::new();
         dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("FlateDecode")]));
         let bomb = Stream::from_raw(dict, pdfcraft_filters::encode_flate(&inner));
-        let cost = (bomb.raw.len() + inner.len() + samples.len()) as u64;
+        let cost = (bomb.raw.len() + inner.len() + samples.len()) as u64 + read(bomb.raw.len()) + read(inner.len());
         let mut budget = ImageBudget::with_work(2 * cost + 1);
         for left in [cost + 1, 1] {
             assert_eq!(budget.decode(&doc, &bomb, 1 << 20).unwrap(), samples);
@@ -461,17 +468,17 @@ mod image_tests {
         let image = behind(pdfcraft_filters::encode_flate(&alone.raw));
         let mut budget = ImageBudget::with_work(u64::MAX);
         assert_eq!(budget.decode(&doc, &image, 1 << 20).unwrap(), samples);
-        assert_eq!(u64::MAX - budget.work_left(), decoding + (image.raw.len() + alone.raw.len()) as u64);
+        assert_eq!(u64::MAX - budget.work_left(), decoding + (image.raw.len() + alone.raw.len()) as u64 + read(image.raw.len()));
 
         // Past this image's limit: an error, with what finding out took paid and the rest left.
         let bomb = behind(pdfcraft_filters::encode_flate(&vec![0; 1 << 16]));
         let mut budget = ImageBudget::with_work(u64::MAX);
         assert!(budget.decode(&doc, &bomb, 1000).is_err());
-        assert_eq!(u64::MAX - budget.work_left(), bomb.raw.len() as u64 + 1000);
+        assert_eq!(u64::MAX - budget.work_left(), bomb.raw.len() as u64 + read(bomb.raw.len()) + 1000);
         assert_eq!(budget.refused(), 0, "that image's limit isn't the run's");
 
         // A small allowance is a limit too: it stops there, and the image is refused.
-        let mut budget = ImageBudget::with_work(bomb.raw.len() as u64 + 10);
+        let mut budget = ImageBudget::with_work(bomb.raw.len() as u64 + read(bomb.raw.len()) + 10);
         assert!(budget.decode(&doc, &bomb, 1 << 20).is_err());
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
     }
@@ -511,7 +518,7 @@ mod image_tests {
         let doc = Document::open(std::sync::Arc::new(file)).unwrap();
         let image = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Image").unwrap();
         let s = stream(&doc, image);
-        let filters = (raw.len() + skipped.len()) as u64;
+        let filters = (raw.len() + skipped.len()) as u64 + read(raw.len());
         assert_eq!(spent(&doc, &s), first, "the first read undoes them");
         assert_eq!(spent(&doc, &s), first - filters, "kept");
 
@@ -526,7 +533,7 @@ mod image_tests {
         let image = jbig2(Some(Object::Dict(parms)));
         let mut budget = ImageBudget::with_work(u64::MAX);
         assert!(budget.decode(&doc, &image, 1 << 20).unwrap_err().to_string().contains("globals"));
-        assert_eq!(u64::MAX - budget.work_left(), (over.len() + crate::MAX_JBIG2_GLOBALS) as u64);
+        assert_eq!(u64::MAX - budget.work_left(), (over.len() + crate::MAX_JBIG2_GLOBALS) as u64 + read(over.len()));
         assert_eq!(budget.refused(), 0);
     }
 
@@ -547,7 +554,7 @@ mod image_tests {
         dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Dict(parms)]));
         let image = Stream::from_raw(dict, pdfcraft_filters::encode_flate(&coded));
         let pixels = u64::from(w) * u64::from(h);
-        let cost = (image.raw.len() + coded.len() + 4 * coded.len() + 512 * h as usize) as u64 + pixels;
+        let cost = (image.raw.len() + coded.len() + 4 * coded.len() + 512 * h as usize) as u64 + read(image.raw.len()) + pixels;
         let mut budget = ImageBudget::with_work(cost);
         assert_eq!(budget.decode(&doc, &image, 1 << 20).unwrap().len(), 512 * h as usize);
         assert_eq!(budget.work_left(), 0, "exactly that");
@@ -572,7 +579,7 @@ mod image_tests {
         };
         let rows = vec![0xFFu8; 512 * 1024];
         let flate = blank(Some("FlateDecode"), pdfcraft_filters::encode_flate(&rows));
-        let cost = (flate.raw.len() + rows.len()) as u64 + 4096 * 1024;
+        let cost = (flate.raw.len() + rows.len()) as u64 + read(flate.raw.len()) + 4096 * 1024;
         let mut budget = ImageBudget::with_work(cost);
         assert_eq!(budget.decode(&doc, &flate, 1 << 24).unwrap(), rows);
         assert_eq!((budget.work_left(), budget.refused()), (0, 0), "exactly that");
@@ -609,6 +616,36 @@ mod image_tests {
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
     }
 
+    /// What Flate reads is priced for blocks that make nothing, and an image an encoder made pays
+    /// little for it: a scan-like picture stored in under half its size costs no more than half
+    /// again its bytes, samples and pixels. Redaction decodes a picture once for each page that draws it, so
+    /// a letterhead on hundreds of pages has to fit about as often as it did unpriced (here, at
+    /// most half again the cost).
+    #[test]
+    fn an_image_an_encoder_made_pays_little_for_its_reading() {
+        let doc = Document::new_empty();
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let samples: Vec<u8> = (0..256 * 256usize)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                ((i % 256) as u8 / 16) ^ (seed as u8 & 3)
+            })
+            .collect();
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(256));
+        dict.set(b"Height".to_vec(), Object::Int(256));
+        let image = Stream::flate(dict, &samples);
+        assert!(image.raw.len() * 2 < samples.len(), "stored smaller: {}", image.raw.len());
+        let unpriced = (image.raw.len() + samples.len()) as u64 + 256 * 256;
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        budget.decode(&doc, &image, 1 << 20).unwrap();
+        let paid = u64::MAX - budget.work_left();
+        assert_eq!(paid, unpriced + read(image.raw.len()));
+        assert!(2 * paid <= 3 * unpriced, "{paid} steps against {unpriced}");
+    }
+
     /// An image pays for the pixels its data holds, not those its size declares: one claiming
     /// 131072 by 131072 pixels with a few bytes of Flate costs what those bytes give, and the
     /// images after it are decoded as they would be without it.
@@ -628,8 +665,8 @@ mod image_tests {
             budget.decode(&doc, s, 1 << 24).unwrap();
             u64::MAX - budget.work_left()
         };
-        assert_eq!(cost(&claims), (claims.raw.len() + 16 + 16 * 8) as u64, "its bytes, and a pixel a bit of them");
-        assert_eq!(cost(&image), (image.raw.len() + 64 * 64) as u64 + 64 * 64, "its bytes, and its pixels");
+        assert_eq!(cost(&claims), (claims.raw.len() + 16 + 16 * 8) as u64 + read(claims.raw.len()), "its bytes, and a pixel a bit of them");
+        assert_eq!(cost(&image), (image.raw.len() + 64 * 64) as u64 + read(image.raw.len()) + 64 * 64, "its bytes, and its pixels");
         for decode in [ImageBudget::decode, ImageBudget::decode_filters] {
             let mut budget = ImageBudget::with_work(cost(&claims) + cost(&image));
             assert_eq!(decode(&mut budget, &doc, &claims, 1 << 24).unwrap(), [0; 16]);
@@ -646,7 +683,7 @@ mod image_tests {
         let samples = vec![7u8; 1000];
         let raw = pdfcraft_filters::encode_flate(&samples);
         let chain = [(Filter::Flate, Params::default())];
-        let cost = (raw.len() + samples.len()) as u64;
+        let cost = (raw.len() + samples.len()) as u64 + read(raw.len());
         let mut budget = ImageBudget::with_work(cost + 10);
         assert_eq!(budget.decode_chain(&chain, &raw, 1 << 20).unwrap(), samples);
         assert_eq!(budget.work_left(), 10);
@@ -683,7 +720,7 @@ mod image_tests {
         assert_eq!(budget.decode_filters(&doc, &image, 1 << 20).unwrap(), rows);
         let cost = u64::MAX - budget.work_left();
         // The tag byte of each of its 100 rows counts, which the predictor takes off.
-        assert_eq!(cost, (image.raw.len() + rows.len() + 100) as u64);
+        assert_eq!(cost, (image.raw.len() + rows.len() + 100) as u64 + read(image.raw.len()));
         let mut budget = ImageBudget::with_work(cost - 1);
         assert!(budget.decode_filters(&doc, &image, 1 << 20).is_err());
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
