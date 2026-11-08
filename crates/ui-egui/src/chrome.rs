@@ -484,6 +484,10 @@ const MODE_BAR_RIGHT: f32 = 3.0 * 32.0 + 3.0 * 4.0 + 8.0;
 const MODE_BAR_SEARCH_MIN: f32 = 140.0;
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if app.mode == Mode::Read {
+        app.read_menu_shortcuts(ui);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
