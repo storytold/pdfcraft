@@ -23,7 +23,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
-use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
+use pdfcraft_fonts::helvetica_width;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum EditError {
@@ -43,12 +43,17 @@ pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
 pub use text::strip_subset_tag;
 mod background;
 pub use background::page_background;
+mod rules;
+pub use rules::page_rules;
 pub mod objects;
-pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
+pub use objects::{
+    CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,
+};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
+mod ungroup;
 pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;
 pub mod indic;
@@ -61,8 +66,8 @@ pub use text::{
 };
 pub mod added;
 pub use added::{
-    Added, AddedImage, AddedText, Align, Content, Family, MarkerScan, add_content, delete_content, first_undrawable, isolate_content, list_added,
-    scan_markers, update_content,
+    Added, AddedImage, AddedText, Align, Content, Family, Ink, MarkerScan, add_content, delete_content, first_undrawable, isolate_content,
+    list_added, scan_markers, update_content,
 };
 
 mod apply;

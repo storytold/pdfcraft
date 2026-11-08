@@ -36,6 +36,7 @@ pub mod js;
 mod layers;
 pub mod links;
 pub mod model3d;
+mod object_clip;
 pub mod ocr;
 mod open;
 pub mod optimizer;
@@ -44,6 +45,7 @@ mod pictures;
 pub mod print_raster;
 pub mod printcheck;
 mod protection;
+mod rich_copy;
 pub mod scan_clean;
 mod scan_colours;
 mod scan_fields;
@@ -68,6 +70,7 @@ pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
 pub use pdfcraft_edit::strip_subset_tag;
+pub use rich_copy::RichCopy;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
@@ -91,7 +94,8 @@ pub use pdfcraft_edit::added::{
 };
 pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
-    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
+    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, Ink as TextInk,
+    MarkKind, Watermark,
 };
 pub use pdfcraft_forms::{
     BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,
@@ -105,6 +109,7 @@ pub use pdfcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, T
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
+pub use object_clip::{ObjectClip, ObjectClipboard};
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
 pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
@@ -126,8 +131,9 @@ pub use pdfcraft_redact::patterns::{
     MAX_WORDS as REDACT_MAX_WORDS, PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern, word_list as redact_word_list,
 };
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
+pub use pdfcraft_redact::user_regex::{UserRegex as RedactRegex, VALIDATORS as REDACT_VALIDATORS, Validator as RedactValidator};
 pub use pdfcraft_sign as sign;
-pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
+pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, StatusCaptions, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
 pub use pdfcraft_xfdf::{Outline as CommentOutline, comment_count, comment_outlines, comments_bounds, is_xfdf_comments};
 
@@ -138,7 +144,7 @@ pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name
 #[cfg(test)]
 use document::page_runs;
 pub use document::{Document, EditNotice, TextNotice, display_bytes_for, render_password_for};
-use document::{display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
+use document::{carry_verdict_marks, display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
