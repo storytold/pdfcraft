@@ -609,4 +609,12 @@ fn reference_and_find_join_past_empty_and_invisible_glyphs_after_a_soft_hyphen()
     text.line_of = vec![0, 0, 0, 1];
     assert_eq!(text.find("Mitarbeiterinnen"), vec![0..4]);
     assert_eq!(reference(&text, "Mitarbeiterinnen", false, false, usize::MAX), vec![0..4]);
+
+    // A visible glyph after the soft hyphen ends the hyphenated word there: the line end stays a space.
+    let mut text = page(&["Mitar\u{AD}", "x", "", "\u{200B}", "beiterinnen"]);
+    text.line_of = vec![0, 0, 0, 0, 1];
+    assert!(text.find("Mitarbeiterinnen").is_empty());
+    assert!(reference(&text, "Mitarbeiterinnen", false, false, usize::MAX).is_empty());
+    assert_eq!(text.find("Mitarx beiterinnen"), vec![0..5]);
+    assert_eq!(reference(&text, "Mitarx beiterinnen", false, false, usize::MAX), vec![0..5]);
 }
