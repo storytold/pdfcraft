@@ -31,6 +31,7 @@ pub use session::TextSession;
 mod blocks;
 mod editor;
 mod fallback;
+pub mod forms;
 mod interp;
 mod lines;
 mod rewrite;
@@ -42,8 +43,8 @@ pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
-use editor::layout_draft;
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
+use editor::{builtin_thai_choice, layout_draft};
 #[cfg(test)]
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{

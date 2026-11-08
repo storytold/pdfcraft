@@ -10464,29 +10464,18 @@ fn escape_in_an_open_paragraph_selects_its_box_for_delete() {
 #[test]
 fn ungroup_in_the_artwork_menu_makes_a_forms_text_editable() {
     let table = b"BT /F1 14 Tf 1 0 0 1 40 200 Tm (Revenue 153,300.00) Tj 1 0 0 1 40 170 Tm (Costs 382,110.00) Tj ET";
-    let stream = |dict: &str, data: &[u8]| [format!("{dict} /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat();
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /XObject << /Fm1 5 0 R >> >> >>".to_vec(),
-        stream("<<", b"q /Fm1 Do Q"),
-        stream("<< /Type /XObject /Subtype /Form /BBox [0 0 400 300] /Group << /S /Transparency >> /Resources << /Font << /F1 6 0 R >> >>", table),
+        pdf_stream("<<", b"q /Fm1 Do Q"),
+        pdf_stream(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 400 300] /Group << /S /Transparency >> /Resources << /Font << /F1 6 0 R >> >>",
+            table,
+        ),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
     ];
-    let mut pdf = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(pdf.len());
-        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-        pdf.extend_from_slice(o);
-        pdf.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = pdf.len();
-    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let pdf = pdf_of_objects(&objs);
 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -10519,6 +10508,89 @@ fn ungroup_in_the_artwork_menu_makes_a_forms_text_editable() {
     assert!(h.state_mut().execute("edit.undo"));
     h.run_steps(3);
     assert_eq!(blocks(&h), 0, "undo puts the form back");
+}
+
+/// A stream object `dict` (its opening `<<` and entries, without `/Length` or `>>`) holding `data`.
+fn pdf_stream(dict: &str, data: &[u8]) -> Vec<u8> {
+    [format!("{dict} /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat()
+}
+
+/// A PDF of `objs`, numbered from 1, with the first as its catalog.
+fn pdf_of_objects(objs: &[Vec<u8>]) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(o);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// Grouped text is not prepared while the pages are only looked at: entering Edit text and
+/// scrolling change nothing. One click on the group's text prepares that page, as one undoable
+/// step, and opens the paragraph clicked for typing. A click on a grouped logo selects it, as a
+/// click on any picture does, and changes nothing; a drag from the text group prepares nothing.
+#[test]
+fn one_click_on_grouped_text_opens_it_for_editing() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /XObject << /Body 5 0 R /Logo 7 0 R >> >> >>".to_vec(),
+        pdf_stream("<<", b"q /Body Do Q q 1 0 0 1 300 20 cm /Logo Do Q"),
+        pdf_stream(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 280 300] /Resources << /Font << /F1 6 0 R >> >>",
+            b"BT /F1 24 Tf 1 0 0 1 40 200 Tm (Grouped words) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+        pdf_stream("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /Resources << >>", b"0 0 1 rg 0 0 60 60 re f"),
+    ];
+    let pdf = pdf_of_objects(&objs);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("grouped.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let doc = |h: &Harness<'static, PdfCraftApp>| {
+        let d = h.state().session.get(id).unwrap();
+        (d.text_blocks(0).len(), d.page_images(0).len(), d.can_undo().map(str::to_string))
+    };
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(6);
+    assert_eq!(doc(&h), (0, 2, None), "nothing is prepared while the page is only shown");
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    // User space (x, y) on the page, which is 400 by 300 points and upright.
+    let at = |x: f32, y: f32| r.left_top() + egui::vec2(r.width() * x / 400.0, r.height() * (300.0 - y) / 300.0);
+
+    click_at(&mut h, at(330.0, 50.0));
+    let logo = h.state().session.get(id).unwrap().page_images(0).iter().position(|i| i.name == "Logo");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index)), logo.map(|i| (0, i)), "the logo is selected");
+    assert_eq!(doc(&h), (0, 2, None), "a click on artwork without text changes nothing");
+    assert!(h.state().views[0].line_editor.is_none());
+
+    drag(&mut h, at(60.0, 208.0), at(120.0, 150.0));
+    assert_eq!(doc(&h).0, 0, "a drag on the text group prepares nothing");
+
+    click_at(&mut h, at(60.0, 208.0));
+    h.run_steps(2);
+    assert_eq!(doc(&h), (1, 1, Some("Prepare grouped text".into())), "the page's grouped text is prepared, in one step");
+    let editing = h.state().views[0].line_editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(editing.as_deref(), Some("Grouped words"), "the paragraph clicked opens for typing");
+
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    let (blocks, images, _) = doc(&h);
+    assert_eq!((blocks, images), (0, 2), "undo puts the group back");
 }
 
 #[test]

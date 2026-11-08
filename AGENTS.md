@@ -1,4 +1,4 @@
-<!-- craft-house-rules:start core source=dde09ea31e2e457f5b4653a6e76f7cdf55944bdf sha256=540e6cea75d12d0710c3dca89658328e81e508ecef102446ca5bb95b7c0b92bb -->
+<!-- craft-house-rules:start core source=1315c63e17905daf7dbc6dc6f8c49384e415162b sha256=540e6cea75d12d0710c3dca89658328e81e508ecef102446ca5bb95b7c0b92bb -->
 ## House rules
 
 These apply in every Craft repository. A later rule may be stricter, not weaker. The source is `standards/house-rules-core.md` in `storytold/craft-contrib`. Propose changes there, not in a copy.
@@ -19,7 +19,7 @@ These apply in every Craft repository. A later rule may be stricter, not weaker.
 14. **Keep pull requests moving.** Concurrent pull requests are fine; unanswered actionable feedback is not. Respond in 7 days, a reminder at 14, closure eligible at 30, from when an actionable request waits on the author. Suggestions and unconfirmed bot findings do not start the clock. A fix, explanation or agreed plan resets it; unrelated activity does not. Waiting on a reviewer or maintainer pauses it and does not count against the author. A maintainer decides closure; it is never automatic. Reuse search results, do not poll, and stop at a rate limit.
 15. **No agent attribution.** A pull request does not say an agent wrote it. A repository rule may not require that.
 <!-- craft-house-rules:end -->
-<!-- craft-house-rules:start rust source=dde09ea31e2e457f5b4653a6e76f7cdf55944bdf sha256=387e0ccb4b49e567f60951d7d6fff7305054c89f43ad812b9993dc7c38528013 -->
+<!-- craft-house-rules:start rust source=1315c63e17905daf7dbc6dc6f8c49384e415162b sha256=642f46b4ac38cc9e4d10d1ccde19d68cb6bc03d20e4c6236a7535f3047566262 -->
 ## Rust Craft repositories
 
 These apply to native Craft apps and to shared Rust libraries. Select them by repository type. A repository that merely contains some Rust does not take this block. Rules later in a repository's file may be stricter, but not weaker. The source is `standards/house-rules-rust.md` in [storytold/craft-contrib](https://github.com/storytold/craft-contrib).
@@ -40,6 +40,7 @@ Dependencies and assets use SPDX identifiers. An expression is allowed when ever
 - `BSD-2-Clause`
 - `BSD-3-Clause`
 - `Apache-2.0`
+- `Unicode-3.0`
 - `OFL-1.1`
 - `Ubuntu-font-1.0`
 - `Bitstream-Vera`
