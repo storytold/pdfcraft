@@ -203,6 +203,10 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
             custom_actions: Vec::new(),
@@ -641,6 +645,11 @@ impl eframe::App for PdfCraftApp {
         // The OCR Verify screen's worker may have finished while no frame was drawn.
         if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
+        }
+        // A run or re-read asked for while the web build downloaded the models starts when they land.
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_verify.awaiting_models.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
         // So may a page or region re-read's worker.
         if self.ocr_verify.reread.is_some() {

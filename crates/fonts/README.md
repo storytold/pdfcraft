@@ -89,3 +89,11 @@ Document font inputs use `embedding`: bounded static TrueType/OpenType-CFF valid
 exact program preservation, Unicode/CID/GID mapping and full-face subset completion.
 `shaping` uses the same program with harfrust and UAX #9; source UI fallback fonts are
 never exported. See [existing-text editing](../../docs/editing-existing-text.md).
+
+`pdf::embedded_sfnt_within` reconstructs a missing Unicode cmap for Identity-H TrueType
+subsets from the PDF's ToUnicode and CID-to-glyph maps, and completes a THSarabunPSK subset's
+Latin-only one with them. Only the in-memory editor copy changes;
+the PDF's font program stays intact. `pdf::LegacyThaiFont` shapes verified THSarabunPSK
+positional glyphs into their original PDF codes, retaining the source face and weight. Missing
+contextual glyphs are refused. `pdf::recovered_thai_map` recognizes narrowly fingerprinted
+damaged exporter maps; callers must record repairs and apply them to page-owned font copies.
