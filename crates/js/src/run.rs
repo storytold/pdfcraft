@@ -319,5 +319,13 @@ fn restore_reset_event(ctx: &mut Context, ev: &JsObject, event: &Event) -> JsRes
         // non-configurable value or accessor still fails, and the caller aborts the edit.
         global.define_property_or_throw(js_string!("event"), PropertyDescriptor::builder().value(ev.clone()), ctx)?;
     }
+    // A global lexical `let`/`const event` is not a property of the global object. Verify the
+    // binding the field script actually reads, including helpers that close over it. A lexical
+    // alias of `ev` is valid; a different object, primitive or uninitialized binding must abort
+    // this reset before a script can write somewhere other than the object we extract below.
+    let resolved = ctx.eval(Source::from_bytes("event"))?;
+    if !resolved.as_object().is_some_and(|value| JsObject::equals(&value, ev)) {
+        return Err(error("the event identifier does not refer to the canonical reset event"));
+    }
     Ok(())
 }

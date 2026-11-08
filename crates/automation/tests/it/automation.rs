@@ -7788,6 +7788,42 @@ fn reset_form_recalculates_custom_script_through_tools() {
     assert_eq!(values(&mut a, reopened), (json!("17"), json!("34")));
 }
 
+#[test]
+fn reset_form_rejects_lexical_event_through_tools() {
+    let dir = workdir("lf003-lexical-reset");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (name, y) in [("price", 20), ("total", 60)] {
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "price": "42", "total": "84" } }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "price", "default": "17" }));
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc, "field": "total", "event": "calculate", "script": "event.value = Number(getField('price').value) * 2;" }),
+    );
+    ok(&mut a, "js_set_document_script", json!({ "doc": doc, "name": "init", "script": "let event = {value:'0'};" }));
+    for (tool, args) in
+        [("form_reset", json!({ "doc": doc, "fields": ["price"] })), ("js_run", json!({ "doc": doc, "script": "this.resetForm(['price']);" }))]
+    {
+        let error = a.call(tool, &args).unwrap_err();
+        assert!(error.to_string().contains("reset event could not be restored"), "{tool}: {error}");
+        let result = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        let fields = result["fields"].as_array().unwrap();
+        for (name, expected) in [("price", "42"), ("total", "84")] {
+            assert_eq!(fields.iter().find(|f| f["name"] == name).unwrap()["value"], expected);
+        }
+    }
+    ok(&mut a, "js_set_document_script", json!({ "doc": doc, "name": "init", "script": "const event = globalThis.event;" }));
+    ok(&mut a, "form_reset", json!({ "doc": doc, "fields": ["price"] }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "lexical-alias.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "lexical-alias.pdf" }))["doc"].as_u64().unwrap();
+    let result = ok(&mut a, "form_fields", json!({ "doc": reopened }));
+    assert_eq!(result["fields"][0]["value"], "17");
+    assert_eq!(result["fields"][1]["value"], "34");
+}
+
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
 /// lines, every message with its details, and requests.
 #[test]

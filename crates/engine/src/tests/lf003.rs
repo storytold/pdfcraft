@@ -446,3 +446,80 @@ fn reset_event_protection_does_not_leak_to_a_later_batch_field_edit() {
         assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
     }
 }
+
+fn normal_appearance_text(bytes: Arc<Vec<u8>>, name: &str) -> String {
+    let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    let all = pdfcraft_forms::fields(&doc);
+    let field = all.iter().find(|f| f.name == name).unwrap();
+    let widget = doc.get(field.widgets.first().unwrap().obj);
+    let ap = doc.resolve(widget.as_dict().unwrap().get(b"AP").unwrap());
+    let normal = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(stream) = normal.as_ref() else { panic!("normal appearance must be a stream") };
+    // These synthetic fixtures use a simple standard-14 font and ASCII Tj strings.
+    let text: Vec<u8> = pdfcraft_content::parse(&stream.decoded().unwrap())
+        .ops
+        .into_iter()
+        .filter(|op| op.is("Tj"))
+        .flat_map(|op| op.operands.first().unwrap().as_string().unwrap().bytes.clone())
+        .collect();
+    String::from_utf8(text).unwrap()
+}
+
+#[test]
+fn reset_lexical_event_failure_preserves_bytes_history_dirty_and_generation() {
+    for (initializer, dependent) in [
+        ("let event = { value: '0', name: 'Wrong' };", false),
+        ("const event = { value: '0', name: 'Wrong' };", false),
+        ("let event = 7;", false),
+        ("let event;", false),
+        ("throw new Error('before initialization'); let event;", false),
+        ("let event = {value:'0'}; function totalForPrice() { event.value = '34'; return event.value; }", false),
+        ("const event = globalThis.event.name === 'Format' ? {} : globalThis.event;", false),
+        ("const event = globalThis.event.targetName === 'tax' ? {} : globalThis.event;", true),
+    ] {
+        for dirty in [false, true] {
+            let bytes = if dependent { form_with_dependent(&["total", "tax"]) } else { form(false, false) };
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+            pdfcraft_forms::set_field_script(&mut cos, "total", "format", Some("event.value = String(event.value) + '!';")).unwrap();
+            let (mut session, id) = open(with_document_script(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap(), initializer));
+            if dirty {
+                session
+                    .apply(
+                        id,
+                        Edit::SetFieldProps {
+                            name: "price".into(),
+                            props: Box::new(FieldProps { tooltip: Some("edited".into()), ..Default::default() }),
+                        },
+                    )
+                    .unwrap();
+            }
+            let before = session.save_bytes(id).unwrap();
+            let doc = session.get(id).unwrap();
+            let state = (doc.dirty, doc.generation, doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned));
+            let error = session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap_err();
+            assert!(error.to_string().contains("reset event could not be restored"), "{initializer}: {error}");
+            assert_eq!(session.save_bytes(id).unwrap().as_ref(), before.as_ref());
+            let doc = session.get(id).unwrap();
+            assert_eq!((doc.dirty, doc.generation, doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned)), state, "{initializer}");
+            assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["42".into()], vec!["84".into()]));
+        }
+    }
+}
+
+#[test]
+fn reset_lexical_alias_preserves_calculate_format_and_save() {
+    for all in [false, true] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(form(all, false))).unwrap();
+        pdfcraft_forms::set_field_script(&mut cos, "total", "format", Some("event.value = String(event.value) + '!';")).unwrap();
+        let (mut session, id) = open(with_document_script(
+            pdfcraft_cos::write_full(&cos, &Default::default()).unwrap(),
+            "const event = globalThis.event; var saved = event; function savedName() { return saved.name; }",
+        ));
+        session.apply(id, Edit::ResetForm { names: if all { None } else { Some(vec!["price".into()]) } }).unwrap();
+        let saved = session.save_bytes(id).unwrap();
+        assert_eq!(normal_appearance_text(saved.clone(), "total"), "34!");
+        let (reopened, id) = open(saved.as_ref().clone());
+        assert_eq!((value(&reopened, id, "price"), value(&reopened, id, "total")), (vec!["17".into()], vec!["34".into()]));
+        assert_eq!(normal_appearance_text(reopened.save_bytes(id).unwrap(), "total"), "34!");
+    }
+}

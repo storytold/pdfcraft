@@ -2223,3 +2223,67 @@ fn reset_captured_event_shares_value_rc_and_change_with_the_real_event() {
     assert_eq!(outcome.value, "true:84:true:");
     assert_eq!(outcome.change, "real");
 }
+
+#[test]
+fn reset_rejects_incompatible_lexical_event_before_calculate_or_format() {
+    for name in ["Calculate", "Format"] {
+        for initializer in [
+            "let event = { value: '0', name: 'Wrong' };",
+            "const event = { value: '0', name: 'Wrong' };",
+            "let event = 7;",
+            "const event = 7;",
+            "let event;",
+            "throw new Error('before initialization'); let event;",
+            "let event = { value: '0' }; function assign(v) { event.value = v; }",
+            "let event = Object.freeze({ value: '0' });",
+        ] {
+            let o = run_shared_for_reset(
+                "console.println('real script'); event.value = '34'; event.rc = false; event.change = 'real';",
+                &Event::field(name, "total", "84"),
+                &doc(),
+                Arc::new(fields()),
+                &[initializer.into()],
+                Limits::default(),
+            );
+            assert!(o.event_restore_failed, "{name}: {initializer}: {o:?}");
+            assert!(o.error.as_deref().is_some_and(|e| e.contains("reset event could not be restored")), "{o:?}");
+            assert!(!o.console.iter().any(|line| line == "real script"), "{o:?}");
+            assert_eq!((o.value.as_str(), o.rc, o.change.as_str()), ("84", true, ""));
+        }
+    }
+}
+
+#[test]
+fn reset_accepts_lexical_aliases_of_the_canonical_event() {
+    for initializer in [
+        "const event = globalThis.event;",
+        "let event = globalThis.event;",
+        "var event = { value: '0' };",
+        "{ let event = { value: '0' }; }",
+        "function initialize() { let event = { value: '0' }; } initialize();",
+    ] {
+        let o = run_shared_for_reset(
+            "event.value = '34'; event.rc = false; event.change = 'real';",
+            &Event::field("Calculate", "total", "84"),
+            &doc(),
+            Arc::new(fields()),
+            &[initializer.into()],
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{initializer}: {o:?}");
+        assert!(!o.event_restore_failed);
+        assert_eq!((o.value.as_str(), o.rc, o.change.as_str()), ("34", false, "real"));
+    }
+    // Only ResetForm gets the identity guard; an ordinary event retains its existing policy.
+    let o = run(
+        "event.value = '34';",
+        &Event::field("Calculate", "total", "84"),
+        &doc(),
+        &fields(),
+        &["let event = { value: '0' };".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert!(!o.event_restore_failed);
+    assert_eq!(o.value, "84");
+}
