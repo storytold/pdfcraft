@@ -170,7 +170,7 @@ fn embedded_truetype(doc: &Document, descendant: &Dict) -> Option<Vec<u8>> {
     let descriptor = dict(doc, descendant.get(b"FontDescriptor"))?;
     let program = doc.resolve(descriptor.get(b"FontFile2")?);
     let Object::Stream(program) = program.as_ref() else { return None };
-    DecodeBudget::new(super::MAX_SFNT, 0).decode_within(program, super::MAX_SFNT).ok()
+    DecodeBudget::new(super::MAX_SFNT, 0).decode_within(&doc.with_direct_parms(program), super::MAX_SFNT).ok()
 }
 
 /// Source glyph positions and the original PDF character codes that draw them. Empty codes
@@ -197,7 +197,7 @@ pub(super) fn composite_glyph_maps(
     let cid_map = match descendant.get(b"CIDToGIDMap").map(|m| doc.resolve(m)).as_deref() {
         None => None,
         Some(Object::Name(n)) if n == b"Identity" => None,
-        Some(Object::Stream(s)) => Some(budget.decode_within(s, 1 << 17).ok()?),
+        Some(Object::Stream(s)) => Some(budget.decode_within(&doc.with_direct_parms(s), 1 << 17).ok()?),
         _ => return None,
     };
     let face = skrifa::FontRef::new(bytes).ok()?;
@@ -473,12 +473,17 @@ mod tests {
 
     /// A THSarabunPSK Identity-H font over `program`, with `to_unicode`.
     fn thai_font(doc: &mut Document, program: &[u8], to_unicode: &[u8]) -> Dict {
+        let file = Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), program))));
+        thai_font_over(doc, file, Object::name("Identity"), to_unicode)
+    }
+
+    /// [`thai_font`] over the `/FontFile2` stream `file` and the `/CIDToGIDMap` `cid_to_gid`.
+    fn thai_font_over(doc: &mut Document, file: Object, cid_to_gid: Object, to_unicode: &[u8]) -> Dict {
         let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), to_unicode)));
-        let file = doc.add(Object::Stream(Stream::flate(Dict::new(), program)));
         let mut descriptor = Dict::new();
-        descriptor.set(b"FontFile2".to_vec(), Object::Ref(file));
+        descriptor.set(b"FontFile2".to_vec(), file);
         let mut desc = Dict::new();
-        desc.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+        desc.set(b"CIDToGIDMap".to_vec(), cid_to_gid);
         desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
         let mut font = Dict::new();
         font.set(b"Subtype".to_vec(), Object::name("Type0"));
@@ -488,6 +493,22 @@ mod tests {
         font.set(b"ToUnicode".to_vec(), Object::Ref(tu));
         font
     }
+
+    /// `data` as a Flate stream under a PNG predictor whose `/DecodeParms` is given by reference:
+    /// read without that dictionary, each row's tag byte stays in the decoded bytes.
+    fn predicted(doc: &mut Document, data: &[u8]) -> Object {
+        let rows: Vec<u8> = data.iter().flat_map(|byte| [0, *byte]).collect();
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(12));
+        parms.set(b"Columns".to_vec(), Object::Int(1));
+        let parms = doc.add(Object::Dict(parms));
+        let mut stream = Stream::flate(Dict::new(), &rows);
+        stream.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        Object::Ref(doc.add(Object::Stream(stream)))
+    }
+
+    /// An intact legacy map: nominal Thai and two tone alternates.
+    const INTACT: &[u8] = b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar";
 
     /// The exporter's damaged map: intact anchors, Latin/control destinations for the other Thai
     /// codes, and the oversized range first.
@@ -541,6 +562,25 @@ mod tests {
             program[12 + i * 16..28 + i * 16].copy_from_slice(record);
         }
         program
+    }
+
+    /// The font program and `/CIDToGIDMap` are read with `/DecodeParms` given by reference, as a
+    /// viewer reads them: the map repair, the glyph codes and the shaper see the real bytes.
+    #[test]
+    fn thai_font_streams_are_read_with_decode_parms_given_by_reference() {
+        let stripped = without_tables(&thai_ordered_program(), &[b"cmap", b"GSUB", b"GPOS"]);
+        let mut doc = Document::new_empty();
+        let program = predicted(&mut doc, &stripped);
+        let damaged = thai_font_over(&mut doc, program.clone(), Object::name("Identity"), DAMAGED);
+        assert!(recovered_thai_map(&doc, &damaged).is_some(), "the program is read with its predictor");
+        let gids: Vec<u8> = (0u16..=368).flat_map(u16::to_be_bytes).collect();
+        let map = predicted(&mut doc, &gids);
+        let font = thai_font_over(&mut doc, program, map, INTACT);
+        let metrics = Metrics::from_dict(&doc, &font);
+        let (map, _) = composite_glyph_maps(&doc, &font, &stripped, &metrics, &mut DecodeBudget::new(1 << 20, 0)).unwrap();
+        assert_eq!(map.get(&0x0e01), Some(&214), "the CIDToGIDMap is read with its predictor");
+        let shaped = LegacyThaiFont::from_pdf(&doc, &font, 0.25).unwrap().expect("a legacy subset").shape("ก่").unwrap();
+        assert_eq!(shaped.shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [214, 352]);
     }
 
     /// A THSarabunPSK program with its own Thai mark positioning is shaped by that layout; one
