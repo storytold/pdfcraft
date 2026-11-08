@@ -40,6 +40,7 @@ Dependencies and assets use SPDX identifiers. An expression is allowed when ever
 - `BSD-2-Clause`
 - `BSD-3-Clause`
 - `Apache-2.0`
+- `Unicode-3.0`
 - `OFL-1.1`
 - `Ubuntu-font-1.0`
 - `Bitstream-Vera`
