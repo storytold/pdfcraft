@@ -156,6 +156,9 @@ pub enum Edit {
     },
     /// Add a comment (sticky note, highlight, shape, drawing, text box…).
     AddAnnotation(NewAnnotation),
+    /// Add a comment whose `/NM` the caller chooses. Collaboration uses this so
+    /// every replica and the server name the annotation identically (ADR-0002).
+    AddAnnotationNamed(NewAnnotation, String),
     /// A custom stamp from a picture file (a PDF page or an image) on `page`. A zero-size
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
@@ -195,6 +198,14 @@ pub enum Edit {
         index: usize,
         text: String,
         author: String,
+    },
+    /// A reply whose `/NM` the caller chooses (see [`Edit::AddAnnotationNamed`]).
+    ReplyToAnnotationNamed {
+        page: usize,
+        index: usize,
+        text: String,
+        author: String,
+        name: String,
     },
     /// Acrobat's "Set status" (a state reply by `author`).
     SetAnnotationStatus {

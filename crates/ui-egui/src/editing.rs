@@ -52,7 +52,7 @@ fn select_after_edit(
         Edit::DeletePages { .. } => view.select_pages(&[]),
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
-        Edit::AddAnnotation(a)
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _)
             if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. } | pdfcraft_engine::Shape::FreehandHighlight { .. })
                 && matches!(
                     quick_tool,
@@ -61,7 +61,7 @@ fn select_after_edit(
         {
             view.comments.clear_selection();
         }
-        Edit::AddAnnotation(a) => {
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) => {
             // Select the new comment alone (appended last among the page's comments).
             let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
             view.comments.clear_selection();
@@ -190,7 +190,7 @@ impl PdfCraftApp {
                 if let Some(ctx) = &self.ctx {
                     ctx.request_repaint();
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_) | Edit::AddAnnotationNamed(..)) {
                     // A released drawing's raster can come now: it will have the annotation.
                     view.comments.drawings_committed();
                 } else {
@@ -229,7 +229,7 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(info);
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_) | Edit::AddAnnotationNamed(..)) {
                     view.comments.comment_added();
                 }
                 // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
@@ -1120,10 +1120,11 @@ fn one_page_changed(view: &mut crate::DocView, edit: &Edit, page: usize) {
 
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
-        Edit::AddAnnotation(a) => Some(a.page),
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) => Some(a.page),
         Edit::DeleteAnnotation { page, .. }
         | Edit::SetAnnotationContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }
+        | Edit::ReplyToAnnotationNamed { page, .. }
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }

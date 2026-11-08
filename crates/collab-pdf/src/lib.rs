@@ -25,7 +25,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_collab_proto::{BlobRef, ConflictClass, ErrorCode, Op, PageRef, Target};
+use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome};
 use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldValue, FormFieldKind, NewAnnotation, NoteIcon, Session, Shape, Style};
 use serde_json::{Value, json};
@@ -106,13 +106,43 @@ impl PdfAdapter {
         Ok(first.index)
     }
 
+    /// The `/NM` a collaboration client proposed for a new annotation. Absent
+    /// means the engine names it; a present name must be free (ADR-0002).
+    fn requested_name(payload: &Value) -> Result<Option<String>, AdapterError> {
+        let Some(value) = payload.get("nm").filter(|value| !value.is_null()) else { return Ok(None) };
+        let name = value.as_str().ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "nm must be a string", false))?;
+        if name.trim().is_empty() {
+            return Err(AdapterError::new(ErrorCode::Invalid, "nm must not be empty", false));
+        }
+        if name.len() > MAX_ANNOTATION_NAME {
+            return Err(AdapterError::new(ErrorCode::Invalid, "nm is too long", false));
+        }
+        Ok(Some(name.to_owned()))
+    }
+
+    fn ensure_free_name(&self, name: &str) -> Result<(), AdapterError> {
+        let taken = self.document_or_error()?.info.annotations.iter().any(|a| a.name.as_deref() == Some(name));
+        if taken {
+            return Err(AdapterError::new(ErrorCode::Conflict, "an annotation with this name already exists", false));
+        }
+        Ok(())
+    }
+
     fn add_annotation(&mut self, page: usize, payload: &Value) -> Result<Value, AdapterError> {
         let at = point(payload.get("at"))?;
         let contents = payload.get("contents").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let author = payload.get("author").and_then(Value::as_str).unwrap_or("PdfCraft").to_owned();
+        let author = payload.get("author").and_then(Value::as_str).unwrap_or(DEFAULT_AUTHOR).to_owned();
+        let name = Self::requested_name(payload)?;
+        if let Some(name) = &name {
+            self.ensure_free_name(name)?;
+        }
         let before: HashSet<String> = self.document_or_error()?.info.annotations.iter().filter_map(|a| a.name.clone()).collect();
         let shape = Shape::Note { at, icon: NoteIcon::Comment };
-        self.apply_edit(Edit::AddAnnotation(NewAnnotation { page, style: Style::default_for(&shape), shape, contents, author }))?;
+        let new = NewAnnotation { page, style: Style::default_for(&shape), shape, contents, author };
+        match name {
+            Some(name) => self.apply_edit(Edit::AddAnnotationNamed(new, name))?,
+            None => self.apply_edit(Edit::AddAnnotation(new))?,
+        }
         let added = self
             .document_or_error()?
             .info
@@ -133,10 +163,17 @@ impl PdfAdapter {
 
     fn reply(&mut self, page: usize, name: &str, payload: &Value) -> Result<Value, AdapterError> {
         let text = payload.get("text").and_then(Value::as_str).ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "text is missing", false))?;
-        let author = payload.get("author").and_then(Value::as_str).unwrap_or("PdfCraft").to_owned();
+        let author = payload.get("author").and_then(Value::as_str).unwrap_or(DEFAULT_AUTHOR).to_owned();
         let index = self.annotation_index(page, name)?;
+        let reply_name = Self::requested_name(payload)?;
+        if let Some(reply_name) = &reply_name {
+            self.ensure_free_name(reply_name)?;
+        }
         let before: HashSet<String> = self.document_or_error()?.info.annotations.iter().filter_map(|a| a.name.clone()).collect();
-        self.apply_edit(Edit::ReplyToAnnotation { page, index, text: text.to_owned(), author })?;
+        match reply_name {
+            Some(reply_name) => self.apply_edit(Edit::ReplyToAnnotationNamed { page, index, text: text.to_owned(), author, name: reply_name })?,
+            None => self.apply_edit(Edit::ReplyToAnnotation { page, index, text: text.to_owned(), author })?,
+        }
         let added = self
             .document_or_error()?
             .info
@@ -175,38 +212,47 @@ impl PdfAdapter {
 }
 
 impl Adapter for PdfAdapter {
-    fn apply(&mut self, op: &Op) -> Result<ApplyOutcome, AdapterError> {
-        let action = op
+    fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+        // The broadcast operation is the authoritative intent: the author comes
+        // from the verified token, not from the client (ADR-0008 §7), and a name
+        // the engine generated is filled in so every replica uses it.
+        let mut effective = op.clone();
+        let action = effective
             .payload
             .get("action")
             .and_then(Value::as_str)
-            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the payload has no action", false))?;
-        let result = match (action, op.class) {
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the payload has no action", false))?
+            .to_owned();
+        let names_something = matches!(action.as_str(), "annotation.add" | "annotation.reply");
+        if names_something {
+            effective.payload["author"] = json!(actor.as_str());
+        }
+        let result = match (action.as_str(), effective.class) {
             ("annotation.add", ConflictClass::Merge) => {
-                let page = self.page_index(target_page(op)?)?;
-                self.add_annotation(page, &op.payload)?
+                let page = self.page_index(target_page(&effective)?)?;
+                self.add_annotation(page, &effective.payload)?
             }
             ("annotation.set_contents", ConflictClass::Merge) => {
-                let (page, name) = annotation_target(op)?;
-                self.set_contents(self.page_index(page)?, &name, &op.payload)?
+                let (page, name) = annotation_target(&effective)?;
+                self.set_contents(self.page_index(page)?, &name, &effective.payload)?
             }
             ("annotation.reply", ConflictClass::Merge) => {
-                let (page, name) = annotation_target(op)?;
-                self.reply(self.page_index(page)?, &name, &op.payload)?
+                let (page, name) = annotation_target(&effective)?;
+                self.reply(self.page_index(page)?, &name, &effective.payload)?
             }
             ("annotation.delete", ConflictClass::Merge) => {
-                let (page, name) = annotation_target(op)?;
+                let (page, name) = annotation_target(&effective)?;
                 self.delete(self.page_index(page)?, &name)?
             }
             ("field.set_value", ConflictClass::Merge) => {
-                let Target::Field { name } = &op.target else {
+                let Target::Field { name } = &effective.target else {
                     return Err(AdapterError::new(ErrorCode::Invalid, "a field operation needs a field target", false));
                 };
-                self.set_field(name, &op.payload)?
+                self.set_field(name, &effective.payload)?
             }
             ("page.rotate", ConflictClass::Structural) => {
-                let page = self.page_index(target_page(op)?)?;
-                let degrees = op
+                let page = self.page_index(target_page(&effective)?)?;
+                let degrees = effective
                     .payload
                     .get("degrees")
                     .and_then(Value::as_i64)
@@ -216,8 +262,8 @@ impl Adapter for PdfAdapter {
                 json!({ "page": page })
             }
             ("page.move", ConflictClass::Structural) => {
-                let page = self.page_index(target_page(op)?)?;
-                let to = op
+                let page = self.page_index(target_page(&effective)?)?;
+                let to = effective
                     .payload
                     .get("to")
                     .and_then(Value::as_u64)
@@ -228,7 +274,7 @@ impl Adapter for PdfAdapter {
                 json!({ "page": page, "to": to })
             }
             ("page.delete", ConflictClass::Structural) => {
-                let page = self.page_index(target_page(op)?)?;
+                let page = self.page_index(target_page(&effective)?)?;
                 self.apply_edit(Edit::DeletePages { pages: vec![page] })?;
                 self.epoch = self.epoch.saturating_add(1);
                 json!({ "page": page })
@@ -237,7 +283,10 @@ impl Adapter for PdfAdapter {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
         };
-        Ok(ApplyOutcome { result, epoch: self.epoch })
+        if names_something && let Some(nm) = result.get("nm").cloned() {
+            effective.payload["nm"] = nm;
+        }
+        Ok(ApplyOutcome { result, op: effective, epoch: self.epoch })
     }
 
     fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
@@ -374,10 +423,11 @@ mod tests {
             Target::Page(PageRef { index: 0, epoch: 0 }),
             0,
             0,
-            json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "hello", "author": DEFAULT_AUTHOR}),
+            json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "hello", "author": DEFAULT_AUTHOR, "nm": "client-1-note"}),
         )?;
         let applied = room.apply(&editor, &add, 0)?;
         let name = applied.result["nm"].as_str().ok_or("no /NM returned")?.to_owned();
+        assert_eq!(name, "client-1-note", "the client's /NM is kept, so every replica can address it");
 
         let set = op(
             "set-1",
@@ -414,6 +464,49 @@ mod tests {
         let committed = room.commit(&editor, version)?;
         assert!(!committed.sha256.is_empty());
         assert!(committed.bytes > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_duplicate_client_name_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(1).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let add = |id: &str, base: u64| {
+            op(
+                id,
+                ConflictClass::Merge,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                base,
+                0,
+                json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "hello", "nm": "same-name"}),
+            )
+        };
+        room.apply(&editor, &add("a1", 0)?, 0)?;
+        assert!(
+            matches!(room.apply(&editor, &add("a2", 1)?, 0), Err(e) if e.code == pdfcraft_collab_proto::ErrorCode::Conflict),
+            "two annotations may not share an /NM"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_author_comes_from_the_token_not_the_payload() -> Result<(), Box<dyn std::error::Error>> {
+        let mut adapter = PdfAdapter::open("fixture.pdf", fixture(1).into())?;
+        let actor = ActorId::new("user-7")?;
+        let add = op(
+            "a1",
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "hello", "author": "Mallory", "nm": "n1"}),
+        )?;
+        let outcome = adapter.apply(&actor, &add)?;
+        assert_eq!(outcome.op.payload["author"], "user-7");
+        let document = adapter.document().ok_or("the document is gone")?;
+        assert_eq!(document.info.annotations[0].author.as_deref(), Some("user-7"));
         Ok(())
     }
 

@@ -51,15 +51,17 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         // The Attachments list is read from the whole document.
         Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } | Edit::EditAttachmentDescription { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
-        Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::AddAnnotationNamed(..)
         | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
+        | Edit::ReplyToAnnotationNamed { .. }
         | Edit::SetAnnotationStatus { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::LockAnnotation { .. }

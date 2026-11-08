@@ -345,11 +345,11 @@ mod tests {
     }
 
     impl Adapter for Fake {
-        fn apply(&mut self, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
             if op.class == ConflictClass::Structural {
                 self.epoch += 1;
             }
-            Ok(ApplyOutcome { result: json!({"ok": true}), epoch: self.epoch })
+            Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
         }
 
         fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
@@ -447,7 +447,8 @@ mod tests {
     #[test]
     fn a_version_gap_asks_for_a_resync_instead_of_applying() -> Result<(), Box<dyn std::error::Error>> {
         let mut client = joined(Role::Editor)?;
-        let applied = Applied { op_id: OpId::new("foreign")?, actor_id: actor("other")?, version: 3, epoch: 0, result: json!({}) };
+        let foreign = op("foreign")?;
+        let applied = Applied { op_id: foreign.op_id.clone(), actor_id: actor("other")?, version: 3, epoch: 0, op: foreign, result: json!({}) };
         assert_eq!(client.receive(ServerMessage::Applied(applied))?, Some(Effect::Gap));
         assert_eq!(client.version(), 0, "the gap is not skipped");
         assert!(client.take_outgoing().iter().any(|m| matches!(m, ClientMessage::Resync(Resync { last_version: 0 }))));
@@ -543,7 +544,7 @@ mod tests {
     }
 
     fn applied(op: &Op, version: u64, epoch: u64) -> Result<Applied, Box<dyn std::error::Error>> {
-        Ok(Applied { op_id: op.op_id.clone(), actor_id: actor("me")?, version, epoch, result: json!({}) })
+        Ok(Applied { op_id: op.op_id.clone(), actor_id: actor("me")?, version, epoch, op: op.clone(), result: json!({}) })
     }
 
     /// Two clients, one real room: both learn about each other's comment.

@@ -176,11 +176,11 @@ mod tests {
     }
 
     impl Adapter for Fake {
-        fn apply(&mut self, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
             if op.class == ConflictClass::Structural {
                 self.epoch += 1;
             }
-            Ok(ApplyOutcome { result: json!({"ok": true}), epoch: self.epoch })
+            Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
         }
 
         fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {

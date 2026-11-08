@@ -49,12 +49,14 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::AddAnnotationNamed(..)
         | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
+        | Edit::ReplyToAnnotationNamed { .. }
         | Edit::SetAnnotationStatus { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::ReplaceText { .. }
@@ -589,6 +591,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
+        Edit::AddAnnotationNamed(a, name) => {
+            pdfcraft_annot::add_annotation_named(doc, a, &cx.meta(), name)?;
+        }
         Edit::PasteComments { xfdf, page, offset } => {
             // Names from the edit's own id generator: unique to this paste within the document.
             let prefix = cx.meta().id;
@@ -635,6 +640,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
         Edit::ReplyToAnnotation { page, index, text, author } => {
             pdfcraft_annot::add_reply(doc, *page, *index, text, author, &cx.meta())?;
+        }
+        Edit::ReplyToAnnotationNamed { page, index, text, author, name } => {
+            pdfcraft_annot::add_reply_named(doc, *page, *index, text, author, name, &cx.meta())?;
         }
         Edit::SetAnnotationStatus { page, index, state, author } => {
             pdfcraft_annot::set_review_state(doc, *page, *index, *state, author, &cx.meta())?;

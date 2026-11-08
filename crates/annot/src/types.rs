@@ -782,6 +782,14 @@ pub struct Meta {
     pub id: String,
 }
 
+impl Meta {
+    /// The same stamp with a caller-chosen `/NM`. Collaboration clients name
+    /// their own annotations so every replica uses one stable id (ADR-0002).
+    pub(crate) fn named(&self, id: &str) -> Self {
+        Self { date: self.date.clone(), id: id.to_owned() }
+    }
+}
+
 /// Review states a reply can set (§12.5.6.3, Table 172; Acrobat's "Set status").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewState {

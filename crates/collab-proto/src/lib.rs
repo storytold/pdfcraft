@@ -347,6 +347,10 @@ pub struct Applied {
     pub actor_id: ActorId,
     pub version: u64,
     pub epoch: u64,
+    /// The accepted operation, with the server's normalisation (the author from
+    /// the token, a generated name, the resolved target). Every replica applies
+    /// this description, so a client never needs the raw intent from the wire.
+    pub op: Op,
     /// Adapter-specific authoritative result: a confirmed command, a delta, or both.
     pub result: Value,
 }

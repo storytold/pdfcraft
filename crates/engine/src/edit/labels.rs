@@ -213,13 +213,13 @@ impl Edit {
                 pdfcraft_measure::Kind::Area => "Measure area",
             }),
             Edit::SetMeasurementScale { .. } => Label::of("Set measurement scale"),
-            Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
+            Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
-            Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
+            Edit::ReplyToAnnotation { .. } | Edit::ReplyToAnnotationNamed { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
             Edit::SetAnnotationStatus { state, .. } => Label::of(match state {
                 ReviewState::None => "Set status None",

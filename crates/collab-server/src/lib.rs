@@ -24,6 +24,9 @@ use std::collections::{HashMap, VecDeque};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApplyOutcome {
     pub result: Value,
+    /// The operation as applied: the server's author, generated names and any
+    /// target normalisation are in it, and it is what the room broadcasts.
+    pub op: Op,
     pub epoch: u64,
 }
 
@@ -51,7 +54,9 @@ impl AdapterError {
 /// Applies one operation to the authoritative document and produces the file on
 /// commit. The PDF implementation lives in the engine adapter; tests use a fake.
 pub trait Adapter {
-    fn apply(&mut self, op: &Op) -> Result<ApplyOutcome, AdapterError>;
+    /// Apply `op` on behalf of `actor`. The author recorded in the document is
+    /// the verified actor, never a client-supplied string (ADR-0008 §7).
+    fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError>;
     fn commit(&mut self) -> Result<CommitOutcome, AdapterError>;
     /// The current base bytes, when the journal no longer covers a resync.
     fn base(&self) -> Option<BlobRef>;
@@ -260,7 +265,7 @@ impl<A: Adapter> Room<A> {
         if op.class == ConflictClass::Merge && op.epoch != self.epoch {
             return Err(self.reject(&op.op_id, ErrorCode::Stale, true, "the pages changed; resync and retry"));
         }
-        let outcome = match self.adapter.apply(op) {
+        let outcome = match self.adapter.apply(actor, op) {
             Ok(outcome) => outcome,
             Err(e) => return Err(self.reject(&op.op_id, e.code, e.retryable, e.message)),
         };
@@ -272,8 +277,15 @@ impl<A: Adapter> Room<A> {
         }
         self.version = self.version.saturating_add(1);
         self.epoch = outcome.epoch;
-        let applied = Applied { op_id: op.op_id.clone(), actor_id: actor.clone(), version: self.version, epoch: self.epoch, result: outcome.result };
-        if let Ok(op_value) = serde_json::to_value(op) {
+        let applied = Applied {
+            op_id: op.op_id.clone(),
+            actor_id: actor.clone(),
+            version: self.version,
+            epoch: self.epoch,
+            op: outcome.op,
+            result: outcome.result,
+        };
+        if let Ok(op_value) = serde_json::to_value(&applied.op) {
             self.journal.push_back(JournalEntry { version: self.version, op: op_value });
             while self.journal.len() > self.config.journal_len {
                 self.journal.pop_front();
@@ -392,7 +404,7 @@ mod tests {
     }
 
     impl Adapter for Fake {
-        fn apply(&mut self, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
             if op.payload.get("fail").is_some() {
                 return Err(AdapterError::new(ErrorCode::Invalid, "the adapter refused it", false));
             }
@@ -400,7 +412,7 @@ mod tests {
             if op.class == ConflictClass::Structural {
                 self.epoch += 1;
             }
-            Ok(ApplyOutcome { result: json!({"n": self.applied}), epoch: self.epoch })
+            Ok(ApplyOutcome { result: json!({"n": self.applied}), op: op.clone(), epoch: self.epoch })
         }
 
         fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {

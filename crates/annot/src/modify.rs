@@ -371,6 +371,14 @@ pub fn add_reply(doc: &mut Document, page: usize, index: usize, text: &str, auth
     reply(doc, page, index, text, author, meta, None)
 }
 
+/// A reply with a caller-chosen `/NM`.
+pub fn add_reply_named(doc: &mut Document, page: usize, index: usize, text: &str, author: &str, name: &str, meta: &Meta) -> Result<usize, AnnotError> {
+    if name.trim().is_empty() {
+        return Err(AnnotError::Invalid("an annotation name must not be empty".into()));
+    }
+    reply(doc, page, index, text, author, &meta.named(name), None)
+}
+
 /// Set a comment's review status ("Set status ▸ Accepted"…). This adds a hidden state reply
 /// (`/State`, `/StateModel /Review`) by `author`, in reply to `author`'s previous one when there is
 /// one; each reviewer's latest is their status.

@@ -368,7 +368,9 @@ mod tests {
     use super::{Config, TransportError, WsServer};
     use crate::token::{Claims, TokenError, Verifier};
     use pdfcraft_collab_hub::Hub;
-    use pdfcraft_collab_proto::{BlobRef, ClientMessage, ConflictClass, DocKey, ErrorCode, Op, OpId, OpKind, PageRef, Role, ServerMessage, Target};
+    use pdfcraft_collab_proto::{
+        ActorId, BlobRef, ClientMessage, ConflictClass, DocKey, ErrorCode, Op, OpId, OpKind, PageRef, Role, ServerMessage, Target,
+    };
     use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, RoomConfig};
     use serde_json::json;
     use std::sync::Arc;
@@ -381,11 +383,11 @@ mod tests {
     }
 
     impl Adapter for Fake {
-        fn apply(&mut self, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
             if op.class == ConflictClass::Structural {
                 self.epoch += 1;
             }
-            Ok(ApplyOutcome { result: json!({"ok": true}), epoch: self.epoch })
+            Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
         }
 
         fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
