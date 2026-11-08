@@ -66,6 +66,17 @@ Later rendering errors, device loss, and non-winit renderer construction are unc
 
 Stencil masks filled with a pattern (#2975): `hayro`'s renderer paints a pattern-filled stencil mask with the fill (non-stroking) paint. It passed `is_stroke = true`, so an uncoloured tiling pattern was drawn in its stroke colour (black by default) instead of the colour given with `scn`. Covered by `raster::tests::stencil_masks_are_drawn_at_the_fill_opacity_once` (the uncoloured tiling pattern case).
 
+PR #4742 adds a separate derived-image cache in `hayro`, owned by `RenderCache`: at most
+16 MiB of final premultiplied pixels and 512 metadata entries per document/worker, with FIFO
+eviction and uncached fallback. `hayro-interpret` exposes only an eligible raster's opaque
+resource/settings identity; masks, JPX, inline/transferred images and substituted colour spaces
+keep their existing paths. Coverage: `derived_image_cache::tests` (byte/entry limits, FIFO,
+hit/decode counts, document replacement, cache-on/off pixels, masks, cancellation and snapped
+mirrored/turned placement), existing `raster::tests::decoded_images_serve_every_size_they_are_drawn_at`
+and transfer/default-colour-space regressions. The reproducible `image_cache_bench` example and
+original measurements remain in `docs/rendering-image-cache.md`. Upstream patch numbers in the
+table stay intact; the cache is tracked here to avoid colliding with their new entries.
+
 Temporary: hayro is the bootstrap renderer and lopdf the bootstrap inspector (ADR-0004); M2.6 replaces them with our own devices and `cos`/`model`.
 
 TIFF predictor decoding: hayro-syntax aligns the output writer to a byte boundary after each
