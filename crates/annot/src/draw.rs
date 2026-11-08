@@ -51,9 +51,9 @@ pub(crate) fn can_draw(doc: &Document, d: &Dict) -> bool {
 fn build_appearance(doc: &Document, d: &Dict, direct: &Dict) -> Option<Stream> {
     // References followed first. Where that turns up something the builder doesn't draw (a
     // cloudy `/BE` on a square), the drawing made without them stays, rather than none.
-    let mut stream = match appearance::build(direct) {
+    let mut stream = match appearance::build(doc, direct) {
         Some(stream) => stream,
-        None if !std::ptr::eq(direct, d) => appearance::build(d)?,
+        None if !std::ptr::eq(direct, d) => appearance::build(doc, d)?,
         None => return None,
     };
     // Picture-stamp restyling must retain the placement's page-axis correction.
@@ -92,10 +92,11 @@ pub(crate) const PASS_BUDGET: usize = 1 << 22;
 
 /// `d` with the references among the values [`appearance::build`] reads followed. Any value may be
 /// given by reference (ISO 32000-2 §7.3.10): a border style dictionary (`/BS 5 0 R`, Table 168), a
-/// colour, `/RD`, `/CL`, a `/W` inside `/BS`. The builder reads only direct values, so it draws
-/// from this copy. The entries in [`LINK_KEYS`] and streams stay references; past
-/// [`INLINE_DEPTH`] levels or [`INLINE_BUDGET`] copied values a reference is left as it is, which
-/// the builder treats as unreadable. `d` itself when nothing is a reference.
+/// colour, `/RD`, `/CL`, a `/W` inside `/BS`. The builder reads only direct values (apart from
+/// `/QuadPoints`, which it resolves itself), so it draws from this copy. The entries in
+/// [`LINK_KEYS`] and streams stay references; past [`INLINE_DEPTH`] levels or [`INLINE_BUDGET`]
+/// copied values a reference is left as it is, which the builder treats as unreadable. `d` itself
+/// when nothing is a reference.
 pub(crate) fn with_direct_values<'d>(doc: &Document, d: &'d Dict) -> std::borrow::Cow<'d, Dict> {
     with_direct_values_within(doc, d, &mut INLINE_BUDGET.clone())
 }

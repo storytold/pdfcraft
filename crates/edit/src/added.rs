@@ -23,6 +23,7 @@ mod layout;
 mod store;
 mod types;
 
+pub(crate) use draw::thai_glyph_resources;
 #[cfg(test)]
 use draw::{GLYPHS_PER_FONT, LaidLine, draw_laid_shaped};
 #[cfg(test)]
@@ -31,7 +32,7 @@ use layout::Piece;
 pub(crate) use layout::WRAP_CALLS;
 pub use layout::{PASTE_STEP, first_undrawable, lines, paste_place, paste_rect, text_rect, text_width};
 pub use store::{add_content, delete_content, isolate_content, list_added, scan_markers, update_content};
-pub use types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan};
+pub use types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Content {
@@ -87,3 +88,5 @@ fn align_from(code: Option<i64>) -> Align {
 
 #[cfg(test)]
 mod arabic_tests;
+#[cfg(test)]
+mod thai_tests;
