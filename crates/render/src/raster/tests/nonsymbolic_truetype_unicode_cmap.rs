@@ -155,7 +155,7 @@ fn square_drawn(records: &[(u16, u16, Vec<u8>)]) -> bool {
 
 #[test]
 fn a_nonsymbolic_truetype_font_reads_its_unicode_platform_cmap() {
-    for encoding in [0u16, 1, 3] {
+    for encoding in [0u16, 1, 3, 4] {
         assert!(square_drawn(&[(0, encoding, format4(0x41, 2))]), "a lone (0, {encoding}) subtable maps U+0041 to the square");
     }
 }
@@ -191,4 +191,7 @@ fn a_nonsymbolic_truetype_font_skips_a_0_5_subtable() {
     // (0, 5) holds variation sequences, so it is never read as a character map, even when its
     // record points at a format 4 table that maps `A` to the square.
     assert!(!square_drawn(&[(0, 5, format4(0x41, 2))]));
+    // Skipping it does not end the scan: a later (0, 3) still maps `A`, and the (0, 5) one, which
+    // sends `A` to the empty glyph, is not read first.
+    assert!(square_drawn(&[(0, 5, format4(0x41, 1)), (0, 3, format4(0x41, 2))]));
 }
