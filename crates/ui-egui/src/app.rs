@@ -30,6 +30,11 @@ impl Default for PdfCraftApp {
     }
 }
 
+/// How long Edit ▸ Paste waits for the platform's paste, in seconds: it comes on the next pass,
+/// except on Wayland, where egui-winit reads the clipboard asynchronously within its 3-second
+/// delivery budget; a second more covers the pass that carries it.
+const MENU_PASTE_WAIT: f64 = 4.0;
+
 impl PdfCraftApp {
     /// The window's title and, on the web, the page's, from the active document (#3640). Done in
     /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
@@ -264,7 +269,7 @@ impl PdfCraftApp {
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
-            menu_paste_pass: None,
+            menu_paste_asked: None,
             menu_input_due: false,
             page_keys: Default::default(),
             dialog_seen: None,
@@ -362,24 +367,24 @@ impl PdfCraftApp {
 
     /// Adds the keys a menu click stands for to this pass's input, and says whether this pass
     /// carries a menu click's input: those keys (Edit ▸ Copy, Cut, Select all, Delete), or the
-    /// paste the platform answers Edit ▸ Paste with, on the pass it asked or one of the two after
-    /// it (one later, or two with a discarded pass between). A native menu's click runs in `logic` before
-    /// this, so its keys come on its own pass; an in-window menu's runs as the bar is drawn, so
-    /// they come on the next one, when the bar still reads as open (craft-menu stores the menu as
-    /// open on the pass its click closes it). A native menu's click leaves egui's popups, the
-    /// Hotbar tools window and the full-screen and update prompts open too. That input is the
-    /// pages' even so; the user's own keys on the passes after it are not.
+    /// first paste to come within `MENU_PASTE_WAIT` of Edit ▸ Paste asking the platform for the
+    /// clipboard. A native menu's click runs in `logic` before this, so its keys come on its own
+    /// pass; an in-window menu's runs as the bar is drawn, so they come on the next one, when the
+    /// bar still reads as open (craft-menu stores the menu as open on the pass its click closes
+    /// it). A native menu's click leaves egui's popups, the Hotbar tools window and the full-screen
+    /// and update prompts open too. That input is the pages' even so; the user's own keys on the
+    /// passes after it are not.
     fn take_menu_input(&mut self, ctx: &egui::Context) -> bool {
         let keys = !self.menu_input.is_empty();
         if keys {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
-        let pass = ctx.cumulative_pass_nr();
-        let asked = self.menu_paste_pass.filter(|asked| asked.saturating_add(2) >= pass);
+        let now = ctx.input(|i| i.time);
+        let asked = self.menu_paste_asked.filter(|asked| now - asked <= MENU_PASTE_WAIT);
         let paste = asked.is_some() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
         if paste || asked.is_none() {
-            self.menu_paste_pass = None;
+            self.menu_paste_asked = None;
         }
         keys || paste
     }

@@ -10827,7 +10827,7 @@ fn edit_cut_from_the_menu_bar_cuts_the_page() {
 }
 
 /// Edit ▸ Paste whose paste never comes (the platform answers only with text on the clipboard)
-/// lets no later paste through an open menu: its record ends two passes after it asked.
+/// lets no later paste through an open menu: its record ends once the wait for the paste is over.
 #[test]
 fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
     let mut h = organize(3);
@@ -10840,13 +10840,40 @@ fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
     let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
     let ctx = h.ctx.clone();
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.run_steps(6);
+    // Longer than the 4 seconds Edit ▸ Paste waits for its paste.
+    h.run_steps(20);
     assert_eq!(pages(&h), 3, "nothing is pasted without the platform's paste");
     support::open_menu(&mut h, "View");
     assert!(craft_menu::bar::is_open(&h.ctx), "the View menu is open");
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(4);
     assert_eq!(pages(&h), 3, "a paste with the View menu open pasted a page");
+}
+
+/// The platform's answer to Edit ▸ Paste can come late (on Wayland egui-winit reads the clipboard
+/// asynchronously, within 3 seconds): a native menu's Edit ▸ Paste with a page's context menu
+/// still open pastes the page when the paste comes a second later. Its record ended two passes
+/// on, and the open menu then held the paste.
+#[test]
+fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(4);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 4, "the late paste pasted the page");
 }
 
 /// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The platform
