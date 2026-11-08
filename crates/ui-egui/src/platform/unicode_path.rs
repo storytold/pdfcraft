@@ -18,9 +18,10 @@
 //! untouched, keeping the exact bytes the caller got. One that ends in a separator, or in a `.`
 //! after one, is not walked: only a folder satisfies such a path, and the walk rebuilds the path
 //! from its components, which drop that ending, so it could return a file of that name instead.
-//! Where a later component matches in no form, the walk goes back and tries the next form of the
-//! one before. It makes at most three times as many lookups as the path has components, after
-//! the one for the path as delivered; past that, the path counts as not found.
+//! Nor is an ASCII path walked: no ASCII name has another form, so the walk could only look the
+//! same names up again. Where a later component matches in no form, the walk goes back and tries
+//! the next form of the one before. It makes at most three times as many lookups as the path has
+//! components, after the one for the path as delivered; past that, the path counts as not found.
 
 use std::path::{Path, PathBuf};
 
@@ -42,12 +43,17 @@ fn resolve_with(delivered: &str, exists: impl Fn(&Path) -> bool) -> Option<Strin
     if exists(path) {
         return Some(delivered.to_owned());
     }
+    // No ASCII name has another form, so the walk would only look an ASCII path's folders up one
+    // by one, on the UI thread for `OsEvent::Open`, to try the same names again.
+    if delivered.is_ascii() {
+        return None;
+    }
     // Roots and prefixes (`/`, `C:`) carry no name to vary, nor does a leading `.`, the one `.`
     // that `components` keeps.
     // `delivered` is a `&str`, so every component is UTF-8 and this `?` never returns: it keeps
     // the function total without an `expect`.
     let names = path.components().map(|c| c.as_os_str().to_str()).collect::<Option<Vec<_>>>()?;
-    // Only the empty path has no components, and it names nothing to open.
+    // Only the empty path has no components, and it is ASCII, so this `?` never returns either.
     let last = names.last()?;
     // `components` drops a separator or `.` at the end, so where the path does not end in its
     // last name, the path rebuilt from `names` can be a file where only a folder will do:
@@ -336,6 +342,26 @@ mod tests {
         let dotted = Volume::holding(&[root().join(format!("{NFC}."))]);
         let found = dotted.resolve(&root().join(format!("{NFD}.")));
         assert_eq!(found, Some(root().join(format!("{NFC}.")).to_string_lossy().into_owned()), "a name ending in a `.`");
+    }
+
+    /// An ASCII path that does not exist as delivered is looked up once, however many folders it
+    /// names: no ASCII name has another form, so there is nothing for the walk to try. ASCII
+    /// folders above a name in the other form are still walked, and an ASCII path that exists
+    /// comes back as delivered.
+    #[test]
+    fn a_missing_ascii_path_is_looked_up_once() {
+        let docs = root().join("docs");
+        let volume = Volume::holding(&[docs.join("report.pdf"), docs.join(format!("{NFC}.pdf"))]);
+        for missing in [docs.join("missing.pdf"), docs.join("a").join("b").join("missing.pdf"), Path::new("docs").join("missing.pdf")] {
+            volume.probes.set(0);
+            assert_eq!(volume.resolve(&missing), None, "{missing:?}");
+            assert_eq!(volume.probes.get(), 1, "one lookup, of the path as delivered: {missing:?}");
+        }
+        volume.probes.set(0);
+        assert_eq!(volume.resolve(&docs.join("report.pdf")), Some(docs.join("report.pdf").to_string_lossy().into_owned()));
+        assert_eq!(volume.probes.get(), 1, "an ASCII path that exists, as delivered");
+        let found = volume.resolve(&docs.join(format!("{NFD}.pdf")));
+        assert_eq!(found, Some(docs.join(format!("{NFC}.pdf")).to_string_lossy().into_owned()), "ASCII folders, a name in the other form");
     }
 
     /// Where both forms of a folder name exist side by side, a file that only the second form
