@@ -22,6 +22,9 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     // with no visible gap, so whole-word search still sees two words there.
     let mut zero_width_space: Vec<bool> = Vec::new();
     let mut pending_zero_width_space = false;
+    // The last character pushed other than a variation selector, kept as characters are pushed so
+    // a long run of selectors costs no rescan.
+    let mut last_base: Option<char> = None;
     for (i, glyph) in page.glyphs.iter().enumerate() {
         let text = fold(&glyph.text);
         let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
@@ -32,11 +35,11 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         // So does a line of Chinese or Japanese that runs on to the next. The characters on both
         // sides of the break are the visible ones: invisible characters are skipped below, and a
         // variation selector after the last one only picks its glyph.
-        let before = chars.iter().rev().map(|c| c.0).find(|&c| !is_variation_selector(c));
-        let joined = line_break && before.is_some_and(unspaced) && first_visible(page, i).is_some_and(unspaced) && wraps(page, i);
+        let joined = line_break && last_base.is_some_and(unspaced) && first_visible(page, i).is_some_and(unspaced) && wraps(page, i);
         let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !(joined || soft_break));
         if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
             chars.push((' ', i));
+            last_base = Some(' ');
             zero_width_space.push(false);
             pending_zero_width_space = false;
         }
@@ -48,6 +51,9 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
             let c = if c.is_whitespace() { ' ' } else { c };
             if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
                 chars.push((c, i));
+                if !is_variation_selector(c) {
+                    last_base = Some(c);
+                }
                 zero_width_space.push(pending_zero_width_space && c != ' ');
                 pending_zero_width_space = false;
             }
@@ -163,7 +169,14 @@ fn unspaced(c: char) -> bool {
 /// that starts back at the top, a block further down the page and a flow in another direction
 /// keep their word break.
 fn wraps(page: &PageText, i: usize) -> bool {
-    let Some((before, after)) = i.checked_sub(1).and_then(|p| page.glyphs.get(p)).zip(page.glyphs.get(i)) else { return false };
+    // Measured on the glyphs that own the visible characters either side of the break: an
+    // invisible glyph (a zero width space drawn with no height) says nothing about the lines.
+    let Some(end) = i.checked_sub(1) else { return false };
+    let visible = |k: &usize| page.glyphs.get(*k).is_some_and(|g| g.text.chars().any(|c| !is_invisible(c)));
+    let same_line = |k: &usize, of: usize| page.line_of.get(*k).is_some() && page.line_of.get(*k) == page.line_of.get(of);
+    let before = (0..=end).rev().take(16).take_while(|k| same_line(k, end)).find(visible).unwrap_or(end);
+    let after = (i..page.glyphs.len()).take(16).take_while(|k| same_line(k, i)).find(visible).unwrap_or(i);
+    let Some((before, after)) = page.glyphs.get(before).zip(page.glyphs.get(after)) else { return false };
     // Unit directions: the same flow has a dot product of 1.
     let same_flow = before.direction[0] * after.direction[0] + before.direction[1] * after.direction[1] > 0.99;
     let centre = |q: &[[f32; 2]; 4]| [q.iter().map(|p| p[0]).sum::<f32>() / 4.0, q.iter().map(|p| p[1]).sum::<f32>() / 4.0];

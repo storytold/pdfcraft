@@ -542,3 +542,26 @@ fn a_word_divided_between_vertical_columns_of_a_page_is_found_in_both() {
     assert_eq!(text.line_rects(3..7).len(), 2, "one highlight per column");
     assert!(text.find("検知 機構").is_empty());
 }
+
+/// A line of Chinese or Japanese that ends in a zero width space drawn with no height still runs
+/// on: the break is measured on the glyphs that draw the characters either side of it.
+#[test]
+fn a_line_end_after_an_invisible_glyph_with_no_height_still_joins() {
+    let mut text = laid_out(&[(10.0, 10.0, "検知\u{200B}"), (10.0, 25.0, "機構")], 10.0);
+    if let Some(g) = text.glyphs.get_mut(2) {
+        g.rect = [30.0, 15.0, 30.0, 15.0];
+        g.quad = [[30.0, 15.0]; 4];
+    }
+    assert_eq!(text.find("検知機構"), vec![0..5]);
+}
+
+/// A long run of variation selectors, each a glyph of its own, is searched in time linear in the
+/// page: the line-end check doesn't rescan the selectors before every glyph.
+#[test]
+fn a_long_run_of_variation_selectors_is_searched_quickly() {
+    let selectors: String = std::iter::once('葛').chain(std::iter::repeat_n('\u{FE00}', 200_000)).collect();
+    let text = laid_out(&[(10.0, 10.0, &selectors)], 0.001);
+    let started = std::time::Instant::now();
+    assert!(text.find("飾").is_empty());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
