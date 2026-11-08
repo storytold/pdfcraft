@@ -267,7 +267,7 @@ impl Lexer<'_> {
                 self.number();
                 self.push(TokenKind::Number, start);
                 self.after(false, false);
-            } else if is_name_start(c) {
+            } else if is_name_start(c) || self.at("\\u") {
                 self.word(start);
             } else if matches!(c, '+' | '-') && self.peek2() == Some(c) {
                 // An increment leaves a `/` meaning what it did before it: after a value it
@@ -316,6 +316,31 @@ impl Lexer<'_> {
         self.line_start = false;
         self.label_next = false;
         self.may_be_value = false;
+    }
+
+    /// Takes a character of a name, or a `\u` escape spelling one (`\u0061`, `\u{61}`), and says
+    /// whether it did. Outside literals and comments, a `\` can only start such an escape.
+    fn name_part(&mut self) -> bool {
+        if self.at("\\u") {
+            self.bump();
+            self.bump();
+            // `\u0061` needs nothing more, its digits being name characters too.
+            if self.peek() == Some('{') {
+                self.bump();
+                while self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+                    self.bump();
+                }
+                if self.peek() == Some('}') {
+                    self.bump();
+                }
+            }
+            true
+        } else if self.peek().is_some_and(is_name_part) {
+            self.bump();
+            true
+        } else {
+            false
+        }
     }
 
     fn skip_to_line_end(&mut self) {
@@ -411,9 +436,7 @@ impl Lexer<'_> {
     }
 
     fn word(&mut self, start: usize) {
-        while self.peek().is_some_and(is_name_part) {
-            self.bump();
-        }
+        while self.name_part() {}
         let word = self.s.get(start..self.i).unwrap_or_default();
         let label = self.label_next && !self.line_start;
         if self.after_dot {

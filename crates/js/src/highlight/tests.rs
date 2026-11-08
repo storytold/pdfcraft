@@ -177,6 +177,8 @@ fn a_slash_that_can_only_start_a_regex_does_not_make_code_a_literal() {
         "debugger\n/`/.test(x);\n    ",
         "a: while (x) { break a\n/`/.test(x); }\n    ",
         "a: while (x) { continue /* c */ a\n/`/.test(x); }\n    ",
+        "a: while (x) { break \\u0061\n/`/.test(x); }\n    ",
+        "a: while (x) { continue \\u{61}\n/`/.test(x); }\n    ",
         "class A extends /`/.constructor {}\n    ",
     ] {
         assert!(!in_literal(script, script.len()), "{script}");
@@ -195,6 +197,9 @@ fn a_slash_after_break_continue_debugger_or_extends_starts_a_regex() {
         ("debugger\n/`/.test(x);\nvar s = `a\n    ", "`;"),
         ("a: while (x) { break a\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
         ("a: while (x) { continue /* c */ a\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
+        // A label spelled with escapes is one too.
+        ("a: while (x) { break \\u0061\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
+        ("a: while (x) { continue \\u{61}\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
         ("class A extends /`/.constructor {}\nvar s = `a\n    ", "`;"),
         // Not labels, so the `/` divides: `b` past a line end, a comment's or not, or past a `;`.
         ("while (x) { break\nb / `a\n    ", "`; }"),
@@ -205,6 +210,19 @@ fn a_slash_after_break_continue_debugger_or_extends_starts_a_regex() {
         assert!(in_literal(script, script.len()), "{script}");
     }
     assert!(kinds("while (x) { break\n/'/.test(x); }").contains(&(TokenKind::Regex, "/'/")), "coloured as one");
+}
+
+/// `\u0061` and `\u{61}` spell `a`, and `b\u{61}` spells `ba`: a `/` after any of them divides, as after
+/// any name. Read as a `\` and the name `u`, then a block, it was taken as a regular expression.
+#[test]
+fn a_name_spelled_with_escapes_is_one_name() {
+    use TokenKind::*;
+    for script in ["x = \\u{61} / 2 / 3;", "x = \\u0061 / 2 / 3;", "x = b\\u{61} / 2 / 3;"] {
+        assert_eq!(kinds(script), vec![(Number, "2"), (Number, "3")], "{script}");
+    }
+    let script = "var \\u{61} = 4; x = \\u{61} / 2;\n    ";
+    assert!(parses(script));
+    assert!(!in_literal(script, script.len()), "nothing doubtful: code stays code");
 }
 
 /// The price of erring towards leaving the text alone: past a `/` that could go either way, nothing
