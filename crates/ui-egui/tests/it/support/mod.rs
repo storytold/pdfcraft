@@ -51,7 +51,7 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
     );
 }
 
-/// Open the in-window menu bar's `title` menu (File, Edit, View…).
+/// Open a top-level menu (File, Edit, View…) via the modebar's Menu popup.
 pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     use egui_kittest::kittest::Queryable;
     let menu_title_matches = |l: &str| l == title || l.starts_with(title);

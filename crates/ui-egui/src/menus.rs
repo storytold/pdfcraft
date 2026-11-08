@@ -531,6 +531,7 @@ impl PdfCraftApp {
         for menu in &bar.menus {
             let resp = ui.menu_button(&menu.title, |ui| {
                 ui.set_min_width(220.0);
+                ui.set_max_width(360.0);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                     render_nodes(ui, &menu.children, &gate, &mut chosen);
@@ -647,6 +648,7 @@ fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu
                     .add_enabled_ui(enabled, |ui| {
                         ui.menu_button(label, |ui| {
                             ui.set_min_width(220.0);
+                            ui.set_max_width(360.0);
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                             egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                                 render_nodes(ui, children, gate, chosen);
