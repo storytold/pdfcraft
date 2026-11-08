@@ -387,13 +387,20 @@ fn cmap_streams_read_their_parameters_given_by_reference() {
 
 /// A Type 0 subset over Inter with `/DW` alone, whose CIDs 1 to 7 draw "A B C D" (ToUnicode
 /// gives CIDs 1 and 2), its program and its `/CIDToGIDMap` each behind a predictor whose
-/// `/DecodeParms` is a reference, or behind Flate alone.
-fn inter_subset(program_by_reference: bool, map_by_reference: bool) -> Metrics {
+/// `/DecodeParms` is a reference, or behind Flate alone. The map is padded with `.notdef` to
+/// `map_entries` CIDs, if that is more than the seven it needs.
+fn inter_subset(program_by_reference: bool, map_by_reference: bool, map_entries: usize) -> Metrics {
     use skrifa::MetadataProvider as _;
     let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
     let face = skrifa::FontRef::new(bytes).unwrap();
     let gid = |c: char| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
-    let gids: Vec<u8> = std::iter::once(0).chain("A B C D".chars().map(gid)).flat_map(u16::to_be_bytes).collect();
+    let mut gids: Vec<u8> = std::iter::once(0).chain("A B C D".chars().map(gid)).flat_map(u16::to_be_bytes).collect();
+    gids.resize(gids.len().max(map_entries * 2), 0);
+    if map_entries > 7 {
+        // The last CID has a glyph too, so a map read only as far as its start is told from one read whole.
+        let end = gids.len() - 2;
+        gids[end..].copy_from_slice(&gid('A').to_be_bytes());
+    }
     let stream = |doc: &mut Document, data: &[u8], by_reference: bool| {
         if by_reference { behind_parms_by_reference(doc, data) } else { Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), data)))) }
     };
@@ -428,15 +435,28 @@ fn inter_subset(program_by_reference: bool, map_by_reference: bool) -> Metrics {
 /// which glyphs are empty, or the map points the CIDs at other glyphs.
 #[test]
 fn a_subsets_program_and_cid_map_read_their_parameters_given_by_reference() {
-    let direct = inter_subset(false, false);
+    let direct = inter_subset(false, false, 0);
     assert!(!direct.outlined_cids.is_empty());
     assert_eq!(direct.encode("A").as_deref(), Some(&[0, 1][..]));
     assert_eq!(direct.encode(" "), None, "the space's glyph is empty");
     for (program, map) in [(true, false), (false, true)] {
-        let m = inter_subset(program, map);
+        let m = inter_subset(program, map, 0);
         assert_eq!(m.outlined_cids, direct.outlined_cids, "program by reference: {program}, map: {map}");
         assert_eq!(m.encode(" "), None, "program by reference: {program}, map: {map}");
     }
+}
+
+/// A `/CIDToGIDMap` for all 65 536 CIDs is 128 KiB, and behind a PNG predictor Flate gives one
+/// tag byte more for every row, so a limit on what Flate gives would refuse a map of that size
+/// and leave the width-based check to accept the glyphs the subset dropped.
+#[test]
+fn a_full_size_cid_map_behind_a_png_predictor_is_still_read() {
+    let m = inter_subset(false, true, 0x1_0000);
+    assert!(!m.outlined_cids.is_empty(), "the map was not read");
+    let last = 0xFFFF_usize;
+    assert!(m.outlined_cids.get(last / 64).is_some_and(|w| (*w >> (last % 64)) & 1 == 1), "the map was read only as far as its start");
+    assert_eq!(m.encode("A").as_deref(), Some(&[0, 1][..]));
+    assert_eq!(m.encode(" "), None, "the space's glyph is empty");
 }
 
 #[test]
@@ -891,4 +911,125 @@ fn low_codes_resolve_to_the_covering_range() {
     let covered: Vec<u32> = (0..0x70).filter(|&c| u.covering(c).is_some()).collect();
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
+}
+
+/// `program` (an sfnt with a `loca` table) with the glyphs `gids` emptied, as a subsetter that keeps glyph ids
+/// leaves the glyphs it drops: the glyph's `loca` range is zero bytes long. (The glyph before it takes the
+/// bytes; only whether a range is empty matters here.)
+fn with_empty_glyphs(program: &[u8], gids: &[u32]) -> Vec<u8> {
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize;
+    let tables = usize::from(u16::from_be_bytes([program[4], program[5]]));
+    let find = |tag: &[u8; 4]| (0..tables).map(|i| 12 + 16 * i).find(|&at| &program[at..at + 4] == tag).map(|at| be32(program, at + 8)).unwrap();
+    let (head, loca) = (find(b"head"), find(b"loca"));
+    let long = i16::from_be_bytes([program[head + 50], program[head + 51]]) != 0;
+    let mut out = program.to_vec();
+    for &gid in gids {
+        let gid = gid as usize;
+        if long {
+            let end = out[loca + 4 * (gid + 1)..loca + 4 * (gid + 1) + 4].to_vec();
+            out[loca + 4 * gid..loca + 4 * gid + 4].copy_from_slice(&end);
+        } else {
+            let end = out[loca + 2 * (gid + 1)..loca + 2 * (gid + 1) + 2].to_vec();
+            out[loca + 2 * gid..loca + 2 * gid + 2].copy_from_slice(&end);
+        }
+    }
+    out
+}
+
+/// #6149: a subset that keeps glyph ids (PyMuPDF, iText) lists a width in `/W` for the glyphs it emptied too.
+/// The embedded program says which are there: an edit that typed "r" or "y" drew nothing. A space has no outline
+/// in any font, and is still there when `/W` lists it.
+#[test]
+fn a_composite_subsets_program_decides_which_glyphs_are_there_not_its_widths() {
+    use pdfcraft_cos::Stream;
+    // Inter's glyph ids: P 375, o 790, a 507, r 852, y 998, space 1777.
+    let metrics = |program: Vec<u8>| {
+        let mut doc = Document::new_empty();
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+        let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 6 beginbfchar \
+            <0177> <0050> <0316> <006F> <01FB> <0061> <0354> <0072> <03E6> <0079> <06F1> <0020> endbfchar";
+        let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let mut desc = Dict::new();
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        desc.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+        desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        let w = [(0x177, 639), (0x316, 600), (0x1FB, 551), (0x354, 376), (0x3E6, 515), (0x6F1, 281)];
+        desc.set(
+            b"W".to_vec(),
+            Object::Array(w.into_iter().flat_map(|(cid, width)| [Object::Int(cid), Object::Array(vec![Object::Int(width)])]).collect()),
+        );
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("Type0")),
+                ("BaseFont", Object::name("BAAAAA+SampleSans")),
+                ("Encoding", Object::name("Identity-H")),
+                ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+                ("ToUnicode", Object::Ref(tu)),
+            ],
+        );
+        Metrics::from_dict(&doc, &f)
+    };
+    let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    // Nothing emptied: every glyph /W lists is there.
+    assert!(metrics(inter.to_vec()).encode("Poary ").is_some());
+    // "r", "y" and the space emptied, as a subsetter leaves them.
+    let m = metrics(with_empty_glyphs(inter, &[852, 998, 1777]));
+    assert_eq!(m.encode("Poa").as_deref(), Some(&[0x01, 0x77, 0x03, 0x16, 0x01, 0xFB][..]));
+    assert_eq!(m.encode("r"), None, "emptied in the program, though /W lists it");
+    assert_eq!(m.encode("y"), None);
+    assert_eq!(m.encode("Po y"), None);
+    assert_eq!(m.encode("Po a").as_deref(), Some(&[0x01, 0x77, 0x03, 0x16, 0x06, 0xF1, 0x01, 0xFB][..]), "a space is blank by nature");
+    // Every glyph emptied: the program was read and holds no outline at all, which is not "no program".
+    let count = {
+        use skrifa::raw::TableProvider as _;
+        u32::from(skrifa::FontRef::new(inter).unwrap().maxp().unwrap().num_glyphs())
+    };
+    // Last glyph first: each glyph takes the end of the one after it, which is already empty.
+    let none = metrics(with_empty_glyphs(inter, &(0..count).rev().collect::<Vec<_>>()));
+    assert_eq!(none.encode("P"), None, "listed in /W, but the program has no outline for it");
+    assert!(none.encode(" ").is_some(), "a space is still blank by nature");
+}
+
+/// In a `/CIDToGIDMap` stream a CID the subset doesn't have maps to glyph 0, `.notdef`, which has an outline of
+/// its own: typing with that CID would draw the box, not the letter.
+#[test]
+fn a_cid_the_map_sends_to_notdef_is_not_a_glyph() {
+    use pdfcraft_cos::Stream;
+    let mut doc = Document::new_empty();
+    let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), inter)));
+    // Inter's glyph ids: o 790 (0x316), r 852 (0x354). CIDs up to 0x354 map to the glyph of their own number,
+    // except that 0x354 maps to glyph 0.
+    let map: Vec<u8> = (0..=0x354u16).flat_map(|cid| if cid == 0x354 { 0u16 } else { cid }.to_be_bytes()).collect();
+    let map = doc.add(Object::Stream(Stream::flate(Dict::new(), &map)));
+    let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <0316> <006F> <0354> <0072> endbfchar";
+    let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    desc.set(b"CIDToGIDMap".to_vec(), Object::Ref(map));
+    desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    desc.set(
+        b"W".to_vec(),
+        Object::Array(
+            [(0x316, 600), (0x354, 376)].into_iter().flat_map(|(cid, w)| [Object::Int(cid), Object::Array(vec![Object::Int(w)])]).collect(),
+        ),
+    );
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("BaseFont", Object::name("BAAAAA+SampleSans")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+            ("ToUnicode", Object::Ref(tu)),
+        ],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.encode("o").as_deref(), Some(&[0x03, 0x16][..]));
+    assert_eq!(m.encode("r"), None, "its CID maps to .notdef");
 }
