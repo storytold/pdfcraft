@@ -627,7 +627,46 @@ thread_local! {
     pub(crate) static SOURCE_SPACE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics) -> f64 {
+/// The word gaps a line draws, in ems, narrower or wider than this are not a space: a column break
+/// or a gap left by a redaction, or two words that touch.
+const WORD_GAP_EMS: std::ops::Range<f64> = 0.05..1.0;
+
+/// How wide the gaps between the words of `lines` are, in ems, as the lines themselves draw them:
+/// the median distance from the box of one word to the next on an upright line, less the character
+/// spacing that follows a word (a gap set by [`source_show`] adds it back). `None` when the lines
+/// have no two words a gap apart.
+///
+/// A producer that leaves the space out of a subset (pdfTeX writes its width as 0) sets word gaps
+/// with `TJ` adjustments instead, and justifies each line by its own amount, so no font width says
+/// how wide a gap was: only the line does (#6609).
+pub(crate) fn line_word_gap<'a>(lines: impl IntoIterator<Item = &'a TextLine>) -> Option<f64> {
+    let mut gaps: Vec<f64> = Vec::new();
+    for line in lines {
+        // Text space → user space: the font size, the text-to-user scale and the horizontal scale.
+        let em = line.size * line.origin.k * line.origin.state.scale;
+        if !line.upright() || !em.is_finite() || em <= 0.0 {
+            continue;
+        }
+        let tracking = line.origin.state.char_spacing / line.size;
+        for pair in line.ink.windows(2) {
+            let gap = (pair[1][0] - pair[0][2]) / em - tracking;
+            if gap.is_finite() && WORD_GAP_EMS.contains(&gap) {
+                gaps.push(gap);
+            }
+        }
+    }
+    gaps.sort_by(f64::total_cmp);
+    let middle = gaps.len() / 2;
+    match gaps.len() {
+        0 => None,
+        n if n % 2 == 1 => gaps.get(middle).copied(),
+        _ => Some((gaps.get(middle.checked_sub(1)?)? + gaps.get(middle)?) / 2.0),
+    }
+}
+
+/// How wide a space is in `metrics`' font, in ems: its own, then another subset of the same family's,
+/// then `line_gap` (what [`line_word_gap`] measured on the text being edited), then a guess.
+pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics, line_gap: Option<f64>) -> f64 {
     #[cfg(test)]
     SOURCE_SPACE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = |m: &Metrics| m.encode(" ").map(|b| m.codes(&b).iter().map(|(c, _)| m.width(*c)).sum::<f64>());
@@ -645,7 +684,7 @@ pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics) -> f
             }
         }
     }
-    0.33
+    line_gap.filter(|g| g.is_finite() && WORD_GAP_EMS.contains(g)).unwrap_or(0.33)
 }
 
 pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> f64 {

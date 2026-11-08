@@ -1,7 +1,7 @@
 use super::blocks::{BlockStyle, TextBlock, paragraph_separator, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
-    source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, line_word_gap, needs_type3, no_japanese_font, source_encodes,
+    source_family, source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
@@ -83,7 +83,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             metrics,
             &shown,
             target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
-            source_space(doc, &fonts_res, metrics),
+            source_space(doc, &fonts_res, metrics, line_word_gap([&target])),
             target.origin.state.char_spacing,
             target.origin.state.word_spacing,
         )?),
@@ -772,12 +772,21 @@ struct SourceFont {
     space: f64,
 }
 
-fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLine, flat: &str, style: &BlockStyle) -> SourceFont {
+fn source_font(
+    doc: &Document,
+    fonts_res: &Dict,
+    font_name: &str,
+    first: &TextLine,
+    members: &[&TextLine],
+    flat: &str,
+    style: &BlockStyle,
+) -> SourceFont {
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let visual_indic = metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let indic_text = if visual_indic { crate::indic::to_visual(flat) } else { flat.to_owned() };
     let reuse = style.family.is_none() && style.bold.is_none() && metrics.as_ref().is_some_and(|m| source_encodes(m, &indic_text));
-    let space = metrics.as_ref().map_or(0.33, |m| source_space(doc, fonts_res, m));
+    let gap = line_word_gap(members.iter().copied().filter(|l| l.font == font_name));
+    let space = metrics.as_ref().map_or(0.33, |m| source_space(doc, fonts_res, m, gap));
     SourceFont { metrics, reuse, space }
 }
 
@@ -843,7 +852,7 @@ pub(crate) fn rewrite_block_from(
     let last = members.last().copied().unwrap_or(first);
     let emit = &last.origin;
     let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style)?;
-    let source = source_font(doc, &fonts_res, &font_name, first, &flat, style);
+    let source = source_font(doc, &fonts_res, &font_name, first, &members, &flat, style);
     let reuse = source.reuse;
     // The chosen style also determines the real Japanese fallback outlines and advances.
     let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));

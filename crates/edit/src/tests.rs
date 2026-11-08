@@ -10088,13 +10088,47 @@ fn carriage_returns_break_rows_on_the_styled_path() {
 }
 
 /// A subset with no space glyph shows each space as a positioning gap one space wide, so a run
-/// of spaces still takes a run's width (#4199).
+/// of spaces still takes a run's width (#4199). The width is the line's own: the space between its
+/// words is Helvetica's, 278 thousandths, and no longer a flat 330 (#6609).
 #[test]
 fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
-    assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+    assert_eq!(content.matches("[-278] TJ").count(), 5, "{content}");
+}
+
+/// The single `TJ` adjustments of a content stream, in thousandths of the font size.
+fn tj_gaps(bytes: &[u8]) -> Vec<f64> {
+    pdfcraft_content::parse(bytes)
+        .ops
+        .iter()
+        .filter(|o| o.op.as_slice() == b"TJ")
+        .filter_map(|o| match o.operands.first() {
+            Some(Object::Array(a)) if a.len() == 1 => a.first().and_then(Object::as_f64),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A subset with no space glyph sets a space as a gap as wide as the line's own gaps, not a flat
+/// guess: pdfTeX justifies each line by its own amount (#6609).
+#[test]
+fn a_space_a_subset_cannot_show_is_as_wide_as_the_lines_own_word_gaps() {
+    // Half an em between the words; `F2` and the other subset of its family have no space.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td [(ab) -500 (ba)] TJ ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba ab").unwrap().substituted, None);
+    let gaps = tj_gaps(&page_content_bytes(&reopen(&doc), 0));
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|g| (g + 500.0).abs() < 15.0), "{gaps:?}");
+}
+
+/// A single word has no gap to measure, so the guess stays.
+#[test]
+fn a_space_a_subset_cannot_show_is_a_guess_when_the_line_has_one_word() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None);
+    assert_eq!(tj_gaps(&page_content_bytes(&reopen(&doc), 0)), [-330.0]);
 }
 
 #[test]
