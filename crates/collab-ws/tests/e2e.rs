@@ -10,7 +10,7 @@ use pdfcraft_collab_client_pdf::{add_note_payload, apply, merge_op, reply_payloa
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
 use pdfcraft_collab_proto::{ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Role, ServerMessage, Target};
-use pdfcraft_collab_server::RoomConfig;
+use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, RoomConfig};
 use pdfcraft_collab_ws::{Claims, Config, ServerHandle, TokenError, Verifier, WsServer};
 use pdfcraft_engine::Session;
 use serde_json::json;
@@ -252,6 +252,48 @@ fn three_clients_converge_and_a_late_joiner_catches_up() -> Result<(), Box<dyn s
 
 /// The room is only as good as its adapter: a commit through the wire produces
 /// a readable PDF with the comments in it.
+/// Last participant out: the transport commits a dirty room by itself.
+#[test]
+fn leaving_the_last_client_commits_the_room() -> Result<(), Box<dyn std::error::Error>> {
+    struct Counting {
+        inner: PdfAdapter,
+        commits: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl Adapter for Counting {
+        fn apply(&mut self, actor: &pdfcraft_collab_proto::ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            self.inner.apply(actor, op)
+        }
+        fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
+            let outcome = self.inner.commit();
+            if outcome.is_ok() {
+                self.commits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            outcome
+        }
+        fn base(&self) -> Option<pdfcraft_collab_proto::BlobRef> {
+            self.inner.base()
+        }
+    }
+
+    let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let adapter = Counting { inner: PdfAdapter::open("e2e.pdf", fixture(1).into())?, commits: commits.clone() };
+    let doc = DocKey::new("file-1")?;
+    let mut hub = Hub::new(RoomConfig::default());
+    hub.open_room(doc.clone(), adapter)?;
+    let handle = WsServer::new(hub, Arc::new(TestVerifier), Config::default()).bind("127.0.0.1:0")?;
+    let mut editor = Peer::join(handle.local_addr(), "editor:ada", "ada")?;
+    let add = merge_op(doc, OpId::new("op-add")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "kept", "ada"));
+    editor.send(add)?;
+    let _ = editor.settle()?;
+    drop(editor);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while commits.load(std::sync::atomic::Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(commits.load(std::sync::atomic::Ordering::Relaxed), 1, "the last client leaving committed the session");
+    Ok(())
+}
+
 #[test]
 fn a_commit_over_the_wire_produces_a_readable_pdf() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = PdfAdapter::open("e2e.pdf", fixture(1).into())?;

@@ -512,6 +512,34 @@ mod tests {
     }
 
     #[test]
+    fn a_large_document_opens_edits_and_commits() -> Result<(), Box<dyn std::error::Error>> {
+        // 500 pages: the acceptance criterion, and a guard against a per-page copy
+        // on every operation.
+        let started = std::time::Instant::now();
+        let adapter = PdfAdapter::open("large.pdf", fixture(500).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let add = op(
+            "a1",
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 499, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "last page", "nm": "late-note"}),
+        )?;
+        room.apply(&editor, &add, 0)?;
+        let rotate =
+            op("r1", ConflictClass::Structural, Target::Page(PageRef { index: 0, epoch: 0 }), 1, 0, json!({"action": "page.rotate", "degrees": 90}))?;
+        room.apply(&editor, &rotate, 0)?;
+        let committed = room.commit(&editor, 2)?;
+        assert!(!committed.sha256.is_empty());
+        assert!(committed.bytes > 0);
+        println!("500 pages: {:?}", started.elapsed());
+        Ok(())
+    }
+
+    #[test]
     fn the_author_comes_from_the_token_not_the_payload() -> Result<(), Box<dyn std::error::Error>> {
         let mut adapter = PdfAdapter::open("fixture.pdf", fixture(1).into())?;
         let actor = ActorId::new("user-7")?;

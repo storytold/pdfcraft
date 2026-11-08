@@ -208,6 +208,198 @@ fn field_value(kind: FormFieldKind, text: &str) -> FieldValue {
     }
 }
 
+// ── Edit → operation (the interface's side of the wire) ─────────────────────────────────────
+
+/// Turn a user edit into the operations the server accepts. The caller sends
+/// them; the document changes only when `applied` comes back, so no optimistic
+/// state has to be reconciled.
+pub fn ops_for_edit(
+    document: &Document,
+    edit: &Edit,
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+) -> Result<Vec<Op>, ProjectionError> {
+    match edit {
+        Edit::AddAnnotation(new) => {
+            let Shape::Note { at, .. } = &new.shape else {
+                return Err(ProjectionError::Unsupported("only sticky notes are shared in this version".into()));
+            };
+            let nm = new_annotation_name(client_id);
+            let target = Target::Page(PageRef { index: new.page as u32, epoch });
+            let payload = add_note_payload(&nm, *at, &new.contents, &new.author);
+            Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, payload)])
+        }
+        Edit::SetAnnotationContents { page, index, text } => {
+            let nm = name_at(document, *page, *index)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                set_contents_payload(text),
+            )])
+        }
+        Edit::ReplyToAnnotation { page, index, text, author } => {
+            let root = name_at(document, *page, *index)?;
+            let nm = new_annotation_name(client_id);
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm: root },
+                reply_payload(&nm, text, author),
+            )])
+        }
+        Edit::DeleteAnnotation { page, index } => {
+            let nm = name_at(document, *page, *index)?;
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
+                delete_payload(),
+            )])
+        }
+        Edit::SetFieldValue { name, value } => {
+            let target = Target::Field { name: name.clone() };
+            Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, field_value_payload(&field_text(value)))])
+        }
+        Edit::RotatePages { pages, degrees } => pages
+            .iter()
+            .map(|page| {
+                Ok(structural_op(
+                    doc.clone(),
+                    next_id(client_id, counter)?,
+                    base_version,
+                    epoch,
+                    Target::Page(PageRef { index: *page as u32, epoch }),
+                    rotate_payload(*degrees),
+                ))
+            })
+            .collect::<Result<Vec<_>, ProjectionError>>(),
+        Edit::MovePages { pages, to } if pages.len() == 1 => Ok(vec![structural_op(
+            doc,
+            next_id(client_id, counter)?,
+            base_version,
+            epoch,
+            Target::Page(PageRef { index: pages[0] as u32, epoch }),
+            move_payload(*to),
+        )]),
+        Edit::DeletePages { pages } => {
+            let mut sorted = pages.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            // Delete from the end so the earlier indices stay valid.
+            sorted
+                .into_iter()
+                .rev()
+                .map(|page| {
+                    Ok(structural_op(
+                        doc.clone(),
+                        next_id(client_id, counter)?,
+                        base_version,
+                        epoch,
+                        Target::Page(PageRef { index: page as u32, epoch }),
+                        delete_page_payload(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProjectionError>>()
+        }
+        other => Err(ProjectionError::Unsupported(other.label().to_string())),
+    }
+}
+
+/// The operation that undoes `op`, built from the document as it was *before*
+/// applying it. `None` where the change cannot be reverted: a deletion, a page
+/// removal or a form reset. Undo is a normal operation (ADR-0010), so a
+/// conflict with someone else's later edit is reported, not forced.
+pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<Op>, ProjectionError> {
+    let action = op.payload.get("action").and_then(Value::as_str).ok_or(ProjectionError::Missing("action"))?;
+    let base = op.base_version;
+    let epoch = op.epoch;
+    let doc = op.doc.clone();
+    let inverse = match action {
+        "annotation.add" => {
+            let nm = text(op, "nm")?.to_owned();
+            let page = page_target(op)?;
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, delete_payload())
+        }
+        "annotation.reply" => {
+            let nm = text(op, "nm")?.to_owned();
+            let page = page_target(op)?;
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, delete_payload())
+        }
+        "annotation.set_contents" => {
+            let (page, nm) = annotation_target(op)?;
+            let previous = document
+                .info
+                .annotations
+                .iter()
+                .find(|a| a.page == page.index as usize && a.name.as_deref() == Some(nm.as_str()))
+                .map(|a| a.contents.clone().unwrap_or_default())
+                .ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, set_contents_payload(&previous))
+        }
+        "annotation.delete" => return Ok(None),
+        "field.set_value" => {
+            let Target::Field { name } = &op.target else { return Err(ProjectionError::Missing("field target")) };
+            let field = document.form.iter().find(|f| f.name == *name).ok_or(ProjectionError::Missing("form field"))?;
+            let previous = field.value.first().cloned().unwrap_or_default();
+            let previous = if matches!(field.kind, FormFieldKind::CheckBox) {
+                if previous.is_empty() { "false".to_owned() } else { "true".to_owned() }
+            } else {
+                previous
+            };
+            merge_op(doc, op_id, base, epoch, Target::Field { name: name.clone() }, field_value_payload(&previous))
+        }
+        "page.rotate" => {
+            let page = page_target(op)?;
+            let previous = document.info.pages.get(page.index as usize).map(|p| i64::from(p.rotation)).ok_or(ProjectionError::Missing("page"))?;
+            structural_op(doc, op_id, base, epoch, Target::Page(page), rotate_payload(previous))
+        }
+        "page.move" => {
+            let page = page_target(op)?;
+            let to = op.payload.get("to").and_then(Value::as_u64).and_then(|to| usize::try_from(to).ok()).ok_or(ProjectionError::Missing("to"))?;
+            structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: to as u32, epoch }), move_payload(page.index as usize))
+        }
+        "page.delete" => return Ok(None),
+        other => return Err(ProjectionError::Unsupported(other.to_owned())),
+    };
+    Ok(Some(inverse))
+}
+
+fn next_id(client_id: &str, counter: &mut u64) -> Result<OpId, ProjectionError> {
+    *counter = counter.saturating_add(1);
+    OpId::new(format!("{client_id}-{counter}")).map_err(|e| ProjectionError::Invalid(e.to_string()))
+}
+
+fn name_at(document: &Document, page: usize, index: usize) -> Result<String, ProjectionError> {
+    document
+        .info
+        .annotations
+        .iter()
+        .find(|a| a.page == page && a.index == index)
+        .and_then(|a| a.name.clone())
+        .ok_or(ProjectionError::Missing("annotation /NM"))
+}
+
+fn field_text(value: &FieldValue) -> String {
+    match value {
+        FieldValue::Text(text) => text.clone(),
+        FieldValue::Check(true) => "true".into(),
+        FieldValue::Check(false) => "false".into(),
+        FieldValue::Radio(Some(state)) => state.clone(),
+        FieldValue::Radio(None) => String::new(),
+        FieldValue::Choice(values) => values.first().cloned().unwrap_or_default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -408,197 +600,5 @@ mod tests {
         assert!(first.starts_with("client-7-"));
         assert_ne!(first, second);
         assert!(first.len() <= pdfcraft_collab_proto::MAX_ANNOTATION_NAME);
-    }
-}
-
-// ── Edit → operation (the interface's side of the wire) ─────────────────────────────────────
-
-/// Turn a user edit into the operations the server accepts. The caller sends
-/// them; the document changes only when `applied` comes back, so no optimistic
-/// state has to be reconciled.
-pub fn ops_for_edit(
-    document: &Document,
-    edit: &Edit,
-    doc: DocKey,
-    client_id: &str,
-    base_version: u64,
-    epoch: u64,
-    counter: &mut u64,
-) -> Result<Vec<Op>, ProjectionError> {
-    match edit {
-        Edit::AddAnnotation(new) => {
-            let Shape::Note { at, .. } = &new.shape else {
-                return Err(ProjectionError::Unsupported("only sticky notes are shared in this version".into()));
-            };
-            let nm = new_annotation_name(client_id);
-            let target = Target::Page(PageRef { index: new.page as u32, epoch });
-            let payload = add_note_payload(&nm, *at, &new.contents, &new.author);
-            Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, payload)])
-        }
-        Edit::SetAnnotationContents { page, index, text } => {
-            let nm = name_at(document, *page, *index)?;
-            Ok(vec![merge_op(
-                doc,
-                next_id(client_id, counter)?,
-                base_version,
-                epoch,
-                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
-                set_contents_payload(text),
-            )])
-        }
-        Edit::ReplyToAnnotation { page, index, text, author } => {
-            let root = name_at(document, *page, *index)?;
-            let nm = new_annotation_name(client_id);
-            Ok(vec![merge_op(
-                doc,
-                next_id(client_id, counter)?,
-                base_version,
-                epoch,
-                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm: root },
-                reply_payload(&nm, text, author),
-            )])
-        }
-        Edit::DeleteAnnotation { page, index } => {
-            let nm = name_at(document, *page, *index)?;
-            Ok(vec![merge_op(
-                doc,
-                next_id(client_id, counter)?,
-                base_version,
-                epoch,
-                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
-                delete_payload(),
-            )])
-        }
-        Edit::SetFieldValue { name, value } => {
-            let target = Target::Field { name: name.clone() };
-            Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, field_value_payload(&field_text(value)))])
-        }
-        Edit::RotatePages { pages, degrees } => pages
-            .iter()
-            .map(|page| {
-                Ok(structural_op(
-                    doc.clone(),
-                    next_id(client_id, counter)?,
-                    base_version,
-                    epoch,
-                    Target::Page(PageRef { index: *page as u32, epoch }),
-                    rotate_payload(*degrees),
-                ))
-            })
-            .collect::<Result<Vec<_>, ProjectionError>>(),
-        Edit::MovePages { pages, to } if pages.len() == 1 => Ok(vec![structural_op(
-            doc,
-            next_id(client_id, counter)?,
-            base_version,
-            epoch,
-            Target::Page(PageRef { index: pages[0] as u32, epoch }),
-            move_payload(*to),
-        )]),
-        Edit::DeletePages { pages } => {
-            let mut sorted = pages.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
-            // Delete from the end so the earlier indices stay valid.
-            sorted
-                .into_iter()
-                .rev()
-                .map(|page| {
-                    Ok(structural_op(
-                        doc.clone(),
-                        next_id(client_id, counter)?,
-                        base_version,
-                        epoch,
-                        Target::Page(PageRef { index: page as u32, epoch }),
-                        delete_page_payload(),
-                    ))
-                })
-                .collect::<Result<Vec<_>, ProjectionError>>()
-        }
-        other => Err(ProjectionError::Unsupported(other.label().to_string())),
-    }
-}
-
-/// The operation that undoes `op`, built from the document as it was *before*
-/// applying it. `None` where the change cannot be reverted: a deletion, a page
-/// removal or a form reset. Undo is a normal operation (ADR-0010), so a
-/// conflict with someone else's later edit is reported, not forced.
-pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<Op>, ProjectionError> {
-    let action = op.payload.get("action").and_then(Value::as_str).ok_or(ProjectionError::Missing("action"))?;
-    let base = op.base_version;
-    let epoch = op.epoch;
-    let doc = op.doc.clone();
-    let inverse = match action {
-        "annotation.add" => {
-            let nm = text(op, "nm")?.to_owned();
-            let page = page_target(op)?;
-            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, delete_payload())
-        }
-        "annotation.reply" => {
-            let nm = text(op, "nm")?.to_owned();
-            let page = page_target(op)?;
-            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, delete_payload())
-        }
-        "annotation.set_contents" => {
-            let (page, nm) = annotation_target(op)?;
-            let previous = document
-                .info
-                .annotations
-                .iter()
-                .find(|a| a.page == page.index as usize && a.name.as_deref() == Some(nm.as_str()))
-                .map(|a| a.contents.clone().unwrap_or_default())
-                .ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
-            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, set_contents_payload(&previous))
-        }
-        "annotation.delete" => return Ok(None),
-        "field.set_value" => {
-            let Target::Field { name } = &op.target else { return Err(ProjectionError::Missing("field target")) };
-            let field = document.form.iter().find(|f| f.name == *name).ok_or(ProjectionError::Missing("form field"))?;
-            let previous = field.value.first().cloned().unwrap_or_default();
-            let previous = if matches!(field.kind, FormFieldKind::CheckBox) {
-                if previous.is_empty() { "false".to_owned() } else { "true".to_owned() }
-            } else {
-                previous
-            };
-            merge_op(doc, op_id, base, epoch, Target::Field { name: name.clone() }, field_value_payload(&previous))
-        }
-        "page.rotate" => {
-            let page = page_target(op)?;
-            let previous = document.info.pages.get(page.index as usize).map(|p| i64::from(p.rotation)).ok_or(ProjectionError::Missing("page"))?;
-            structural_op(doc, op_id, base, epoch, Target::Page(page), rotate_payload(previous))
-        }
-        "page.move" => {
-            let page = page_target(op)?;
-            let to = op.payload.get("to").and_then(Value::as_u64).and_then(|to| usize::try_from(to).ok()).ok_or(ProjectionError::Missing("to"))?;
-            structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: to as u32, epoch }), move_payload(page.index as usize))
-        }
-        "page.delete" => return Ok(None),
-        other => return Err(ProjectionError::Unsupported(other.to_owned())),
-    };
-    Ok(Some(inverse))
-}
-
-fn next_id(client_id: &str, counter: &mut u64) -> Result<OpId, ProjectionError> {
-    *counter = counter.saturating_add(1);
-    OpId::new(format!("{client_id}-{counter}")).map_err(|e| ProjectionError::Invalid(e.to_string()))
-}
-
-fn name_at(document: &Document, page: usize, index: usize) -> Result<String, ProjectionError> {
-    document
-        .info
-        .annotations
-        .iter()
-        .find(|a| a.page == page && a.index == index)
-        .and_then(|a| a.name.clone())
-        .ok_or(ProjectionError::Missing("annotation /NM"))
-}
-
-fn field_text(value: &FieldValue) -> String {
-    match value {
-        FieldValue::Text(text) => text.clone(),
-        FieldValue::Check(true) => "true".into(),
-        FieldValue::Check(false) => "false".into(),
-        FieldValue::Radio(Some(state)) => state.clone(),
-        FieldValue::Radio(None) => String::new(),
-        FieldValue::Choice(values) => values.first().cloned().unwrap_or_default(),
     }
 }

@@ -140,6 +140,26 @@ fn open_rooms(hub: &mut Hub<PdfAdapter>, args: &Args) -> Result<usize, String> {
     Ok(opened)
 }
 
+/// The health and metrics bodies. No document content, token or comment text.
+fn render(path: &str, metrics: Result<pdfcraft_collab_ws::Metrics, pdfcraft_collab_ws::TransportError>) -> (&'static str, &'static str, String) {
+    match metrics {
+        Ok(metrics) if path == "/health" => {
+            ("200 OK", "application/json", serde_json::json!({"ok": true, "rooms": metrics.rooms, "clients": metrics.clients}).to_string())
+        }
+        Ok(metrics) if path == "/metrics" => {
+            let mut body = format!("pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\n", metrics.rooms, metrics.clients);
+            for (room, version, epoch) in metrics.versions {
+                body.push_str(&format!(
+                    "pdfcraft_collab_room_version{{room=\"{room}\"}} {version}\npdfcraft_collab_room_epoch{{room=\"{room}\"}} {epoch}\n"
+                ));
+            }
+            ("200 OK", "text/plain; version=0.0.4", body)
+        }
+        Ok(_) => ("404 Not Found", "text/plain", "not found\n".to_owned()),
+        Err(_) => ("503 Service Unavailable", "text/plain", "unavailable\n".to_owned()),
+    }
+}
+
 fn start_health(addr: &str, server: Arc<WsServer<PdfAdapter>>) -> Result<std::net::SocketAddr, String> {
     let listener = TcpListener::bind(addr).map_err(|e| format!("could not listen for health on {addr}: {e}"))?;
     let bound = listener.local_addr().map_err(|e| format!("health listener: {e}"))?;
@@ -161,30 +181,14 @@ fn answer(mut stream: TcpStream, server: &WsServer<PdfAdapter>) -> std::io::Resu
     let mut request = String::new();
     reader.read_line(&mut request)?;
     let path = request.split_whitespace().nth(1).unwrap_or("/");
-    let (status, content_type, body) = match server.metrics() {
-        Ok(metrics) if path == "/health" => {
-            ("200 OK", "application/json", serde_json::json!({"ok": true, "rooms": metrics.rooms, "clients": metrics.clients}).to_string())
-        }
-        Ok(metrics) if path == "/metrics" => {
-            let mut body = format!("pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\n", metrics.rooms, metrics.clients);
-            for (room, version, epoch) in metrics.versions {
-                body.push_str(&format!(
-                    "pdfcraft_collab_room_version{{room=\"{room}\"}} {version}\npdfcraft_collab_room_epoch{{room=\"{room}\"}} {epoch}\n"
-                ));
-            }
-            ("200 OK", "text/plain; version=0.0.4", body)
-        }
-        Ok(_) => ("404 Not Found", "text/plain", "not found\n".to_owned()),
-        Err(_) => ("503 Service Unavailable", "text/plain", "unavailable\n".to_owned()),
-    };
+    let (status, content_type, body) = render(path, server.metrics());
     write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, open_rooms, parse_args};
+    use super::{Args, open_rooms, parse_args, render};
     use pdfcraft_collab_hub::Hub;
-    use pdfcraft_collab_pdf::PdfAdapter;
     use pdfcraft_collab_server::RoomConfig;
 
     fn fixture() -> Vec<u8> {
@@ -240,6 +244,21 @@ mod tests {
         assert!(documents.join("file-1.pdf").exists(), "the source is untouched");
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
+    }
+
+    #[test]
+    fn health_and_metrics_say_what_they_are() {
+        let metrics = pdfcraft_collab_ws::Metrics { rooms: 2, clients: 3, versions: vec![("file-1".into(), 7, 1)] };
+        let (status, content_type, body) = render("/health", Ok(metrics.clone()));
+        assert_eq!(status, "200 OK");
+        assert_eq!(content_type, "application/json");
+        assert_eq!(body, r#"{"clients":3,"ok":true,"rooms":2}"#);
+        let (status, _, body) = render("/metrics", Ok(metrics));
+        assert_eq!(status, "200 OK");
+        assert!(body.contains("pdfcraft_collab_rooms 2"));
+        assert!(body.contains(r#"pdfcraft_collab_room_version{room="file-1"} 7"#));
+        let (status, _, _) = render("/nope", Ok(pdfcraft_collab_ws::Metrics { rooms: 0, clients: 0, versions: Vec::new() }));
+        assert_eq!(status, "404 Not Found");
     }
 
     #[test]
