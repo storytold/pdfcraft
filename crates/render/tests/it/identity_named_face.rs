@@ -106,7 +106,10 @@ fn windows_draws_an_identity_simsun_font_on_screen_only() {
         eprintln!("installed faces are turned off: skipped");
         return;
     }
-    let fonts = std::env::var_os("WINDIR").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from).join("Fonts");
+    let fonts = std::env::var_os("WINDIR")
+        .or_else(|| std::env::var_os("SystemRoot"))
+        .map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from)
+        .join("Fonts");
     let Ok(simsun) = std::fs::read(fonts.join("simsun.ttc")) else {
         eprintln!("SimSun is not installed here: skipped");
         return;
