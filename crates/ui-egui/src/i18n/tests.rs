@@ -1783,9 +1783,6 @@ fn third_review_font_gate_is_punjabi_only_and_bounded() {
     for other in [Lang::EN, fixture_lang("fr", "@id\tlanguage.name\tFrançais\n")] {
         assert_eq!(other.for_display(|_| panic!("other languages must not consult Punjabi coverage")), other);
     }
-    let app = crate::PdfCraftApp { language: "pa".to_owned(), ..Default::default() };
-    // No initialized font context: startup must not query egui's panicking fonts accessor.
-    assert_eq!(app.display_language(&egui::Context::default()), Lang::EN);
 }
 
 /// Actual installed fonts keep Punjabi usable; removal/restoration is detected without losing the preference.
@@ -1834,4 +1831,61 @@ fn third_review_installed_font_changes_preserve_preference() {
     h.run_steps(3);
     assert_eq!(current(), pa, "covering fonts restore the saved language");
     assert_eq!(h.state().language, "pa");
+}
+
+/// Punjabi is positively resolved independently of the build input. Both readiness states must
+/// avoid egui's uninitialized-font accessor, and an initialized but Latin-only context stays English.
+#[test]
+fn fourth_review_startup_resolved_punjabi_is_safe_before_fonts() {
+    let pa = fixture_lang("pa", "@id\tlanguage.name\tਪੰਜਾਬੀ\n");
+    assert_eq!(pa.code(), "pa", "the guard must receive Punjabi, not the English fallback");
+    let ctx = egui::Context::default();
+    for fonts_ready in [false, true] {
+        let app = crate::PdfCraftApp { language: "pa".to_owned(), fonts_ready, ..Default::default() };
+        assert_eq!(ctx.cumulative_pass_nr(), 0);
+        assert_eq!(app.display_language_for(&ctx, pa), Lang::EN);
+        assert_eq!(app.language, "pa");
+        let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+        assert_eq!(saved["language"], "pa");
+    }
+    let mut fonts = crate::theme::font_definitions();
+    let latin = ["Inter", "Inter-Medium", "Inter-SemiBold", "JetBrainsMono"];
+    fonts.font_data.retain(|name, _| latin.contains(&name.as_str()));
+    for stack in fonts.families.values_mut() {
+        stack.retain(|name| latin.contains(&name.as_str()));
+    }
+    ctx.set_fonts(fonts);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+    output.textures_delta.clear();
+    for fonts_ready in [false, true] {
+        let app = crate::PdfCraftApp { language: "pa".to_owned(), fonts_ready, ..Default::default() };
+        assert_eq!(app.display_language_for(&ctx, pa), Lang::EN, "Latin-only fonts cannot activate Punjabi");
+        assert_eq!(app.display_language_for(&ctx, Lang::EN), Lang::EN);
+        assert_eq!(app.language, "pa");
+    }
+}
+
+/// A real installed covering face activates the same synthetic Punjabi preference after font
+/// initialization, while readiness still gates activation. No system face is copied into a fixture.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn fourth_review_startup_covering_fonts_enable_resolved_punjabi() {
+    let pa = fixture_lang("pa", "@id\tlanguage.name\tਪੰਜਾਬੀ\n");
+    assert_eq!(pa.code(), "pa");
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+    let mut available = false;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        available = pa.for_display(|text| crate::theme::punjabi_text_is_drawable(ui.ctx(), text)) == pa;
+    });
+    output.textures_delta.clear();
+    if !available {
+        eprintln!("skipped covering-font startup observation: no installed/embedded face covers the required Gurmukhi glyphs");
+        return;
+    }
+    for fonts_ready in [false, true] {
+        let app = crate::PdfCraftApp { language: "pa".to_owned(), fonts_ready, ..Default::default() };
+        assert_eq!(app.display_language_for(&ctx, pa), if fonts_ready { pa } else { Lang::EN });
+        assert_eq!(app.language, "pa");
+    }
 }

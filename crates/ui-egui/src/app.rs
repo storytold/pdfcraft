@@ -35,8 +35,13 @@ impl PdfCraftApp {
     /// and egui's first completed pass before querying fonts, including hidden/startup logic.
     /// Query active fonts rather than a pending set so font changes take effect safely.
     pub(crate) fn display_language(&self, ctx: &egui::Context) -> i18n::Lang {
-        i18n::Lang::from_pref(&self.language)
-            .for_display(|text| self.fonts_ready && ctx.cumulative_pass_nr() > 0 && theme::punjabi_text_is_drawable(ctx, text))
+        self.display_language_for(ctx, i18n::Lang::from_pref(&self.language))
+    }
+
+    /// Apply the readiness/coverage guard to an already resolved preference. Keeping resolution
+    /// separate lets startup tests use a real Punjabi fixture even when the build has no catalog.
+    pub(crate) fn display_language_for(&self, ctx: &egui::Context, language: i18n::Lang) -> i18n::Lang {
+        language.for_display(|text| self.fonts_ready && ctx.cumulative_pass_nr() > 0 && theme::punjabi_text_is_drawable(ctx, text))
     }
 
     /// The window's title and, on the web, the page's, from the active document (#3640). Done in

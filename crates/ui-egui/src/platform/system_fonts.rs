@@ -5,7 +5,7 @@
 //! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
 //! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
-//! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
+//! Tamil, Hebrew, Korean and Punjabi through [`gurmukhi_fallback`] when one is installed. It is read at runtime and never embedded or
 //! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
 
 use std::path::{Path, PathBuf};
@@ -26,6 +26,16 @@ const MAX_FACES: u32 = 16;
 const PROBE: char = '\u{0627}';
 /// Devanagari letter ka: the face must have it to cover Hindi.
 const DEVANAGARI_PROBE: char = '\u{0915}';
+/// Gurmukhi letter ka: selecting a filename alone must not accept a face from another script.
+const GURMUKHI_PROBE: char = '\u{0A15}';
+/// Recognized Noto Gurmukhi filenames in distribution layouts and fontconfig directories.
+const UNIX_GURMUKHI_FILES: &[&str] = &[
+    "google-noto/NotoSansGurmukhi-Regular.ttf",
+    "truetype/noto/NotoSansGurmukhi-Regular.ttf",
+    "noto/NotoSansGurmukhi-Regular.ttf",
+    "google-noto-vf/NotoSansGurmukhi[wdth,wght].ttf",
+    "noto/NotoSansGurmukhi[wdth,wght].ttf",
+];
 /// Telugu letter ka: the face must have it to cover Telugu.
 const TELUGU_PROBE: char = '\u{0C15}';
 /// Sinhala letter ka (ක): the face must have it to cover Sinhala.
@@ -87,6 +97,14 @@ pub fn devanagari_fallback() -> Option<Arc<FontData>> {
     CACHE.get_or_init(|| script_fallback(&devanagari_candidates(), DEVANAGARI_PROBE)).clone()
 }
 
+/// The installed Gurmukhi face, read once with the usual size/face limits and glyph validation.
+/// `None` when system fonts are disabled or no candidate fits; interface activation still checks
+/// complete active-stack coverage. This face is used only at runtime, never embedded or copied.
+pub fn gurmukhi_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&gurmukhi_candidates(), GURMUKHI_PROBE)).clone()
+}
+
 /// The installed fallback face for Telugu, read once. `None` when it is turned off or no
 /// candidate is installed; the interface then draws what the embedded faces can.
 pub fn telugu_fallback() -> Option<Arc<FontData>> {
@@ -138,7 +156,7 @@ fn script_fallback(candidates: &[PathBuf], probe: char) -> Option<Arc<FontData>>
 /// below. On that machine each family below lives in exactly one of the two folders, so their
 /// order is a deterministic choice rather than a tie-break that was ever exercised.
 ///
-/// Only [`macos_devanagari_candidates`] uses this today: in the Telugu, Sinhala and Tamil lists each
+/// The Devanagari and Gurmukhi lists use this: in the Telugu, Sinhala and Tamil lists each
 /// family is named once, in a single folder (some of those lists also name `/Library/Fonts` for the
 /// Unicode face). Their first choices all exist on macOS 26.6, so nothing is dropping there now — the
 /// same two-folder expansion would fit them, and is left for a change that tests it.
@@ -193,6 +211,25 @@ fn devanagari_candidates() -> Vec<PathBuf> {
             "samyak-fonts/Samyak-Devanagari.ttf",
             "gargi/Gargi.ttf",
         ])
+    }
+}
+
+/// Installed Gurmukhi families in the established two-folder macOS layout, then Unicode fallback.
+/// Existence and glyph coverage are checked by the loader, not assumed from these names.
+fn macos_gurmukhi_candidates() -> Vec<PathBuf> {
+    let mut paths = macos_candidates(&["Gurmukhi Sangam MN.ttc", "Gurmukhi MN.ttc"]);
+    paths.push(PathBuf::from("/Library/Fonts/Arial Unicode.ttf"));
+    paths
+}
+
+/// Gurmukhi-specific candidates; Unix also consults the bounded fontconfig discovery cache.
+fn gurmukhi_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["Nirmala.ttf", "Nirmala.ttc", "Raavi.ttf", "Raavib.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        macos_gurmukhi_candidates()
+    } else {
+        unix_fonts(UNIX_GURMUKHI_FILES)
     }
 }
 
@@ -476,6 +513,7 @@ mod tests {
         assert_eq!(face_with(inter, PROBE), None);
         assert_eq!(face_with(inter, HANS_PROBE), None);
         assert_eq!(face_with(inter, HANT_PROBE), None);
+        assert_eq!(face_with(inter, GURMUKHI_PROBE), None);
         assert_eq!(face_with(inter, 'A'), Some(0));
     }
 
@@ -541,12 +579,20 @@ mod tests {
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
         assert!(script_fallback(&candidates, HEBREW_PROBE).is_none());
+        assert!(script_fallback(&candidates, GURMUKHI_PROBE).is_none());
     }
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            gurmukhi_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            hebrew_candidates(),
+            hangul_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
@@ -693,5 +739,50 @@ mod tests {
         } else {
             eprintln!("{last_resort:?} is not installed on this machine — optional to the loader, so nothing to check");
         }
+    }
+    /// Exercise the same filename allowlist/path selector on Windows without claiming Unix execution.
+    #[test]
+    fn fourth_review_gurmukhi_unix_and_macos_candidates() {
+        let standard = unix_candidates(UNIX_GURMUKHI_FILES, &[]);
+        for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+            assert!(standard.contains(&Path::new(root).join("truetype/noto/NotoSansGurmukhi-Regular.ttf")));
+        }
+        let nix = PathBuf::from("/nix/store/example-font/share/fonts/NotoSansGurmukhi-Regular.ttf");
+        let user = PathBuf::from("/home/example/.local/share/fonts/NotoSansGurmukhi[wdth,wght].ttf");
+        let unrelated = PathBuf::from("/custom/fonts/NotoSansDevanagari-Regular.ttf");
+        let list = unix_candidates(UNIX_GURMUKHI_FILES, &[nix.clone(), unrelated.clone(), user.clone(), nix.clone()]);
+        assert!(list.starts_with(&standard), "ordinary candidates retain their precedence");
+        for path in [&nix, &user] {
+            assert_eq!(list.iter().filter(|p| *p == path).count(), 1, "configured filenames are reached once");
+        }
+        assert!(!list.contains(&unrelated));
+        assert!(gurmukhi_candidates().iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")));
+        let mac = macos_gurmukhi_candidates();
+        for dir in MACOS_FONT_DIRS {
+            assert!(mac.contains(&Path::new(dir).join("Gurmukhi Sangam MN.ttc")));
+            assert!(mac.contains(&Path::new(dir).join("Gurmukhi MN.ttc")));
+        }
+        assert_eq!(mac.last(), Some(&PathBuf::from("/Library/Fonts/Arial Unicode.ttf")));
+        let inter = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/Inter-Regular.ttf"));
+        assert!(read(inter, GURMUKHI_PROBE, MAX_BYTES).is_none(), "an allowed filename is never sufficient without the script probe");
+        assert_eq!(face_with(b"not a font", GURMUKHI_PROBE), None);
+    }
+
+    /// Use only a face already installed on this machine; never copy system font bytes to a fixture.
+    #[test]
+    fn fourth_review_gurmukhi_loader_honors_switch_and_caches_valid_face() {
+        let actual = gurmukhi_fallback();
+        if installed_faces_switched_off() {
+            assert!(actual.is_none());
+            return;
+        }
+        let Some(data) = actual else {
+            eprintln!("skipped installed Gurmukhi loader observation: no matching face on this machine");
+            return;
+        };
+        assert!(data.bytes().len() as u64 <= MAX_BYTES);
+        assert_eq!(face_with(data.bytes(), GURMUKHI_PROBE), Some(data.index));
+        assert!(Arc::ptr_eq(&data, &gurmukhi_fallback().expect("cached face")));
+        eprintln!("Gurmukhi cached runtime face: {} bytes, index {}", data.bytes().len(), data.index);
     }
 }

@@ -220,6 +220,8 @@ pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
 /// The name of the installed Devanagari (Hindi) face [`installed_font_definitions`] may add.
 pub const SYSTEM_DEVANAGARI_FALLBACK: &str = "system-devanagari-fallback";
+/// The name of the installed Gurmukhi (Punjabi) face [`installed_font_definitions`] may add.
+pub const SYSTEM_GURMUKHI_FALLBACK: &str = "system-gurmukhi-fallback";
 /// The name of the installed Telugu face [`installed_font_definitions`] may add.
 pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 /// The name of the installed Sinhala face [`installed_font_definitions`] may add.
@@ -262,10 +264,11 @@ fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew, Hangul and Gurmukhi faces, when there are, end
 /// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
 /// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
-/// without such faces.
+/// without such faces. Punjabi may use an installed Gurmukhi face, while its activation gate
+/// still requires complete active-stack glyph coverage.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -282,6 +285,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
             (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
             (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
+            (SYSTEM_GURMUKHI_FALLBACK, crate::system_fonts::gurmukhi_fallback()),
         ] {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
