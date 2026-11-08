@@ -2549,3 +2549,19 @@ fn delete_and_escape_with_a_menu_open_leave_the_pages_panel() {
         assert_eq!(s.views[0].selected, selected, "{key:?} with a menu open dropped the page selection");
     }
 }
+
+/// Full screen entered over the OCR Verify screen draws the page alone, and its keys are the
+/// pages': Escape leaves it. The hidden screen still counted as over the pages, so only ⌘L did.
+#[test]
+fn escape_leaves_full_screen_entered_over_the_ocr_verify_screen() {
+    let mut h = harness(&[]);
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(4);
+    assert!(h.state().full_screen, "⌘L entered full screen");
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert!(!h.state().full_screen, "Escape left full screen");
+    assert!(h.state().ocr_verify.open, "the OCR Verify screen is back");
+}

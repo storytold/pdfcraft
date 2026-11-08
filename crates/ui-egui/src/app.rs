@@ -343,12 +343,15 @@ impl PdfCraftApp {
 
     /// Whether something over the pages has the keyboard: a dialog or prompt, the palette, the
     /// OCR Verify screen, the hotbar's tools window, a popup or a menu of the menu bar. On a pass
-    /// that carries the input a menu click stands for (`menu_input_due`), popups and the menu bar
-    /// don't count: that input is the pages'.
+    /// that carries the input a menu click stands for (`menu_input_due`), the hotbar's window,
+    /// popups and the menu bar don't count: that input is the pages'.
     pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
         self.covers_pages()
-            || self.hotbar.picker_over_pages(ctx)
-            || !self.menu_input_due && (egui::Popup::is_any_open(ctx) || craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx))
+            || !self.menu_input_due
+                && (self.hotbar.picker_over_pages(ctx)
+                    || egui::Popup::is_any_open(ctx)
+                    || craft_menu::bar::is_open(ctx)
+                    || craft_menu::bar::is_focused(ctx))
     }
 
     /// Adds the keys a menu click stands for to this pass's input, and says whether this pass
@@ -357,8 +360,9 @@ impl PdfCraftApp {
     /// later, or two with a discarded pass between). A native menu's click runs in `logic` before
     /// this, so its keys come on its own pass; an in-window menu's runs as the bar is drawn, so
     /// they come on the next one, when the bar still reads as open (craft-menu stores the menu as
-    /// open on the pass its click closes it). A native menu's click leaves egui's popups open too.
-    /// That input is the pages' even so; the user's own keys on the passes after it are not.
+    /// open on the pass its click closes it). A native menu's click leaves egui's popups and the
+    /// Hotbar tools window open too. That input is the pages' even so; the user's own keys on the
+    /// passes after it are not.
     fn take_menu_input(&mut self, ctx: &egui::Context) -> bool {
         let keys = !self.menu_input.is_empty();
         if keys {
@@ -376,9 +380,10 @@ impl PdfCraftApp {
 
     /// A dialog, a prompt, the palette or the OCR Verify screen is drawn over the pages.
     pub(crate) fn covers_pages(&self) -> bool {
-        // The palette isn't drawn in full screen.
-        let palette = self.palette_open && !(self.full_screen && self.active.is_some());
-        self.modal_open() || self.pending_full_screen.is_some() || palette || self.ocr_verify.open
+        // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
+        // entered over.
+        let shown = !(self.full_screen && self.active.is_some());
+        self.modal_open() || self.pending_full_screen.is_some() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act

@@ -4461,6 +4461,21 @@ fn keys_after_a_native_menu_command_with_a_context_menu_open_leave_the_comment()
     }
 }
 
+/// A native menu's click leaves the Hotbar tools window open, like egui's popups, and its keys are
+/// the pages' all the same: Edit ▸ Delete removes the selected comment. It did nothing.
+#[test]
+fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_comment() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
 /// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
 /// which held every page key, H included.

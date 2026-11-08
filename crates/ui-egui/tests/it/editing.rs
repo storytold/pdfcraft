@@ -10826,6 +10826,29 @@ fn edit_cut_from_the_menu_bar_cuts_the_page() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2, "Edit ▸ Cut took the page out");
 }
 
+/// Edit ▸ Paste whose paste never comes (the platform answers only with text on the clipboard)
+/// lets no later paste through an open menu: its record ends two passes after it asked.
+#[test]
+fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(6);
+    assert_eq!(pages(&h), 3, "nothing is pasted without the platform's paste");
+    support::open_menu(&mut h, "View");
+    assert!(craft_menu::bar::is_open(&h.ctx), "the View menu is open");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 3, "a paste with the View menu open pasted a page");
+}
+
 /// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The platform
 /// answers the menu's paste request on the next pass (kittest doesn't, so the test does), while
 /// the bar still reads as open, and the pages' clipboard dropped it.
