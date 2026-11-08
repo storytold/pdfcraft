@@ -6199,6 +6199,55 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
     }
 }
 
+/// Thai in a header, footer or text watermark is drawn from the Thai face as Add text draws it:
+/// Type 3 glyphs with a ToUnicode map, one set of fonts shared by every page the mark goes on,
+/// beside the mark's standard face. A build without a Thai face refuses it, saying what to do.
+#[test]
+fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
+    let blank = String::new;
+    let footer = HeaderFooter {
+        text: [blank(), "หน้า <<1>> บุญฤทธิ์".into(), blank(), blank(), blank(), "น้ำ <<Bates Number#3#1#ก-#>>".into()],
+        ..HeaderFooter::default()
+    };
+    let wm = Watermark { text: "ลับ ปั้น\nDRAFT".into(), ..Watermark::default() };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        let mut doc = fixture();
+        for err in [add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap_err(), add_watermark(&mut doc, &[0], &wm, false).unwrap_err()] {
+            assert!(matches!(&err, EditError::Invalid(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+        }
+        assert!(!doc.is_modified(), "nothing is written when the font is missing");
+        assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (Some('ห'), Some('ล')));
+        return;
+    }
+    assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (None, None));
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0, 1], &footer, false, &cx()).unwrap();
+    add_watermark(&mut doc, &[0, 1], &wm, false).unwrap();
+    let doc = reopen(&doc);
+    let mut shared = Vec::new();
+    for page in 0..2 {
+        let drawn = streams(&doc, page).concat();
+        assert!(drawn.contains("/PCTh") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{drawn}");
+        let p = &pdfcraft_model::pages(&doc)[page];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+        let thai: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCTh")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        assert_eq!(thai.len(), 2, "the footer's fonts and the watermark's");
+        let mut mapped = String::new();
+        for (_, f) in &thai {
+            let f = doc.resolve(f).as_dict().unwrap().clone();
+            assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+            mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+        }
+        // น้ำ, ก (the Bates prefix) and ปั้น copy as typed.
+        for text in ["<0E190E490E33>", "<0E01>", "<0E1B0E310E49>"] {
+            assert!(mapped.contains(text), "{text} in {mapped}");
+        }
+        shared.push(thai);
+    }
+    assert_eq!(shared[0], shared[1], "every page draws with the same fonts");
+}
+
 /// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
 /// and leave the document untouched.
 #[test]
@@ -6617,6 +6666,57 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     delete_content(&mut doc, 0, 0).unwrap();
     assert!(list_added(&doc).is_empty());
     assert!(arabic_font_names(&doc, 0).is_empty());
+}
+
+#[test]
+fn added_thai_text_wraps_between_dictionary_words() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!("skipping the Thai word wrapping checks: built without craft-fonts (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let text = "การประปาส่วนภูมิภาคให้บริการน้ำประปาที่สะอาดแก่ประชาชนทั่วประเทศ";
+    let t = AddedText { rect: [0.0, 0.0, 90.0, 400.0], text: text.into(), size: 16.0, ..AddedText::default() };
+    let rows = super::added::lines(&t);
+    assert!(rows.len() > 2, "{rows:?}");
+    assert_eq!(rows.concat(), text, "no space is added or lost between the rows");
+    // Every row ends where the dictionary lets one end, never inside a word such as ประปา.
+    let cuts = crate::linebreak::breaks(text);
+    let mut at = 0;
+    for row in rows.iter().take(rows.len() - 1) {
+        at += row.len();
+        assert!(cuts.contains(&at), "row {row:?} ends inside a word: {rows:?}");
+    }
+    // Spaces where a row ends are dropped, as for Latin text, and a word wider than the row is
+    // still broken between clusters.
+    let spaced =
+        AddedText { text: "น้ำประปา สะอาด ปลอดภัย".into(), rect: [0.0, 0.0, 60.0, 400.0], ..t.clone() };
+    let rows = super::added::lines(&spaced);
+    assert!(rows.iter().all(|r| !r.starts_with(' ') && !r.ends_with(' ')), "{rows:?}");
+    assert_eq!(rows.concat(), "น้ำประปาสะอาดปลอดภัย");
+    let narrow = AddedText { rect: [0.0, 0.0, 16.0, 200.0], text: "กิ่กิ่กิ่".into(), ..t.clone() };
+    assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
+    // Spaces that open a paragraph are kept, but they are not a row of their own: a first word
+    // too wide to fit after them stays on the first row (or breaks between clusters there).
+    for width in [16.0, 40.0, 60.0, 90.0] {
+        let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: "      ประปาสะอาด".into(), ..t.clone() };
+        let rows = super::added::lines(&indented);
+        assert!(rows.iter().all(|r| !r.trim().is_empty()), "an empty row at width {width}: {rows:?}");
+        assert!(rows[0].starts_with("      "), "the opening spaces are kept at width {width}: {rows:?}");
+        assert_eq!(rows.concat().trim_start(), "ประปาสะอาด");
+    }
+    // A first word that fits a row alone but not after the opening spaces breaks between clusters
+    // on the first row rather than running past its end.
+    let word = "ประปา";
+    let word_w = super::added::shaped_width(&t, word, false);
+    let indent_w = super::added::shaped_width(&t, "      ", false);
+    let width = word_w + indent_w / 2.0;
+    let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: format!("      {word}"), ..t.clone() };
+    let rows = super::added::lines(&indented);
+    for row in &rows {
+        assert!(super::added::shaped_width(&t, row, false) <= width + 0.5, "{row:?} overflows {width}: {rows:?}");
+    }
+    assert!(rows.len() > 1 && rows[0].starts_with("      "), "{rows:?}");
+    assert_eq!(rows.concat().trim_start(), word);
 }
 
 #[test]

@@ -18,7 +18,7 @@ mod links;
 mod prefs;
 mod window;
 
-pub(crate) use clipboard::{copy_refused, print_refused};
+pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
 use frame::migrate_panel_state;
@@ -245,6 +245,8 @@ impl PdfCraftApp {
             progress_notice: None,
             page_clipboard: None,
             comment_clipboard: None,
+            object_clipboard: None,
+            object_clip_mark: Default::default(),
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
