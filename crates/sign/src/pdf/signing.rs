@@ -120,13 +120,19 @@ fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), S
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
+///
+/// The document's first signature removes the AcroForm's `/NeedAppearances` flag: Acrobat does
+/// not recognise a signature while it is set. Later signatures leave the flag as it is.
+/// A field that has a value but no appearance stream of its own then shows empty in viewers that
+/// only drew it because of the flag.
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
     sign_inner(doc, id, opts, None)
 }
 
 /// Sign and embed an RFC 3161 signature timestamp from `tsa` (PAdES B-T). The transport is the
 /// caller's: this crate never opens a socket, and a rejected or malformed token fails the
-/// signing before any file is produced.
+/// signing before any file is produced. The form's `/NeedAppearances` flag is handled as in
+/// [`sign`].
 pub fn sign_with_timestamp(
     doc: &Document,
     id: &DigitalId,
@@ -298,7 +304,8 @@ fn sign_inner(
     // Acrobat does not recognise a signature in a form that asks viewers to redraw its fields
     // (`/NeedAppearances true`): redrawing would change what the signature covers. The first
     // signature drops the flag; a later one leaves it, as removing it would count as a change
-    // to the earlier signatures.
+    // to the earlier signatures. The cost: a field with a value but no appearance stream of its
+    // own, which viewers only drew because of the flag, now shows empty in them.
     if !earlier_signatures {
         if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
             doc.update_dict(r, |af| {
