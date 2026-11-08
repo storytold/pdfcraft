@@ -342,12 +342,13 @@ impl PdfCraftApp {
     }
 
     /// Whether something over the pages has the keyboard. Two kinds:
-    /// - What covers them ([`Self::covers_pages`]): nothing acts on the pages under it, a menu
-    ///   click's input included.
+    /// - What covers them ([`Self::covers_pages`]): no page key reaches the pages under it, a
+    ///   menu click's input included.
     /// - What sits over them and leaves the menus on: the full-screen and update prompts, the
-    ///   hotbar's tools window, a popup or a menu of the menu bar. On a pass that carries the
-    ///   input a menu click stands for (`menu_input_due`) these don't count, and that input is the
-    ///   pages'; the user's own keys are not.
+    ///   hotbar's tools window, a popup, a menu of the menu bar, or the bar holding the keyboard
+    ///   (Alt, F10). On a pass that carries the input a menu click stands for (`menu_input_due`)
+    ///   these don't count, and that input is the pages'; the user's own keys on the passes after
+    ///   it are not.
     pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
         self.covers_pages()
             || !self.menu_input_due

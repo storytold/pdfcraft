@@ -4514,7 +4514,7 @@ fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// The update prompt covers the window, in full screen too: Delete under it leaves the selected
+/// The update prompt is over the window, in full screen too: Delete under it leaves the selected
 /// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
 #[test]
 fn keys_under_the_update_prompt_leave_the_selected_comment() {
@@ -4550,27 +4550,39 @@ fn edit_delete_from_a_native_menu_under_the_update_prompt_removes_the_comment() 
 }
 
 /// "Open in Full Screen mode?", asked for a document that wants it, leaves the menus on as the
-/// update prompt does: the user's Delete under it leaves the comment selected in another document,
-/// and Edit ▸ Delete from a native menu removes it. That did nothing.
+/// update prompt does, in full screen too: the user's Delete under it leaves the comment selected
+/// in another document, Edit ▸ Delete from a native menu removes it, and the Escape that answers
+/// the prompt is the prompt's alone. Edit ▸ Delete did nothing.
 #[test]
 fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_removes_the_comment() {
-    let mut h = selected_square();
-    let deck = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("/Type /Catalog", "/Type /Catalog /PageMode /FullScreen").into_bytes();
-    h.state_mut().open_bytes("deck.pdf", None, deck).expect("the deck opens");
-    h.run_steps(3);
-    assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is open");
-    let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::with_params("window.document", serde_json::json!({ "index": 0 })));
-    h.run_steps(3);
-    assert_eq!(h.state().active, Some(0), "Window ▸ the first document switched to it");
-    assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is still open");
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
-    h.key_press(egui::Key::Delete);
-    h.run_steps(3);
-    assert_eq!(comments(&h).len(), 1, "Delete under the full-screen prompt deleted the comment");
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
-    h.run_steps(4);
-    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+    for full_screen in [false, true] {
+        let mut h = selected_square();
+        if full_screen {
+            assert!(h.state_mut().execute("view.full_screen"));
+            h.run_steps(4);
+            assert!(h.state().full_screen, "full screen");
+        }
+        let deck = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("/Type /Catalog", "/Type /Catalog /PageMode /FullScreen").into_bytes();
+        h.state_mut().open_bytes("deck.pdf", None, deck).expect("the deck opens");
+        h.run_steps(3);
+        assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is open");
+        let ctx = h.ctx.clone();
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::with_params("window.document", serde_json::json!({ "index": 0 })));
+        h.run_steps(3);
+        assert_eq!(h.state().active, Some(0), "Window ▸ the first document switched to it");
+        assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is still open");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+        h.run_steps(4);
+        assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment (full screen: {full_screen})");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().pending_full_screen.is_none(), "Escape answered the prompt");
+        assert_eq!(h.state().full_screen, full_screen, "the Escape that answered the prompt is the prompt's alone");
+    }
 }
 
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
