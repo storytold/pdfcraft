@@ -408,7 +408,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     }
     if scope.mode == Mode::Apply {
         walk.finish_apply(doc, scope, &mut processed);
-        clean_replacements(doc, resources, &original, &mut processed, scope.report);
+        clean_replacements(doc, resources, &original, &walk.clipped, &mut processed, scope.report);
     }
     walk.out.streams = processed.into_iter().zip(comment_edges).map(|((ops, changed), edges)| changed.then(|| piece_bytes(&ops, edges))).collect();
     walk.out
@@ -473,6 +473,9 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// Painting operators written again under a clip that cuts the regions out: unchanged as
+    /// operators, but what they paint is no longer all there.
+    clipped: HashSet<usize>,
     out: Output,
 }
 
@@ -493,6 +496,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            clipped: HashSet::new(),
             out: Output::default(),
         }
     }
@@ -522,7 +526,7 @@ impl Walk {
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
             b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
-            b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, op, piece),
+            b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, &mut self.clipped, op, piece),
             b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
             // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
             // and clear it. `cs` with a space other than /Pattern clears it too.
@@ -824,10 +828,12 @@ impl Walk {
         None
     }
 
-    /// A shading fills the current clip: the regions are clipped out.
-    fn shading(gs: &Gs, scope: &Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
-        let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]) else { return Some(op) };
+    /// A shading fills the current clip: the regions are clipped out. Removing hidden content has
+    /// no regions, so the shading and its name stay as they are.
+    fn shading(gs: &Gs, scope: &Scope<'_>, clipped: &mut HashSet<usize>, op: Op, piece: &mut Piece) -> Option<Op> {
+        let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]).filter(|c| !c.is_empty()) else { return Some(op) };
         piece.changed = true;
+        clipped.insert(op.span.start);
         piece.ops.push(Op::new("q", vec![]));
         piece.ops.extend(c);
         piece.ops.push(op);
@@ -846,7 +852,16 @@ impl Walk {
     }
 }
 
-fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], processed: &mut [(Vec<Op>, bool)], report: &mut Report) {
+/// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
+/// removed, changed or `clipped`: the words they name may be among what is gone.
+fn clean_replacements(
+    doc: &Document,
+    resources: &Dict,
+    original: &[Op],
+    clipped: &HashSet<usize>,
+    processed: &mut [(Vec<Op>, bool)],
+    report: &mut Report,
+) {
     let originals: HashMap<usize, &Op> = original.iter().map(|op| (op.span.start, op)).collect();
     let unchanged: HashSet<usize> =
         processed.iter().flat_map(|(ops, _)| ops).filter(|op| originals.get(&op.span.start) == Some(op)).map(|op| op.span.start).collect();
@@ -858,7 +873,13 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
             b"EMC" => {
                 stack.pop();
             }
-            _ if !unchanged.contains(&op.span.start) => affected.extend(stack.iter().copied()),
+            // A scope joins `affected` only with every scope around it, so once the innermost one
+            // is in, the rest are too: deep nesting over many changed ops stays linear.
+            _ if (!unchanged.contains(&op.span.start) || clipped.contains(&op.span.start))
+                && stack.last().is_some_and(|top| !affected.contains(top)) =>
+            {
+                affected.extend(stack.iter().copied())
+            }
             _ => {}
         }
     }
