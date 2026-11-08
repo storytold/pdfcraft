@@ -279,7 +279,6 @@ impl DocumentCopyJob {
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
         let mut out = String::new();
         let mut cut = false;
-        let mut push = |out: &mut String, text: String| cut |= push_bounded(out, &text, MAX_COPY_BYTES);
         for (page, p) in self.pages.into_iter().enumerate() {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
@@ -290,7 +289,7 @@ impl DocumentCopyJob {
                 break;
             }
             match p {
-                CopyPage::Read(t) => push(&mut out, t.text_of(0..t.glyphs.len())),
+                CopyPage::Read(t) => cut |= push_bounded(&mut out, &t.text_of(0..t.glyphs.len()), MAX_COPY_BYTES),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -305,7 +304,7 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(&mut out, t.text_of(0..t.glyphs.len()));
+                        cut |= push_bounded(&mut out, &t.text_of(0..t.glyphs.len()), MAX_COPY_BYTES);
                     }
                 }
                 CopyPage::Skip => {}
