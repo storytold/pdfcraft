@@ -527,6 +527,25 @@ fn spacing_that_has_to_be_drawn_redraws_the_phrase() {
     assert!(drawn.join("").contains("Jon  Smy"), "the typed spaces are there: {drawn:?}");
 }
 
+/// A word drawn twice, its copy earlier in the layer: rewriting the word takes the copy with it, and
+/// the words after the copy move up the list. The next change must not land on the wrong word.
+#[test]
+fn a_change_lands_on_its_own_word_when_a_rewrite_removes_an_earlier_copy() {
+    let bytes = under_scan(
+        "BT /F1 12 Tf 3 Tr 1 0 0 1 84 44 Tm (Jones) Tj 1 0 0 1 20 44 Tm (John) Tj 1 0 0 1 50 44 Tm (Smith) Tj 1 0 0 1 84 44 Tm (Jones) Tj ET",
+    );
+    let mut s = Session::new();
+    let id = s.open("copy.pdf", None, bytes, None).unwrap();
+    let block = texts(&s, id).iter().position(|t| t == "John Smith Jones").expect("the phrase, after its copy");
+    // John goes. A deletion draws nothing, so nothing else would notice it landing on Smith.
+    edit_block(&mut s, id, block, "Smith Joness");
+    let text = s.get(id).unwrap().text_lines(0).iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ");
+    let words: Vec<&str> = text.split_whitespace().collect();
+    assert!(words.contains(&"Smith"), "Smith wasn't changed: {words:?}");
+    assert!(!words.contains(&"John"), "John is the word that goes: {words:?}");
+    assert!(words.contains(&"Joness"), "{words:?}");
+}
+
 /// A layer whose words are already narrowed (50 Tz): squeezing a replacement narrows it further,
 /// rather than setting a scale wider than the one it had and running it into the next word.
 #[test]

@@ -183,7 +183,8 @@ fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Re
 }
 
 /// Rewrite each change of `plan` in `doc`, last first: a rewrite goes where its words were or at
-/// the end of the page, so the words before it keep their indexes. Gives how far right each drew.
+/// the end of the page, so the words before it keep their indexes (an error if they don't). Gives
+/// how far right each drew.
 fn apply(
     doc: &mut Document,
     page: usize,
@@ -198,9 +199,17 @@ fn apply(
     let mut style = BlockStyle { align: Some(crate::added::Align::Left), changed_words_only: false, ..style.clone() };
     let mut rights = vec![None; plan.len()];
     let mut substituted = None;
+    let original = word_lines(doc, page)?;
     for (at, change) in plan.iter().enumerate().rev() {
         let indices = members.get(change.runs.clone()).ok_or_else(|| EditError::Invalid("the phrase has no such words".into()))?;
         let before = word_lines(doc, page)?;
+        // The words up to the next that stays must still be where they were. A rewrite also takes
+        // away copies of its words, and a copy earlier on the page moves these up the list.
+        let up_to = change.runs.end.saturating_add(1).min(members.len());
+        let same = |index: &usize| before.get(*index).map(key) == original.get(*index).map(key);
+        if !members.get(..up_to).unwrap_or_default().iter().all(same) {
+            return Err(EditError::Invalid("rewriting these words alone would lose track of the words before them".into()));
+        }
         let part = stretch(phrase, &before, indices)?;
         // Relative to the scale the words have, which a layer may have narrowed already.
         let own_scale = indices.first().and_then(|i| before.get(*i)).map_or(1.0, |line| line.origin.state.scale);
