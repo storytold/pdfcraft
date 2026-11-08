@@ -227,11 +227,14 @@ impl Automation {
             });
             out.push(match converted {
                 Ok((pdfcraft_engine::SourceKind::Pdf, ..)) => json!({ "path": p, "skipped": "already a PDF" }),
-                Ok((_, stem, pdf)) => {
-                    let target = unused(&dir, &stem);
-                    write_atomic(&target, &pdf)?;
-                    json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
-                }
+                // every numbered name taken is this file's failure, not the whole call's
+                Ok((_, stem, pdf)) => match unused(&dir, &stem) {
+                    Ok(target) => {
+                        write_atomic(&target, &pdf)?;
+                        json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
+                    }
+                    Err(e) => json!({ "path": p, "error": e.to_string() }),
+                },
                 Err(e) => json!({ "path": p, "error": e }),
             });
         }
