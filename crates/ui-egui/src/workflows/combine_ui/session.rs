@@ -3,7 +3,7 @@ use super::MAX_FOLDER_FILES;
 use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess};
 #[cfg(not(target_arch = "wasm32"))]
 use super::parts::combinable_in;
-use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, title_of};
+use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, takes, title_of};
 use super::{Arc, BTreeSet, CombineTab, HISTORY, Modifiers, PdfCraftApp};
 
 impl PdfCraftApp {
@@ -246,9 +246,21 @@ impl PdfCraftApp {
 
     /// Add picked files to the Combine files list (and show it).
     pub(crate) fn stage_combine(&mut self, files: Vec<(String, Vec<u8>)>) {
-        let incoming =
-            files.into_iter().map(|(name, bytes)| Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }).collect();
-        self.stage_combine_with(incoming);
+        self.stage_combine_with(files.into_iter().map(|(name, bytes)| Incoming::new(name, bytes)).collect());
+    }
+
+    /// Files dropped on the Combine files tab join the end of its list in the order dropped, as
+    /// one undo step. A drop isn't filtered like a pick, so files of a kind Combine doesn't take
+    /// are left out, and named.
+    pub(crate) fn add_dropped_to_combine(&mut self, files: Vec<Incoming>) {
+        let (taken, refused): (Vec<_>, Vec<_>) = files.into_iter().partition(|f| takes(&f.name, &f.bytes));
+        if !refused.is_empty() {
+            let names: Vec<&str> = refused.iter().map(|f| f.name.as_str()).collect();
+            self.notify_fmt("Not added: {names}. Combine takes PDFs, images and text files.", &[("names", &names.join(", "))]);
+        }
+        if !taken.is_empty() {
+            self.stage_combine_with(taken);
+        }
     }
 
     /// Add files to the Combine files list, with what can be known about them up front.
