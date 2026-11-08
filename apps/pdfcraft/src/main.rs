@@ -461,6 +461,13 @@ fn app_creator<'a>(
                 &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
             );
         }
+        #[cfg(target_os = "windows")]
+        {
+            pdfcraft_ui_egui::windows_association::sync_on_startup(
+                pdfcraft_ui_egui::portable::data_dir().is_some(),
+                app.windows_association_disabled,
+            );
+        }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
         if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {

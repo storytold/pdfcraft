@@ -15,3 +15,5 @@ pub(super) mod system_fonts;
 pub mod ui_scale;
 pub mod updates;
 pub mod window_controls;
+#[cfg(target_os = "windows")]
+pub mod windows_association;

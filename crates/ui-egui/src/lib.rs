@@ -143,6 +143,8 @@ use platform::system_fonts;
 pub use platform::ui_scale;
 pub use platform::updates;
 pub use platform::window_controls;
+#[cfg(target_os = "windows")]
+pub use platform::windows_association;
 #[cfg(test)]
 use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
@@ -399,6 +401,9 @@ pub struct PdfCraftApp {
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
+    /// Preferences (Windows): the user explicitly removed PdfCraft's per-user Windows file
+    /// association, so portable startup leaves the registry untouched until they register again.
+    pub windows_association_disabled: bool,
     /// Open documents' files, watched for changes on disk.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) watch: file_watch::FileWatch,

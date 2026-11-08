@@ -12,6 +12,8 @@ use std::sync::OnceLock;
 
 /// Files beside the executable that switch on portable mode (either one; contents are ignored).
 pub const MARKERS: [&str; 2] = ["portable.txt", "PdfCraft.portable"];
+/// Default contents written to `portable.txt` when portable mode is enabled from Preferences.
+pub const PORTABLE_MARKER_TEXT: &str = "PdfCraft portable mode: keep settings, logs, crash-recovery autosaves and new digital IDs in PdfCraftData beside pdfcraft.exe. Remove this file to use %APPDATA% and %LOCALAPPDATA% instead.\n";
 /// The data folder created beside the executable in portable mode.
 pub const DATA_DIR: &str = "PdfCraftData";
 
@@ -81,6 +83,45 @@ pub fn resolve(exe_dir: Option<&Path>) -> Portable {
 /// The first marker file in `exe_dir`, if any. A folder with a marker's name is not a marker.
 pub fn find_marker(exe_dir: &Path) -> Option<PathBuf> {
     MARKERS.iter().map(|m| exe_dir.join(m)).find(|p| p.is_file())
+}
+
+/// Whether a portable marker file currently exists in `exe_dir`.
+pub fn marker_present_in(exe_dir: &Path) -> bool {
+    find_marker(exe_dir).is_some()
+}
+
+/// Whether a portable marker file currently exists beside the running executable.
+pub fn marker_present() -> bool {
+    std::env::current_exe().ok().and_then(|exe| exe.parent().map(marker_present_in)).unwrap_or(false)
+}
+
+/// Enable or disable portable mode in `exe_dir` by creating `portable.txt` (and verifying
+/// `PdfCraftData` is writable) or removing existing marker files.
+pub fn set_enabled_in(exe_dir: &Path, enabled: bool) -> std::io::Result<PathBuf> {
+    let primary = exe_dir.join(MARKERS[0]);
+    if enabled {
+        let folder = exe_dir.join(DATA_DIR);
+        ensure_writable(&folder)?;
+        if find_marker(exe_dir).is_none() {
+            std::fs::write(&primary, PORTABLE_MARKER_TEXT)?;
+        }
+        Ok(folder)
+    } else {
+        for marker in MARKERS {
+            let path = exe_dir.join(marker);
+            if path.is_file() {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        Ok(primary)
+    }
+}
+
+/// Enable or disable portable mode beside the running executable.
+pub fn set_enabled(enabled: bool) -> std::io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let exe_dir = exe.parent().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "executable folder not found"))?;
+    set_enabled_in(exe_dir, enabled)
 }
 
 /// Create `dir` and prove a file can be written in it (a folder can exist yet be read-only).
@@ -167,5 +208,24 @@ mod tests {
     #[test]
     fn no_exe_dir_leaves_portable_mode_off() {
         assert_eq!(resolve(None), Portable::default());
+    }
+
+    #[test]
+    fn set_enabled_in_creates_and_removes_markers() {
+        let exe = temp("toggle");
+        assert!(!marker_present_in(&exe));
+        let folder = set_enabled_in(&exe, true).unwrap();
+        assert_eq!(folder, exe.join(DATA_DIR));
+        assert!(marker_present_in(&exe));
+        assert!(exe.join("portable.txt").is_file());
+        assert!(exe.join(DATA_DIR).is_dir());
+
+        // Also place the alternate marker to verify disabling removes both.
+        std::fs::write(exe.join("PdfCraft.portable"), b"").unwrap();
+        set_enabled_in(&exe, false).unwrap();
+        assert!(!marker_present_in(&exe));
+        assert!(!exe.join("portable.txt").exists());
+        assert!(!exe.join("PdfCraft.portable").exists());
+        let _ = std::fs::remove_dir_all(&exe);
     }
 }
