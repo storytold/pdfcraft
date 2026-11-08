@@ -143,7 +143,10 @@ fn spool_job(
         grey_pages: false,
         title,
         options: {
-            let mut options: Vec<(String, String)> = options.into_iter().chain(media.map(|m| ("media".to_string(), m.to_string()))).collect();
+            let mut options: Vec<(String, String)> = options.into_iter().filter(|(k, _)| k != "media").collect();
+            if let Some(m) = media {
+                options.push(("media".to_string(), m.to_string()));
+            }
             print::add_cups_orientation(&mut options, sheets);
             options
         },
@@ -579,5 +582,17 @@ mod tests {
         for spec in ["0x0mm", "-5x10cm", "5x-10cm", "10x15"] {
             assert_eq!(paper_size(spec), None, "{spec}");
         }
+    }
+
+    /// A user-supplied `media` option must not reach the spooler alongside the
+    /// laid-out paper's own `media` option: the job carries exactly one `media`
+    /// entry, and it is the paper the sheets were laid out on.
+    #[test]
+    fn spool_job_does_not_duplicate_media_option() {
+        let (index, _) = paper_named(None).unwrap();
+        let job = spool_job(&Args(&json!({ "options": { "InputSlot": "Tray3", "media": "A4" } })), "Office", "a.pdf".into(), None, index).unwrap();
+        let media: Vec<&(String, String)> = job.options.iter().filter(|(k, _)| k == "media").collect();
+        assert_eq!(media, [print::media_option(index).as_ref().unwrap()]);
+        assert!(job.options.contains(&("InputSlot".to_string(), "Tray3".to_string())));
     }
 }
