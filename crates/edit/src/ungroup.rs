@@ -4,7 +4,9 @@
 //! content streams. Ungrouping copies the form's content into the page at the same place,
 //! wrapped as `q <Matrix> cm <BBox> re W n … Q`, with the form's resources merged into a copy of
 //! the page's under names that don't clash. Its text then edits like any other. The form object
-//! itself is left alone, so another page or placement that draws it is unchanged.
+//! itself is left alone, so another page or placement that draws it is unchanged. Each resource
+//! name is read from the operand the renderer uses ([`resource_operand`]), so a surplus operand
+//! before it changes neither the renaming nor the checks below.
 //!
 //! Drawing a form inline paints the same pixels unless the form is a transparency group whose
 //! compositing differs from painting its parts one by one: a knockout group, a group that uses
@@ -192,29 +194,12 @@ pub(crate) fn ungroup_ops(
             b"ET" => in_text = false,
             _ => {}
         }
-        let slot: Option<(&[u8], usize)> = match op.op.as_slice() {
-            b"Tf" | b"Do" | b"gs" | b"sh" | b"cs" | b"CS" => {
-                let cat: &[u8] = match op.op.as_slice() {
-                    b"Tf" => b"Font",
-                    b"Do" => b"XObject",
-                    b"gs" => b"ExtGState",
-                    b"sh" => b"Shading",
-                    _ => b"ColorSpace",
-                };
-                Some((cat, 0))
-            }
-            b"scn" | b"SCN" => op.operands.len().checked_sub(1).map(|i| (&b"Pattern"[..], i)),
-            b"BDC" | b"DP" => Some((&b"Properties"[..], 1)),
-            b"q" => {
-                depth = depth.saturating_add(1);
-                None
-            }
-            b"Q" => {
-                depth = depth.checked_sub(1).ok_or_else(|| refuse("its content restores more graphics states than it saves"))?;
-                None
-            }
-            _ => None,
-        };
+        match op.op.as_slice() {
+            b"q" => depth = depth.saturating_add(1),
+            b"Q" => depth = depth.checked_sub(1).ok_or_else(|| refuse("its content restores more graphics states than it saves"))?,
+            _ => {}
+        }
+        let slot = resource_operand(op).map_err(|Unreadable| refuse("its content selects a resource with operands that can't be read"))?;
         if let Some((cat, i)) = slot
             && let Some(operand) = op.operands.get_mut(i)
             && let Object::Name(n) = operand
@@ -246,10 +231,7 @@ pub(crate) fn ungroup_ops(
         let mut moved: Renames = Vec::new();
         let mut n = 0u32;
         for op in &mut ops {
-            if !(op.is("scn") || op.is("SCN")) {
-                continue;
-            }
-            let Some(i) = op.operands.len().checked_sub(1) else { continue };
+            let Ok(Some((b"Pattern", i))) = resource_operand(op) else { continue };
             let Some(Object::Name(from)) = op.operands.get(i) else { continue };
             // A name the resources don't have selects nothing, inline or not.
             let Some(entry) = table.get(from).cloned() else { continue };
@@ -388,23 +370,58 @@ struct BlendWalk {
     reads: usize,
 }
 
-/// Whether `ops` (drawn with `resources`) blend with something other than Normal: a `gs` they
-/// use, or one used by a form or pattern they draw, at any depth. A shading pattern blends through
-/// its own `/ExtGState`, a tiling pattern through its content. A nested form or pattern that can't
-/// be read, is nested too deep or draws itself counts as blending, so the caller refuses rather
-/// than guesses.
+/// An operator whose operands the renderer can't read as it expects, so it skips the operator.
+struct Unreadable;
+
+/// Which operand of `op` names a resource, and from which category, read as the renderer reads
+/// it: operands are taken from the end, so a surplus operand before them is ignored. `Do`, `gs`,
+/// `sh`, `cs` and `CS` take the last operand; `Tf` a name then a size; `BDC` and `DP` a tag then
+/// a name or an inline dictionary; `scn` and `SCN` numbers and the last name among them.
+/// `Ok(None)` when `op` names no resource; [`Unreadable`] when the renderer would skip it, which
+/// [`ungroup_ops`] refuses rather than guess at.
+fn resource_operand(op: &Op) -> Result<Option<(&'static [u8], usize)>, Unreadable> {
+    let operands = &op.operands;
+    let name_at = |i: Option<usize>| i.is_some_and(|i| matches!(operands.get(i), Some(Object::Name(_))));
+    let last = operands.len().checked_sub(1);
+    let (cat, at): (&'static [u8], Option<usize>) = match op.op.as_slice() {
+        b"Do" => (b"XObject", last),
+        b"gs" => (b"ExtGState", last),
+        b"sh" => (b"Shading", last),
+        b"cs" | b"CS" => (b"ColorSpace", last),
+        b"Tf" => {
+            if !last.is_some_and(|i| matches!(operands.get(i), Some(Object::Int(_) | Object::Real(_)))) {
+                return Err(Unreadable);
+            }
+            (b"Font", operands.len().checked_sub(2))
+        }
+        b"BDC" | b"DP" => {
+            if !name_at(operands.len().checked_sub(2)) {
+                return Err(Unreadable);
+            }
+            match last.and_then(|i| operands.get(i)) {
+                Some(Object::Name(_)) => (b"Properties", last),
+                Some(Object::Dict(_)) => return Ok(None),
+                _ => return Err(Unreadable),
+            }
+        }
+        b"scn" | b"SCN" => {
+            if !operands.iter().all(|o| matches!(o, Object::Int(_) | Object::Real(_) | Object::Name(_))) {
+                return Err(Unreadable);
+            }
+            return Ok(operands.iter().rposition(|o| matches!(o, Object::Name(_))).map(|i| (&b"Pattern"[..], i)));
+        }
+        _ => return Ok(None),
+    };
+    match at {
+        Some(i) if name_at(Some(i)) => Ok(Some((cat, i))),
+        _ => Err(Unreadable),
+    }
+}
+
 /// Whether `op` draws a Form XObject (`Do`), Type 3 font (`Tf`) or tiling pattern (`scn`/`SCN`) from
 /// `resources` that has no `/Resources` of its own, and so inherits the ones it is drawn with.
 fn inherits_resources(doc: &Document, resources: &Dict, op: &Op) -> bool {
-    let (cat, i): (&[u8], usize) = match op.op.as_slice() {
-        b"Do" => (b"XObject", 0),
-        b"Tf" => (b"Font", 0),
-        b"scn" | b"SCN" => match op.operands.len().checked_sub(1) {
-            Some(i) => (b"Pattern", i),
-            None => return false,
-        },
-        _ => return false,
-    };
+    let Ok(Some((cat @ (b"XObject" | b"Font" | b"Pattern"), i))) = resource_operand(op) else { return false };
     let Some(Object::Name(name)) = op.operands.get(i) else { return false };
     let Some(entry) = resources.get(cat).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.get(name).cloned())) else {
         return false;
@@ -423,20 +440,23 @@ fn inherits_resources(doc: &Document, resources: &Dict, op: &Op) -> bool {
     drawn && dict.get(b"Resources").is_none()
 }
 
+/// Whether `ops` (drawn with `resources`) blend with something other than Normal: a `gs` they
+/// use, or one used by a form or pattern they draw, at any depth. A shading pattern blends through
+/// its own `/ExtGState`, a tiling pattern through its content. A nested form or pattern that can't
+/// be read, is nested too deep or draws itself counts as blending, so the caller refuses rather
+/// than guesses. An operator the renderer skips ([`Unreadable`]) draws nothing and is skipped.
 fn blends_inside(doc: &Document, resources: &Dict, ops: &[Op], depth: usize, walk: &mut BlendWalk) -> bool {
     let category = |cat: &[u8]| resources.get(cat).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     let (states, xobjects, patterns) = (category(b"ExtGState"), category(b"XObject"), category(b"Pattern"));
     let state_blends = |g: Option<&Object>| g.map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).is_some_and(|gs| blends(doc, &gs));
     for op in ops {
-        if op.is("gs") && state_blends(op.name(0).and_then(|n| states.get(n))) {
-            return true;
-        }
-        let o = if op.is("Do") {
-            op.name(0).and_then(|n| xobjects.get(n))
-        } else if op.is("scn") || op.is("SCN") {
-            op.operands.len().checked_sub(1).and_then(|i| op.name(i)).and_then(|n| patterns.get(n))
-        } else {
-            continue;
+        let Ok(Some((cat, i))) = resource_operand(op) else { continue };
+        let Some(name) = op.name(i) else { continue };
+        let o = match cat {
+            b"ExtGState" if state_blends(states.get(name)) => return true,
+            b"XObject" => xobjects.get(name),
+            b"Pattern" => patterns.get(name),
+            _ => continue,
         };
         let Some(o) = o else { continue };
         let resolved = doc.resolve(o);
@@ -545,7 +565,8 @@ pub(crate) fn translucent_at(doc: &Document, resources: &Dict, ops: &[Op], at: u
             b"q" => stack.push(now),
             b"Q" => now = stack.pop().unwrap_or([false; 4]),
             b"gs" => {
-                let Some(gs) = op.name(0).and_then(|n| states.get(n)).map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()) else {
+                let Ok(Some((_, i))) = resource_operand(op) else { continue };
+                let Some(gs) = op.name(i).and_then(|n| states.get(n)).map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()) else {
                     continue;
                 };
                 let alpha = |key: &[u8]| gs.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).map(|a| a < 1.0);

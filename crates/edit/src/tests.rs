@@ -10626,6 +10626,160 @@ fn ungroup_renames_every_kind_of_resource() {
     assert_eq!(lookup("ExtGState", b"G"), Some(tag("page ExtGState")), "the page's own G is kept");
 }
 
+/// The renderer takes an operator's operands from the end and ignores a surplus before them
+/// (`0 /Inner Do` draws `/Inner`): one name for `Do`, `gs`, `sh` and `cs`, a name then a size for
+/// `Tf`, a tag then a name for `BDC` and `DP`, the last name for `scn`. Ungroup renames that
+/// operand, so the inline content still selects the form's objects and not the page's.
+#[test]
+fn ungroup_renames_the_name_operand_the_renderer_reads() {
+    let tag = |s: &str| {
+        let mut d = Dict::new();
+        d.set(b"Tag".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: s.as_bytes().to_vec(), hex: false }));
+        Object::Dict(d)
+    };
+    let categories = ["Font", "XObject", "ExtGState", "ColorSpace", "Pattern", "Shading", "Properties"];
+    let names = ["F1", "Inner", "G", "C", "P", "S", "M"];
+    let mut form_res = Dict::new();
+    let mut page_res = Dict::new();
+    for (cat, name) in categories.iter().zip(names) {
+        let mut f = Dict::new();
+        f.set(name.as_bytes().to_vec(), tag(&format!("form {cat}")));
+        form_res.set(cat.as_bytes().to_vec(), Object::Dict(f));
+        if *cat != "Font" && *cat != "XObject" {
+            let mut p = Dict::new();
+            p.set(name.as_bytes().to_vec(), tag(&format!("page {cat}")));
+            page_res.set(cat.as_bytes().to_vec(), Object::Dict(p));
+        }
+    }
+    let content = b"0 /G gs 1 /C cs /Pattern cs 0.5 /P scn 0 /S sh /X /OC /M BDC EMC /X /OC /M DP 0 /Inner Do BT /X /F1 9 Tf (x) Tj ET";
+    let (mut doc, art) = page_with_form(&[("Resources", Object::Dict(form_res))], content, "", None);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        for (k, v) in page_res.iter() {
+            d.set(k.clone(), v.clone());
+        }
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(art));
+        xo.set(b"Inner".to_vec(), tag("page XObject"));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).unwrap();
+    let doc = reopen(&doc);
+    let page = pdfcraft_model::pages(&doc).into_iter().next().unwrap();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let contents = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(s) = contents.as_ref() else { panic!("one content stream") };
+    let ops = pdfcraft_content::parse(&s.decoded().unwrap()).ops;
+    let lookup = |cat: &str, name: &[u8]| {
+        let d = doc.resolve(res.get(cat.as_bytes()).unwrap()).as_dict().cloned().unwrap();
+        d.get(name).map(|o| doc.resolve(o).as_ref().clone())
+    };
+    // The operand each of the form's operators is drawn with, counted from the end as the
+    // renderer does (the page's own `/Art Do` and `/F1 9 Tf` have no surplus and are skipped).
+    let from_end = |op: &pdfcraft_content::Op, back: usize| op.operands.len().checked_sub(back + 1).and_then(|i| op.name(i)).map(<[u8]>::to_vec);
+    let used: Vec<(&str, Vec<u8>)> = ops
+        .iter()
+        .filter(|op| op.operands.len() >= if op.is("Tf") || op.is("BDC") || op.is("DP") { 3 } else { 2 })
+        .filter_map(|op| match op.op.as_slice() {
+            b"gs" => Some(("ExtGState", from_end(op, 0)?)),
+            b"cs" => Some(("ColorSpace", from_end(op, 0)?)),
+            b"scn" => Some(("Pattern", from_end(op, 0)?)),
+            b"sh" => Some(("Shading", from_end(op, 0)?)),
+            b"BDC" | b"DP" => Some(("Properties", from_end(op, 0)?)),
+            b"Do" => Some(("XObject", from_end(op, 0)?)),
+            b"Tf" => Some(("Font", from_end(op, 1)?)),
+            _ => None,
+        })
+        .collect();
+    for cat in categories {
+        let hits: Vec<_> = used.iter().filter(|(c, _)| *c == cat).collect();
+        assert!(!hits.is_empty(), "{cat} is used: {used:?}");
+        let want = match tag(&format!("form {cat}")) {
+            Object::Dict(mut d) if cat == "Pattern" => {
+                d.set(b"Matrix".to_vec(), Object::Array([2, 0, 0, 2, 40, 80].map(Object::Int).to_vec()));
+                Object::Dict(d)
+            }
+            other => other,
+        };
+        for (_, n) in &hits {
+            assert_eq!(lookup(cat, n), Some(want.clone()), "{cat}: the operand the renderer reads names the form's object: {hits:?}");
+        }
+    }
+    let surplus = ops.iter().filter(|o| o.operands.len() == 3).filter_map(|o| o.name(0)).filter(|n| *n == b"X").count();
+    assert_eq!(surplus, 3, "the surplus operands of BDC, DP and Tf are left as they were");
+}
+
+/// A surplus operand before a resource name can't hide what the name selects from Ungroup's
+/// checks either: a nested form without resources of its own drawn with `0 /N Do` still inherits
+/// renamed ones, and a group's `0 /M gs` still blends, directly or in a nested form.
+#[test]
+fn ungroup_checks_the_name_operand_the_renderer_reads() {
+    let refused = |r: Result<(), EditError>, why: &str| match r {
+        Err(EditError::Invalid(m)) => assert!(m.contains(why), "{m}"),
+        other => panic!("expected a refusal mentioning {why:?}, got {other:?}"),
+    };
+    let nested = |doc: &mut Document, res: Option<Dict>, content: &[u8]| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+        if let Some(res) = res {
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        }
+        Object::Ref(doc.add(Object::Stream(Stream::flate(d, content))))
+    };
+    let one = |cat: &str, name: &str, v: Object| {
+        let mut inner = Dict::new();
+        inner.set(name.as_bytes().to_vec(), v);
+        let mut d = Dict::new();
+        d.set(cat.as_bytes().to_vec(), Object::Dict(inner));
+        d
+    };
+    // The form's F1 (Times) is renamed past the page's Courier F1, so N would find the page's.
+    let r = ungroup_art(b"BT /F1 9 Tf (a) Tj ET 0 /N Do", false, |doc| {
+        let n = nested(doc, None, b"BT /F1 9 Tf (n) Tj ET");
+        let mut times = Dict::new();
+        times.set(b"Type".to_vec(), Object::name("Font"));
+        times.set(b"Subtype".to_vec(), Object::name("Type1"));
+        times.set(b"BaseFont".to_vec(), Object::name("Times-Roman"));
+        let mut res = one("Font", "F1", Object::Dict(times));
+        res.set(b"XObject".to_vec(), one("XObject", "N", n).get(b"XObject").cloned().unwrap());
+        res
+    });
+    refused(r, "uses its resources");
+    let multiply = || {
+        let mut gs = Dict::new();
+        gs.set(b"BM".to_vec(), Object::name("Multiply"));
+        Object::Dict(gs)
+    };
+    refused(ungroup_art(b"0 /M gs 1 0 0 rg 0 0 10 10 re f", true, |_| one("ExtGState", "M", multiply())), "blend");
+    let r = ungroup_art(b"/N Do", true, |doc| {
+        let n = nested(doc, Some(one("ExtGState", "M", multiply())), b"0 /M gs 1 0 0 rg 0 0 10 10 re f");
+        one("XObject", "N", n)
+    });
+    refused(r, "blend");
+    let r = ungroup_art(b"0 /N Do", true, |doc| {
+        let n = nested(doc, Some(one("ExtGState", "M", multiply())), b"/M gs 1 0 0 rg 0 0 10 10 re f");
+        one("XObject", "N", n)
+    });
+    refused(r, "blend");
+}
+
+/// An operator whose operands the renderer can't read as a resource selection (no name where
+/// it takes one, a `Tf` without a size, a `BDC` whose properties are a number) is skipped when
+/// drawn. Ungroup refuses rather than guess what it should rename. A `BDC` with an inline
+/// properties dictionary names no resource and is fine.
+#[test]
+fn ungroup_refuses_a_resource_operator_it_cannot_read() {
+    for content in [&b"Do"[..], b"1 Do", b"/F1 Tf", b"/F1 /F2 Tf", b"/Tag 5 BDC EMC", b"/P BDC EMC", b"(s) /P scn", b"/G (s) gs"] {
+        match ungroup_art(content, false, |_| Dict::new()) {
+            Err(EditError::Invalid(m)) => assert!(m.contains("can't be read"), "{}: {m}", String::from_utf8_lossy(content)),
+            other => panic!("{}: expected a refusal, got {other:?}", String::from_utf8_lossy(content)),
+        }
+    }
+    ungroup_art(b"/Span <</ActualText (x)>> BDC EMC 0 0 1 rg 0 0 5 5 re f", false, |_| Dict::new()).unwrap();
+}
+
 /// #3067 review: a pattern's matrix maps pattern space to the default space of the stream that
 /// uses it (ISO 32000-2 §8.7.2), so drawn from the page a form's pattern would lose the form's
 /// placement. Ungroup draws it from a copy whose `/Matrix` carries that placement. A pattern
@@ -11094,7 +11248,7 @@ fn ungroup_refuses_nested_content_that_inherits_renamed_resources() {
             "form" => b"BT /F1 9 Tf (a) Tj ET /N Do",
             "type3" => b"BT /F1 9 Tf (a) Tj /N 9 Tf (b) Tj ET",
             // An uncoloured pattern: the name comes after the colour.
-            _ => b"BT /F1 9 Tf (a) Tj ET [/Pattern /DeviceGray] cs 0.5 /N scn 0 0 10 10 re f",
+            _ => b"BT /F1 9 Tf (a) Tj ET /PG cs 0.5 /N scn 0 0 10 10 re f",
         }
     };
     let run = |kind: &'static str, own: bool| {
@@ -11111,6 +11265,10 @@ fn ungroup_refuses_nested_content_that_inherits_renamed_resources() {
                 res.set(cat.as_bytes().to_vec(), Object::Dict(d));
             }
             res.set(b"Font".to_vec(), Object::Dict(fonts));
+            // `cs` takes a name (ISO 32000-2 §8.6.8, Table 73), here the uncoloured pattern space.
+            let mut spaces = Dict::new();
+            spaces.set(b"PG".to_vec(), Object::Array(vec![Object::name("Pattern"), Object::name("DeviceGray")]));
+            res.set(b"ColorSpace".to_vec(), Object::Dict(spaces));
             res
         })
     };
