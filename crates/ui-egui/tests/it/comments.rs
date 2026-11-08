@@ -3561,9 +3561,23 @@ fn hotbar_settings_button_shows_one_tooltip() {
     let mut h = harness(|_| {});
     h.run_steps(2);
     h.get_by_label("Hotbar settings").hover();
-    for _ in 0..40 {
+    // egui shows a tooltip once the pointer has rested `tooltip_delay` seconds of *input* time,
+    // and the harness advances that clock by a fixed step every frame, so the wait is counted in
+    // simulated seconds rather than slept: it cannot pass early or depend on the machine's speed.
+    let delay = f64::from(h.ctx.global_style().interaction.tooltip_delay);
+    let start = h.ctx.input(|i| i.time);
+    let elapsed = |h: &Harness<'static, PdfCraftApp>| h.ctx.input(|i| i.time) - start;
+    let mut frames = 0;
+    while h.query_all_by_label("Hotbar settings / add tools").next().is_none() {
+        assert!(elapsed(&h) < 4.0 * delay && frames < 100, "no tooltip after {:.2}s of rest", elapsed(&h));
         h.step();
-        std::thread::sleep(std::time::Duration::from_millis(15));
+        frames += 1;
+    }
+    // Rest two more delays, so a second tooltip would have had its chance to open.
+    let shown = elapsed(&h);
+    while elapsed(&h) < shown + 2.0 * delay && frames < 100 {
+        h.step();
+        frames += 1;
     }
     assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
     assert_eq!(h.query_all_by_label("Hotbar settings").count(), 1, "the button's name, and no second tooltip");
