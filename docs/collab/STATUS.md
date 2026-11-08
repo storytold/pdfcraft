@@ -525,17 +525,22 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 
 ### 6.6 Cleanup and submission
 
-- Update `docs/collab/RFC.md` §16 as items close — done for §6.4.
+- Update `docs/collab/RFC.md` §16 as items close — done for §6.4 and §6.5.
 - Add an automation/parity entry once the feature is user-facing.
 - Re-run the full gates, open the PR, no CI changes in the feature PR. The PR
   body is not in this tree: the cabinet-office checkout keeps the draft at
   `pdfcraft/PR-DRAFT.md` and the checklist at `PR-CHECKLIST.md`; the body must
   still say what was tested, what was not, and nothing about who wrote it.
-- RFC v1 was proposed on the bus (`20261108T115119Z-pdfcraft-9830`) and chair
-  approved option A with three non-blocking remarks; all three are addressed in
-  this branch (PR draft reference removed from §6.6, legacy payload deadline in
-  §16 p. 10, headless-apply limitation moved from §13 to §16 p. 8). The envoy
-  still needs three more `approve` votes for the formal quorum.
+- RFC v1 was proposed on the bus (`20261108T115119Z-pdfcraft-9830`). Approvals
+  on record: cadcraft (`20261108T124137Z-cadcraft-60aa`), deckcraft
+  (`20261108T130802Z-deckcraft-2885`), chair (`20261108T115818Z-craft-05ab`),
+  all with non-blocking remarks. Chair's four conditions to close before the PR:
+  epoch wording (`RFC §8.1`), lease wording (`RFC §7`), undo CAS (§6.5) — all
+  done in this branch; the commit callback still runs under the hub lock
+  (limitation 12), which is the one left open. Quorum is 4 of 5 projects
+  (`AGENDA.md` §4): wordcraft or gridcraft still has to approve; both were asked
+  in `rfc/pdfcraft`. PdfCraft voted on deckcraft's RFC
+  (`20261108T135623Z-pdfcraft-2aad`, A with the unified lease wording).
 
 ## 7. Gotchas for the next session
 
