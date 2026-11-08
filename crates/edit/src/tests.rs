@@ -13280,6 +13280,33 @@ fn a_legacy_subset_is_completed_by_a_complete_program_it_cannot_reuse_in_place()
     assert!(shown_codes(&doc).iter().all(|(font, _)| font != "F1"), "no cluster split from the subset: {:?}", shown_codes(&doc));
 }
 
+/// A complete program whose embedding permissions forbid embedding it again is passed over for a
+/// later complete program of the face that may be, rather than failing the edit.
+#[test]
+fn a_complete_program_that_may_not_be_embedded_is_passed_over() {
+    let mut without_kho_khwai = legacy_thai_program();
+    drop_sfnt_glyph(&mut without_kho_khwai, 217);
+    let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+    let mut restricted = complete.clone();
+    let fs_type = sfnt_table(&restricted, b"OS/2") + 8;
+    restricted[fs_type..fs_type + 2].copy_from_slice(&2u16.to_be_bytes());
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let legacy = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &without_kho_khwai, LEGACY_THAI_UNICODE);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(legacy));
+    let encoding = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap",
+    )));
+    for (object, program) in [(6, &restricted), (7, &complete)] {
+        let mut full = legacy_thai_font(&mut doc, "THSarabunPSK", program, LEGACY_THAI_UNICODE);
+        full.set(b"Encoding".to_vec(), Object::Ref(encoding));
+        doc.set(pdfcraft_cos::ObjRef::new(object, 0), Object::Dict(full));
+    }
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).expect("the program that may be embedded shapes the span");
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+}
+
 /// The complete program that takes over a span shapes all of its rows, a Latin-only one too,
 /// even where its existing PDF encoding has no Latin; and it must have the source's own style:
 /// a Regular program never completes text that the subset's descriptor marks bold.

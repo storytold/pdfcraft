@@ -1145,10 +1145,11 @@ impl FontStyle {
     }
 }
 
-/// `text` shaped by `font`'s embedded program with its own layout, when the program covers it.
+/// `text` shaped by `font`'s embedded program with its own layout, when the program covers it and
+/// may be embedded again (`embed_mapping` refuses one that may not, so a later program is tried).
 fn shape_with_program(doc: &Document, font: &Dict, text: &str) -> Option<(Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun)> {
     let bytes = pdfcraft_fonts::pdf::embedded_sfnt(doc, font)?;
-    if !pdfcraft_fonts::embedding::covers(&bytes, text) {
+    if pdfcraft_fonts::embedding::validate(&bytes).is_err() || !pdfcraft_fonts::embedding::covers(&bytes, text) {
         return None;
     }
     let shaped = pdfcraft_fonts::source_shaping::shape(&bytes, text).ok()?;
