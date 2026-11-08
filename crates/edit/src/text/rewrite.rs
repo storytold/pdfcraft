@@ -4,10 +4,12 @@ use super::fallback::{
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
-use super::lines::{content_streams, dropped_advances, dropped_side_effects, page_dict, rewritten_contents, show_side_effects, splice, text_lines};
+use super::lines::{
+    content_streams, dropped_advances, dropped_side_effects, joined, page_dict, rewritten_contents, show_side_effects, splice, text_lines,
+};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, alignment_frame, group_blocks,
-    is_centred, parse, rewrite_styled_block,
+    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks, is_centred,
+    parse, rewrite_styled_block,
 };
 
 /// What replacing a line did.
@@ -56,7 +58,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     // The line's own font, when it can show every character.
@@ -119,7 +121,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
     let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
-    let contents = rewritten_contents(doc, &streams, new_data);
+    let contents = rewritten_contents(doc, &streams, new_data)?;
     let page_ref = p.obj;
     if substituted.is_some() {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
@@ -826,7 +828,7 @@ pub(crate) fn rewrite_block_from(
     }
     let upright = dispatch.upright;
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let text = paragraph_text(text.unwrap_or(&b.text));
     // The characters to show, for choosing fonts: the breaks are moves, not glyphs.
@@ -966,7 +968,7 @@ pub(crate) fn rewrite_block_from(
         insert.extend(advances.remove(&i));
         (insert, keep)
     });
-    let contents = rewritten_contents(doc, &streams, new_data);
+    let contents = rewritten_contents(doc, &streams, new_data)?;
     let new_font = !reuse;
     if new_font {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
@@ -1036,7 +1038,7 @@ pub(crate) fn selectable_blocks(
             !b.lines
                 .iter()
                 .filter_map(|i| lines.get(*i))
-                .any(|l| streams.get(l.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
+                .any(|l| streams.get(l.stream).and_then(|s| s.entry.as_ref()).is_some_and(|r| excluded.contains(&r)))
         })
         .collect())
 }
@@ -1130,7 +1132,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     }
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
@@ -1201,7 +1203,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
-    let contents = rewritten_contents(doc, &streams, data);
+    let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }

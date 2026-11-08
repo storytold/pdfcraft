@@ -1,7 +1,7 @@
 use super::interp::{Carry, interpret};
-use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, show_side_effects, splice, text_lines};
+use super::lines::{content_streams, joined, page_dict, reading_lines, rewritten_contents, show_side_effects, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
+use super::{Document, EditError, HashMap, Object, Op, TextLine, group_blocks, regions};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
@@ -270,7 +270,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
@@ -291,7 +291,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         patches.insert(s.op, replacement);
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
-    let contents = rewritten_contents(doc, &streams, data);
+    let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
