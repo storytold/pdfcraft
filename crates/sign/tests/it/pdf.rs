@@ -167,6 +167,36 @@ fn an_empty_signature_value_does_not_count_as_an_earlier_signature() {
     assert!(form_of(&signed).get(b"NeedAppearances").is_none());
 }
 
+/// A signature dictionary whose /Contents is still the zero-filled placeholder (hex or literal
+/// hex text, with a /ByteRange) is not signed either: the first real signature drops the flag.
+#[test]
+fn a_zero_filled_signature_placeholder_does_not_count_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    for contents in [&b"<0000000000000000>"[..], b"(00000000)"] {
+        let sig = [&b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 10 20 10] /Contents "[..], contents, b" >>"]
+            .concat();
+        let bytes = fixture_with(
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+            &[b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Pending) /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>", &sig],
+        );
+        assert!(!pdfcraft_sign::has_signatures(&open(&bytes)), "{}", String::from_utf8_lossy(contents));
+        let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        assert!(form_of(&signed).get(b"NeedAppearances").is_none());
+        assert!(pdfcraft_sign::has_signatures(&open(&signed)));
+    }
+}
+
+/// A document timestamp outside the field tree counts by its /Contents alone, even without a
+/// /ByteRange; a zero-filled one does not.
+#[test]
+fn a_document_timestamp_counts_unless_its_contents_are_zero_filled() {
+    for (contents, stamped) in [(&b"<3080>"[..], true), (b"<0000>", false)] {
+        let ts = [&b"<< /Type /DocTimeStamp /SubFilter /ETSI.RFC3161 /Contents "[..], contents, b" >>"].concat();
+        let bytes = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true >> >>", &[&ts]);
+        assert_eq!(pdfcraft_sign::has_signatures(&open(&bytes)), stamped, "{}", String::from_utf8_lossy(contents));
+    }
+}
+
 /// A signed field without a name (`/T` is optional) is an earlier signature too: signing another
 /// field leaves `/NeedAppearances` as it is.
 #[test]

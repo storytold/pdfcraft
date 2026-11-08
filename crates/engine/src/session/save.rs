@@ -372,11 +372,42 @@ fn drawn_for_first_signature(cos: std::borrow::Cow<'_, pdfcraft_cos::Document>) 
     std::borrow::Cow::Owned(drawn)
 }
 
-/// Whether the widget's normal appearance stream (`/AP /N`) shows text, itself or through a
-/// form XObject it paints (counted as text without looking inside).
+/// Whether the widget's normal appearance stream (`/AP /N`) shows text, itself or through the
+/// form XObjects it paints (a background-only one doesn't count).
 fn draws_text(cos: &pdfcraft_cos::Document, widget: &pdfcraft_cos::Dict) -> bool {
     let ap = widget.get(b"AP").map(|ap| cos.resolve(ap));
     let normal = ap.as_deref().and_then(|ap| ap.as_dict()).and_then(|ap| ap.get(b"N")).map(|n| cos.resolve(n));
     let Some(pdfcraft_cos::Object::Stream(s)) = normal.as_deref() else { return false };
-    s.decoded().is_ok_and(|data| pdfcraft_content::ops(&data).any(|op| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"" | b"Do")))
+    stream_draws_text(cos, s, &mut 16)
+}
+
+/// Whether the form stream `s` shows text, following `Do` into its form XObjects. `budget` caps
+/// the streams opened along the way; running out (deep nesting, a cycle, many XObjects) counts
+/// as text, so the field keeps its own appearance as it would without the look inside.
+fn stream_draws_text(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, budget: &mut u8) -> bool {
+    let Ok(data) = s.decoded() else { return false };
+    let resources = s.dict.get(b"Resources").map(|r| cos.resolve(r));
+    let xobjects = resources.as_deref().and_then(|r| r.as_dict()).and_then(|r| r.get(b"XObject")).map(|x| cos.resolve(x));
+    for op in pdfcraft_content::ops(&data) {
+        match op.op.as_slice() {
+            b"Tj" | b"TJ" | b"'" | b"\"" => return true,
+            b"Do" => {
+                let name = op.operands.first().and_then(|n| n.as_name());
+                let x = name.and_then(|n| xobjects.as_deref().and_then(|x| x.as_dict()).and_then(|x| x.get(n))).map(|x| cos.resolve(x));
+                let Some(pdfcraft_cos::Object::Stream(f)) = x.as_deref() else { continue };
+                if f.dict.name(b"Subtype") != Some(b"Form") {
+                    continue;
+                }
+                if *budget == 0 {
+                    return true;
+                }
+                *budget -= 1;
+                if stream_draws_text(cos, f, budget) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }

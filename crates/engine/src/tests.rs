@@ -2701,14 +2701,17 @@ fn a_signed_file_carries_no_password_field_value() {
 
 /// A form with `/NeedAppearances true` whose filled fields have stored appearances that draw no
 /// text: `name` an empty placeholder, `town` one too with a value Helvetica can't hold (`ň`),
-/// `city` such a value with its own appearance that draws it (#5939).
+/// `city` such a value with its own appearance that draws it (#5939), `street` no appearance at
+/// all, `river` a value Helvetica can't hold (`ř`) with an appearance that paints only a
+/// background form XObject, and `lake` such a value drawn by a form XObject its appearance
+/// paints.
 fn need_appearances_form() -> Vec<u8> {
     let stream =
         |content: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Length {} >>\nstream\n{content}\nendstream", content.len());
     let objs = [
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>".to_string(),
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
-        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada Lovelace) /Rect [20 250 180 270] /P 3 0 R /AP << /N 8 0 R >> >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (town) /V <FEFF0050006C007A00650148> /Rect [20 200 180 220] /P 3 0 R /AP << /N 9 0 R >> >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00200159> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
@@ -2716,6 +2719,13 @@ fn need_appearances_form() -> Vec<u8> {
         stream("/Tx BMC EMC"),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC BT /Helv 10 Tf 2 5 Td (Brno r) Tj ET EMC"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (street) /V (Main Street) /Rect [20 100 180 120] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F0159006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Bg 14 0 R >> >> /Length 10 >>\nstream\nq /Bg Do Q\nendstream".into(),
+        stream("0.9 g 0 0 160 20 re f"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F0159006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Fm 17 0 R >> >> /Length 10 >>\nstream\nq /Fm Do Q\nendstream".into(),
+        stream("BT /Helv 10 Tf 2 5 Td (Orech) Tj ET"),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -2757,9 +2767,14 @@ fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     assert!(normal_appearance(&doc, 4).contains("(Ada Lovelace) Tj"), "{}", normal_appearance(&doc, 4));
     assert!(normal_appearance(&doc, 5).contains("(Plze?) Tj"), "{}", normal_appearance(&doc, 5));
     assert!(normal_appearance(&doc, 6).contains("(Brno r) Tj"), "{}", normal_appearance(&doc, 6));
+    assert!(normal_appearance(&doc, 11).contains("(Main Street) Tj"), "{}", normal_appearance(&doc, 11));
+    // Its own appearance only paints a background, so `river` gets the drawing, `?` and all.
+    assert!(normal_appearance(&doc, 12).contains("(O?ech) Tj"), "{}", normal_appearance(&doc, 12));
     let city = |d: &pdfcraft_cos::Document| d.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().unwrap().get(b"AP").cloned();
     let original = pdfcraft_cos::Document::open(Arc::new(need_appearances_form())).unwrap();
     assert_eq!(city(&doc), city(&original), "city keeps its own appearance");
+    let lake = |d: &pdfcraft_cos::Document| d.get(pdfcraft_cos::ObjRef::new(15, 0)).as_dict().unwrap().get(b"AP").cloned();
+    assert_eq!(lake(&doc), lake(&original), "lake keeps the appearance its form XObject draws");
     s.mark_signed(id, signed, None).unwrap();
     s.set_trusted_certificates(vec![digital_id.certificate.clone()]);
     let sig = &s.get(id).unwrap().signatures[0];

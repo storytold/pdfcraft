@@ -120,16 +120,24 @@ fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), S
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
 /// Whether `doc` already holds a signature or a document timestamp: a signature dictionary whose
-/// `/Contents` is not empty (a field whose `/V` has an empty `/Contents` is not signed yet). A
-/// signature field without a name (`/T`) counts too: indirect signature dictionaries are found by
-/// their `/ByteRange`, not through the field tree.
+/// `/Contents` holds a nonzero byte (a field whose `/V` has an empty or zero-filled `/Contents`
+/// is not signed yet). A signature field without a name (`/T`) counts too: indirect signature
+/// dictionaries and document timestamps are found in one pass over the file (by `/ByteRange`,
+/// or as timestamps), not through the field tree.
 pub fn has_signatures(doc: &Document) -> bool {
     let signed = |d: &Dict| {
         let contents = d.get(b"Contents").map(|c| doc.resolve(c));
-        contents.as_deref().and_then(Object::as_string).is_some_and(|s| !s.bytes.is_empty())
+        // Hex strings decode to the DER when parsed; a literal string carries hex text.
+        let der = contents
+            .as_deref()
+            .and_then(Object::as_string)
+            .and_then(|s| if s.hex { Some(s.bytes.clone()) } else { super::validate::unhex(&s.bytes) });
+        der.is_some_and(|der| der.iter().any(|b| *b != 0))
     };
-    super::validate::signature_contents(doc).iter().any(|der| !der.is_empty())
-        || doc.scan_objects().any(|(_, o)| o.as_dict().is_some_and(|d| d.contains(b"ByteRange") && signed(d)))
+    sig_fields(doc).iter().any(|f| f.dict.get(b"V").map(|v| doc.resolve(v)).as_deref().and_then(Object::as_dict).is_some_and(signed))
+        || doc
+            .scan_objects()
+            .any(|(_, o)| o.as_dict().is_some_and(|d| (d.contains(b"ByteRange") || super::validate::is_doc_timestamp(d)) && signed(d)))
 }
 
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
