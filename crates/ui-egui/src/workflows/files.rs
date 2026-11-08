@@ -201,8 +201,9 @@ pub struct ExtractDraft {
     /// the document's name when it opens; empty means that name too. As separate files each
     /// page is `<name> (page N).pdf`, and a single page the user renamed is `<name>.pdf`.
     pub name: String,
-    /// The pages to extract as typed ranges, 1-based ("1-5, 8, 11-13") (#3593). Empty means the
-    /// selected pages (or the current one); the dialog opens with that range filled in.
+    /// The pages to extract as typed ranges, 1-based ("1-5, 8, 11-13") (#3593). The dialog opens
+    /// prefilled with the selected/current range. If the user clears it, the selected pages
+    /// (or the current one) are used instead.
     pub pages: String,
     /// Focus and select the Pages field on the dialog's first frame.
     pub focus_pages: bool,
@@ -681,7 +682,8 @@ impl PdfCraftApp {
     }
 
     /// Copy the pages typed in Extract pages, else the selected pages (or the current page), into
-    /// a new unsaved document tab.
+    /// a new unsaved document tab. If the draft has a source that no longer matches the active
+    /// document, refuse with a notification and no edits.
     pub fn extract_selection(&mut self) {
         if self.extract_draft.source.is_some() && self.extract_draft.source != self.active_ids().map(|(_, id)| id) {
             self.notify_tr("The document changed while you were choosing a file, so nothing was changed.");

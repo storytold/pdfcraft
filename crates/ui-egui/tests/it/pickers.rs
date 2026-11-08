@@ -1118,6 +1118,44 @@ fn extract_pages_prefills_focuses_selects_and_shows_the_total() {
 }
 
 #[test]
+fn extract_pages_shows_the_range_hint_after_clearing() {
+    let mut h = harness(&[6]);
+    h.state_mut().views[0].select_pages(&[1, 2, 4]);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(3);
+    // The opener selects all text; real Backspace clears it through production input ordering.
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Backspace,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(3);
+    assert!(h.state().extract_draft.pages.is_empty());
+    let field = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Pages");
+    assert_eq!(field.accesskit_node().placeholder(), Some("2-3, 5"), "an empty field shows a range-format example");
+    let field_rect = field.rect();
+    assert!(
+        h.output()
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "2-3, 5" && field_rect.contains_rect(t.visual_bounding_rect()))),
+        "the hint is painted inside the cleared field"
+    );
+    h.get_by_label("Extract").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(h.state().views[1].id).unwrap();
+    let actual: Vec<_> = (0..doc.info.pages.len()).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
+    assert_eq!(actual, ["Page 2", "Page 3", "Page 5"], "clearing keeps the selection fallback");
+}
+
+#[test]
 fn extract_pages_untouched_prefill_extracts_the_selected_or_current_pages() {
     let cases = [
         (6, vec![], 3, "4", vec![3]),

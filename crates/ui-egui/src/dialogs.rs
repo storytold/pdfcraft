@@ -1053,9 +1053,15 @@ fn dialog_extract(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -
     let (selected, total) = app.active_ids().map_or((Vec::new(), 0), |(i, _)| (app.views[i].target_pages(), app.views[i].page_count()));
     ui.label(egui::RichText::new(tl!("Extract pages")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
+    // Restore the selection's range as an empty-state example (#3593).
+    let hint = match crate::combine_ui::range_of(&selected, total) {
+        all if all.is_empty() && total > 1 => format!("1-{total}"),
+        all if all.is_empty() => "1".to_string(),
+        some => some,
+    };
     ui.horizontal(|ui| {
         let l = ui.label(tl!("Pages"));
-        let mut field = egui::TextEdit::singleline(&mut app.extract_draft.pages).desired_width(240.0).show(ui);
+        let mut field = egui::TextEdit::singleline(&mut app.extract_draft.pages).hint_text(hint).desired_width(240.0).show(ui);
         let response = field.response.response.labelled_by(l.id);
         if std::mem::take(&mut app.extract_draft.focus_pages) {
             response.request_focus();
