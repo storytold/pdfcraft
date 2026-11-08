@@ -1091,3 +1091,21 @@ mod punjabi_date_tests {
         assert_eq!(date_language_picker_name(pa, |_| false), "Punjabi (Gurmukhi; English date names)");
     }
 }
+
+/// Canonical UI and legacy explicit date choices disclose the same English date vocabulary.
+#[cfg(test)]
+mod canonical_punjabi_date_tests {
+    #[test]
+    fn canonical_punjabi_follow_and_restored_dates_disclose_english() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        for code in ["pa", "pa-guru"] {
+            assert!(super::date_language_follow_label(code, "ਪੰਜਾਬੀ").contains("English date names"));
+            let mut app = crate::PdfCraftApp::default();
+            app.restore(&serde_json::json!({"date_language": code}).to_string());
+            assert_eq!(app.session.date_language(), Some("pa-guru"));
+        }
+        let choices = super::date_language_options(|_| false);
+        assert_eq!(choices.iter().filter(|(l, _)| l.code == "pa-guru").count(), 1);
+        assert!(choices.iter().any(|(l, name)| l.code == "pa-guru" && name.contains("English date names")));
+    }
+}

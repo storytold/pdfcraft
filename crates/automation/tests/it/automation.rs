@@ -4105,6 +4105,10 @@ fn punjabi_date_format_discloses_and_preserves_english_names() {
     assert_eq!(reread["language"], "pa-guru");
     assert_eq!(reread["today"], result["today"]);
     assert_eq!(reread["unwritable"], "");
+    // Canonical UI catalog code is accepted without changing the existing automation output id.
+    let canonical = ok(&mut a, "fill_sign_date_format", json!({ "language": "pa" }));
+    assert_eq!(canonical["language"], "pa-guru");
+    assert_eq!(canonical["today"], result["today"]);
 }
 
 #[test]

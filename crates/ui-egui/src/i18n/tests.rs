@@ -230,7 +230,7 @@ fn the_languages_offered_are_the_embedded_ones_of_the_list() {
     }
     let listed: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
     // Only the pending Punjabi starter catalog may be absent from a configured checkout.
-    let expected: Vec<&str> = listed.iter().copied().filter(|c| *c != "pa-guru" || CRAFT_I18N.iter().any(|(code, ..)| code == c)).collect();
+    let expected: Vec<&str> = listed.iter().copied().filter(|c| *c != "pa" || CRAFT_I18N.iter().any(|(code, ..)| code == c)).collect();
     assert_eq!(all, expected, "all established languages must retain their embedded catalogs");
     assert!(Lang::from_code("pseudo").is_none(), "the pseudo locale is never a setting");
     // craft-i18n has catalogs PdfCraft doesn't offer (yet); they are never offered here.
@@ -617,7 +617,7 @@ fn plural_forms_follow_the_rules_pdfcraft_had() {
     // English has no catalog: its own two forms, `one` for 1 alone, as PdfCraft's rule had it.
     assert_eq!(plural_counts().map(|n| trn(Lang::EN, n, "1", "x")).filter(|s| s == "1").count(), 1);
     // Punjabi has no legacy PdfCraft plural rule to compare against.
-    for info in LANGUAGES.iter().filter(|l| !matches!(l.code, "en" | "pa-guru")) {
+    for info in LANGUAGES.iter().filter(|l| !matches!(l.code, "en" | "pa")) {
         let rule = pdfcraft_plural_rule(info.code);
         let pdfcraft_forms = (0..=1000).map(rule).max().unwrap_or(0) + 1;
         // How many forms CLDR gives this language: the first form count whose row loads.
@@ -1541,21 +1541,19 @@ fn translation_gaps_report() {
 const REPORT_START: &str = "=== translation gaps ===";
 const REPORT_END: &str = "=== end of translation gaps ===";
 
-/// Date and interface registries retain code/native-name parity; date availability is independent.
+/// Date codes resolve every interface code, including canonical Punjabi; availability is independent.
 /// Keep this historical test identifier stable for the parity evidence that cites it.
 /// Punjabi's English date vocabulary remains selectable even without its interface catalog.
 #[test]
 fn date_languages_are_the_interface_languages() {
-    let interface: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
+    let interface: Vec<&str> =
+        LANGUAGES.iter().map(|l| pdfcraft_engine::dates::date_language(l.code).expect("registered date language or alias").code).collect();
     let dates: Vec<&str> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| l.code).collect();
     assert_eq!(dates, interface);
     needs_catalogs!();
     let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
-    let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES
-        .iter()
-        .filter(|l| l.code != "pa-guru" || Lang::from_code(l.code).is_some())
-        .map(|l| (l.code, l.name))
-        .collect();
+    let dates: Vec<(&str, &str)> =
+        pdfcraft_engine::dates::DATE_LANGUAGES.iter().filter_map(|l| Lang::from_code(l.code).map(|lang| (lang.code(), l.name))).collect();
     assert_eq!(dates, interface);
 }
 
@@ -1572,15 +1570,16 @@ fn image_paste_and_home_notifications_are_translated() {
     }
 }
 
-/// Punjabi selection must never infer Gurmukhi from Shahmukhi/Pakistan or bare Punjabi.
+/// Canonical Punjabi is Gurmukhi; Pakistani and non-Gurmukhi tags follow the runtime policy.
 #[test]
 fn punjabi_routing_keeps_scripts_separate() {
-    for tag in ["pa-Guru", "pa-Guru-IN", "pa-IN", "pa_IN.UTF-8", "pa-Guru-PK"] {
-        assert!(candidates(tag).iter().any(|c| c == "pa-guru"), "{tag}");
-        assert_eq!(lang_from_tag(tag), Lang::from_code("pa-guru"), "{tag}");
+    let lang = Lang::from_code("pa");
+    for tag in ["pa", "pa-Guru", "pa-Guru-IN", "pa-IN", "pa_IN.UTF-8", "pa-Guru-PK"] {
+        assert_eq!(candidates(tag).iter().any(|c| c == "pa"), lang.is_some(), "{tag}");
+        assert_eq!(lang_from_tag(tag), lang, "{tag}");
     }
-    for tag in ["pa", "pa-Arab", "pa-Arab-PK", "pa-PK", "pa-Latn-IN", "pa_Arab_IN.UTF-8"] {
-        assert!(!candidates(tag).iter().any(|c| c == "pa-guru"), "{tag}");
+    for tag in ["pa-Arab", "pa-Arab-PK", "pa-PK", "pa-Latn-IN", "pa_Arab_IN.UTF-8"] {
+        assert!(!candidates(tag).iter().any(|c| c == "pa"), "{tag}");
         assert_eq!(lang_from_tag(tag), None, "{tag}");
     }
 }
@@ -1588,12 +1587,12 @@ fn punjabi_routing_keeps_scripts_separate() {
 /// A partial catalog can be stored; absent catalogs must not offer Punjabi.
 #[test]
 fn punjabi_catalog_and_picker_fallback() {
-    let Some(lang) = Lang::from_code("pa-guru") else {
-        assert!(!Lang::all().any(|l| l.code() == "pa-guru"));
-        assert_eq!(normalize_pref("pa-guru"), None);
+    let Some(lang) = Lang::from_code("pa") else {
+        assert!(!Lang::all().any(|l| l.code() == "pa"));
+        assert_eq!(normalize_pref("pa"), None);
         return;
     };
-    assert_eq!(normalize_pref("PA-GURU"), Some("pa-guru"));
+    assert_eq!(normalize_pref("PA-GURU"), Some("pa"));
     assert!(!lang.rtl());
     assert_eq!(lang.name(), "ਪੰਜਾਬੀ");
     assert_eq!(lang.picker_name(|_| false), "Punjabi (Gurmukhi)");
@@ -1606,13 +1605,13 @@ fn punjabi_catalog_and_picker_fallback() {
     app.set_option("language", "PA-GURU").expect("Punjabi option");
     let mut restored = crate::PdfCraftApp::default();
     restored.restore(&app.persist());
-    assert_eq!(restored.language, "pa-guru");
+    assert_eq!(restored.language, "pa");
 }
 
 /// Punjabi uses the runtime CLDR rules, not a fabricated pre-migration rule.
 #[test]
 fn punjabi_plural_rules_come_from_runtime() {
-    let lang = fixture_lang("pa-guru", "@plural\t{n} item|{n} items\tONE {n}|OTHER {n}\n");
+    let lang = fixture_lang("pa", "@plural\t{n} item|{n} items\tONE {n}|OTHER {n}\n");
     for (n, expected) in [(0, "ONE 0"), (1, "ONE 1"), (2, "OTHER 2")] {
         assert_eq!(trn(lang, n, "{n} item", "{n} items"), expected);
     }
@@ -1622,7 +1621,7 @@ fn punjabi_plural_rules_come_from_runtime() {
 #[cfg(target_os = "windows")]
 #[test]
 fn punjabi_egui_layout_and_missing_font_picker() {
-    let Some(lang) = Lang::from_code("pa-guru") else { return };
+    let Some(lang) = Lang::from_code("pa") else { return };
     use egui::epaint::text::{Fonts, TextOptions};
     let id = egui::FontId::proportional(17.0);
     let mut embedded = Fonts::new(TextOptions::default(), crate::theme::font_definitions());
@@ -1648,4 +1647,71 @@ fn punjabi_egui_layout_and_missing_font_picker() {
     assert!(!ctx.tessellate(output.shapes, output.pixels_per_point).is_empty());
     // This headless test has no GPU consumer; explicitly acknowledge unused texture updates.
     output.textures_delta.clear();
+}
+
+/// Canonical catalogs offer pa; the old interface preference is only an input alias.
+#[test]
+fn canonical_punjabi_registration_and_picker() {
+    assert!(LANGUAGES.iter().any(|l| l.code == "pa"));
+    assert!(!LANGUAGES.iter().any(|l| l.code == "pa-guru"));
+    let embedded = CRAFT_I18N.iter().any(|(code, ..)| *code == "pa");
+    assert_eq!(Lang::from_code("pa").is_some(), embedded);
+    assert_eq!(Lang::from_code("pa-guru"), Lang::from_code("pa"));
+    if let Some(lang) = Lang::from_code("pa") {
+        assert_eq!(lang.code(), "pa");
+        assert_eq!(lang.name(), "ਪੰਜਾਬੀ");
+        assert!(!lang.rtl());
+        assert_eq!(lang.picker_name(|_| false), "Punjabi (Gurmukhi)");
+        assert_eq!(lang.picker_name(|_| true), "ਪੰਜਾਬੀ");
+        assert_eq!(tr(lang, "Untranslated synthetic label"), "Untranslated synthetic label");
+        assert!(Lang::for_picker_by(|l| l.picker_name(|_| false)).contains(&lang));
+    } else {
+        assert_eq!(normalize_pref("pa-guru"), None);
+        assert!(!Lang::all().any(|l| l.code() == "pa"));
+    }
+}
+
+/// Use the pinned runtime's script policy, including explicit Gurmukhi in Pakistan.
+#[test]
+fn canonical_punjabi_routing_matches_runtime() {
+    let (reference, problems) = I18n::new(CRAFT_I18N, &["pa"]);
+    assert!(problems.is_empty());
+    for tag in ["pa", "pa-IN", "pa_IN.UTF-8", "pa-Guru", "pa-Guru-IN", "pa-Guru-PK"] {
+        assert_eq!(lang_from_tag(tag).map(Lang::code), reference.match_tag(tag).map(|l| reference.code(l)), "{tag}");
+    }
+    for tag in ["pa-PK", "pa_PK.UTF-8", "pa-Arab", "pa-Arab-PK", "pa-Arab-IN", "pa-Latn", "pa-Latn-IN", "pa-Cyrl"] {
+        assert!(!candidates(tag).iter().any(|c| c == "pa"), "{tag}");
+        assert_eq!(lang_from_tag(tag), None, "{tag}");
+    }
+    assert_eq!(lang_from_tag("en-US"), Some(Lang::EN));
+    assert_eq!(lang_from_tag("fr-CA"), Lang::from_code("fr"));
+    assert_eq!(lang_from_tag("pt-PT"), Lang::from_code("pt-br"));
+    assert_eq!(lang_from_tag("zh-TW"), Lang::from_code("zh-hant"));
+}
+
+/// Restore old JSON through the real app path and serialize only the canonical interface code.
+#[test]
+fn canonical_punjabi_legacy_preference_restoration() {
+    let embedded = CRAFT_I18N.iter().any(|(code, ..)| *code == "pa");
+    for input in ["pa-guru", "PA-GURU", "pa"] {
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "en").unwrap();
+        app.restore(&serde_json::json!({"language": input, "date_language": "pa-guru"}).to_string());
+        let expected = if embedded { "pa" } else { "en" };
+        assert_eq!(app.language, expected, "{input}");
+        let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+        assert_eq!(saved["language"], expected);
+        assert_eq!(saved["date_language"], "pa-guru");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, expected);
+        assert_eq!(restored.session.date_language(), Some("pa-guru"));
+        if embedded {
+            app.set_option("language", input).unwrap();
+            assert_eq!(app.language, "pa");
+            assert_eq!(Lang::from_pref(input).code(), "pa");
+        } else {
+            assert!(app.set_option("language", input).is_err());
+        }
+    }
 }

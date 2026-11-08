@@ -596,8 +596,12 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
+/// Canonical UI `pa` aliases the stable `pa-guru` date identifier so saved settings and automation
+/// keep their existing output code and English month/weekday vocabulary.
 pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
-    DATE_LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code.trim()))
+    let code = code.trim();
+    let code = if code.eq_ignore_ascii_case("pa") { "pa-guru" } else { code };
+    DATE_LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code))
 }
 
 /// Form date fields (`AFDate_FormatEx`, `util.printd`, `util.scand`) write month and weekday
@@ -804,6 +808,23 @@ mod tests {
         for pattern in DATE_FORMATS {
             assert_eq!(in_lang(pattern, "pa-guru"), in_lang(pattern, "en"));
         }
+    }
+
+    /// Canonical UI pa aliases the stable date identifier, preserving old sessions and names.
+    #[test]
+    fn canonical_punjabi_date_alias_preserves_legacy_contract() {
+        let legacy = date_language("pa-guru").unwrap();
+        for code in ["pa", "PA", " pa ", "pa-guru", "PA-GURU"] {
+            assert_eq!(date_language(code), Some(legacy));
+            for pattern in DATE_FORMATS {
+                assert_eq!(in_lang(pattern, code), in_lang(pattern, "en"));
+            }
+            let mut session = Session::new();
+            session.set_date_language(Some(code)).unwrap();
+            assert_eq!(session.date_language(), Some("pa-guru"));
+        }
+        assert!(date_language("pa-PK").is_none());
+        assert!(date_language("pa-Arab").is_none());
     }
 
     #[test]
