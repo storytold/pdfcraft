@@ -1,14 +1,19 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
-- State: implemented behind the `collab` feature (off by default); published as
-  PR #6622 (not a draft) through the chair's fork at head `0f286ed9`, CI green,
-  `MERGEABLE`. The §6.6 gate run at `5eb6bea8` is in §4: green apart from two
-  known environment flakes. The slice after that head (commit publication
-  outside the hub lock, §6.4) is committed locally and **not pushed**; the PR
-  body draft is `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
-  Limitation 1 (crash recovery against the real process) is closed locally at
-  `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4).
+- State: implemented behind the `collab` feature (off by default). **Rebased onto
+  `origin/main` `8d5d39ef`** (2026-11-09; all 40 commits moved, no conflicts —
+  main's `43f24aa1..8d5d39ef` delta touches 16 files and overlaps the branch
+  only in `crates/ui-egui/src/app.rs`, in different hunks). The §6.6 gates were
+  re-run at the rebased head (§4). **Not pushed:** the fork and PR #6622 are
+  still at `333072e8`, so the PR reads `CONFLICTING` until a human force-pushes;
+  `git merge-tree origin/main HEAD` is clean and HEAD contains `origin/main`,
+  so it should go `MERGEABLE` once pushed. The PR body draft is
+  `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
+  Limitation 1 (crash recovery against the real process) is closed in
+  `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
+  limitation 12 (commit publication outside the hub lock) in `a47641fb`. After
+  the rebase those commits are `2dfae0fe` and `e043c132`.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -199,6 +204,59 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
+### Rebase onto `origin/main` `8d5d39ef` and the gate run at the rebased head (2026-11-09)
+
+The branch was 40 commits ahead of `43f24aa1` (the `origin/main` it had been
+rebased onto on 2026-11-08) and the fork head `333072e8` made PR #6622
+`CONFLICTING`. `git rebase origin/main` moved all 40 commits onto `8d5d39ef`
+("Combine files: a drop is one undo step, in order, and names what it can't
+take", #6645) with **no conflict**.
+
+Main changed 16 files in `43f24aa1..8d5d39ef`; the only one also touched by the
+branch is `crates/ui-egui/src/app.rs`. Main rewrote the drop loop there
+(`drop_into_combine(dropped, ctx)` takes the whole batch, `#6645`); the branch
+adds the `collab`/`collab_off` fields in `new()` and the
+`poll_collab`/`show_collab` calls in `update`/`ui` (commit `397c539c`). The
+hunks do not overlap, so git kept both. Same check as CADCraft's stack rebuild
+(§4.1.1 of its STATUS): `git diff backup/pre-rebase-7628b605..HEAD` is byte for
+byte `git diff 43f24aa1..origin/main`, i.e. the rebase moved the base and
+changed no feature content. PdfCraft has no `i18n/*.tsv` catalog (UI strings
+live in `ui-egui` code, with `status_captions` for translated captions), so the
+i18n half of CADCraft's conflict pattern has no counterpart here.
+
+Backup of the pre-rebase head: `backup/pre-rebase-7628b605` (= `7628b605`).
+Rebased head before the STATUS commit: `faad6b79`.
+
+Gates re-run at that head (toolchain 1.99.1; the machine was under heavy load —
+load average 25–30 on 4 cores from the other projects' builds, hence the
+17 minutes for `cargo xtask layers`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass on re-run; the first attempt was killed by SIGTERM to its `clippy-driver` children after 4 s (machine memory/build pressure from the parallel builds), not by a diagnostic — no error line was emitted |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — 125 tests: proto 12, server 18, hub 4, client 12, client-pdf 13, session 2, ws 6 (unit), pdf 20, annot 10, daemon 27 (unit) + 1 (`tests/crash_recovery.rs`) |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, 6/6 |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass |
+| UI suite | `cargo test -p pdfcraft-ui-egui --features collab --no-fail-fast` | 2440 passed, 1 failed, 5 ignored: `--lib` 840 passed/1 ignored; `it` 1582 passed and the known font failure `editing::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone` (`No glyph for "�" (U+FFFD)`); `ocr` 6, `page_shadows` 7, `perf` 4, `play` 1 |
+| wasm, client crate | `cargo check --target wasm32-unknown-unknown -p pdfcraft-collab-client-pdf` | pass |
+
+The single `it` failure is environment, not this branch: the test comes from
+`origin/main` (last touched by `ae7a21d2`, not by the branch, which only edits
+`crates/ui-egui/src/editing.rs` for remote edits), it panics in egui's font
+code because the machine's font set lacks a glyph for U+FFFD, and it failed the
+same way before the rebase and without the `collab` feature (the
+`5eb6bea8` run below). The parallel-load flake
+`control::transport::transport_tests::only_so_many_connections_may_wait_to_authenticate`
+passed in this run.
+
+Mergeability after a push is expected, not observed: the fork still holds
+`333072e8` (`git ls-remote fork` and `gh pr view 6622` agree, `mergeable:
+CONFLICTING`), `git rev-list --count origin/main..HEAD` is 0 behind, and
+`git merge-tree --write-tree origin/main HEAD` exits 0.
+
 ### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
 
 `apps/pdfcraft-collab-server/tests/crash_recovery.rs`
@@ -241,7 +299,7 @@ rename, and a torn journal line, stay `Store`-level tests; a kill during the
 cabinet publication itself is still only reasoned about (the room restarts
 dirty and the next commit retries — limitation 7).
 
-### Gate run at `5eb6bea8` — the §6.6 acceptance pass (2026-11-08)
+### Gate run at `5eb6bea8` — the §6.6 acceptance pass (2026-11-08; pre-rebase hashes, see the 2026-11-09 section above)
 
 Working tree clean; `feature/realtime-collaboration` at `5eb6bea8`
 (`a47641fb` plus the preceding docs commit) on top of the pushed head
@@ -671,29 +729,48 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 
 ### 6.6 Cleanup and submission
 
-- The publication slice (limitation 12) is `a47641fb` on
-  `feature/realtime-collaboration`, local and not pushed.
-- **Gates at `5eb6bea8` are green** (§4): fmt, both clippy scopes, 124 collab
-  tests, 6/6 e2e (including the two-room commit test), `cargo check -p
-  pdfcraft --features collab`, `cargo xtask layers`, and the UI suite
-  (2310 passed across all targets) with one parallel-load flake and the known
-  `U+FFFD` font failure. No code change was needed for this pass.
-- **Pushed head, verified 2026-11-08:** PR #6622 (`storytold/pdfcraft`, open,
-  not a draft, `MERGEABLE`, 53 changed files) has head
-  `0f286ed9028564fdf14c26eeca98cf19ce51a725`, owner `copoka`;
-  `gh pr view 6622` and `git ls-remote fork
-  refs/heads/feature/realtime-collaboration` agree. The local branch is two
-  commits ahead — `a47641fb` (publication outside the hub lock) and `5eb6bea8`
-  (docs). Nothing was pushed in this session.
-- **The live PR body is stale, even for the pushed head.** Against
-  `PR-DRAFT.md` it still says "other users' cursors are not drawn", lists only
-  notes/replies/form values/page rotate-move-delete as shared, says deleting a
-  comment or a page cannot be undone, and says the control plane provisions
-  rooms "as a directory today" — all four are wrong at `0f286ed9` (§6.2, §6.4,
-  §6.5). It also lacks the e2e line about the commit callback running outside
-  the hub lock, which only becomes true at `a47641fb`. Replace the body with
-  `PR-DRAFT.md` (from `## What` on) when the slice is pushed; editing the PR
-  text is a publication action and needs the owner's approval.
+- **Rebase onto `origin/main`.** The branch had already been rebased onto
+  `43f24aa1` (2026-11-08; that rebase had one conflict in
+  `crates/engine/src/session/editing.rs` — main's
+  `apply_reporting`/`prepare_text` split against this branch's `apply_remote`
+  with a `record_undo` flag; the resolution makes `apply`, `prepare_text` and
+  `apply_remote` all call `apply_reporting(id, edit, record_undo)`, so the
+  remote path still clears the local snapshot history). `main` then moved to
+  `8d5d39ef` and the branch was rebased onto it on 2026-11-09 with **no
+  conflicts** (§4). The rebased tip before the docs commits is `faad6b79`; the
+  pre-rebase head is kept as `backup/pre-rebase-7628b605`.
+- **Gates at the rebased tip `faad6b79` are green** (§4): `cargo fmt --all
+  --check`; clippy for the nine collab crates plus the daemon and for
+  `pdfcraft-ui-egui --features collab`, `--all-targets -- -D warnings` (this
+  one had to be re-run: the first attempt's `clippy-driver` children were
+  SIGTERMed under machine memory pressure); 125 collab tests (proto 12,
+  server 18, hub 4, client 12, client-pdf 13, session 2, ws 6 unit, pdf 20,
+  annot 10, daemon 27 + the crash-recovery test), 6/6 e2e (the two-room commit
+  test included); `cargo check -p pdfcraft --features collab`;
+  `cargo xtask layers` (50 crates, no violations); the wasm check for
+  `collab-client-pdf`; and the UI suite — 2440 passed across all targets
+  (`--lib` 840 + 1 ignored, `it` 1582 + 4 ignored, ocr 6, page_shadows 7, perf
+  4, play 1) with the one known `U+FFFD` font failure
+  (`editing::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone`),
+  which reproduces without the `collab` feature. The parallel-load flake in
+  `control::transport` did not recur.
+- **Nothing was pushed.** `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` and `gh pr view 6622` still report
+  head `333072e8` and `mergeable: CONFLICTING`; the local branch is 41 commits
+  ahead of `origin/main` and 0 behind (the 40 rebased commits plus this STATUS
+  commit). A
+  force-push of the rebased branch would make the PR `MERGEABLE`: HEAD contains
+  `origin/main` and `git merge-tree --write-tree origin/main HEAD` exits 0 with
+  no conflicted paths. Push and editing the PR text are publication actions for
+  the owner.
+- **The live PR body is still stale** (and the draft has to be re-checked
+  against the rebased head). Against `PR-DRAFT.md` it still says "other users'
+  cursors are not drawn", lists only notes/replies/form values/page
+  rotate-move-delete as shared, says deleting a comment or a page cannot be
+  undone, and says the control plane provisions rooms "as a directory today" —
+  all four are wrong in this branch (§6.2, §6.4, §6.5). It also lacks the e2e
+  line about the commit callback running outside the hub lock. Replace the body
+  with `PR-DRAFT.md` (from `## What` on) when the branch is pushed.
 - Remaining limitations to state in that body: no web client/host bridge
   (§6.3), no publication queue (a failed cabinet POST is retried only by the
   next commit or the last-client-leave commit), no endpoint to resolve a
@@ -704,10 +781,8 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 - Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
   limitation 12 (§8.2, §9, §16 p. 9).
 - Add an automation/parity entry once the feature is user-facing.
-- Gates are re-run (above and §4) and PR #6622 is open, not a draft; what is
-  left is pushing `a47641fb` + docs and replacing the PR text with
-  `PR-DRAFT.md`. No CI changes in the feature PR. The body is not in this tree:
-  the cabinet-office checkout keeps the draft at `pdfcraft/PR-DRAFT.md` and the
+- No CI changes in the feature PR. The body is not in this tree: the
+  cabinet-office checkout keeps the draft at `pdfcraft/PR-DRAFT.md` and the
   checklist at `PR-CHECKLIST.md`; the body must say what was tested, what was
   not, and nothing about who wrote it.
 - RFC v1 was proposed on the bus (`20261108T115119Z-pdfcraft-9830`). Approvals
