@@ -2993,6 +2993,36 @@ fn a_calculated_combo_stores_the_export_value_of_the_option_it_names() {
     assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 0, "the display text names the value it already has");
 }
 
+/// An export value names its own option even when an earlier option shows that text, whether a
+/// calculation or the user sets it.
+#[test]
+fn an_export_value_wins_over_an_earlier_options_display_text() {
+    struct Pick;
+    impl Scripts for Pick {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let mut objs = Vec::new();
+    for (name, y) in [("calculated", 10.0), ("chosen", 40.0)] {
+        let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+        add_field(&mut doc, 0, [10.0, y, 100.0, y + 20.0], &kind, Some(name)).unwrap();
+        let obj = field(&fields(&doc), name).obj;
+        doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("ca", "fr"), pair("fr", "France")]))).unwrap();
+        objs.push(obj);
+    }
+    set_field_script(&mut doc, "calculated", "calculate", Some("fr")).unwrap();
+    recalculate_with(&mut doc, &mut Pick).unwrap();
+    set_value(&mut doc, "chosen", &FieldValue::Choice(vec!["fr".into()])).unwrap();
+    for obj in objs {
+        let dict = doc.get(obj).as_dict().cloned().unwrap();
+        assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
+        assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
+    }
+}
+
 #[test]
 fn partial_appearance_keeps_custom_default_appearance_and_font_resources() {
     let mut doc = fixture();

@@ -184,16 +184,16 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             v
         };
         // A combo box result naming an option, by export value or display text, is stored as that
-        // option's export value (the first element of an /Opt pair, ISO 32000-2 Table 231), as
+        // option's export value (the first element of an /Opt pair, ISO 32000-2 Table 234), as
         // `write_value` stores a choice, so /V, /I and exported form data agree.
         let combo = f.kind == FieldKind::Combo;
-        let matched = if combo { f.options.iter().position(|(e, d)| *e == v || *d == v) } else { None };
+        let matched = if combo { option_named(&f, &v) } else { None };
         let v = match matched.and_then(|i| f.options.get(i)) {
             Some((export, _)) => export.clone(),
             None => v,
         };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            // A combo box's /I (its option indices, ISO 32000-2 Table 231) follows the value, as
+            // A combo box's /I (its option indices, ISO 32000-2 Table 234) follows the value, as
             // `write_value` keeps it, so the selection kept never disagrees with the value.
             let picked = matched.and_then(|i| i64::try_from(i).ok());
             doc.update_dict(f.obj, |d| {
@@ -214,6 +214,12 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         }
     }
     Ok(changed)
+}
+
+/// The index of the choice option `v` names: the option whose export value it is, else the first
+/// whose display text it is, so a display text never shadows a later option's export value.
+fn option_named(f: &Field, v: &str) -> Option<usize> {
+    f.options.iter().position(|(e, _)| e == v).or_else(|| f.options.iter().position(|(_, d)| d == v))
 }
 
 /// The fields whose calculation differs between two readings of a form, matched by field object
@@ -304,7 +310,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // Accept export values or display texts; free text only in editable combo boxes.
             let mut exports = Vec::new();
             for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
+                match option_named(f, v).and_then(|i| f.options.get(i)) {
                     Some((e, _)) => exports.push(e.clone()),
                     None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
                     None if f.options.is_empty() => exports.push(v.clone()),

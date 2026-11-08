@@ -3170,6 +3170,7 @@ event.value = v;",
     .unwrap();
     s.apply(id, script("size", "event.value = this.getField(\"origin\").value > 5 ? \"Large\" : \"Small\";")).unwrap();
     s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty(), "both scripts ran to the end");
     let doc = s.get(id).unwrap();
     let value = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
     assert_eq!(value("kept").as_deref(), None, "event.value, set to the field's own value, decides");
