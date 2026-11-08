@@ -8079,6 +8079,14 @@ fn detecting_comb_boxes_through_tools() {
 fn comparing_documents_through_tools() {
     let dir = workdir("compare");
     let mut a = auto(&dir);
+    let compare_tool = tools().into_iter().find(|tool| tool.name == "doc_compare").expect("compare tool");
+    assert!(
+        compare_tool.input_schema["properties"]["visual"]["description"]
+            .as_str()
+            .is_some_and(|description| { description.contains("each with a kind: annotation, image or other") }),
+        "{:?}",
+        compare_tool.input_schema
+    );
     let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Rent is 900 per month. Pets are not allowed." }))["doc"].as_u64().unwrap();
     let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Rent is 950 per month. Pets are allowed. Parking included." }))["doc"]
         .as_u64()

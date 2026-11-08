@@ -445,6 +445,76 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     Ok(out)
 }
 
+/// The visible bounds of inline images (`BI … ID … EI`) drawn on a page, including images inside
+/// Form XObjects. Coordinates are in user space and clipped like [`reading_images`].
+pub fn reading_inline_image_rects(doc: &Document, page: usize) -> Result<Vec<[f64; 4]>, EditError> {
+    struct Forms {
+        path: Vec<ObjRef>,
+        budget: crate::text::FormBudget,
+    }
+    fn walk(
+        doc: &Document,
+        ops: &[Op],
+        resources: &Dict,
+        state: &mut ImageState,
+        forms: &mut Forms,
+        out: &mut Vec<[f64; 4]>,
+    ) -> Result<(), EditError> {
+        let mut held = None;
+        let xobjects = crate::text::resource_dict(doc, resources, b"XObject", &mut held);
+        for op in ops {
+            state.apply(op)?;
+            let ctm = state.placement.matrix;
+            if op.is("BI") {
+                let rect = ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+                if rect.iter().all(|value| value.is_finite())
+                    && let Some(visible) = intersection(rect, state.placement.clip)
+                {
+                    if out.len() >= MAX_PAGE_IMAGES {
+                        return Err(too_many_images());
+                    }
+                    out.push(visible);
+                }
+                continue;
+            }
+            if !op.is("Do") {
+                continue;
+            }
+            let Some(name) = op.name(0) else { continue };
+            let Some(form) = crate::text::form_call(doc, resources, name, ctm, &forms.path, &mut forms.budget) else { continue };
+            if let Some(reference) = form.obj {
+                forms.path.push(reference);
+            }
+            let bounds = xobjects
+                .and_then(|objects| objects.get(name))
+                .map(|object| doc.resolve(object))
+                .and_then(|object| object.as_dict().and_then(|dict| dict.get(b"BBox")).map(|bbox| doc.resolve(bbox)))
+                .and_then(|bbox| {
+                    let [x0, y0, x1, y1] = bbox.as_array()?.as_slice() else { return None };
+                    Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
+                });
+            let clip = bounds.map_or(state.placement.clip, |bounds| intersection(state.placement.clip, bounds).unwrap_or([0.0; 4]));
+            let mut inner = ImageState::new(form.ctm, clip, state.placement.clips.clone());
+            let inner_resources = form.resources(resources);
+            walk(doc, &parse(&form.data).ops, inner_resources, &mut inner, forms, out)?;
+            if form.obj.is_some() {
+                forms.path.pop();
+            }
+        }
+        Ok(())
+    }
+
+    let page_dict = page_of(doc, page)?;
+    let resources = page_dict.dict.get(b"Resources").map(|value| doc.resolve(value)).and_then(|value| value.as_dict().cloned()).unwrap_or_default();
+    let mut out = Vec::new();
+    let mut state = ImageState::new(Matrix::IDENTITY, page_dict.crop(doc), Vec::new());
+    let mut decode = pdfcraft_cos::DecodeBudget::page();
+    let pieces = joined(&crate::text::content_streams_within(doc, &page_dict.dict, &mut decode)?);
+    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
+    walk(doc, &pieces.parse().ops, &resources, &mut state, &mut forms, &mut out)?;
+    Ok(out)
+}
+
 /// The four stacking order arrangements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrangeOrder {
