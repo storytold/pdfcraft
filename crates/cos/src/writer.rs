@@ -686,7 +686,9 @@ fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
     }
 }
 
-/// Keep an existing `/ID`, or create one with [`new_file_id`].
+/// Keep any existing two-element `/ID` array as it is, even a malformed one such as `[<> <>]` or `[1 2]` (an ordinary
+/// save preserves what it doesn't understand; Save as PDF/A replaces or completes it), or create one with
+/// [`new_file_id`] when there is none or it isn't a two-element array.
 fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     if matches!(trailer.get(b"ID"), Some(Object::Array(a)) if a.len() == 2) {
         return;
