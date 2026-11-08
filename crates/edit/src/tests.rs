@@ -8961,13 +8961,29 @@ fn noop_arrange_is_not_ok_without_change() {
     assert!(r.is_err() || before != after, "Ok with no change");
 }
 
-/// Bring to front on an at-limit image that shares its only content unit with other
-/// paint is a no-op, so it is refused instead of rebuilding the same placement.
+/// Bring to front on an at-limit image that shares its only content unit with paint
+/// already before it is a no-op, so it is refused instead of rebuilding the same placement.
 #[test]
 fn arrange_front_image_in_single_shared_unit_is_refused() {
-    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
     let before = page_content_bytes(&doc, 0);
     assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "an image before following paint in one shared unit can be brought to front");
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do Q q 50 50 10 10 re f Q Q");
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "separate inner units inside a page wrapper can be reordered");
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringForward).is_err());
     assert_eq!(page_content_bytes(&doc, 0), before);
 }
 
