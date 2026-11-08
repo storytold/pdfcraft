@@ -697,11 +697,10 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let spacing = gs.char_spacing + if f.is_space(code, len) { gs.word_spacing } else { 0.0 };
                     let trm = Matrix([size * gs.scale, 0.0, 0.0, size, 0.0, gs.rise]).then(tm).then(&gs.ctm);
                     let metrics = trm.bbox([0.0, f.descent, w0, f.ascent]);
-                    // A Type 3 glyph paints where its whole font matrix puts it: the box covers both.
-                    let b = gs.glyph_box.map_or(metrics, |g| {
-                        let p = trm.bbox(g);
-                        [metrics[0].min(p[0]), metrics[1].min(p[1]), metrics[2].max(p[2]), metrics[3].max(p[3])]
-                    });
+                    // A Type 3 glyph paints where its whole font matrix puts it: the box covers both,
+                    // and the transformed box is kept on its own so it can be tested separately.
+                    let type3 = gs.glyph_box.map(|g| trm.bbox(g));
+                    let b = type3.map_or(metrics, |p| [metrics[0].min(p[0]), metrics[1].min(p[1]), metrics[2].max(p[2]), metrics[3].max(p[3])]);
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
                     let hit = match scope.hidden_text {
@@ -711,7 +710,13 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
                         // (the metrics box is a second test: the union's overlap threshold is wider than a narrow glyph's own)
-                        None => scope.glyph_hit(b, origin) || scope.glyph_hit(metrics, origin),
+                        None => {
+                            scope.glyph_hit(b, origin)
+                                || scope.glyph_hit(metrics, origin)
+                                // On its own: the union box's overlap threshold is set by the larger
+                                // metrics box, which can hide a mark over a narrow glyph.
+                                || type3.is_some_and(|p| scope.glyph_hit(p, origin))
+                        }
                     };
                     glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
