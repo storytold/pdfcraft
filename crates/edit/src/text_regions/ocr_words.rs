@@ -6,9 +6,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 
+use super::grouping::group_blocks;
 use super::grouping::row_rect;
 use super::styled::rewrite_styled_block;
-use super::{BlockStyle, Document, EditError, LineEdit, TextBlock, TextLine, kept_words, word_lines};
+use super::{BlockStyle, Document, EditError, LineEdit, MAX_TYPE3_GLYPHS, TextBlock, TextLine, cover_box, kept_words, text_lines, word_lines};
 
 /// How many times a replacement may be refitted to the room it has before the whole phrase is
 /// redrawn instead. Each try rewrites a copy of the document.
@@ -182,6 +183,12 @@ fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Re
     Ok(drawn.iter().map(|line| line.rect[2]).reduce(f64::max))
 }
 
+/// The edges of the words either side of the stretch `runs`, which a cover stops at. `box_of` gives
+/// a run's box.
+fn cover_limits(runs: &Range<usize>, box_of: impl Fn(usize) -> Option<[f64; 4]>) -> [f64; 2] {
+    [runs.start.checked_sub(1).and_then(&box_of).map_or(f64::NEG_INFINITY, |rect| rect[2]), box_of(runs.end).map_or(f64::INFINITY, |rect| rect[0])]
+}
+
 /// Rewrite each change of `plan` in `doc`, last first: a rewrite goes where its words were or at
 /// the end of the page, so the words before it keep their indexes (an error if they don't). Gives
 /// how far right each drew.
@@ -215,11 +222,7 @@ fn apply(
         let own_scale = indices.first().and_then(|i| before.get(*i)).map_or(1.0, |line| line.origin.state.scale);
         style.scale = change.squeeze.map(|squeeze| squeeze * own_scale * 100.0);
         // The words on either side stay, with all their ink.
-        let edge = |run: Option<usize>| run.and_then(|run| members.get(run)).and_then(|i| before.get(*i)).map(|line| line.rect);
-        style.cover_between = Some([
-            edge(change.runs.start.checked_sub(1)).map_or(f64::NEG_INFINITY, |rect| rect[2]),
-            edge(Some(change.runs.end)).map_or(f64::INFINITY, |rect| rect[0]),
-        ]);
+        style.cover_between = Some(cover_limits(&change.runs, |run| members.get(run).and_then(|i| before.get(*i)).map(|line| line.rect)));
         let edit = rewrite_styled_block(doc, page, &part, &before, Some(&change.text), &style, max_glyphs)?;
         substituted = substituted.or(edit.substituted);
         let right = drawn_right(&before, indices, &word_lines(doc, page)?)?;
@@ -257,19 +260,26 @@ fn make_room(change: &Change, right: f64, boxes: &[[f64; 4]], squeezes: &mut BTr
     true
 }
 
-/// Rewrite only the words `draft` changes in the invisible phrase `phrase`, or `None` when this
-/// edit is not one that can (it changes the formatting or the lines, the phrase is turned or
-/// right-to-left, or its words can't be told apart or kept in place): the caller then rewrites the
-/// whole phrase. Nothing changes in `doc` unless the whole edit works.
-pub(crate) fn rewrite_changed_words(
-    doc: &mut Document,
-    page: usize,
-    phrase: &TextBlock,
-    joined: &[TextLine],
-    draft: &str,
-    style: &BlockStyle,
-    max_glyphs: usize,
-) -> Option<LineEdit> {
+/// What fitting a draft to the phrase's words came to: the edit written into a copy of the document,
+/// and where everything went.
+struct Fitted {
+    doc: Document,
+    substituted: Option<String>,
+    /// The draft's words.
+    new_words: usize,
+    kept_as: Vec<Option<usize>>,
+    /// How many words each run holds, and its box.
+    counts: Vec<usize>,
+    boxes: Vec<[f64; 4]>,
+    baselines: Vec<f64>,
+    plan: Vec<Change>,
+    rights: Vec<Option<f64>>,
+}
+
+/// Fit `draft` to the invisible phrase `phrase` on a copy of `doc`, or `None` when this edit can't
+/// keep words: it changes the formatting or the lines, the phrase is turned or right-to-left, or
+/// its words can't be told apart or kept in place.
+fn fit(doc: &Document, page: usize, phrase: &TextBlock, joined: &[TextLine], draft: &str, style: &BlockStyle, max_glyphs: usize) -> Option<Fitted> {
     let right_to_left = |text: &str| text.chars().any(crate::bidi::is_rtl);
     if !style.changed_words_only
         || !phrase.invisible
@@ -301,6 +311,7 @@ pub(crate) fn rewrite_changed_words(
     let kept_as = kept_words(&old, &new)?;
     let counts: Vec<usize> = runs.iter().map(Vec::len).collect();
     let boxes: Vec<[f64; 4]> = members.iter().filter_map(|i| lines.get(*i)).map(|line| line.rect).collect();
+    let baselines: Vec<f64> = members.iter().filter_map(|i| lines.get(*i)).map(|line| line.origin.baseline).collect();
     let mut redrawn = BTreeSet::new();
     let mut squeezes = BTreeMap::new();
     for _ in 0..MAX_TRIES {
@@ -320,11 +331,102 @@ pub(crate) fn rewrite_changed_words(
             }
         }
         if !again {
-            *doc = trial;
-            return Some(LineEdit { substituted });
+            return Some(Fitted { doc: trial, substituted, new_words: new.len(), kept_as, counts, boxes, baselines, plan, rights });
         }
     }
     None
+}
+
+/// Rewrite only the words `draft` changes in the invisible phrase `phrase`, or `None` when this
+/// edit is not one that can ([`fit`]): the caller then rewrites the whole phrase. Nothing changes
+/// in `doc` unless the whole edit works.
+pub(crate) fn rewrite_changed_words(
+    doc: &mut Document,
+    page: usize,
+    phrase: &TextBlock,
+    joined: &[TextLine],
+    draft: &str,
+    style: &BlockStyle,
+    max_glyphs: usize,
+) -> Option<LineEdit> {
+    let fitted = fit(doc, page, phrase, joined, draft, style, max_glyphs)?;
+    *doc = fitted.doc;
+    Some(LineEdit { substituted: fitted.substituted })
+}
+
+/// Words of a draft an applied edit will draw, and where (user space).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawnWords {
+    pub text: String,
+    pub rect: [f64; 4],
+    pub baseline: f64,
+}
+
+/// What applying a text-only draft to an OCR phrase will do, from the fit Apply itself runs: so an
+/// editor can show the scan under the words that stay, and the result of the rest.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WordPreview {
+    /// The word boxes Apply covers, as it pads them (user space).
+    pub covers: Vec<[f64; 4]>,
+    pub drawn: Vec<DrawnWords>,
+    /// Where each word of the draft sits: its byte range in the draft and its box (user space).
+    pub placed: Vec<(Range<usize>, [f64; 4])>,
+}
+
+/// The byte range of the draft's words `words` together.
+fn span_of(ranges: &[Range<usize>], words: Range<usize>) -> Option<Range<usize>> {
+    if words.is_empty() {
+        return None;
+    }
+    let first = ranges.get(words.start)?;
+    let last = ranges.get(words.end.checked_sub(1)?)?;
+    Some(first.start..last.end)
+}
+
+impl Fitted {
+    fn preview(&self, draft: &str) -> WordPreview {
+        let ranges = word_ranges(draft);
+        let mut out = WordPreview::default();
+        if ranges.len() != self.new_words {
+            return out;
+        }
+        for (change, right) in self.plan.iter().zip(&self.rights) {
+            let between = cover_limits(&change.runs, |run| self.boxes.get(run).copied());
+            out.covers.extend(self.boxes.get(change.runs.clone()).unwrap_or_default().iter().map(|rect| cover_box(*rect, Some(between))));
+            let (Some(first), Some(baseline)) = (self.boxes.get(change.runs.start), self.baselines.get(change.runs.start)) else { continue };
+            let Some(span) = span_of(&ranges, change.words.clone()) else { continue };
+            let right = right.unwrap_or(first[2]);
+            let rect = [first[0], first[1], right, first[3]];
+            out.drawn.push(DrawnWords { text: change.text.clone(), rect, baseline: *baseline });
+            out.placed.push((span, rect));
+        }
+        let mut token = 0usize;
+        for (run, count) in self.counts.iter().enumerate() {
+            let words = self.kept_as.get(token..token.saturating_add(*count)).unwrap_or_default();
+            token = token.saturating_add(*count);
+            if self.plan.iter().any(|change| change.runs.contains(&run)) {
+                continue;
+            }
+            let (Some(Some(at)), Some(rect)) = (words.first(), self.boxes.get(run)) else { continue };
+            if let Some(span) = span_of(&ranges, *at..at.saturating_add(*count)) {
+                out.placed.push((span, *rect));
+            }
+        }
+        out.placed.sort_by_key(|(span, _)| span.start);
+        out
+    }
+}
+
+/// What applying the text-only `draft` to paragraph `block` will do, or `None` when it would redraw
+/// the whole phrase. `doc` is not changed.
+pub fn word_preview(doc: &Document, page: usize, block: usize, draft: &str) -> Option<WordPreview> {
+    let joined = text_lines(doc, page).ok()?;
+    let phrase = group_blocks(&joined).into_iter().nth(block)?;
+    if !phrase.invisible {
+        return None;
+    }
+    let style = BlockStyle { changed_words_only: true, ..BlockStyle::default() };
+    Some(fit(doc, page, &phrase, &joined, draft, &style, MAX_TYPE3_GLYPHS)?.preview(draft))
 }
 
 #[cfg(test)]
@@ -403,6 +505,14 @@ mod tests {
         let (mut squeezes, mut redrawn) = (BTreeMap::new(), BTreeSet::new());
         let change = Change { runs: 0..1, words: 0..1, text: "x".to_owned(), squeeze: None };
         (make_room(&change, right, &BOXES, &mut squeezes, &mut redrawn), squeezes, redrawn)
+    }
+
+    #[test]
+    fn a_span_of_words_runs_from_the_first_to_the_last() {
+        assert_eq!(span_of(&word_ranges("ab  é c "), 0..2), Some(0..6));
+        assert_eq!(span_of(&word_ranges("ab"), 0..0), None, "no words");
+        assert_eq!(span_of(&word_ranges("ab c"), 1..1), None, "no words, past the first");
+        assert_eq!(span_of(&word_ranges("ab"), 1..2), None, "past the end");
     }
 
     #[test]

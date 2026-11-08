@@ -68,12 +68,21 @@ pub(super) struct ParagraphCover<'a> {
     /// The measured extent of this paragraph's draft on screen, once the textless page has measured it.
     draft_rect: Option<Rect>,
     cover: bool,
+    /// For a draft of an OCR phrase that keeps its words, what Apply will cover and draw, painted
+    /// instead of the cover: the scan shows through everywhere else.
+    words: Option<Vec<Shape>>,
     laid: Option<Laid>,
 }
 
 impl<'a> ParagraphCover<'a> {
     pub(super) fn new(doc: &'a pdfcraft_engine::Document, ed: &'a LineEditor, scale: f32, room: f32, draft_rect: Option<Rect>, cover: bool) -> Self {
-        ParagraphCover { common: Common::new(), doc, ed, scale, room, draft_rect, cover, laid: None }
+        ParagraphCover { common: Common::new(), doc, ed, scale, room, draft_rect, cover, words: None, laid: None }
+    }
+
+    /// Paint `shapes`, the covers and words of the draft's word plan, instead of the cover.
+    pub(super) fn words(mut self, shapes: Option<Vec<Shape>>) -> Self {
+        self.words = shapes;
+        self
     }
 
     /// The paragraph laid out for the pass: by paint, which keeps it for finish, or by finish when no paint ran.
@@ -84,19 +93,25 @@ impl<'a> ParagraphCover<'a> {
         // the page edge, paragraphs rewrap at their source width, and the visible frame grows/shrinks vertically with
         // their rows. An OCR phrase (several stretched words on one scanned line) also grows rightwards.
         let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-        let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+        let words = ed.current_words();
+        let width = if let Some(words) = words {
+            // Where the engine puts the last word.
+            let source_left = ed.source.as_ref().map_or(0.0, |(block, _)| block.rect[0]);
+            let right = words.placed.iter().map(|(_, rect)| rect[2]).fold(source_left, f64::max);
+            ed.rect.width().max(((right - source_left) as f32 * scale).ceil())
+        } else if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
             let job = editor_job(ctx, ed, &faces, &ed.text, scale, f32::INFINITY);
             let natural = ctx.fonts_mut(|f| f.layout_job(job)).size().x;
             natural.max(ed.size * 0.4).min(self.room)
         } else {
             ed.rect.width().max(1.0)
         };
-        let measured = editor_galley(ctx, ed, &faces, &ed.text, scale, width);
+        let measured = editor_galley(ctx, ed, &faces, &ed.text, scale, width, words);
         let overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
         let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(vec2(1.0, 1.0)));
         // Unsupported source programs use an interface fallback whose glyph advances can differ from the PDF's. Keep
         // every visible row inside the growing frame.
-        let live = self.draft_rect.map_or(visible, |bounds| bounds.union(visible));
+        let live = if words.is_some() { ed.rect.union(visible) } else { self.draft_rect.map_or(visible, |bounds| bounds.union(visible)) };
         Laid { faces, width, overflow, live }
     }
 }
@@ -129,6 +144,10 @@ impl Component for ParagraphCover<'_> {
         let laid = self.lay_out(cx, &cx.response.ctx);
         let live = laid.live;
         self.laid = Some(laid);
+        if let Some(words) = self.words.take() {
+            ui.content_painter(cx).data_shapes(words);
+            return;
+        }
         if !self.cover {
             return;
         }
