@@ -1557,3 +1557,23 @@ fn image_paste_and_home_notifications_are_translated() {
         }
     }
 }
+
+/// These notices use the shared catalog when it has a row; missing translations keep English.
+/// Completeness belongs to craft-i18n and must not make an English-only app build fail.
+#[test]
+fn javascript_web_notices_use_shared_catalogs_or_english_fallback() {
+    for source in ["Opening local files from JavaScript is unavailable on the web", "Interactive JavaScript menus require the desktop application"] {
+        assert_eq!(tr(Lang::EN, source), source);
+        for language in Lang::all() {
+            let translated = tr(language, source);
+            assert!(!translated.is_empty());
+            if !has(language, source) {
+                assert_eq!(translated, source, "missing {} row falls back to English", language.code());
+            } else if let Some((_, _, expected)) =
+                rows(app_catalog(language.code())).into_iter().find(|(context, key, _)| context.is_empty() && key == source)
+            {
+                assert_eq!(translated, expected, "{} uses its embedded PdfCraft row", language.code());
+            }
+        }
+    }
+}

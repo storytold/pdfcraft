@@ -355,6 +355,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        effects_enabled: true,
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),
@@ -2071,4 +2072,402 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+#[test]
+fn popup_cancellation_and_link_document_target() {
+    let e = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let o = go("if (event.target !== this) throw Error('target'); app.popUpMenuEx({cName:'A',cReturn:''})", &e);
+    assert_eq!(o.error, None);
+    assert_eq!(o.result.as_deref(), Some(""));
+}
+
+#[test]
+fn document_initialization_uses_open_event() {
+    let o = run(
+        "console.println(event.type + ':' + event.name)",
+        &Event { kind: "Link".into(), ..Event::doc("Mouse Up") },
+        &doc(),
+        &[],
+        &["if (event.name !== 'Open' || event.target !== this) throw Error('initialization'); var ready=1;".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.console, ["Link:Mouse Up"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn popup_resumes_same_execution_and_validates_choices() {
+    for choice in [Some("next"), None, Some("forged")] {
+        let rx = interactive("var count=1; var c=app.popUpMenuEx.apply(app,[{cName:'Group',oSubMenu:[{cName:'Next',cReturn:'next'},{cName:'Disabled',cReturn:'bad',bEnabled:false}]}]); count++; console.println(count); if(c==='next') this.pageNum=2;".into(),
+            Event { kind:"Link".into(), ..Event::doc("Mouse Up") }, doc(), vec![], vec![]).unwrap();
+        match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+            InteractiveEvent::Menu(items, reply) => {
+                assert_eq!(items[0].children[0].value, "next");
+                assert!(!items[0].children[1].enabled);
+                reply.send(choice.map(str::to_string)).unwrap();
+            }
+            _ => panic!("menu expected"),
+        }
+        let InteractiveEvent::Complete(o) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+        if choice == Some("forged") {
+            assert!(o.error.is_some());
+        } else {
+            assert_eq!(o.error, None);
+            assert_eq!(o.console, ["2"]);
+            assert_eq!(o.requests, if choice.is_some() { vec![Request::GoToPage(2)] } else { vec![] });
+        }
+    }
+}
+
+#[test]
+fn popup_limits_and_open_doc_are_fail_closed() {
+    let o = go("var a={cName:'cycle'}; a.oSubMenu=a; app.popUpMenuEx(a)", &Event::doc("Console"));
+    assert!(o.error.is_some());
+    let o = go("app.openDoc({cPath:'relative.pdf'})", &Event::doc("Console"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.requests, [Request::OpenDoc("relative.pdf".into())]);
+    let o = go("app.popUpMenuEx({cName:'blank',cReturn:''}) === null", &Event::doc("Console"));
+    assert_eq!(o.result.as_deref(), Some("true"));
+}
+
+#[test]
+fn initialization_aggregate_limit_preserves_field_value() {
+    let e = Event::field("Validate", "price", "17");
+    let scripts = vec![String::new(); 1025];
+    let o = run("", &e, &doc(), &fields(), &scripts, Limits::default());
+    assert!(o.error.is_some());
+    assert_eq!(o.value, "17");
+    assert!(o.rc);
+}
+
+#[test]
+fn remediation_finite_menu_depth_boundary() {
+    for (depth, rejected) in [(16, false), (17, true)] {
+        let script = format!("var a={{cName:'leaf'}};for(var i=0;i<{depth};i++)a={{cName:'parent',oSubMenu:a}};app.popUpMenuEx(a)");
+        let o = run(&script, &Event::doc("Console"), &DocInfo::default(), &[], &[], Limits::default());
+        println!("DEPTH {depth} error={:?}", o.error);
+        assert_eq!(o.error.is_some(), rejected, "finite tree below the node cap must test depth independently");
+    }
+}
+
+#[test]
+fn remediation_existing_events_keep_their_context_and_saved_fields() {
+    let fields = vec![FieldState::new("price", FieldType::Text, vec!["17".into()])];
+    for event in [
+        Event::doc("Console"),
+        Event::doc("WillSave"),
+        Event::field("Calculate", "price", "17"),
+        Event::field("Validate", "price", "17"),
+        Event::field("Mouse Up", "price", "17"),
+    ] {
+        let init = "if(event.name==='Open')getField('price').value='0';var count=1;var serialized=JSON.stringify(event);";
+        let out = run(
+            "if(!Object.prototype.propertyIsEnumerable.call(this,'event'))throw Error('legacy binding');count++;console.println(count);console.println(event.type+':'+event.name);event.value='done'",
+            &event,
+            &doc(),
+            &fields,
+            &[init.into()],
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{event:?}");
+        assert!(out.changed.is_empty(), "non-Open initializer changed saved fields: {event:?}");
+        assert_eq!(out.console, ["2".to_owned(), format!("{}:{}", event.kind, event.name)]);
+        assert_eq!(out.value, "done");
+    }
+    let open = run(
+        "console.println(count)",
+        &Event::doc("Open"),
+        &doc(),
+        &fields,
+        &["if(event.name==='Open')getField('price').value='0';var count=1;".into()],
+        Limits::default(),
+    );
+    assert_eq!(open.error, None);
+    assert_eq!(open.console, ["1"]);
+    assert_eq!(open.changed.len(), 1);
+    assert_eq!(open.changed[0].value, ["0"]);
+    for name in ["Console", "Open", "WillSave"] {
+        let out = run("JSON.stringify(event)", &Event::doc(name), &doc(), &[], &[], Limits::default());
+        assert_eq!(out.error, None, "{name}");
+        assert!(out.result.unwrap().contains(name));
+    }
+}
+
+#[test]
+fn remediation_link_initialization_and_target_are_serializable() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let init = "if(event.type!=='Doc'||event.name!=='Open'||event.target!==this)throw Error('init');JSON.stringify(event);var initialized=1;";
+    let out = run(
+        "JSON.stringify(event);if(event.target!==this)throw Error('target');initialized++;console.println(initialized);console.println(event.type+':'+event.name)",
+        &event,
+        &doc(),
+        &[],
+        &[init.into()],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.console, ["2", "Link:Mouse Up"]);
+}
+
+/// Synchronizing #3985 keeps ordinary field initialization tolerant while Link initialization
+/// remains fail-closed, in both the synchronous and interactive hosts.
+#[test]
+fn sync_document_script_errors_remain_fatal_for_links() {
+    let scripts = vec!["console.println('init'); throw Error('broken initializer');".to_owned(), "console.println('later');".to_owned()];
+    let action = "console.println('action'); event.value='ran';";
+    let field = run(action, &Event::field("Calculate", "qty", "keep"), &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(field.error, None);
+    assert_eq!(field.value, "ran");
+    assert_eq!(field.doc_errors.len(), 1);
+    assert_eq!(field.console, ["init", "later", "action"]);
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let link = run(action, &event, &doc(), &fields(), &scripts, Limits::default());
+    assert!(link.error.as_deref().is_some_and(|e| e.contains("broken initializer")));
+    assert_eq!(link.console, ["init"]);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let rx = interactive(action.into(), event, doc(), fields(), scripts).unwrap();
+        let InteractiveEvent::Complete(out) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("broken initializer")));
+        assert_eq!(out.console, ["init"]);
+    }
+}
+
+/// Refusing a document initializer at preflight skips it for a field, but never silently runs
+/// a Link action with incomplete initialization. The aggregate initialization bound also stays.
+#[test]
+fn sync_refused_initializers_do_not_run_link_actions() {
+    let scripts = vec![format!("var deep={}1{};", "(".repeat(10_000), ")".repeat(10_000))];
+    let action = "console.println('action');";
+    let field = run(action, &Event::field("Calculate", "qty", ""), &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(field.error, None);
+    assert_eq!(field.console, ["action"]);
+    assert_eq!(field.doc_errors.len(), 1);
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let link = run(action, &event, &doc(), &fields(), &scripts, Limits::default());
+    assert!(link.error.is_some());
+    assert!(link.console.is_empty());
+    #[cfg(not(target_arch = "wasm32"))]
+    assert!(interactive(action.into(), event, doc(), fields(), scripts).is_err());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn empty_popup_does_not_request_interaction_or_shift_choices() {
+    let rx = interactive("if(app.popUpMenuEx()!==null)throw Error('empty');var a=app.popUpMenuEx({cName:'First',cReturn:'a'});app.popUpMenuEx.apply(app,[]);var b=app.popUpMenuEx({cName:'Second',cReturn:'b'});console.println(a+':'+b);".into(), Event { kind:"Link".into(), ..Event::doc("Mouse Up") }, doc(), vec![], vec![]).unwrap();
+    for value in ["a", "b"] {
+        let InteractiveEvent::Menu(items, reply) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("menu expected") };
+        // Always release a received worker, including the red run's empty menu.
+        let valid = items.len() == 1 && items[0].value == value;
+        reply.send(if valid { Some(value.to_owned()) } else { None }).unwrap();
+        assert!(valid, "empty popup consumed an interactive choice: {items:?}");
+    }
+    let InteractiveEvent::Complete(out) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+    assert_eq!(out.error, None);
+    assert_eq!(out.console, ["a:b"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn nonempty_unselectable_popups_still_rendezvous_and_cancel() {
+    let rx = interactive(
+        "var a=app.popUpMenuEx({cName:'Disabled',bEnabled:false});var b=app.popUpMenuEx({cName:'-'});console.println(a===null&&b===null);".into(),
+        Event::doc("Console"),
+        doc(),
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    for name in ["Disabled", "-"] {
+        let InteractiveEvent::Menu(items, reply) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("menu expected") };
+        assert_eq!(items[0].name, name);
+        reply.send(None).unwrap();
+    }
+    let InteractiveEvent::Complete(out) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+    assert_eq!(out.error, None);
+    assert_eq!(out.console, ["true"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn empty_popups_keep_the_interactive_call_limit() {
+    let rx = interactive("for(var i=0;i<33;i++)app.popUpMenuEx();".into(), Event::doc("Console"), doc(), vec![], vec![]).unwrap();
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+            InteractiveEvent::Menu(_, reply) => reply.send(None).unwrap(),
+            InteractiveEvent::Complete(out) => {
+                assert!(out.error.as_deref().is_some_and(|e| e.contains("too many popup menus")));
+                break;
+            }
+        }
+    }
+}
+
+#[test]
+fn pr2081_current_document_base_returns_only_a_deferred_request() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:this})",
+        "app.openDoc('other.pdf',this)",
+        "app.openDoc('other.pdf',event.target)",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:''})",
+        "app.openDoc('other.pdf',null)",
+    ] {
+        let out = go(&format!("getField('price').value='17';console.println({call}===null);"), &event);
+        assert_eq!(out.error, None, "{call}");
+        assert_eq!(out.requests, [Request::OpenDoc("other.pdf".into())], "{call}");
+        assert_eq!(out.console, ["true"], "consent has not returned a live document: {call}");
+        assert_eq!(out.changed.iter().find(|field| field.name == "price").unwrap().value, ["17"]);
+    }
+}
+
+#[test]
+fn pr2081_current_document_base_rejects_other_objects_and_options() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:{}})",
+        "app.openDoc('other.pdf',{})",
+        "app.openDoc('other.pdf',Object.create(this))",
+        "app.openDoc('other.pdf',new Proxy(this,{}))",
+        "app.openDoc('other.pdf',getField('price'))",
+        "app.openDoc('other.pdf',this,true)",
+        "app.openDoc('other.pdf',this,'CHTTP')",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:'CHTTP'})",
+    ] {
+        let out = go(call, &event);
+        assert!(
+            out.error.as_deref().is_some_and(|error| error.contains("openDoc")),
+            "unsupported base or option accepted, or failed before its guard: {call}: {:?}",
+            out.error
+        );
+        assert!(out.requests.is_empty() && out.changed.is_empty(), "refusal must not queue an effect: {call}");
+    }
+}
+
+/// Rebuilding function definitions is not permission to replay the document's effects.
+#[test]
+fn deepseek_non_link_bootstrap_reads_current_state_without_replaying_effects() {
+    let scripts = vec!["getField('price').value=0;getField('price').readonly=true;getField('agree').checkThisBox(0,true);this.pageNum=2;resetForm();print();app.alert('bootstrap');app.launchURL('https://example.invalid');app.openDoc('other.pdf');event.value='init';event.rc=false;var seen=getField('price').value;var pageSeen=this.pageNum;function amount(){return seen*2;}".into()];
+    for event in [
+        Event::doc("Console"),
+        Event::field("Calculate", "total", "unchanged"),
+        Event::field("Validate", "qty", "unchanged"),
+        Event::field("Keystroke", "qty", "unchanged"),
+        Event::field("Format", "qty", "unchanged"),
+        Event::field("Mouse Up", "agree", "unchanged"),
+    ] {
+        let out = run(
+            "console.println(seen+':'+pageSeen);event.value=amount();getField('total').value=amount();",
+            &event,
+            &doc(),
+            &fields(),
+            &scripts,
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{event:?}");
+        assert_eq!(out.console, ["12.5:0"], "initialization reads authoritative values, not discarded temporary writes: {event:?}");
+        assert_eq!(out.value, "25");
+        assert!(out.rc);
+        // Upstream keeps initialization diagnostics for ordinary/inactive XFA containers.
+        assert_eq!(out.alerts, [Message::plain("bootstrap")], "initializer diagnostic was lost: {event:?}");
+        assert!(out.requests.is_empty(), "initializer requests escaped: {event:?}: {:?}", out.requests);
+        assert_eq!(out.changed.len(), 1, "initializer field writes escaped: {event:?}");
+        assert_eq!(out.changed[0].name, "total");
+        assert_eq!(out.changed[0].value, ["25"]);
+    }
+}
+
+#[test]
+fn deepseek_event_effects_and_explicit_initialization_still_work() {
+    let scripts=vec!["function update(){getField('price').value=5;getField('price').required=true;resetForm(['qty']);print();app.launchURL('https://example.invalid');this.pageNum=1;}".into()];
+    let out = run("update();", &Event::field("Calculate", "total", ""), &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(out.error, None);
+    assert_eq!(out.changed.len(), 1);
+    assert_eq!(out.changed[0].value, ["5"]);
+    assert!(out.changed[0].required);
+    assert_eq!(
+        out.requests,
+        [Request::Reset(vec!["qty".into()]), Request::Print, Request::LaunchUrl("https://example.invalid".into()), Request::GoToPage(1)]
+    );
+    let open = run("", &Event::doc("Open"), &doc(), &fields(), &["event.value='explicit open';event.rc=false;".into()], Limits::default());
+    assert_eq!(open.value, "explicit open");
+    assert!(!open.rc);
+    for event in [Event::doc("Open"), Event { kind: "Link".into(), ..Event::doc("Mouse Up") }] {
+        let out = run(
+            "console.println(getField('price').value);",
+            &event,
+            &doc(),
+            &fields(),
+            &["getField('price').value=0;this.pageNum=1;".into()],
+            Limits::default(),
+        );
+        assert_eq!(out.error, None);
+        assert_eq!(out.console, ["0"]);
+        assert_eq!(out.changed[0].value, ["0"]);
+        assert_eq!(out.requests, [Request::GoToPage(1)]);
+    }
+}
+
+#[test]
+fn deepseek_open_doc_rejects_extra_arguments_in_both_forms() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'x.pdf'},true)",
+        "app.openDoc({cPath:'x.pdf'},this)",
+        "app.openDoc({cPath:'x.pdf'},null,true)",
+        "app.openDoc('x.pdf',this,true)",
+        "app.openDoc('x.pdf',this,null,true)",
+    ] {
+        let out = go(call, &event);
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("openDoc")), "{call}: {:?}", out.error);
+        assert!(out.requests.is_empty(), "{call}");
+    }
+    for call in ["app.openDoc({cPath:'x.pdf',oDoc:this})", "app.openDoc({cPath:'x.pdf'},null,undefined)", "app.openDoc('x.pdf',this,null,undefined)"]
+    {
+        let out = go(call, &event);
+        assert_eq!(out.error, None, "{call}");
+        assert_eq!(out.requests, [Request::OpenDoc("x.pdf".into())]);
+    }
+}
+
+/// A bounded lifetime probe, not a termination guarantee: each worker waits on a held
+/// menu reply, a short receive deadline expires, and abandoning its receiver leaves it alive.
+#[cfg(windows)]
+#[test]
+fn deepseek_abandoning_receivers_does_not_terminate_workers() {
+    fn threads() -> usize {
+        let command = format!("(Get-Process -Id {}).Threads.Count", std::process::id());
+        let out = std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &command]).output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().parse().unwrap()
+    }
+    let before = threads();
+    let mut replies = Vec::new();
+    for _ in 0..3 {
+        let rx =
+            interactive("app.popUpMenuEx({cName:'Wait'});".into(), Event { kind: "Link".into(), ..Event::doc("Mouse Up") }, doc(), vec![], vec![])
+                .unwrap();
+        let InteractiveEvent::Menu(_, reply) = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() else { panic!("menu expected") };
+        replies.push(reply);
+        assert!(matches!(rx.recv_timeout(std::time::Duration::from_millis(10)), Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+        drop(rx);
+    }
+    let abandoned = threads();
+    // Sending succeeds after all receivers above were dropped: each worker is still
+    // receiving its own menu reply. This is cooperation, never forced VM interruption.
+    for reply in replies {
+        reply.send(None).unwrap();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut finished = threads();
+    while finished > before && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        finished = threads();
+    }
+    println!("WORKER_LIFETIME before={before} abandoned={abandoned} released={finished}");
+    // Process-wide counts are observations, not assertions: unrelated tests may create
+    // or finish threads in the normal parallel harness. The three successful reply sends
+    // above establish that our own workers survived receiver abandonment independently.
 }

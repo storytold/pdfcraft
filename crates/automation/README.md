@@ -286,6 +286,13 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+## JavaScript link actions
+
+`link_run_javascript {doc, page, index, menu_choices?}` executes a PDF link with its document
+scripts and Link/Mouse Up event. Menus cancel unless `menu_choices` provides validated return
+strings (or null) in order. It returns menus, diagnostics and viewer requests and performs no
+external access. See [JavaScript link actions](../../docs/javascript-link-actions.md) for
+limits, native UI behavior, file-opening consent and compatibility boundaries.
 
 ## Reviewing OCR headlessly
 

@@ -1,3 +1,37 @@
+/// Negative cache of failed script-stream decompressions during one structure inspection.
+/// Callers must supply stream addresses that stay stable for that inspection; these are
+/// opaque identities, never dereferenced here. Do not reuse the cache across documents,
+/// edits or inspections, where an address may identify a different stream.
+/// FIFO eviction bounds it to 4096 identities and allows an evicted failure to be retried;
+/// a cache hit does not refresh its position. This bounds retained failures, not the
+/// total decoding work, and does not cache successful sources or spend their text budget.
+#[derive(Default)]
+pub(super) struct RejectedJavaScript {
+    identities: std::collections::HashSet<*const lopdf::Stream>,
+    order: std::collections::VecDeque<*const lopdf::Stream>,
+}
+
+impl RejectedJavaScript {
+    pub(super) const CAPACITY: usize = 4096;
+
+    pub(super) fn contains(&self, identity: *const lopdf::Stream) -> bool {
+        self.identities.contains(&identity)
+    }
+
+    pub(super) fn insert(&mut self, identity: *const lopdf::Stream) {
+        if self.identities.contains(&identity) {
+            return;
+        }
+        if self.order.len() >= Self::CAPACITY
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.identities.remove(&oldest);
+        }
+        self.identities.insert(identity);
+        self.order.push_back(identity);
+    }
+}
+
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
 use super::navigation::text_string;
@@ -91,6 +125,12 @@ impl<'a> Inspector<'a> {
         // Once the comment budget is spent, comments are no longer built, but links and attachments
         // are still listed.
         let mut comments_full = false;
+        // Shared JavaScript actions have a separate source budget from link text.
+        let mut javascript_remaining = 4 << 20;
+        // Per-inspection negative cache: identity is the resolved stream, not the
+        // annotation/action that refers to it. FIFO eviction bounds retained identities.
+        let mut rejected_javascript = RejectedJavaScript::default();
+        let mut javascript_limit_reported = false;
         for (page, index, a) in entries {
             let Some(d) = self.dict(a) else { continue };
             let Some(subtype) = self.name(d, b"Subtype") else { continue };
@@ -101,9 +141,16 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, text_budget) {
-                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                if let Some(link) = self.link(page, index, d, text_budget, &mut javascript_remaining, &mut rejected_javascript) {
+                    if matches!(&link.target, LinkTarget::JavaScript(_)) || matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                         info.has_javascript = true;
+                    }
+                    if javascript_remaining == 0 && matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") && !javascript_limit_reported {
+                        info.warnings.push(
+                            "Link JavaScript sources reached the 4 MiB document inspection limit; remaining JavaScript actions are unavailable."
+                                .into(),
+                        );
+                        javascript_limit_reported = true;
                     }
                     info.links.push(link);
                 }
@@ -192,7 +239,22 @@ impl<'a> Inspector<'a> {
         link_replies(&mut info.annotations);
     }
 
-    fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
+    /// Inspect the direct destination/action; JavaScript source is data, never executed here.
+    /// Script strings and decompressed streams are capped at 256 KiB before PDF-text
+    /// conversion. `annotations` shares a 4 MiB budget for retained UTF-8 script text
+    /// and one negative stream cache across the inspection. Decompression failures do
+    /// not debit that budget; a decoded source exceeding its remainder exhausts it.
+    /// Unsupported/refused script sources become Other("JavaScript"); malformed or
+    /// missing actions can return None. This does not traverse an action's Next chain.
+    fn link(
+        &self,
+        page: usize,
+        index: usize,
+        d: &Dictionary,
+        text_budget: &mut usize,
+        javascript_remaining: &mut usize,
+        rejected_javascript: &mut RejectedJavaScript,
+    ) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -214,6 +276,45 @@ impl<'a> Inspector<'a> {
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+                Some("JavaScript") => a
+                    .get(b"JS")
+                    .ok()
+                    .and_then(|js| {
+                        if *javascript_remaining == 0 {
+                            return None;
+                        }
+                        const LIMIT: usize = 256 << 10;
+                        let bytes = match self.resolve(js) {
+                            Object::String(bytes, _) if bytes.len() <= LIMIT => bytes.clone(),
+                            Object::Stream(stream) => {
+                                // Structure returns stable references throughout this inspection.
+                                // A resolved object address also identifies direct streams without
+                                // conflating distinct actions or aliases to an indirect stream.
+                                let identity = std::ptr::from_ref(stream);
+                                if rejected_javascript.contains(identity) {
+                                    return None;
+                                }
+                                #[cfg(test)]
+                                JS_DECODE_COUNT.with(|n| n.set(n.get() + 1));
+                                match stream.decompressed_content_with_limit(LIMIT) {
+                                    Ok(bytes) => bytes,
+                                    Err(_) => {
+                                        rejected_javascript.insert(identity);
+                                        return None;
+                                    }
+                                }
+                            }
+                            _ => return None,
+                        };
+                        let source = pdfcraft_cos::PdfString::literal(bytes).to_text();
+                        let Some(remaining) = javascript_remaining.checked_sub(source.len()) else {
+                            *javascript_remaining = 0;
+                            return None;
+                        };
+                        *javascript_remaining = remaining;
+                        Some(LinkTarget::JavaScript(source))
+                    })
+                    .unwrap_or_else(|| LinkTarget::Other("JavaScript".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
@@ -470,5 +571,89 @@ fn rect4(o: &Object) -> [f32; 4] {
             [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]
         }
         _ => [0.0; 4],
+    }
+}
+
+#[cfg(test)]
+thread_local! { static JS_DECODE_COUNT: std::cell::Cell<usize> = const {std::cell::Cell::new(0)}; }
+
+#[cfg(test)]
+mod remediation_probes {
+    use super::*;
+    use crate::inspect::{Arc, inspect};
+    use lopdf::{Document, dictionary};
+    #[test]
+    fn remediation_rejected_stream_cache_has_a_fixed_bound() {
+        let streams: Vec<_> = (0..8192).map(|_| lopdf::Stream::new(dictionary! {}, vec![])).collect();
+        let mut cache = RejectedJavaScript::default();
+        for stream in &streams {
+            cache.insert(std::ptr::from_ref(stream));
+            assert!(cache.identities.len() <= 4096);
+            assert!(cache.order.len() <= 4096);
+        }
+        assert!(!cache.contains(std::ptr::from_ref(streams.first().unwrap())));
+        assert!(cache.contains(std::ptr::from_ref(streams.last().unwrap())));
+    }
+    fn shared_bad_stream(n: usize, repeated_annotation: bool) -> Vec<u8> {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        let mut stream = lopdf::Stream::new(dictionary! {}, vec![b'x'; 300 << 10]);
+        stream.compress().unwrap();
+        let stream_id = d.add_object(stream);
+        let action = d.add_object(dictionary! {"S"=>"JavaScript","JS"=>stream_id});
+        let mut annots = Vec::new();
+        let mut first = None;
+        for _ in 0..n {
+            let annotation_action = if n == 33 {
+                let alias = d.add_object(Object::Reference(stream_id));
+                d.add_object(dictionary! {"S"=>"JavaScript","JS"=>alias})
+            } else {
+                action
+            };
+            let id = if let Some(id) = first.filter(|_| repeated_annotation) {
+                id
+            } else {
+                let id = d.add_object(
+                    dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>vec![0.into(),0.into(),50.into(),50.into()],"A"=>annotation_action},
+                );
+                first = Some(id);
+                id
+            };
+            annots.push(Object::Reference(id));
+        }
+        let good=d.add_object(dictionary!{"Subtype"=>"Link","Rect"=>vec![0.into(),0.into(),50.into(),50.into()],"A"=>dictionary!{"S"=>"JavaScript","JS"=>Object::string_literal("console.println('valid');")}});
+        annots.push(good.into());
+        let page = d.add_object(dictionary! {"Type"=>"Page","Parent"=>pages,"Annots"=>annots});
+        d.objects.insert(
+            pages,
+            dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1,"MediaBox"=>vec![0.into(),0.into(),200.into(),200.into()]}.into(),
+        );
+        let root = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        bytes
+    }
+    #[test]
+    fn remediation_rejected_stream_decode_is_cached_and_preserves_budget() {
+        for (n, repeated) in [(1, false), (33, false), (256, false), (1024, false), (1024, true)] {
+            let bytes = shared_bad_stream(n, repeated);
+            let len = bytes.len();
+
+            let mut times = Vec::new();
+            let mut calls = 0;
+            for _ in 0..3 {
+                JS_DECODE_COUNT.with(|n| n.set(0));
+                let now = std::time::Instant::now();
+                let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+                times.push(now.elapsed().as_micros());
+                calls = JS_DECODE_COUNT.with(|n| n.get());
+                assert_eq!(calls, 1);
+                assert_eq!(info.links.len(), if repeated { 2 } else { n + 1 });
+                assert!(matches!(&info.links.last().unwrap().target,LinkTarget::JavaScript(s) if s=="console.println('valid');"));
+                assert!(!info.warnings.iter().any(|w| w.contains("4 MiB")));
+            }
+            println!("REJECT n={n} repeated_annotation={repeated} bytes={len} decode_calls={calls} micros={times:?}");
+        }
     }
 }

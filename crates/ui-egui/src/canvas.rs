@@ -1214,6 +1214,7 @@ struct PageEnv<'a> {
     fill_text_border: crate::fill_sign::TextBorder,
     today: (i64, u32, u32),
     can_paste_image: bool,
+    javascript_interaction: bool,
 }
 
 /// What the page-scroll closure produces for the rest of the frame.
@@ -1221,6 +1222,7 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    javascript_link: Option<(pdfcraft_engine::DocId, usize, usize, Pos2)>,
     comment_notice: Option<&'static str>,
     copy_comments: bool,
     copy_selected: bool,
@@ -1761,6 +1763,7 @@ fn draw_pages(
     let PageOut {
         mut canvas_action,
         clicked_link,
+        javascript_link,
         copy_selected,
         mut field_menu,
         field_placed,
@@ -2006,6 +2009,7 @@ fn draw_pages(
     *out = PageOut {
         canvas_action,
         clicked_link,
+        javascript_link,
         comment_notice,
         copy_comments,
         copy_selected,
@@ -2661,6 +2665,7 @@ fn follow_link(
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
         LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        LinkTarget::JavaScript(_) => {}
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
     None
@@ -2869,6 +2874,7 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+    let javascript_interaction = app.link_script_interaction_active();
     let t = Tokens::get(ui.ctx());
     let can_paste_key = egui::Id::unique("can-paste-image");
     let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
@@ -3127,6 +3133,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         },
         today,
         can_paste_image,
+        javascript_interaction,
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), app.show_page_edge_shadows, |ui, viewport| {
@@ -3135,6 +3142,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        javascript_link,
         comment_notice,
         copy_comments,
         mut copy_selected,
@@ -3246,6 +3254,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let tool = finish_sign_requests(app, index, tool);
     app.quick_tool = tool;
     let requests = FrameRequests {
+        javascript_link,
         open_props,
         field_props,
         field_menu,
@@ -3272,6 +3281,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
 /// What the frame's input asked the app to do, once the document is no longer borrowed.
 struct FrameRequests {
+    javascript_link: Option<(pdfcraft_engine::DocId, usize, usize, Pos2)>,
     open_props: Option<(usize, usize)>,
     field_props: Option<(String, usize)>,
     field_menu: Option<FieldMenu>,
@@ -3301,6 +3311,7 @@ struct FrameRequests {
 #[allow(clippy::cognitive_complexity)]
 fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, requests: FrameRequests) {
     let FrameRequests {
+        javascript_link,
         open_props,
         field_props,
         field_menu,
@@ -3516,6 +3527,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if let Some((id, page, annotation, point)) = javascript_link {
+        app.run_link_script_at(id, page, annotation, point, Some(ui.ctx().cumulative_frame_nr()));
     }
     if copy_comments {
         app.execute("comment.copy");

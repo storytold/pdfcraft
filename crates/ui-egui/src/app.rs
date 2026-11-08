@@ -213,6 +213,8 @@ impl PdfCraftApp {
             compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            link_script: Default::default(),
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
@@ -579,6 +581,7 @@ impl eframe::App for PdfCraftApp {
             control.tick(ctx, self);
             self.control = Some(control);
         }
+        self.poll_link_script(ctx);
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         #[cfg(target_os = "macos")]
@@ -666,6 +669,7 @@ impl eframe::App for PdfCraftApp {
         self.motion.begin_pass(&ctx, self.animation_effects);
         // One-time 0.36 -> 0.37 panel persistence migration, before any panel stores or reads state.
         migrate_panel_state(ui);
+        self.show_link_script(&ctx);
         for view in &mut self.views {
             view.begin_render_frame();
         }

@@ -65,7 +65,15 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 /// the document has (`links`, the engine's), with a margin around each so a thin one can be
 /// picked, and a drag from one draws a new link. The other tools find the links the renderer can
 /// follow, which have a target (`info.links`). The tip is the link's target.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem], tool: QuickTool, p: Pos2) -> Option<Hit> {
+pub(crate) fn hit(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    links: &[LinkItem],
+    tool: QuickTool,
+    p: Pos2,
+    hide_javascript_tip: bool,
+) -> Option<Hit> {
     // A press off the page is no page's, so nothing there is a link's, the margin included.
     if !xf.rect.contains(p) {
         return None;
@@ -77,7 +85,8 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem
         let link = info.links.iter().rfind(|l| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
         (link.index, Some(link))
     };
-    let tip = link.map(|l| target_label(info, &l.target));
+    // An active JavaScript menu owns its feedback; its tooltip must not cover or intercept it.
+    let tip = link.filter(|l| !(hide_javascript_tip && matches!(&l.target, LinkTarget::JavaScript(_)))).map(|l| target_label(info, &l.target));
     let declines_drag = tool == QuickTool::Link;
     Some(Hit { tip, declines_drag, ..Hit::new(Owner::Link { index }, Layer::Link, egui::CursorIcon::PointingHand) })
 }
@@ -89,6 +98,7 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
         LinkTarget::Uri(u) => u.clone(),
         LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
         LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::JavaScript(_) => "JavaScript".to_string(),
         LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
     }
 }

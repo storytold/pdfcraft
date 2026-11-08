@@ -12,6 +12,8 @@ mod documents;
 mod form_tools;
 mod ocr;
 
+pub(crate) use form_tools::{alert_json, request_json};
+
 fn status_id(s: Status) -> &'static str {
     match s {
         Status::Passed => "passed",

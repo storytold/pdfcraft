@@ -726,6 +726,7 @@ impl Automation {
             "printer_options" => self.printer_options(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
+            "link_run_javascript" => self.link_run_javascript(&a)?,
             "link_add" => self.link_add(&a)?,
             "link_edit" => self.link_edit(&a)?,
             "link_delete" => self.link_delete(&a)?,

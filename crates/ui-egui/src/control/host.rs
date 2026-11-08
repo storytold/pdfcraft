@@ -71,7 +71,12 @@ impl Host for crate::PdfCraftApp {
             self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let javascript_menu = self.link_script.inspect();
+        #[cfg(target_arch = "wasm32")]
+        let javascript_menu = serde_json::Value::Null;
         json!({
+            "javascript_menu": javascript_menu,
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
             "pending_opens": pending_opens,
