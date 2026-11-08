@@ -272,6 +272,20 @@ mod tests {
         assert_eq!(p.display_size(&d), (612.0, 792.0));
     }
 
+    /// A page without a `/MediaBox` of its own inherits its `/Pages` parent's (ISO 32000-2
+    /// §7.7.3.4): only a box neither has falls back to US Letter.
+    #[test]
+    fn a_page_inherits_its_parents_media_box_before_falling_back_to_letter() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 300.0, 400.0]);
+        assert_eq!(p.display_size(&d), (300.0, 400.0));
+    }
+
     /// A `/MediaBox` without area (`[0 0 0 0]`) is US Letter too, as the renderer draws it.
     #[test]
     fn a_page_whose_media_box_has_no_area_is_letter() {

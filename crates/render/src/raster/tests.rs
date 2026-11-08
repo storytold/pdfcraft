@@ -5538,6 +5538,27 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// A page without a `/MediaBox` of its own inherits its `/Pages` parent's (ISO 32000-2 §7.7.3.4)
+/// before any fallback: rendered and inspected at 300 × 400, not US Letter.
+#[test]
+fn a_page_inherits_its_parents_media_box_before_falling_back_to_letter() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "rendered size");
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 400 - 30), [0, 0, 255]);
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]
