@@ -2968,6 +2968,31 @@ fn recalc_chain_where_script_changes_checkbox() {
     assert_eq!(field(&all, "result").value, ["box_was_Yes"], "second recalc saw the normalized checkbox value");
 }
 
+/// A calculation returning a combo option's display text stores the option's export value in /V
+/// and selects it in /I, as choosing it does.
+#[test]
+fn a_calculated_combo_stores_the_export_value_of_the_option_it_names() {
+    struct Pick;
+    impl Scripts for Pick {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("ca", "Canada"), pair("fr", "France")]))).unwrap();
+    set_field_script(&mut doc, "country", "calculate", Some("France")).unwrap();
+    assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 1);
+    let dict = doc.get(obj).as_dict().cloned().unwrap();
+    assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
+    assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
+    assert_eq!(field(&fields(&doc), "country").value, ["fr"]);
+    assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 0, "the display text names the value it already has");
+}
+
 #[test]
 fn partial_appearance_keeps_custom_default_appearance_and_font_resources() {
     let mut doc = fixture();

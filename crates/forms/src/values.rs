@@ -183,11 +183,19 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             let Some(v) = af::calculate(&f.actions.calculate, &lookup) else { continue };
             v
         };
+        // A combo box result naming an option, by export value or display text, is stored as that
+        // option's export value (the first element of an /Opt pair, ISO 32000-2 Table 231), as
+        // `write_value` stores a choice, so /V, /I and exported form data agree.
+        let combo = f.kind == FieldKind::Combo;
+        let matched = if combo { f.options.iter().position(|(e, d)| *e == v || *d == v) } else { None };
+        let v = match matched.and_then(|i| f.options.get(i)) {
+            Some((export, _)) => export.clone(),
+            None => v,
+        };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
             // A combo box's /I (its option indices, ISO 32000-2 Table 231) follows the value, as
             // `write_value` keeps it, so the selection kept never disagrees with the value.
-            let combo = f.kind == FieldKind::Combo;
-            let picked = f.options.iter().position(|(e, d)| *e == v || *d == v).and_then(|i| i64::try_from(i).ok());
+            let picked = matched.and_then(|i| i64::try_from(i).ok());
             doc.update_dict(f.obj, |d| {
                 d.set(b"V".to_vec(), PdfString::text(&v));
                 match picked {
