@@ -1,0 +1,84 @@
+//! Typographic Export workflow using `pdf-typographic-converter`.
+//!
+//! Exports an active PDF document to high-fidelity Word (.docx), Excel (.xlsx),
+//! or PowerPoint (.pptx) documents using PDFium character extraction and typographic clustering.
+
+use pdf_typographic_converter::{emitters, extract, layout};
+use std::path::Path;
+
+/// Supported typographic export formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// Microsoft Word (.docx) document
+    Docx,
+    /// Microsoft Excel (.xlsx) spreadsheet
+    Xlsx,
+    /// Microsoft PowerPoint (.pptx) presentation
+    Pptx,
+}
+
+impl ExportFormat {
+    /// File extension without leading period.
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ExportFormat::Docx => "docx",
+            ExportFormat::Xlsx => "xlsx",
+            ExportFormat::Pptx => "pptx",
+        }
+    }
+}
+
+/// Convert a PDF file at `pdf_path` into the requested format and write to `output_path`.
+pub fn export_pdf<P: AsRef<Path>, Q: AsRef<Path>>(pdf_path: P, output_path: Q, format: ExportFormat) -> Result<(), String> {
+    let pdf_path_ref = pdf_path.as_ref();
+    let output_path_ref = output_path.as_ref();
+
+    if !pdf_path_ref.exists() {
+        return Err(format!("Input PDF file not found: {}", pdf_path_ref.display()));
+    }
+
+    let page_data =
+        extract::extract_pages_full(pdf_path_ref).map_err(|e| format!("Failed to extract pages from PDF at {}: {e:#}", pdf_path_ref.display()))?;
+
+    let document_layout = layout::build_layout(page_data);
+
+    match format {
+        ExportFormat::Docx => emitters::export_docx(&document_layout, output_path_ref)
+            .map_err(|e| format!("Failed to export DOCX to {}: {e:#}", output_path_ref.display())),
+        ExportFormat::Xlsx => emitters::export_xlsx(&document_layout, output_path_ref)
+            .map_err(|e| format!("Failed to export XLSX to {}: {e:#}", output_path_ref.display())),
+        ExportFormat::Pptx => emitters::export_pptx(&document_layout, output_path_ref)
+            .map_err(|e| format!("Failed to export PPTX to {}: {e:#}", output_path_ref.display())),
+    }
+}
+
+/// Convert PDF bytes in memory into the requested format and write to `output_path`.
+pub fn export_pdf_bytes<Q: AsRef<Path>>(pdf_bytes: &[u8], output_path: Q, format: ExportFormat) -> Result<(), String> {
+    use std::io::Write;
+    let mut tmp =
+        tempfile::Builder::new().prefix("pdfcraft_export_").suffix(".pdf").tempfile().map_err(|e| format!("Failed to create temporary PDF: {e}"))?;
+    tmp.write_all(pdf_bytes).map_err(|e| format!("Failed to write temporary PDF: {e}"))?;
+    export_pdf(tmp.path(), output_path, format)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_export_formats_extension() {
+        assert_eq!(ExportFormat::Docx.extension(), "docx");
+        assert_eq!(ExportFormat::Xlsx.extension(), "xlsx");
+        assert_eq!(ExportFormat::Pptx.extension(), "pptx");
+    }
+
+    #[test]
+    fn test_export_pdf_missing_file_returns_error() {
+        let non_existent = Path::new("non_existent_doc_12345.pdf");
+        let out = Path::new("out.docx");
+        let res = export_pdf(non_existent, out, ExportFormat::Docx);
+        assert!(res.is_err(), "exporting non-existent PDF should return Err");
+        let err_msg = res.unwrap_err();
+        assert!(err_msg.contains("Input PDF file not found"), "unexpected error: {err_msg}");
+    }
+}

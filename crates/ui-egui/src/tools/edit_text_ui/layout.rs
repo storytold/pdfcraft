@@ -107,9 +107,14 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
 
 pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    // An unchanged PDF row already has an authoritative line break. Do not rewrap it
-    // because font rounding or a fallback face measures a fraction of a pixel wider.
-    job.wrap.max_width = if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width };
+    // An unchanged PDF row or single-line text already has an authoritative line break or flows horizontally.
+    // Do not wrap single-line entries down onto adjacent rows.
+    let is_single_line = !ed.multiline && !text.contains('\n');
+    job.wrap.max_width = if (is_single_line && width.is_infinite()) || (text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0) {
+        f32::INFINITY
+    } else {
+        width
+    };
     if let Some((block, lines)) = &ed.source {
         let lefts: Vec<_> = block.rows.iter().filter_map(|r| r.first().and_then(|i| lines.get(*i)).map(|l| l.rect[0])).collect();
         let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);

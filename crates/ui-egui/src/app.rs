@@ -94,6 +94,7 @@ impl PdfCraftApp {
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
+            reading_bg: Default::default(),
             show_page_edge_shadows: true,
             #[cfg(target_os = "linux")]
             desktop_theme: None,

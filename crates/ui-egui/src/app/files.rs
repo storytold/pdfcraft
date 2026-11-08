@@ -765,7 +765,10 @@ impl PdfCraftApp {
         self.forget_recovery(id);
         self.session.close(id);
         self.active = match self.active {
-            _ if self.views.is_empty() => None,
+            _ if self.views.is_empty() => {
+                self.reading_bg.picker_open = false;
+                None
+            }
             Some(a) if a > index => Some(a - 1),
             Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
             other => other,

@@ -111,6 +111,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::UpdateLineEndpoints { .. }
+        | Edit::SetLineProperties { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
@@ -724,6 +726,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::UpdateLineEndpoints { page, target, new_start, new_end } => {
+            pdfcraft_edit::update_line_endpoints(doc, *page, *target, *new_start, *new_end)?;
+        }
+        Edit::SetLineProperties { page, target, color, width, dash } => {
+            pdfcraft_edit::set_line_properties(doc, *page, *target, *color, *width, dash.clone())?;
+        }
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }

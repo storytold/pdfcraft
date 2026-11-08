@@ -248,8 +248,47 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
+    handle_barcode_and_vector_clicks(&cx, tool, view, can_modify, consumed);
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
     PageInput { press, text_drag: !view.router.keeps_drag(), consumed, area_tool, hover, released_over }
+}
+
+fn handle_barcode_and_vector_clicks(cx: &PageToolContext<'_>, tool: QuickTool, view: &mut DocView, can_modify: bool, consumed: bool) {
+    if !consumed
+        && tool == QuickTool::QrBarcode
+        && cx.resp.clicked()
+        && let Some(pos) = cx.resp.interact_pointer_pos()
+    {
+        for (idx, code) in view.barcode_hud.scanned_codes.iter().enumerate() {
+            if code.page == cx.page {
+                let screen_rect = cx.xf.user_rect(cx.info, cx.page, code.rect.map(|v| v as f32));
+                if screen_rect.contains(pos) {
+                    view.barcode_hud.active_index = idx;
+                    view.barcode_hud.target_rect = Some(code.rect);
+                    view.barcode_hud.open = true;
+                    view.barcode_hud.panel_open = true;
+                    cx.ui.ctx().request_repaint();
+                    break;
+                }
+            }
+        }
+    }
+    if !consumed
+        && (view.vector_edit_mode || tool == QuickTool::EditText)
+        && can_modify
+        && cx.resp.clicked()
+        && let Some(pos) = cx.resp.interact_pointer_pos()
+    {
+        let lines = crate::canvas::cached_vector_lines(view, cx.doc, cx.page).to_vec();
+        for line in &lines {
+            if crate::canvas_selection::hit_test_line(pos, line, cx.xf, cx.info, 5.0) {
+                view.canvas_selection.selected = Some(crate::canvas_selection::SelectableElement::new_line_vector(cx.page, line.clone()));
+                view.line_properties.reset_to_line(line);
+                cx.ui.ctx().request_repaint();
+                break;
+            }
+        }
+    }
 }
 
 /// What lies under the pointer at `p`, after the tools act: its top, what a press there would take,

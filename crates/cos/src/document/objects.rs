@@ -756,7 +756,7 @@ impl Document {
         let own = edited || overlay_reads() != edits_read;
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
-        let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
+        let first = s.dict.int(b"First").and_then(|f| usize::try_from(f).ok());
         // Its parameters can be given by reference, and can sit in another object stream. A scan of
         // the file's object streams comes here without a read around it.
         let _scope = crate::security::FollowScope::enter();
@@ -765,7 +765,7 @@ impl Document {
         super::tests::OBJSTM_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
         let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
-        let mut index = Vec::with_capacity(n);
+        let mut index = Vec::with_capacity(n.min(100_000));
         for _ in 0..n {
             let (Some(Object::Int(onum)), Some(Object::Int(off))) = (lx.object().ok(), lx.object().ok()) else { break };
             index.push(objstm_member(onum, off, first, data.len()));

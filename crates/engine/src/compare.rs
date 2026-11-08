@@ -153,10 +153,11 @@ impl Session {
     }
 }
 
-/// Export a PDF ▸ Word, PowerPoint, HTML or RTF.
+/// Export a PDF ▸ Word, Excel, PowerPoint, HTML or RTF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfficeFormat {
     Docx,
+    Xlsx,
     Pptx,
     Html,
     /// CSS-free HTML that preserves text and inline images but drops colours and layout styling.
@@ -169,6 +170,7 @@ impl OfficeFormat {
     pub fn extension(self) -> &'static str {
         match self {
             OfficeFormat::Docx => "docx",
+            OfficeFormat::Xlsx => "xlsx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
             OfficeFormat::HtmlSimple => "html",
@@ -180,6 +182,7 @@ impl OfficeFormat {
     pub fn from_extension(ext: &str) -> Option<OfficeFormat> {
         match ext.to_ascii_lowercase().as_str() {
             "docx" => Some(OfficeFormat::Docx),
+            "xlsx" => Some(OfficeFormat::Xlsx),
             "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
@@ -232,16 +235,27 @@ impl crate::Document {
     /// `images` no picture is prepared.
     pub(crate) fn export_pages_checked(&self, images: bool, image_budget: usize) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(editor) = self.editor.as_ref() else { return (Vec::new(), Vec::new()) };
-        self.export_pages_within(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos))
+        self.export_pages_within_split(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos), false)
     }
 
     /// [`Self::export_pages_checked`], its pictures decoded within `image_work`, which is shared
     /// by the whole export: a picture past it is left out like one past `image_budget`.
+    #[allow(dead_code)]
     pub(crate) fn export_pages_within(
         &self,
         images: bool,
         image_budget: usize,
         image_work: &mut pdfcraft_cos::ImageBudget,
+    ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        self.export_pages_within_split(images, image_budget, image_work, false)
+    }
+
+    pub(crate) fn export_pages_within_split(
+        &self,
+        images: bool,
+        image_budget: usize,
+        image_work: &mut pdfcraft_cos::ImageBudget,
+        split_rows: bool,
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
@@ -264,26 +278,61 @@ impl crate::Document {
                 let unit = display_unit(info);
                 let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
                 let forms_unread = reading.truncated;
-                let blocks = reading
-                    .blocks
-                    .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
-                    .map(|b| {
-                        let (bold, italic) = weight_and_slant(&b.base_font);
-                        // `text` is trimmed; the editor text keeps the source's own spaces.
-                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
-                        pdfcraft_export::Block {
-                            space_around,
+                let mut blocks = Vec::new();
+                for b in reading.blocks {
+                    if b.text.trim().is_empty() {
+                        continue;
+                    }
+                    let (bold_font, italic_font) = weight_and_slant(&b.base_font);
+                    let bold = bold_font || b.bold;
+                    let italic = italic_font || b.italic;
+                    let rotation = b.rotation - f64::from(info.rotation);
+                    let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
+
+                    if split_rows && b.rows.len() > 1 {
+                        for row_indices in &b.rows {
+                            let mut row_rect: Option<[f64; 4]> = None;
+                            let mut row_text = String::new();
+                            for &idx in row_indices {
+                                if let Some(line) = reading.lines.get(idx) {
+                                    row_rect = Some(match row_rect {
+                                        Some(r) => [r[0].min(line.rect[0]), r[1].min(line.rect[1]), r[2].max(line.rect[2]), r[3].max(line.rect[3])],
+                                        None => line.rect,
+                                    });
+                                    if !row_text.is_empty() && !row_text.ends_with(' ') && !line.text.starts_with(' ') {
+                                        row_text.push(' ');
+                                    }
+                                    row_text.push_str(&line.text);
+                                }
+                            }
+                            let text = row_text.trim().to_string();
+                            if !text.is_empty() {
+                                let rect = row_rect.unwrap_or(b.rect);
+                                blocks.push(pdfcraft_export::Block {
+                                    text,
+                                    rect: visible_rect(rect),
+                                    size: b.size * unit,
+                                    bold,
+                                    italic,
+                                    color: b.color,
+                                    rotation,
+                                    space_around: [false, false],
+                                });
+                            }
+                        }
+                    } else {
+                        blocks.push(pdfcraft_export::Block {
                             text: b.text,
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
                             bold,
                             italic,
                             color: b.color,
-                            rotation: b.rotation - f64::from(info.rotation),
-                        }
-                    })
-                    .collect();
+                            rotation,
+                            space_around,
+                        });
+                    }
+                }
                 let placed = if images { pdfcraft_edit::reading_images(cos, i).unwrap_or_default() } else { Vec::new() };
                 let mut over_budget = false;
                 let images = placed
@@ -321,7 +370,7 @@ impl crate::Document {
         (pages, truncated)
     }
 
-    /// The document as a Word, PowerPoint, HTML or RTF file.
+    /// The document as a Word, Excel, PowerPoint, HTML or RTF file.
     pub fn export_office(&self, format: OfficeFormat) -> Vec<u8> {
         self.export_office_checked(format).bytes
     }
@@ -329,12 +378,19 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        // RTF and Markdown leave pictures out.
-        let (pages, truncated_pages) =
-            self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
+        let (pages, truncated_pages) = {
+            let Some(editor) = self.editor.as_ref() else { return OfficeExport { bytes: Vec::new(), truncated_pages: Vec::new() } };
+            self.export_pages_within_split(
+                !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
+                MAX_EXPORT_IMAGE_BYTES,
+                &mut pdfcraft_cos::ImageBudget::new(&editor.cos),
+                format == OfficeFormat::Xlsx,
+            )
+        };
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Xlsx => pdfcraft_export::xlsx(&pages, &title),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),

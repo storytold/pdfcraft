@@ -34,7 +34,9 @@ macro_rules! tl_ctx {
         $crate::i18n::tr_ctx($crate::i18n::current(), $context, $s)
     };
 }
+pub mod barcode_hud;
 pub mod canvas;
+pub mod canvas_selection;
 mod chrome;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
@@ -61,12 +63,13 @@ mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+pub mod symbol_palette;
 pub mod theme;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
 
-pub use canvas::{DocView, RasterMemory};
+pub use canvas::{DocView, RasterMemory, ReadingBgState};
 
 /// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
 /// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
@@ -319,6 +322,8 @@ pub struct PdfCraftApp {
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
+    /// Session-persistent eye-strain reading background preference and tint settings.
+    pub reading_bg: ReadingBgState,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.

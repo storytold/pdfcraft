@@ -9461,6 +9461,14 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
             "Ordinary body text. Still the same paragraph.",
         ]
     );
+    let all_blocks = text::reading_blocks(&doc, 0).unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let last = all_blocks.last().unwrap();
+    assert_eq!(last.rows.len(), 2);
+    let row0_line_idx = last.rows[0][0];
+    let row1_line_idx = last.rows[1][0];
+    assert_eq!(lines[row0_line_idx].text, "Ordinary body text.");
+    assert_eq!(lines[row1_line_idx].text, "Still the same paragraph.");
 }
 
 #[cfg(test)]

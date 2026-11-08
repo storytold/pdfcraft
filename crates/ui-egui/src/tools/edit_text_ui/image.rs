@@ -864,7 +864,17 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                             apply_resize(drag.initial_rect, handle, delta)
                         }
                     }
-                    DragTarget::Move => drag.initial_rect.translate(p - drag.start),
+                    DragTarget::Move => {
+                        let mut delta = p - drag.start;
+                        if ui.input(|i| i.modifiers.shift) {
+                            if delta.x.abs() > delta.y.abs() {
+                                delta.y = 0.0;
+                            } else {
+                                delta.x = 0.0;
+                            }
+                        }
+                        drag.initial_rect.translate(delta)
+                    }
                     _ => drag.initial_rect,
                 };
 
@@ -930,7 +940,14 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
 
             let (m_new, cursor_icon) = match drag.target {
                 DragTarget::Move => {
-                    let (dx, dy) = (px - sx, py - sy);
+                    let (mut dx, mut dy) = (px - sx, py - sy);
+                    if ui.input(|i| i.modifiers.shift) {
+                        if dx.abs() > dy.abs() {
+                            dy = 0.0;
+                        } else {
+                            dx = 0.0;
+                        }
+                    }
                     (Matrix([a0, b0, c0, d0, e0 + dx, f0 + dy]), egui::CursorIcon::Move)
                 }
                 DragTarget::Handle(handle) => {
@@ -964,7 +981,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                 }
                 if m_new.0 != drag.initial_matrix {
                     if matches!(drag.target, DragTarget::Move) {
-                        let (dx, dy) = (px - sx, py - sy);
+                        let (dx, dy) = (m_new.0[4] - e0, m_new.0[5] - f0);
                         let new_rect = [image.rect[0] + dx, image.rect[1] + dy, image.rect[2] + dx, image.rect[3] + dy];
                         view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(new_rect) });
                     } else if let Some(inv) = Matrix(drag.initial_matrix).invert() {

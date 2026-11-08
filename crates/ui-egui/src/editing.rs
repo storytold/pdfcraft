@@ -254,8 +254,16 @@ impl PdfCraftApp {
                     }
                     // A paragraph that couldn't be applied opens again with its typing, instead of
                     // the box the click moved to.
-                    if let Edit::EditTextBlock { page, block, .. } = &edit
-                        && let Some(mut ed) = view.applied_editor.take().filter(|ed| (ed.page, ed.block) == (*page, *block))
+                    let text_target = match &edit {
+                        Edit::EditTextBlock { page, block, .. } => Some((*page, *block)),
+                        Edit::Batch { edits, .. } => edits.iter().find_map(|e| match e {
+                            Edit::EditTextBlock { page, block, .. } => Some((*page, *block)),
+                            _ => None,
+                        }),
+                        _ => None,
+                    };
+                    if let Some((page, block)) = text_target
+                        && let Some(mut ed) = view.applied_editor.take().filter(|ed| (ed.page, ed.block) == (page, block))
                     {
                         ed.focus = true;
                         view.line_editor = Some(ed);
@@ -404,14 +412,22 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        if let Some(ed) = view.line_editor.take()
-            && let Some(edit) = crate::edit_text_ui::finished_edit(ed.clone())
-            && !self.apply_edit(edit)
-        {
-            if let Some(view) = self.views.get_mut(i) {
-                view.line_editor = Some(ed);
+        if let Some(mut ed) = view.line_editor.take() {
+            if let Some(doc) = self.session.get(id)
+                && let Some(p) = doc.info.pages.get(ed.page)
+            {
+                ed.rotation = p.rotation as i32;
             }
-            return false;
+            let reflow = view.reflow_paragraphs;
+            let blocks = self.session.get(id).map(|d| d.text_blocks(ed.page));
+            if let Some(edit) = crate::edit_text_ui::finished_edit_with_reflow(ed.clone(), reflow, blocks.as_deref())
+                && !self.apply_edit(edit)
+            {
+                if let Some(view) = self.views.get_mut(i) {
+                    view.line_editor = Some(ed);
+                }
+                return false;
+            }
         }
         let added = self.session.get(id).map(|d| d.added().to_vec()).unwrap_or_default();
         let Some(view) = self.views.get_mut(i) else { return true };
@@ -795,7 +811,14 @@ impl PdfCraftApp {
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
         let added = view.content.finish_draft(doc.added());
-        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
+        let reflow = view.reflow_paragraphs;
+        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(|mut ed| {
+            if let Some(p) = doc.info.pages.get(ed.page) {
+                ed.rotation = p.rotation as i32;
+            }
+            let blocks = doc.text_blocks(ed.page);
+            crate::edit_text_ui::finished_edit_with_reflow(ed, reflow, Some(&blocks))
+        });
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
         if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
@@ -1111,6 +1134,75 @@ fn typing_step(ctx: &egui::Context, id: egui::Id, text: &str, undo: bool) -> Opt
     state.cursor.set_char_range(Some(range));
     egui::TextEdit::store_state(ctx, id, state);
     Some(stepped)
+}
+
+/// Line Properties panel for vector line editing.
+pub fn line_properties_panel(ui: &mut egui::Ui, view: &mut crate::canvas::DocView) {
+    if !view.vector_edit_mode {
+        return;
+    }
+    let Some(sel) = &view.canvas_selection.selected else {
+        return;
+    };
+    if sel.kind != crate::canvas_selection::SelectableKind::VectorLine || !view.canvas_selection.multi_selected.is_empty() {
+        return;
+    }
+
+    let page = sel.page;
+    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+
+    ui.group(|ui| {
+        ui.heading("Line Properties");
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Color:");
+            egui::color_picker::color_edit_button_rgb(ui, &mut view.line_properties.color);
+        });
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Width:");
+            ui.add(egui::Slider::new(&mut view.line_properties.width, 0.5..=20.0).step_by(0.5).suffix(" pt"));
+        });
+        ui.add_space(4.0);
+
+        let dash_labels = ["Solid", "Dotted", "Dashed", "DashDot"];
+        let current_dash = dash_labels.get(view.line_properties.dash_idx).copied().unwrap_or(dash_labels[0]);
+        craft_ui::ComboBox::from_id_salt("line-dash").selected_text(current_dash).show_ui(ui, |ui| {
+            for (idx, label) in dash_labels.iter().enumerate() {
+                ui.selectable_value(&mut view.line_properties.dash_idx, idx, *label);
+            }
+        });
+        ui.add_space(4.0);
+        ui.add(crate::widgets::checkbox(&mut view.extend_perpendicular_lines, "Extend touching lines (Excel grid)"));
+        ui.add_space(6.0);
+
+        if ui.button(tl!("Apply")).clicked() {
+            let color = if (view.line_properties.color[0] - view.line_properties.initial_color[0]).abs() > 1e-4
+                || (view.line_properties.color[1] - view.line_properties.initial_color[1]).abs() > 1e-4
+                || (view.line_properties.color[2] - view.line_properties.initial_color[2]).abs() > 1e-4
+            {
+                Some([view.line_properties.color[0] as f64, view.line_properties.color[1] as f64, view.line_properties.color[2] as f64])
+            } else {
+                None
+            };
+            let width =
+                if (view.line_properties.width - view.line_properties.initial_width).abs() > 1e-4 { Some(view.line_properties.width) } else { None };
+            let dash =
+                if view.line_properties.dash_idx != view.line_properties.initial_dash_idx { Some(view.line_properties.dash_pattern()) } else { None };
+            if color.is_some() || width.is_some() || dash.is_some() {
+                view.pending_edit = Some(pdfcraft_engine::Edit::SetLineProperties { page, target, color, width, dash });
+            }
+            view.line_properties.last_error = None;
+            ui.ctx().request_repaint();
+        }
+
+        if let Some(err) = &view.line_properties.last_error {
+            ui.add_space(4.0);
+            ui.colored_label(egui::Color32::from_rgb(220, 50, 50), err);
+        }
+    });
 }
 
 #[cfg(test)]
