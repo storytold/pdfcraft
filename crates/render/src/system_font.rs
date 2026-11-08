@@ -453,7 +453,7 @@ mod tests {
                 ..FallbackFontQuery::default()
             };
             let (bytes, index) = fallback(&query).expect("installed Chinese font");
-            let font = skrifa::FontRef::from_index(bytes.as_ref().as_ref(), index).unwrap();
+            let font = skrifa_test::FontRef::from_index(bytes.as_ref().as_ref(), index).unwrap();
             let names: Vec<String> = font.localized_strings(StringId::POSTSCRIPT_NAME).map(|n| n.chars().collect()).collect();
             assert!(names.iter().any(|n| n.eq_ignore_ascii_case(expected)), "{name} resolved to {names:?}, expected {expected}");
         }
@@ -475,7 +475,7 @@ mod tests {
         };
         for (script, region) in [(Script::TraditionalChinese, "TC"), (Script::SimplifiedChinese, "SC")] {
             let index = pick_face(&bytes, script.probe(), &[region], false).expect("PingFang covers it");
-            let font = skrifa::FontRef::from_index(&bytes, index).unwrap();
+            let font = skrifa_test::FontRef::from_index(&bytes, index).unwrap();
             let family: String = font.localized_strings(StringId::FAMILY_NAME).next().unwrap().chars().collect();
             assert!(family.contains(region), "{script:?} got {family:?}");
         }
