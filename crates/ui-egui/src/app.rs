@@ -66,6 +66,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -245,6 +246,9 @@ impl PdfCraftApp {
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
+            html_clipboard_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            os_clipboard: None,
             clipboard_override: None,
             attach_override: None,
             duplicate_draft: None,
@@ -459,6 +463,7 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        self.apply_status_captions(lang);
         // Form date fields name months in the date language (Preferences ▸ Date format), which
         // follows the interface language until one is picked (#5303).
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
@@ -585,7 +590,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            // An OCR review not yet accepted or rejected is work the page would lose, too.
+            let dirty = self.work_at_risk();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
@@ -605,9 +611,15 @@ impl eframe::App for PdfCraftApp {
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
-            view.objects.set_input_blocked(blocked || self.active != Some(index));
-            if blocked || self.active != Some(index) {
+            let shut = blocked || self.active != Some(index);
+            view.objects.set_input_blocked(shut);
+            if shut {
                 view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing
@@ -690,10 +702,20 @@ impl eframe::App for PdfCraftApp {
         if self.draws_window_frame() {
             window_controls::resize_edges(&ctx);
         }
+        chrome::tab_strip(self, ui);
+        chrome::mode_bar(self, ui);
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
+        // recognized text brings it back with its review as it was.
+        if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
+            self.ocr_verify.open = false;
+        }
+        self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
         if self.ocr_verify.open {
-            // The OCR Verify screen owns the window (its four panes); dialogs and notices
+            // The OCR Verify screen takes the document area (its four panes) under the window's
+            // tabs, menus and toolbar, which stay (#6485); the palette, dialogs and notices
             // still show above it.
             workflows::ocr_verify::show(self, ui);
+            palette::show(self, &ctx);
             dialogs::show(self, &ctx);
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
@@ -704,8 +726,6 @@ impl eframe::App for PdfCraftApp {
             }
             return;
         }
-        chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;

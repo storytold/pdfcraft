@@ -22,6 +22,7 @@ pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 # CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
 pdfcraft-filters = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
 sha2 = "0.11"
 
