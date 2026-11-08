@@ -13,7 +13,7 @@ use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 use pdfcraft_filters::MAX_CHAIN;
 
 use crate::document::Held;
-use crate::{Dict, Document, Object, PdfString, Stream};
+use crate::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// How many references one read or write of an object may follow, with all that it loads on the
 /// way. How an object is treated can be given by reference, and what that loads can do the same: a
@@ -254,12 +254,46 @@ pub(crate) enum Pass {
     EncryptReplacing,
 }
 
+/// Only embedded files use a crypt filter: the stream filter is `/Identity`.
+fn attachments_only(h: &SecurityHandler) -> bool {
+    !h.dict().ef_f.is_empty() && matches!(h.dict().stm_f.as_slice(), b"" | b"Identity")
+}
+
+/// Streams held by file specifications that need `/EFF`, even when `/Type /EmbeddedFile` is absent.
+pub(crate) fn embedded_file_targets(doc: &Document) -> std::collections::HashSet<u32> {
+    let mut found = std::collections::HashSet::new();
+    let (Some(h), _) = doc.output_security() else { return found };
+    if !doc.encryption_changed() || !attachments_only(h) {
+        return found;
+    }
+    for (_, object) in doc.scan_objects_checked() {
+        let Ok(object) = object else { continue };
+        let mut stack: Vec<(&Object, usize)> = vec![(&object, 0)];
+        while let Some((o, depth)) = stack.pop() {
+            if depth > 32 {
+                continue;
+            }
+            match o {
+                Object::Dict(d) => {
+                    if let Some(ef) = d.get(b"EF").map(|value| doc.resolve(value)).and_then(|value| value.as_dict().cloned()) {
+                        found.extend(ef.iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num));
+                    }
+                    stack.extend(d.iter().map(|(_, v)| (v, depth + 1)));
+                }
+                Object::Array(a) => stack.extend(a.iter().map(|v| (v, depth + 1))),
+                _ => {}
+            }
+        }
+    }
+    found
+}
+
 /// Decrypt or encrypt every string and stream in an indirect object, except a signature
 /// dictionary's `/Contents` (see [`is_signature_dict`]).
 ///
 /// `o` is as `doc` holds it: what a stream's dictionary gives by reference is read from `doc`, so
 /// its references have to be the document's, not a save's renumbered ones.
-pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass, attachment: bool) -> Object {
     let _scope = FollowScope::enter();
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
@@ -271,7 +305,7 @@ pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u3
     // which overflowed the stack on a 10 KB file. A stream can't be nested, and a dictionary that
     // is reads as it says directly.
     match o {
-        Object::Stream(s) => stream(doc, s, &strings, h, num, generation, pass),
+        Object::Stream(s) => stream(doc, s, &strings, h, ObjRef::new(num, generation), pass, attachment),
         Object::Dict(d) if is_signature_dict(Some(doc), d) => signature_dict(d, &strings),
         o => walk(o, &strings),
     }
@@ -304,9 +338,9 @@ fn stream(
     s: &Stream,
     strings: &dyn Fn(&PdfString) -> PdfString,
     h: &SecurityHandler,
-    num: u32,
-    generation: u16,
+    id: ObjRef,
     pass: Pass,
+    attachment: bool,
 ) -> Object {
     let decrypt = pass == Pass::Decrypt;
     let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(v, strings))).collect() };
@@ -320,7 +354,10 @@ fn stream(
     }
     let mut named = named_crypt_filter(doc, &s.dict);
     // Before the walk, which then encrypts what is in the dictionary this leaves.
-    let foreign = pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n));
+    let foreign = pass == Pass::EncryptReplacing
+        && named.as_deref().is_some_and(|n| {
+            !h.dict().crypt_filters.iter().any(|(f, _)| f == n) || (attachments_only(h) && ty != Some(b"EmbeddedFile") && !attachment)
+        });
     let dropped = foreign.then(|| drop_crypt_filter(doc, s));
     if dropped.is_some() {
         named = None;
@@ -329,8 +366,58 @@ fn stream(
     let kind = match (&named, ty) {
         (Some(n), _) => StreamKind::Named(n),
         (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
+        (None, _) if attachment => StreamKind::EmbeddedFile,
         _ => StreamKind::Normal,
     };
-    let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
+    let raw = if decrypt { h.decrypt_stream(id.num, id.generation, &s.raw, kind) } else { h.encrypt_stream(id.num, id.generation, &s.raw, kind) };
     Object::Stream(Stream { dict, raw: raw.into() })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attachment_encryption() -> pdfcraft_crypt::NewEncryption<'static> {
+        pdfcraft_crypt::NewEncryption {
+            algorithm: pdfcraft_crypt::Algorithm::Aes128,
+            user_password: "pw",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        }
+    }
+
+    #[test]
+    fn embedded_file_targets_resolve_an_indirect_ef_dictionary() {
+        let bytes = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 5 0 R >> >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
+            .obj("<< /Type /Page /Parent 2 0 R >>")
+            .obj("<< /Type /Filespec /F (file.bin) /EF 6 0 R >>")
+            .obj("<< /Names [(file.bin) 4 0 R] >>")
+            .obj("<< /F 7 0 R >>")
+            .stream("", "secret attachment")
+            .build();
+        let mut doc = Document::open(std::sync::Arc::new(bytes)).unwrap();
+        doc.set_attachment_encryption(&attachment_encryption()).unwrap();
+
+        assert!(embedded_file_targets(&doc).contains(&7));
+    }
+
+    #[test]
+    fn typeless_attachment_streams_use_the_embedded_file_crypt_filter() {
+        let bytes = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
+            .obj("<< /Type /Page /Parent 2 0 R >>")
+            .build();
+        let mut doc = Document::open(std::sync::Arc::new(bytes)).unwrap();
+        doc.set_attachment_encryption(&attachment_encryption()).unwrap();
+        let handler = doc.output_security().0.unwrap();
+        let stream = Object::Stream(Stream { dict: Dict::new(), raw: b"secret attachment".to_vec().into() });
+
+        let encrypted = transform(&doc, handler, &stream, 7, 0, Pass::EncryptReplacing, true);
+        let Object::Stream(encrypted) = encrypted else { panic!("transform kept the stream object") };
+        assert_ne!(encrypted.raw.as_ref(), b"secret attachment");
+    }
 }

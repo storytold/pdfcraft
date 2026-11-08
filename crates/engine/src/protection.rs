@@ -55,6 +55,9 @@ pub struct Protection {
     pub algorithm: pdfcraft_cos::Algorithm,
     /// `false`: "Encrypt all document contents except metadata".
     pub encrypt_metadata: bool,
+    /// "Encrypt only file attachments": the pages, strings and metadata stay readable without
+    /// the open password. AES levels only.
+    pub attachments_only: bool,
 }
 
 impl std::fmt::Debug for Protection {
@@ -69,6 +72,7 @@ impl std::fmt::Debug for Protection {
             .field("accessibility", &self.accessibility)
             .field("algorithm", &self.algorithm)
             .field("encrypt_metadata", &self.encrypt_metadata)
+            .field("attachments_only", &self.attachments_only)
             .finish()
     }
 }
@@ -85,6 +89,7 @@ impl Default for Protection {
             accessibility: true,
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             encrypt_metadata: true,
+            attachments_only: false,
         }
     }
 }
@@ -127,6 +132,9 @@ impl Protection {
         }
         if [&self.open_password, &self.permissions_password].into_iter().flatten().any(String::is_empty) {
             return bad("passwords can't be empty");
+        }
+        if self.attachments_only && matches!(self.algorithm, pdfcraft_cos::Algorithm::Rc4_40 | pdfcraft_cos::Algorithm::Rc4_128) {
+            return bad("encrypting only file attachments needs AES-128 or AES-256");
         }
         if self.algorithm != pdfcraft_cos::Algorithm::Aes256
             && [&self.open_password, &self.permissions_password].into_iter().flatten().any(|p| p.chars().any(|c| !(' '..='~').contains(&c)))

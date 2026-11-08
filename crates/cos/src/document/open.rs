@@ -200,7 +200,6 @@ impl Document {
         };
         let params = crate::security::encrypt_dict(self, &dict);
         let id0 = self.first_id();
-        // Read here, while nothing is decrypted yet.
         let members = self.encryption_members(enc);
         let handler = match credentials {
             Credentials::Password(password) => Arc::new(pdfcraft_crypt::SecurityHandler::open(params, &id0, *password).map_err(|e| match e {
@@ -231,9 +230,7 @@ impl Document {
 
     /// The objects `/Encrypt`, given as `enc`, and `/ID` refer to, the ones they refer to, and so
     /// on, up to [`MAX_ENCRYPT_MEMBERS`]. Their strings aren't encrypted (ISO 32000-2 §7.6.2): the
-    /// key is made from them, so they have to read as stored, and stay so. A number with no object
-    /// behind it, and a stream, which those dictionaries never hold, isn't one: an object added
-    /// under that number later, or a page's content a hostile `/Encrypt` names, is encrypted.
+    /// key is made from them, so they have to read as stored, and stay so.
     fn encryption_members(&self, enc: &Object) -> HashSet<u32> {
         let mut pending = Vec::new();
         crate::writer::collect_refs(enc, &mut |r| pending.push(r));
@@ -255,9 +252,7 @@ impl Document {
         members
     }
 
-    /// Whether object `num` is written as it is held, being one of [`Document::encryption_members`],
-    /// unedited, and the save writing the same `/Encrypt`. What was edited or added is encrypted
-    /// whatever its number.
+    /// Whether an unchanged object is written as stored with the same encryption handler.
     pub(crate) fn stored_as_is(&self, num: u32) -> bool {
         !self.encryption_changed && !self.is_edited(num) && self.encrypt_members.contains(&num)
     }
@@ -334,6 +329,16 @@ impl Document {
     /// Protect the document with a password (§7.6.4). Takes effect on the next save, which is
     /// always a full rewrite. Returns the handler (authenticated as owner).
     pub fn set_encryption(&mut self, params: &pdfcraft_crypt::NewEncryption) -> Result<(), CosError> {
+        self.apply_encryption(params, false)
+    }
+
+    /// Like [`Document::set_encryption`], but only embedded files are encrypted: the standard
+    /// crypt filter is `/EFF`, and `/StmF` and `/StrF` are `/Identity`. AES levels only.
+    pub fn set_attachment_encryption(&mut self, params: &pdfcraft_crypt::NewEncryption) -> Result<(), CosError> {
+        self.apply_encryption(params, true)
+    }
+
+    fn apply_encryption(&mut self, params: &pdfcraft_crypt::NewEncryption, attachments_only: bool) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
         let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
         let id0 = match id.as_deref() {
@@ -345,7 +350,8 @@ impl Document {
                 id
             }
         };
-        let h = pdfcraft_crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
+        let created = if attachments_only { pdfcraft_crypt::create_attachments_only(params, &id0) } else { pdfcraft_crypt::create(params, &id0) };
+        let h = created.map_err(|e| CosError::Security(e.to_string()))?;
         let d = h.dict();
         let s = |b: &[u8]| Object::String(crate::PdfString { bytes: b.to_vec(), hex: true });
         let mut e = Dict::new();
@@ -363,11 +369,17 @@ impl Document {
             let (cfm, len) = if d.v >= 5 { ("AESV3", 32) } else { ("AESV2", 16) };
             std_cf.set(b"CFM".to_vec(), Object::name(cfm));
             std_cf.set(b"Length".to_vec(), Object::Int(len));
-            std_cf.set(b"AuthEvent".to_vec(), Object::name("DocOpen"));
+            // Attachment-only files ask for the password when an embedded file is opened, so other
+            // readers show the pages without a prompt (PdfCraft itself still asks at open).
+            std_cf.set(b"AuthEvent".to_vec(), Object::name(if attachments_only { "EFOpen" } else { "DocOpen" }));
             cf.set(b"StdCF".to_vec(), Object::Dict(std_cf));
             e.set(b"CF".to_vec(), Object::Dict(cf));
-            e.set(b"StmF".to_vec(), Object::name("StdCF"));
-            e.set(b"StrF".to_vec(), Object::name("StdCF"));
+            let name = |n: &[u8]| Object::Name(if n.is_empty() { b"Identity".to_vec() } else { n.to_vec() });
+            e.set(b"StmF".to_vec(), name(&d.stm_f));
+            e.set(b"StrF".to_vec(), name(&d.str_f));
+            if !d.ef_f.is_empty() {
+                e.set(b"EFF".to_vec(), name(&d.ef_f));
+            }
             if !d.encrypt_metadata {
                 e.set(b"EncryptMetadata".to_vec(), Object::Bool(false));
             }
@@ -405,7 +417,7 @@ impl Document {
     pub(super) fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
             Some(h) if Some(id.num) != self.encrypt_num && !self.encrypt_members.contains(&id.num) => {
-                crate::security::transform(self, h, &o, id.num, id.generation, crate::security::Pass::Decrypt)
+                crate::security::transform(self, h, &o, id.num, id.generation, crate::security::Pass::Decrypt, false)
             }
             _ => o,
         }
