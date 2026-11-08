@@ -2,10 +2,11 @@
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
 - State: implemented behind the `collab` feature (off by default); published as
-  PR #6622 (not a draft) through the chair's fork at head `0f286ed9`, CI green.
-  The slice after that head (commit publication outside the hub lock, §6.4) is
-  committed locally and **not pushed**; the PR body draft is
-  `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
+  PR #6622 (not a draft) through the chair's fork at head `0f286ed9`, CI green,
+  `MERGEABLE`. The §6.6 gate run at `5eb6bea8` is in §4: green apart from two
+  known environment flakes. The slice after that head (commit publication
+  outside the hub lock, §6.4) is committed locally and **not pushed**; the PR
+  body draft is `pdfcraft/PR-DRAFT.md` in the cabinet-office checkout.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -196,7 +197,42 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
-Commands that were run:
+### Gate run at `5eb6bea8` — the §6.6 acceptance pass (2026-11-08)
+
+Working tree clean; `feature/realtime-collaboration` at `5eb6bea8`
+(`a47641fb` plus the preceding docs commit) on top of the pushed head
+`0f286ed9`.
+Toolchain: cargo/rustc 1.99.1 (no `rust-toolchain.toml`; the workspace declares
+`rust-version = "1.95"`, edition 2024).
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all --check` | pass (exit 0) |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — 124 tests: proto 12, server 18, hub 4, client 12, client-pdf 13, session 2, ws 6 (unit), pdf 20, annot 10, daemon 27 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, 6/6, including `a_commit_does_not_block_presence_in_another_room` (two rooms) and `a_commit_over_the_wire_produces_a_readable_pdf` |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass |
+| UI suite, first pass | `cargo test -p pdfcraft-ui-egui --features collab` | `--lib` **1 failed** of 799 (`only_so_many_connections_may_wait_to_authenticate`); cargo stopped before the integration targets |
+| UI suite, full re-run | `cargo test -p pdfcraft-ui-egui --features collab --no-fail-fast` | `--lib` 799 passed, 1 ignored; `it` 1493 passed, **1 failed**; `ocr` 6, `page_shadows` 7, `perf` 4, `play` 1 pass; 5 ignored in total |
+
+The two failures are environment, not regressions:
+
+- `control::transport::transport_tests::only_so_many_connections_may_wait_to_authenticate`
+  (`control/transport.rs:573`) expected the fourth connection's `auth` reply to
+  carry `{"ok":true}` and got `Null`. It passes alone in 0.52 s and in the full
+  re-run; the file's last change is `2d27306a`, outside this branch; the test
+  depends on a 100 ms admission window while 800 tests run in parallel on four
+  cores already busy with another build. Parallel-load flake.
+- `editing::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone`
+  — the known font failure (`No glyph for "�" (U+FFFD)`), reproduced without
+  the `collab` feature in earlier sessions; environment.
+
+The acceptance brief also names `collab-doc`; this workspace has no such crate —
+the PDF document layer is `pdfcraft-collab-pdf` and it is in the list above.
+
+Commands that were run in earlier sessions:
 
 ```bash
 cargo test -p pdfcraft-collab-proto -p pdfcraft-collab-server \
@@ -584,16 +620,44 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 ### 6.6 Cleanup and submission
 
 - The publication slice (limitation 12) is `a47641fb` on
-  `feature/realtime-collaboration`, local and not pushed; the PR body in
-  `PR-DRAFT.md` gained the e2e line and a corrected limitation list, so the open
-  PR #6622 text needs the same edit when this slice is pushed.
+  `feature/realtime-collaboration`, local and not pushed.
+- **Gates at `5eb6bea8` are green** (§4): fmt, both clippy scopes, 124 collab
+  tests, 6/6 e2e (including the two-room commit test), `cargo check -p
+  pdfcraft --features collab`, `cargo xtask layers`, and the UI suite
+  (2310 passed across all targets) with one parallel-load flake and the known
+  `U+FFFD` font failure. No code change was needed for this pass.
+- **Pushed head, verified 2026-11-08:** PR #6622 (`storytold/pdfcraft`, open,
+  not a draft, `MERGEABLE`, 53 changed files) has head
+  `0f286ed9028564fdf14c26eeca98cf19ce51a725`, owner `copoka`;
+  `gh pr view 6622` and `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` agree. The local branch is two
+  commits ahead — `a47641fb` (publication outside the hub lock) and `5eb6bea8`
+  (docs). Nothing was pushed in this session.
+- **The live PR body is stale, even for the pushed head.** Against
+  `PR-DRAFT.md` it still says "other users' cursors are not drawn", lists only
+  notes/replies/form values/page rotate-move-delete as shared, says deleting a
+  comment or a page cannot be undone, and says the control plane provisions
+  rooms "as a directory today" — all four are wrong at `0f286ed9` (§6.2, §6.4,
+  §6.5). It also lacks the e2e line about the commit callback running outside
+  the hub lock, which only becomes true at `a47641fb`. Replace the body with
+  `PR-DRAFT.md` (from `## What` on) when the slice is pushed; editing the PR
+  text is a publication action and needs the owner's approval.
+- Remaining limitations to state in that body: no web client/host bridge
+  (§6.3), no publication queue (a failed cabinet POST is retried only by the
+  next commit or the last-client-leave commit), no endpoint to resolve a
+  `conflict` room, WSS/TLS behind a reverse proxy, page restore capped at
+  160 KiB, text selections not shared, and signatures / custom stamps /
+  redaction / attachments / page insert-duplicate-split refused as
+  `unsupported`.
 - Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
   limitation 12 (§8.2, §9, §16 p. 9).
 - Add an automation/parity entry once the feature is user-facing.
-- Re-run the full gates, open the PR, no CI changes in the feature PR. The PR
-  body is not in this tree: the cabinet-office checkout keeps the draft at
-  `pdfcraft/PR-DRAFT.md` and the checklist at `PR-CHECKLIST.md`; the body must
-  still say what was tested, what was not, and nothing about who wrote it.
+- Gates are re-run (above and §4) and PR #6622 is open, not a draft; what is
+  left is pushing `a47641fb` + docs and replacing the PR text with
+  `PR-DRAFT.md`. No CI changes in the feature PR. The body is not in this tree:
+  the cabinet-office checkout keeps the draft at `pdfcraft/PR-DRAFT.md` and the
+  checklist at `PR-CHECKLIST.md`; the body must say what was tested, what was
+  not, and nothing about who wrote it.
 - RFC v1 was proposed on the bus (`20261108T115119Z-pdfcraft-9830`). Approvals
   on record: cadcraft (`20261108T124137Z-cadcraft-60aa`), deckcraft
   (`20261108T130802Z-deckcraft-2885`), chair (`20261108T115818Z-craft-05ab`),
