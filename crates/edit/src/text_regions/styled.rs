@@ -2,9 +2,9 @@ use super::super::interp::TextState;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
-    no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
-    splice, type3_faces, type3_glyph, write_type3_glyphs,
+    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, line_word_gap, needs_type3,
+    no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show,
+    source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -902,11 +902,17 @@ pub(crate) fn rewrite_styled_block(
     // Only for the fonts the paragraph uses, when first asked: working out every page font's width
     // up front would scan the page once per font for a short edit on a page of many fonts.
     let spaces: std::cell::RefCell<HashMap<String, f64>> = std::cell::RefCell::new(HashMap::new());
+    // How wide the paragraph's own word gaps are in a font, for when the font has no space to measure.
+    let gap_of = |name: &str| {
+        let own = line_word_gap(block.lines.iter().filter_map(|i| lines.get(*i)).filter(|l| l.font == name));
+        // A font the paragraph did not use (a style picked another subset) sets the paragraph's own gap.
+        own.or_else(|| line_word_gap(block.lines.iter().filter_map(|i| lines.get(*i))))
+    };
     let space_of = |name: &str, m: &Metrics| {
         if let Some(w) = spaces.borrow().get(name) {
             return *w;
         }
-        let w = source_space(doc, &fonts, m);
+        let w = source_space(doc, &fonts, m, gap_of(name));
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
@@ -1169,7 +1175,7 @@ pub(crate) fn rewrite_styled_block(
                     m,
                     &string,
                     size_of(source, item.1),
-                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
+                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m, gap_of(&item.2))),
                     state.char_spacing,
                     state.word_spacing,
                 )?);

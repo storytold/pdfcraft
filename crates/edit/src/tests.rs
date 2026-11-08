@@ -10738,13 +10738,97 @@ fn carriage_returns_break_rows_on_the_styled_path() {
 }
 
 /// A subset with no space glyph shows each space as a positioning gap one space wide, so a run
-/// of spaces still takes a run's width (#4199).
+/// of spaces still takes a run's width (#4199). The width is the line's own: the space between its
+/// words is Helvetica's, 278 thousandths, and no longer a flat 330 (#6609).
 #[test]
 fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
-    assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+    assert_eq!(content.matches("[-278] TJ").count(), 5, "{content}");
+}
+
+/// The single `TJ` adjustments of a content stream, in thousandths of the font size.
+fn tj_gaps(bytes: &[u8]) -> Vec<f64> {
+    pdfcraft_content::parse(bytes)
+        .ops
+        .iter()
+        .filter(|o| o.op.as_slice() == b"TJ")
+        .filter_map(|o| match o.operands.first() {
+            Some(Object::Array(a)) if a.len() == 1 => a.first().and_then(Object::as_f64),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A subset with no space glyph sets a space as a gap as wide as the line's own gaps, not a flat
+/// guess: pdfTeX justifies each line by its own amount (#6609).
+#[test]
+fn a_space_a_subset_cannot_show_is_as_wide_as_the_lines_own_word_gaps() {
+    // Half an em between the words; `F2` and the other subset of its family have no space.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td [(ab) -500 (ba)] TJ ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba ab").unwrap().substituted, None);
+    let gaps = tj_gaps(&page_content_bytes(&reopen(&doc), 0));
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|g| (g + 500.0).abs() < 15.0), "{gaps:?}");
+}
+
+/// A style that picks another subset has no line of its own in it, so its spaces take the gap of
+/// the paragraph's lines.
+#[test]
+fn a_style_that_picks_another_subset_takes_the_paragraphs_word_gap() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td [(ab) -500 (ba)] TJ ET");
+    let style = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: 0..8,
+            family: None,
+            resource: Some("F3".into()),
+            size: None,
+            color: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut doc, 0, 0, Some("ab ba ab"), &style).unwrap();
+    let content = page_content_bytes(&reopen(&doc), 0);
+    assert!(String::from_utf8_lossy(&content).contains("/F3 "), "the range is set in the subset it picked");
+    let gaps = tj_gaps(&content);
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|g| (g + 500.0).abs() < 15.0), "{gaps:?}");
+}
+
+/// Two boxes that `/ActualText` reads as one word have a gap that is not a space: the guess stays.
+#[test]
+fn a_gap_inside_a_word_is_not_measured_as_a_space() {
+    let mut doc = text_page("/Span << /ActualText (ab) >> BDC BT /F2 12 Tf 72 700 Td (a) Tj 10.2 0 Td (b) Tj ET EMC");
+    let line = &text::text_lines(&doc, 0).unwrap()[0];
+    assert_eq!((line.text.as_str(), line.ink.len()), ("ab", 2), "the fixture reads as one word in two boxes");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None);
+    assert_eq!(tj_gaps(&page_content_bytes(&reopen(&doc), 0)), [-330.0]);
+}
+
+/// Two spaces between two words are drawn as one gap twice as wide as a space: the measure is of one
+/// space, or a space set into the line comes out two spaces wide.
+#[test]
+fn a_run_of_spaces_in_the_line_is_measured_as_one_space() {
+    // `F1` draws the two spaces between "ab" and "ba" (Helvetica, 278 thousandths each); `F2` has none.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf (  ) Tj /F2 12 Tf (ba) Tj ET");
+    let line = &text::text_lines(&doc, 0).unwrap()[0];
+    assert_eq!((line.text.as_str(), line.ink.len()), ("ab  ba", 2), "the fixture reads as two words and two spaces");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba ab").unwrap().substituted, None);
+    let gaps = tj_gaps(&page_content_bytes(&reopen(&doc), 0));
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|g| (g + 278.0).abs() < 15.0), "each space is one space wide, not two: {gaps:?}");
+}
+
+/// A single word has no gap to measure, so the guess stays.
+#[test]
+fn a_space_a_subset_cannot_show_is_a_guess_when_the_line_has_one_word() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None);
+    assert_eq!(tj_gaps(&page_content_bytes(&reopen(&doc), 0)), [-330.0]);
 }
 
 #[test]
