@@ -145,9 +145,11 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
                 String::new()
             } else {
                 let js = x.to_string(ctx)?;
-                // Checked before the copy: UTF-16 units never outnumber the UTF-8 bytes they
-                // become, so this refuses nothing the byte check below would accept.
-                if bytes.saturating_add(js.len()) > xfa::MAX_PAYLOAD {
+                // Checked before the copy, at the widest the escaped form can be: six bytes for a
+                // `\uXXXX` escape of one UTF-16 unit. The width cannot be measured exactly without
+                // the copy this check exists to avoid, so an entry whose worst case does not fit is
+                // refused rather than copied first and rejected afterwards.
+                if bytes.saturating_add(js.len().saturating_mul(6)) > xfa::MAX_PAYLOAD {
                     return Err(error(format!("the array holds more than {} bytes of text", xfa::MAX_PAYLOAD)));
                 }
                 js.to_std_string_escaped()
