@@ -228,7 +228,15 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     h.run_steps(3);
     let second = h.state().views.iter().position(|v| v.place() == Place::Second).unwrap();
     let (first_key, id) = (h.state().views[0].view_key(), h.state().views[0].id);
-    let typed = pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 40.0], text: "typed".into(), size: 10.0, color: [0.0; 3], focus: false };
+    let typed = pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 40.0],
+        text: "typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: Default::default(),
+        focus: false,
+    };
     h.state_mut().views[second].fill_text = Some(typed);
     h.state_mut().request_close_tab(second);
     assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(id)), "the typing is asked about");
