@@ -185,3 +185,10 @@ fn a_nonsymbolic_truetype_font_still_prefers_its_3_1_cmap() {
     // 32000-2 §9.6.5.4), whatever order the records are listed in.
     assert!(square_drawn(&[(0, 3, format4(0x41, 1)), (3, 1, format4(0x41, 2))]));
 }
+
+#[test]
+fn a_nonsymbolic_truetype_font_skips_a_0_5_subtable() {
+    // (0, 5) holds variation sequences, so it is never read as a character map, even when its
+    // record points at a format 4 table that maps `A` to the square.
+    assert!(!square_drawn(&[(0, 5, format4(0x41, 2))]));
+}

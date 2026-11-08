@@ -132,6 +132,14 @@ order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
 
+Non-symbolic TrueType Unicode `cmap` (#6581): in `hayro-interpret` `EmbeddedKind::map_code`, an
+embedded TrueType font whose Nonsymbolic flag is set reads a Unicode-platform (0, x) subtable as
+Unicode when its (3, 1) and (1, 0) subtables and its `post` glyph names give nothing. ISO 32000-2
+§9.6.5.4 names only (3, 1) and (1, 0), so this comes last: only a code that drew `.notdef` can
+change. (0, 5) holds variation sequences, not characters, and is skipped. A font whose only
+subtable was (0, 1) drew its text as boxes. Covered by
+`raster::tests::nonsymbolic_truetype_unicode_cmap`, whose font is built in memory.
+
 ## KenM76 integration patches
 
 | PR | Vendored change | Regression coverage |
