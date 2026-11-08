@@ -280,6 +280,207 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
 }
 
 #[test]
+fn actual_text_over_painted_paths_reads_where_they_are_painted() {
+    // Words drawn as outlines (a face that can't be embedded) carry their text in /ActualText
+    // (ISO 32000-2 §14.9.4): it reads at the box of the paths it marks, in view space (y down).
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (valid)>> BDC 100 40 m 160 40 l 160 60 l 100 60 l f EMC",
+        // A curve is measured by its control points, as redaction measures it.
+        "/Span <</ActualText (arc)>> BDC 100 40 m 100 100 160 100 160 40 c f EMC",
+        "BT /F1 20 Tf 1 0 0 1 20 150 Tm (a) Tj ET /Span <</ActualText (b)>> BDC 100 140 60 20 re f EMC BT /F1 20 Tf 1 0 0 1 200 150 Tm (c) Tj ET",
+        // Glyphs inside the span keep their own box; the paths beside them don't widen it.
+        "/Span <</ActualText (x)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (y) Tj ET 0 0 300 300 re f EMC",
+        // Paths are not text without a replacement, and an empty one stands for nothing.
+        "100 140 60 20 re f",
+        "/Span <</ActualText ()>> BDC 100 140 60 20 re f EMC",
+    ]);
+    let painted = marked_text(&pdf, 0);
+    assert_eq!(painted.plain_text(), "valid");
+    assert_eq!(painted.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+    assert_eq!(marked_text(&pdf, 1).glyphs[0].rect, [100.0, 200.0, 160.0, 260.0]);
+    let between = marked_text(&pdf, 2);
+    assert_eq!(between.glyphs.iter().map(|g| g.text.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+    let mixed = marked_text(&pdf, 3);
+    assert_eq!(mixed.plain_text(), "x");
+    assert!(mixed.glyphs[0].rect[2] - mixed.glyphs[0].rect[0] < 20.0, "{:?}", mixed.glyphs[0].rect);
+    for page in 4..6 {
+        assert_eq!(marked_text(&pdf, page).plain_text(), "", "page {page}");
+    }
+}
+
+#[test]
+fn the_painted_filter_leaves_out_replacements_that_mark_no_glyph() {
+    // A page's own text, without words that only /ActualText names.
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (valid)>> BDC 100 40 m 160 40 l 160 60 l 100 60 l f EMC",
+        "BT /F1 20 Tf 1 0 0 1 20 150 Tm (a) Tj ET /Span <</ActualText (b)>> BDC 100 140 60 20 re f EMC BT /F1 20 Tf 1 0 0 1 200 150 Tm (c) Tj ET",
+    ]);
+    let own = |page| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), TextFilter { painted: true, ..Default::default() });
+    assert_eq!(own(0).unwrap().plain_text(), "");
+    let between = own(1).unwrap().plain_text();
+    assert!(between.contains('a') && between.contains('c') && !between.contains('b'), "the glyphs stay: {between:?}");
+}
+
+#[test]
+fn actual_text_over_paint_reads_only_where_it_shows() {
+    let pdf = marked_pages(&[
+        // A page-sized fill clipped to a word's box reads at that box.
+        "q 100 40 30 20 re W n /Span <</ActualText (c)>> BDC 0 0 300 300 re f EMC Q",
+        // Wholly clipped away, it reads nowhere.
+        "q 0 0 10 10 re W n /Span <</ActualText (gone)>> BDC 100 40 60 20 re f EMC Q",
+        // A clip that ended before the paint no longer cuts it.
+        "q 0 0 10 10 re W n Q /Span <</ActualText (back)>> BDC 100 40 60 20 re f EMC",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).glyphs[0].rect, [100.0, 240.0, 130.0, 260.0]);
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "");
+    assert_eq!(marked_text(&pdf, 2).glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+}
+
+#[test]
+fn actual_text_over_paint_reads_only_inside_the_crop_box() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let (page, crop) = ([0, 0, 300, 300], [50, 60, 250, 240]);
+    let pages = [
+        // Wholly outside the crop box, as a glyph there is: it reads nowhere.
+        ("/Span <</ActualText (below)>> BDC 100 10 60 20 re f EMC", page, crop),
+        // Across its left edge: it reads from that edge, as a glyph across it still shows.
+        ("/Span <</ActualText (edge)>> BDC 20 100 60 20 re f EMC", page, crop),
+        // Partly painted outside it: its words may be among what the crop box hides.
+        ("/Span <</ActualText (part)>> BDC 100 100 60 20 re f 100 10 60 20 re f EMC", page, crop),
+        // A glyph the crop takes leaves the replacement no glyph, and the paint can't place it.
+        ("/Span <</ActualText (split)>> BDC BT /F1 12 Tf 1 0 0 1 100 10 Tm (x) Tj ET 100 100 60 20 re f EMC", page, crop),
+        // On a page wide enough to hold them, paint too far apart to be the place of words.
+        ("/Span <</ActualText (far)>> BDC 100 40 10 10 re f 12100 40 10 10 re f EMC", [0, 0, 14400, 300], [0, 0, 14400, 300]),
+    ];
+    let boxed = |b: [i64; 4]| b.map(Object::Integer).to_vec();
+    let mut doc = Document::with_version("1.7");
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+    let parent = doc.new_object_id();
+    let mut kids = Vec::new();
+    for (ops, media, crop) in pages {
+        let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
+        kids.push(Object::Reference(doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => parent,
+            "MediaBox" => boxed(media),
+            "CropBox" => boxed(crop),
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+            "Contents" => content,
+        })));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(parent, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }.into());
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => parent });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "");
+    // View space starts at the crop box's top-left corner.
+    assert_eq!(marked_text(&pdf, 1).glyphs[0].rect, [0.0, 120.0, 30.0, 140.0]);
+    for page in 2..5 {
+        assert_eq!(marked_text(&pdf, page).plain_text(), "", "page {page}");
+    }
+}
+
+#[test]
+fn actual_text_over_paint_reads_along_the_way_it_is_drawn() {
+    // The same quarter turn for a path and for text: the replacement runs the way the text does.
+    let pdf = marked_pages(&[
+        "q 0 1 -1 0 150 150 cm /Span <</ActualText (turned)>> BDC 0 0 40 10 re f EMC Q",
+        "q 0 1 -1 0 150 150 cm BT /F1 10 Tf 0 0 Td (t) Tj ET Q",
+    ]);
+    let (painted, text) = (marked_text(&pdf, 0), marked_text(&pdf, 1));
+    assert_eq!(painted.plain_text(), "turned");
+    assert_eq!(painted.glyphs[0].direction, text.glyphs[0].direction);
+    let [x0, y0, x1, y1] = painted.glyphs[0].rect;
+    assert_eq!((x1 - x0, y1 - y0), (10.0, 40.0), "40 along the turned line, 10 across it");
+}
+
+#[test]
+fn actual_text_over_a_picture_reads_where_it_is_drawn() {
+    // Two pixels square, so a box placed in pixels rather than across the picture shows.
+    let pdf = marked_pages(&["/Span <</ActualText (E=mc2)>> BDC q 60 0 0 20 100 40 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q EMC"]);
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "E=mc2");
+    assert_eq!(text.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+    // Counting without images leaves it out.
+    let filter = TextFilter { images: true, ..Default::default() };
+    assert_eq!(extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), filter).unwrap().plain_text(), "");
+}
+
+#[test]
+fn excluded_glyphs_beside_paint_leave_the_whole_replacement_out() {
+    // The marked glyphs are a figure's, so the replacement goes with them; the paint beside
+    // them neither keeps it nor turns it into a mixed span that can't be counted.
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (f)>> BDC /Figure BMC BT /F1 20 Tf 1 0 0 1 100 150 Tm (x) Tj ET EMC 100 40 60 20 re f EMC",
+        // Paint inside an excluded region is excluded with it.
+        "/Span <</ActualText (z)>> BDC /Figure BMC 100 40 60 20 re f EMC EMC",
+        "/Span <</ActualText (t)>> BDC /Table BMC q 60 0 0 20 100 40 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q EMC EMC",
+    ]);
+    let filtered = |page, filter| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), filter).unwrap().plain_text();
+    let (figures, tables) = (TextFilter { images: true, ..Default::default() }, TextFilter { tables: true, ..Default::default() });
+    assert_eq!(filtered(0, figures.clone()), "");
+    assert_eq!((filtered(1, TextFilter::default()), filtered(1, figures)), ("z".to_string(), String::new()));
+    assert_eq!((filtered(2, TextFilter::default()), filtered(2, tables)), ("t".to_string(), String::new()));
+}
+
+#[test]
+fn paint_split_by_an_exclusion_is_a_mixed_span_that_cant_be_counted() {
+    // Paint places a replacement that marks no glyph, so paint left out mixes it as excluded
+    // glyphs do: the words left out can't be told from the rest.
+    let picture = "q 60 0 0 20 100 40 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q";
+    let (table, beside) = (
+        format!("/Span <</ActualText (t)>> BDC /Table BMC {picture} EMC 200 40 60 20 re f EMC"),
+        format!("/Span <</ActualText (p)>> BDC {picture} 200 40 60 20 re f EMC"),
+    );
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (w)>> BDC /Figure BMC 100 40 60 20 re f EMC 200 40 60 20 re f EMC",
+        &table,
+        &beside,
+        // Glyphs place this one, and the paint beside them is not its words.
+        "/Span <</ActualText (g)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (y) Tj ET /Figure BMC 100 40 60 20 re f EMC EMC",
+    ]);
+    let filtered = |page, filter| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), filter).map(|t| t.plain_text());
+    let (figures, tables) = (TextFilter { images: true, ..Default::default() }, TextFilter { tables: true, ..Default::default() });
+    for (page, text, filter) in [(0, "w", figures.clone()), (1, "t", tables), (2, "p", figures.clone())] {
+        assert_eq!(filtered(page, TextFilter::default()), Ok(text.to_string()));
+        assert!(filtered(page, filter).is_err(), "page {page}");
+    }
+    assert_eq!(filtered(3, figures), Ok("g".to_string()));
+}
+
+#[test]
+fn annotations_never_join_a_replacement_the_page_left_open() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let pages = doc.new_object_id();
+    let content = doc.add_object(Stream::new(dictionary! {}, b"/Span <</ActualText (open)>> BDC 100 40 60 20 re f".to_vec()));
+    let ap = doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 50.into(), 50.into()] },
+        b"0 0 50 50 re f".to_vec(),
+    ));
+    let annot = doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Square", "F" => 4,
+        "Rect" => vec![200.into(), 200.into(), 250.into(), 250.into()], "AP" => dictionary! { "N" => ap },
+    });
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages, "Contents" => content, "Annots" => vec![Object::Reference(annot)],
+        "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)],
+    });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "open");
+    assert_eq!(text.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0], "the square comment is not part of it");
+}
+
+#[test]
 fn an_unmarked_redraw_of_actual_text_reads_as_the_same_text() {
     // Canva draws text twice (an outline or shadow) and marks only one drawing. The copy,
     // before or after the marked one and half a point off, takes the same replacement and is
@@ -1760,6 +1961,137 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
 }
 
+/// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of
+/// splitting out as a raised segment that steals the block's tail and pushes the host line
+/// after the paragraph.
+#[test]
+fn paragraph_selection_includes_lines_with_footnote_references() {
+    for inline in [true, false] {
+        let ops = if inline {
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (First line of the paragraph) Tj \
+             1 0 0 1 40 285 Tm (Second line with a note) Tj \
+             /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+             /F1 12 Tf ( and more text) Tj \
+             1 0 0 1 40 270 Tm (Third line of the paragraph) Tj \
+             /F1 7 Tf 1 0 0 1 40 104 Tm (1) Tj \
+             /F1 10 Tf 1 0 0 1 47 100 Tm (Footnote at the bottom) Tj ET"
+        } else {
+            // Superscripts drawn in a separate pass after the body text.
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (First line of the paragraph) Tj \
+             1 0 0 1 40 285 Tm (Second line with a note) Tj \
+             1 0 0 1 173 285 Tm (and more text) Tj \
+             1 0 0 1 40 270 Tm (Third line of the paragraph) Tj \
+             /F1 10 Tf 1 0 0 1 47 100 Tm (Footnote at the bottom) Tj \
+             /F1 8 Tf 1 0 0 1 165 290.5 Tm (1) Tj \
+             /F1 7 Tf 1 0 0 1 40 104 Tm (1) Tj ET"
+        };
+        let text = page_glyphs(ops);
+        let start = text.nearest(40.0, 95.0).unwrap();
+        let end = text.nearest(185.0, 128.0).unwrap();
+        assert_eq!(
+            text.text_of(start..end + 1),
+            "First line of the paragraph\nSecond line with a note1 and more text\nThird line of the paragraph",
+            "inline={inline}"
+        );
+        assert_eq!(text.line_rects(start..end + 1).len(), 3, "three selected lines, inline={inline}");
+        assert_eq!(
+            text.plain_text(),
+            "First line of the paragraph\nSecond line with a note1 and more text\nThird line of the paragraph\n1 Footnote at the bottom",
+            "inline={inline}"
+        );
+    }
+
+    // Superscript on the first line, multi-character bracketed reference `[12]` on the second
+    // line, and subscript on the third line (both inline and out-of-order).
+    for inline in [true, false] {
+        let ops = if inline {
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Opening claim) Tj \
+             /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+             /F1 12 Tf ( in the first line) Tj \
+             1 0 0 1 40 285 Tm (Middle citation) Tj \
+             /F1 8 Tf 5.5 Ts ([12]) Tj 0 Ts \
+             /F1 12 Tf ( continues here) Tj \
+             1 0 0 1 40 270 Tm (Formula H) Tj \
+             /F1 8 Tf -3 Ts (2) Tj 0 Ts \
+             /F1 12 Tf (O in the third line) Tj ET"
+        } else {
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Opening claim) Tj \
+             1 0 0 1 125 300 Tm (in the first line) Tj \
+             1 0 0 1 40 285 Tm (Middle citation) Tj \
+             1 0 0 1 135 285 Tm (continues here) Tj \
+             1 0 0 1 40 270 Tm (Formula H) Tj \
+             1 0 0 1 101 270 Tm (O in the third line) Tj \
+             /F1 8 Tf 1 0 0 1 117 305.5 Tm (1) Tj \
+             1 0 0 1 117 290.5 Tm ([12]) Tj \
+             1 0 0 1 96.5 267 Tm (2) Tj ET"
+        };
+        let text = page_glyphs(ops);
+        assert_eq!(
+            text.plain_text(),
+            "Opening claim1 in the first line\nMiddle citation[12] continues here\nFormula H2O in the third line",
+            "inline={inline}"
+        );
+        assert_eq!(text.line_rects(0..text.glyphs.len()).len(), 3, "inline={inline}");
+    }
+
+    // Justified wide gap (18pt = 1.5 * h) after an inline superscript stays on the same line,
+    // and an out-of-order superscript kerned slightly over punctuation does not break the host
+    // word via overprint collision.
+    let justified = page_glyphs(
+        "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Justified clause.) Tj \
+         /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+         /F1 12 Tf 1 0 0 1 151 300 Tm (Next sentence on the same line) Tj \
+         1 0 0 1 40 285 Tm (Kerned clause.) Tj \
+         1 0 0 1 130 285 Tm (continues cleanly) Tj \
+         /F1 8 Tf 1 0 0 1 118 290.5 Tm (2) Tj ET",
+    );
+    assert_eq!(justified.plain_text(), "Justified clause.1 Next sentence on the same line\nKerned clause.2 continues cleanly");
+    assert_eq!(justified.line_rects(0..justified.glyphs.len()).len(), 2);
+
+    // A line that begins with a raised superscript marker and continues with taller body text
+    // adopts the body text's vertical band (Seg::extend_box first branch) so a later
+    // out-of-order superscript on that line still measures against the body baseline.
+    let leading_script = page_glyphs(
+        "BT /F1 8 Tf 1 0 0 1 40 300 Tm 6 Ts (1) Tj 0 Ts \
+         /F1 12 Tf ( See the appendix) Tj \
+         1 0 0 1 146 300 Tm (for details) Tj \
+         /F1 8 Tf 1 0 0 1 139 303.6 Tm (2) Tj ET",
+    );
+    assert_eq!(leading_script.plain_text(), "1 See the appendix2 for details");
+    let marker = leading_script.glyphs.first().unwrap().rect;
+    let body = leading_script.glyphs.iter().find(|g| g.text == "S").unwrap().rect;
+    let last = leading_script.glyphs.last().unwrap().rect;
+    let center = |r: [f32; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (start_x, start_y) = center(marker);
+    let (end_x, end_y) = center(last);
+    let start = leading_script.nearest(start_x, start_y).unwrap();
+    let end = leading_script.nearest(end_x, end_y).unwrap();
+    assert_eq!(leading_script.text_of(start..end + 1), "1 See the appendix2 for details");
+    let rects = leading_script.line_rects(start..end + 1);
+    assert_eq!(rects.len(), 1);
+    assert!(marker[1] < body[1] && marker[3] < body[3], "marker must be raised above the body");
+    let close = |actual: f32, expected: f32| assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
+    // Highlight rectangles cover the actual glyphs, including the raised marker. They do
+    // not expose the segment's baseline band used for line grouping.
+    for (actual, expected) in rects[0].into_iter().zip([marker[0], marker[1], last[2], body[3]]) {
+        close(actual, expected);
+    }
+    close(rects[0][3] - rects[0][1], 14.8);
+    close(body[3] - 0.2 * 12.0, 100.0); // 300 pt PDF baseline on a 400 pt page.
+
+    // Pin that internal band too: replacing the first extend_box condition with `false`
+    // must fail here even when plain text and highlight rectangles remain unchanged.
+    let mut segment = Seg::new(Run { start: 0, end: 1 }, marker, marker[3] - marker[1]);
+    segment.extend_box(&body, body[3] - body[1]);
+    for (actual, expected) in segment.bbox.into_iter().zip([marker[0], body[1], body[2], body[3]]) {
+        close(actual, expected);
+    }
+    close(segment.h, 12.0);
+    close(segment.bbox[3] - segment.bbox[1], 12.0);
+    close(segment.bbox[3] - 0.2 * segment.h, 100.0);
+    close(segment.cy(), (body[1] + body[3]) / 2.0);
+}
+
 #[test]
 fn text_outside_the_crop_box_is_clipped() {
     use lopdf::{Document, Object, Stream, dictionary};
@@ -1833,4 +2165,19 @@ fn text_outside_the_crop_box_is_clipped() {
         let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
+}
+
+/// The glyph under a point is the first whose box holds it, edges included; between glyphs, none.
+#[test]
+fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {
+    let text = PageText {
+        glyphs: vec![em_box("a", 0.0, 0.0, 10.0, 10.0), em_box("b", 8.0, 0.0, 20.0, 10.0)],
+        line_of: vec![0, 0],
+        space_before: vec![false, false],
+    };
+    assert_eq!(text.glyph_at(5.0, 5.0), Some(0));
+    assert_eq!(text.glyph_at(9.0, 5.0), Some(0), "the first of overlapping boxes");
+    assert_eq!(text.glyph_at(20.0, 10.0), Some(1), "an edge is in");
+    assert_eq!(text.glyph_at(25.0, 5.0), None);
+    assert_eq!(PageText::default().glyph_at(0.0, 0.0), None);
 }

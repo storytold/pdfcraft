@@ -23,6 +23,9 @@ pub struct TextFilter {
     pub code: bool,
     /// Exclude Figure-marked text and invisible text layers, including OCR.
     pub images: bool,
+    /// Exclude `/ActualText` that marks no glyph, whose words are drawn as outlines or pictures:
+    /// a page's own text, for deciding whether it still needs reading from its pixels.
+    pub painted: bool,
     /// Page-local MCIDs whose structure ancestors match the selected exclusions.
     pub mcids: HashSet<i32>,
 }
@@ -173,6 +176,11 @@ impl PageText {
                 (start < end).then_some(start..end)
             })
             .collect()
+    }
+
+    /// Index of the first glyph whose box holds a view-space point: the text under the pointer.
+    pub fn glyph_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.glyphs.iter().position(|g| x >= g.rect[0] && x <= g.rect[2] && y >= g.rect[1] && y <= g.rect[3])
     }
 
     /// Index of the glyph nearest to a view-space point (for selection anchors).
@@ -385,7 +393,7 @@ pub use layout::layout;
 use layout::{from_upright, to_upright};
 use layout::{is_rtl, union};
 #[cfg(test)]
-use order::{Run, Scratch, collide, restarts_run};
+use order::{Run, Scratch, Seg, collide, restarts_run};
 
 #[cfg(test)]
 mod tests;

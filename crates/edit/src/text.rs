@@ -24,12 +24,14 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
-use regions::{group_blocks, is_centred, rewrite_styled_block};
+pub use fallback::strip_subset_tag;
+use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
 
 mod blocks;
 mod editor;
 mod fallback;
+pub mod forms;
 mod interp;
 mod lines;
 mod rewrite;
@@ -41,25 +43,29 @@ pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
-use editor::layout_draft;
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
+use editor::{builtin_thai_choice, layout_draft};
 #[cfg(test)]
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
-    source_family, source_program, source_show, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
+    source_family, source_program, source_show, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
+pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
 use lines::page_dict;
-pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
+pub(crate) use lines::{
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
+    joined, resource_dict, rewritten_contents, splice,
+};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
+pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
-pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +124,14 @@ pub struct TextLine {
     /// `ink`, and whether joining put a space before it. Empty when the line's text was put
     /// into another order (see [`TextLine::runs`]).
     runs: Vec<(String, usize, bool)>,
+    /// This line continues the previous one because a rewrite wrapped it (`/PCSoft`).
+    soft_break: bool,
+    /// This line starts after a break a rewrite kept on purpose (`/PCHard`).
+    hard_break: bool,
+    /// When `soft_break`: the exact number of separator characters the wrap consumed (0 for a
+    /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
+    /// (#2529). Meaningless otherwise.
+    soft_gap: usize,
 }
 
 impl TextLine {
@@ -154,6 +168,7 @@ mod tests {
             lines: Vec::new(),
             rows: Vec::new(),
             editor_text: text.into(),
+            reflow_text: text.into(),
             spans: Vec::new(),
             invisible: false,
         }
@@ -204,40 +219,74 @@ mod tests {
         assert!(!same_base_font("Arial", ""));
     }
 
+    fn wrapped(text: &str, width: f64) -> Vec<String> {
+        wrap(text, width, |s| s.chars().count() as f64).into_iter().map(|(line, _, _)| line).collect()
+    }
+
     #[test]
     fn paragraph_wrapping_keeps_ideographic_spaces() {
+        assert_eq!(wrapped("A　　B C", 4.0), ["A　　B", "C"]);
+        assert_eq!(wrapped("A\u{a0}B C", 3.0), ["A B", "C"]);
+        assert_eq!(wrapped("A\u{2028}B C", 3.0), ["A B", "C"]);
+        // `wrap` treats every whitespace character, including `\r`, as a separator to keep
+        // (#4199); the caller turns `\r\n` and `\r` into `\n` before calling it.
+        assert_eq!(wrapped(" \tA  B\r\nC ", 3.0), ["  A", "B ", "C "]);
+    }
+
+    #[test]
+    fn a_wrap_is_marked_soft_and_a_newline_is_not() {
         let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
-        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap("Page 1", 5.0, width), [("Page".into(), false, 0), ("1".into(), true, 1)]);
+        assert_eq!(wrap("One\nTwo", 10.0, width), [("One".into(), false, 0), ("Two".into(), false, 0)]);
+    }
+
+    /// #2529: a run of spaces that happens to fall at a wrap point is recorded exactly, not
+    /// assumed to be one space; a Chinese/Japanese word split, which has no space of its own,
+    /// is recorded as none.
+    #[test]
+    fn a_wrap_records_how_many_spaces_it_consumed() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("One  Two", 5.0, width), [("One".into(), false, 0), ("Two".into(), true, 2)]);
+        assert_eq!(wrap("One   Two", 5.0, width), [("One".into(), false, 0), ("Two".into(), true, 3)]);
+        assert_eq!(wrap("日本語の文章です", 3.0, width), [("日本語".into(), false, 0), ("の文章".into(), true, 0), ("です".into(), true, 0)]);
     }
 
     /// #4199: a run of spaces stays a run, before, between and after words; the spaces where a
     /// row wraps go, and each other white-space character is one space.
     #[test]
     fn paragraph_wrapping_keeps_every_space_typed() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("a  b   c", 20.0, width), ["a  b   c"]);
-        assert_eq!(wrap("  a b  ", 20.0, width), ["  a b  "]);
-        assert_eq!(wrap("a\t\tb", 20.0, width), ["a  b"]);
-        assert_eq!(wrap("aa  bb  cc", 6.0, width), ["aa  bb", "cc"]);
+        assert_eq!(wrapped("a  b   c", 20.0), ["a  b   c"]);
+        assert_eq!(wrapped("  a b  ", 20.0), ["  a b  "]);
+        assert_eq!(wrapped("a\t\tb", 20.0), ["a  b"]);
+        assert_eq!(wrapped("aa  bb  cc", 6.0), ["aa  bb", "cc"]);
         // An indent alone on a row doesn't wrap before its first word.
-        assert_eq!(wrap("    abc", 3.0, width), ["    abc"]);
+        assert_eq!(wrapped("    abc", 3.0), ["    abc"]);
         // The rewrite turns `\r\n` and `\r` into `\n` before wrapping.
-        assert_eq!(wrap(" \tA  B\nC ", 3.0, width), ["  A", "B", "C "]);
-        assert_eq!(wrap("   ", 3.0, width), ["   "]);
-        assert_eq!(wrap("", 3.0, width), [""]);
+        assert_eq!(wrapped(" \tA  B\nC ", 3.0), ["  A", "B", "C "]);
+        assert_eq!(wrapped("   ", 3.0), ["   "]);
+        assert_eq!(wrapped("", 3.0), [""]);
     }
 
     #[test]
     fn japanese_text_wraps_between_characters_but_not_before_closing_marks() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("日本語の文章です。", 3.0, width), ["日本語", "の文章", "です。"]);
+        assert_eq!(wrapped("日本語の文章です。", 3.0), ["日本語", "の文章", "です。"]);
         // The comma can't begin a row, so the character before it moves down with it.
-        assert_eq!(wrap("あいう、えお", 3.0, width), ["あい", "う、え", "お"]);
+        assert_eq!(wrapped("あいう、えお", 3.0), ["あい", "う、え", "お"]);
         // Pieces of one word join without a space; separate words keep theirs.
-        assert_eq!(wrap("Edit PDFを編集", 6.0, width), ["Edit", "PDFを編集"]);
-        assert_eq!(wrap("一行目　二行目", 4.0, width), ["一行目　", "二行目"]);
+        assert_eq!(wrapped("Edit PDFを編集", 6.0), ["Edit", "PDFを編集"]);
+        assert_eq!(wrapped("一行目　二行目", 4.0), ["一行目　", "二行目"]);
+    }
+
+    #[test]
+    fn thai_text_wraps_between_dictionary_words_and_keeps_marks_on_their_word() {
+        // Without word breaks the whole run is one word and overflows a single row.
+        assert_eq!(wrapped("ภาษาไทยไม่มีช่องว่าง", 8.0), ["ภาษาไทย", "ไม่มี", "ช่องว่าง"]);
+        // Mai Yamok stays with the word it repeats; pieces join without a space, words keep theirs.
+        assert_eq!(wrapped("เด็กๆชอบกิน ขนม", 6.0), ["เด็กๆ", "ชอบกิน", "ขนม"]);
+        assert_eq!(wrapped("ไฟล์ PDF ประปาส่วนภูมิภาค", 9.0), ["ไฟล์ PDF", "ประปาส่วน", "ภูมิภาค"]);
+        // A wrap between Thai words consumed no separator, so a rejoin puts back no space.
+        let rows = wrap("ภาษาไทยไม่มีช่องว่าง", 8.0, |s| s.chars().count() as f64);
+        assert_eq!(rows.iter().map(|(_, soft, gap)| (*soft, *gap)).collect::<Vec<_>>(), [(false, 0), (true, 0), (true, 0)]);
     }
 
     #[test]
