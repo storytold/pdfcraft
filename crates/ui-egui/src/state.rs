@@ -253,8 +253,20 @@ pub struct PageClip {
     /// Snapshot of the system clipboard when the pages were copied, so Create ▸ Clipboard can
     /// detect when newer text or image content was copied afterwards.
     pub(crate) system_clip_at_copy: Option<crate::create_ui::Clip>,
+    /// System-clipboard marker line naming the copied pages (e.g. `"1 page from b.pdf"`), so
+    /// Create ▸ Clipboard treats a page-copy marker on the system clipboard as the page copy
+    /// rather than newer text.
+    pub(crate) clipboard_marker: String,
     /// Newer text or image copied inside PdfCraft since these pages were copied.
     pub(crate) superseded_by_clip: Option<crate::create_ui::Clip>,
+}
+
+impl PageClip {
+    /// Whether `clip` matches the system-clipboard state from when these pages were copied
+    /// (either the unchanged pre-copy clipboard or the page-copy marker line).
+    pub(crate) fn matches_system_clip(&self, clip: &Option<crate::create_ui::Clip>) -> bool {
+        clip == &self.system_clip_at_copy || matches!(clip, Some(crate::create_ui::Clip::Text(t)) if t == &self.clipboard_marker)
+    }
 }
 
 /// One page of a whole-document copy: its text as read for display, to read, or not to try

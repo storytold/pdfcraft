@@ -152,7 +152,7 @@ impl PdfCraftApp {
         let sys_clip = self.current_system_clip();
         if let Some(clip) = self.page_clipboard.clone()
             && clip.superseded_by_clip.is_none()
-            && sys_clip == clip.system_clip_at_copy
+            && clip.matches_system_clip(&sys_clip)
         {
             let created = self.session.extract_from_bytes(&clip.name, &clip.bytes, clip.password.as_deref(), &clip.pages).map_err(|e| e.to_string());
             if let Err(e) = self.open_created_bytes("Clipboard.pdf", created) {
@@ -160,7 +160,7 @@ impl PdfCraftApp {
             }
             return;
         }
-        let clip = if self.page_clipboard.as_ref().is_some_and(|c| sys_clip == c.system_clip_at_copy) {
+        let clip = if self.page_clipboard.as_ref().is_some_and(|c| c.matches_system_clip(&sys_clip)) {
             self.page_clipboard.as_ref().and_then(|c| c.superseded_by_clip.clone()).or(sys_clip)
         } else {
             sys_clip.or_else(|| self.page_clipboard.as_ref().and_then(|c| c.superseded_by_clip.clone()))

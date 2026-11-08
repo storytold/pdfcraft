@@ -618,8 +618,12 @@ impl PdfCraftApp {
             self.notify_tr("A document needs at least one page: copy instead");
             return;
         }
+        // A newer copy wins over a whole-document copy still reading its pages.
+        self.document_copy = None;
         let system_clip_at_copy = self.current_system_clip();
         let Some(doc) = self.session.get(id) else { return };
+        let what = if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) };
+        let clipboard_marker = crate::i18n::fmt(tl!("{what} from {name}"), &[("what", &what), ("name", &doc.name)]);
         self.page_clipboard = Some(crate::PageClip {
             from: id,
             name: doc.name.clone(),
@@ -627,12 +631,12 @@ impl PdfCraftApp {
             password: doc.password.clone(),
             pages: pages.clone(),
             system_clip_at_copy,
+            clipboard_marker,
             superseded_by_clip: None,
         });
         if cut {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }
-        let what = if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) };
         if cut {
             self.notify_fmt("Cut {what}", &[("what", &what)]);
         } else {
