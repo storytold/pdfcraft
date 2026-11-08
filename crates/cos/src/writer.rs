@@ -413,7 +413,8 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 /// [`write_full`] into any [`Write`] sink, such as a file, without holding the output in memory:
 /// each object is passed on as soon as it is serialized (in chunks of about 64 KB). Only the
 /// output buffer goes away; the writer's working memory is the same as `write_full`'s, such as
-/// object-stream batches (up to 8 MiB, briefly more while one is assembled and
+/// the objects parsed while numbering that are kept for the write pass (up to 64 MiB, see
+/// `KeptObjects`), object-stream batches (up to 8 MiB, briefly more while one is assembled and
 /// compressed), the largest single object, bookkeeping that grows with the number of objects and
 /// references, and the cross-reference section, which is built in full before it is written.
 /// The bytes are identical to `write_full`'s. Returns the number of bytes written. The sink is

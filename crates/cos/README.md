@@ -95,7 +95,8 @@ classic table any reader accepts. Both forms map accepted xref/header aliases to
 object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
 `write_full_to` is the same writer handing each object to a `Write` sink as it is serialized, so
 the output is never held whole. Only the output buffer goes away: the writer's own working memory
-(object-stream batches of up to 8 MiB, the largest single object, bookkeeping that grows with the
+(objects parsed while numbering, kept for the write pass up to 64 MiB, object-stream batches of
+up to 8 MiB, the largest single object, bookkeeping that grows with the
 number of objects and references, and the cross-reference section, built in full before it is
 written) is the same as `write_full`'s. A document that asked for a new identifier (below) is the
 exception: the identifier hashes every byte before the trailer, so `write_full_to` holds that
