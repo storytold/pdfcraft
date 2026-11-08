@@ -253,9 +253,9 @@ pub(crate) fn thai_glyph_resources(
     if shaped.glyphs.len() > 65_534 {
         return Err(EditError::Invalid("shaped row exceeds its geometry budget".into()));
     }
-    let mut outlines = HashMap::new();
+    let mut outlines = std::collections::HashMap::new();
     let mut clusters = Vec::new();
-    let mut index = HashMap::new();
+    let mut index = std::collections::HashMap::new();
     let mut indices = Vec::new();
     for glyph in &shaped.glyphs {
         let id = glyph.id.to_u32();
@@ -266,7 +266,12 @@ pub(crate) fn thai_glyph_resources(
         let at = *index.entry((id, glyph.text.as_str())).or_insert_with(|| {
             let at = clusters.len();
             let width = outlines.get(&key).map_or(0.0, |g| g.width);
-            clusters.push(ShapedCluster { script: ShapedScript::Thai, glyphs: vec![(id, [0.0, 0.0])], advance: width, text: glyph.text.clone() });
+            clusters.push(pdfcraft_fonts::ShapedCluster {
+                script: ShapedScript::Thai,
+                glyphs: vec![(id, [0.0, 0.0])],
+                advance: width,
+                text: glyph.text.clone(),
+            });
             at
         });
         indices.push(at);
@@ -274,9 +279,9 @@ pub(crate) fn thai_glyph_resources(
     // Validate all outlines before adding resources. Type 3 character codes are single bytes;
     // shard long rows and return the appropriate resource/code for every positioned glyph.
     let mut names = Vec::new();
-    for chunk in clusters.chunks(GLYPHS_PER_FONT) {
+    for chunk in clusters.chunks(shaped_text::GLYPHS_PER_FONT) {
         let refs: Vec<_> = chunk.iter().collect();
-        let font = type3_shaped(doc, &refs, &outlines);
+        let font = shaped_text::add_type3_font(doc, &refs, &outlines);
         doc.update_dict(font, |f| f.set(b"Name".to_vec(), Object::name("PCThai")))?;
         let mut name = format!("PCThai{}", font.num);
         while fonts.contains(name.as_bytes()) {
@@ -288,8 +293,8 @@ pub(crate) fn thai_glyph_resources(
     indices
         .into_iter()
         .map(|at| {
-            let name = names.get(at / GLYPHS_PER_FONT).ok_or_else(|| EditError::Invalid("Thai font resource is missing".into()))?;
-            let code = u8::try_from(at % GLYPHS_PER_FONT + 1).map_err(|_| EditError::Invalid("Thai glyph limit".into()))?;
+            let name = names.get(at / shaped_text::GLYPHS_PER_FONT).ok_or_else(|| EditError::Invalid("Thai font resource is missing".into()))?;
+            let code = u8::try_from(at % shaped_text::GLYPHS_PER_FONT + 1).map_err(|_| EditError::Invalid("Thai glyph limit".into()))?;
             Ok((name.clone(), vec![code]))
         })
         .collect()

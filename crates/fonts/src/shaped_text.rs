@@ -292,6 +292,17 @@ pub fn thai_refusal(text: &str) -> Option<String> {
     text.split(['\n', '\r']).filter(|l| l.chars().any(is_thai)).find_map(|l| thai_pieces(l).err().map(|e| thai_message(e, l)))
 }
 
+/// [`type3_font`] written into `doc`, with its glyphs, descriptor and ToUnicode as objects of their
+/// own: for content that draws `clusters` (at most [`GLYPHS_PER_FONT`]) as codes 1… directly.
+pub fn add_type3_font(
+    doc: &mut Document,
+    clusters: &[&ShapedCluster],
+    outlines: &HashMap<(ShapedScript, u32), GlyphOutline>,
+) -> pdfcraft_cos::ObjRef {
+    let font = type3_font(clusters, outlines, &mut |o| Object::Ref(doc.add(o)));
+    doc.add(Object::Dict(font))
+}
+
 /// A Type 3 font with `clusters` as codes 1…, each drawn from its script face's glyph `outlines`.
 fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32), GlyphOutline>, store: &mut dyn FnMut(Object) -> Object) -> Dict {
     let mut charprocs = Dict::new();
