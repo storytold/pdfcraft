@@ -26,7 +26,7 @@ pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -
     list(doc, bytes, trust).into_iter().find(|s| s.field == field)
 }
 
-fn unhex(s: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn unhex(s: &[u8]) -> Option<Vec<u8>> {
     let digits: Vec<u8> = s.iter().copied().filter(|c| !c.is_ascii_whitespace()).collect();
     let val = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
     digits.chunks(2).map(|p| Some(val(p[0])? << 4 | p.get(1).map_or(Some(0), |c| val(*c))?)).collect()

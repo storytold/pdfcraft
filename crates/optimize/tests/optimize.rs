@@ -3157,6 +3157,87 @@ fn images_that_do_not_tile_a_picture_are_left_alone() {
     unmerged(&mut off, &Settings { merge_fragments: false, ..Settings::default() });
 }
 
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    Stream::from_raw(dict, raw)
+}
+
+/// A page whose content is damaged partway isn't all known: its strips aren't merged, which would
+/// write its content again without what follows the damage.
+#[test]
+fn strips_on_a_page_damaged_partway_are_left_as_they_are() {
+    let (mut doc, _) = printed_page(40, |_| false, |_, s| s);
+    let p = pdfcraft_annot::page_refs(&doc).unwrap()[0];
+    let bad = damaged_flate(b"0 g\n", b"q 1000 0 0 1 0 0 cm /R0 Do Q");
+    let damaged = doc.add(Object::Stream(bad.clone()));
+    let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+    let contents = Object::Array(vec![first, Object::Ref(damaged)]);
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+    assert_eq!(doc.get(p).as_dict().unwrap().get(b"Contents"), Some(&contents));
+    assert_eq!(stream(&doc, damaged), bad);
+}
+
+/// An image may be drawn larger past the damage in a page's or a form's content, so no image is
+/// resampled for the uses before it.
+#[test]
+fn content_damaged_partway_leaves_every_image_at_its_resolution() {
+    for in_form in [false, true] {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 720, 720, 1, false, None);
+        let p = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+        assert_eq!(effective_resolutions(&doc, &[p])[&img], 720.0);
+        let mut bad = damaged_flate(b"q 72 0 0 72 0 0 cm /Im Do Q\n", b"q 720 0 0 720 0 0 cm /Im Do Q");
+        let added = if in_form {
+            bad.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            bad.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            bad.dict.set(b"Resources".to_vec(), Object::Dict(resources(xobjects(&[("Im", img)]))));
+            let f = doc.add(Object::Stream(bad));
+            let res = Object::Dict(resources(xobjects(&[("Im", img), ("F", f)])));
+            doc.update_dict(p, |d| d.set(b"Resources".to_vec(), res)).unwrap();
+            content(&mut doc, "/F Do")
+        } else {
+            doc.add(Object::Stream(bad))
+        };
+        let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![first, Object::Ref(added)]))).unwrap();
+        // Not measured, or measured as never resampled: the image pass reads only what was measured.
+        let ppi = effective_resolutions(&doc, &[p]).get(&img).copied().unwrap_or(f64::INFINITY);
+        assert_eq!(ppi, f64::INFINITY, "in a form: {in_form}");
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(r.images_resampled, 0, "{r:?}");
+    }
+}
+
+/// One page damaged partway stops resampling for the whole document: another page drawing the same
+/// image at its full resolution, whole, doesn't get it resampled either.
+#[test]
+fn content_damaged_partway_on_one_page_leaves_the_image_another_page_draws() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 720, 720, 1, false, None);
+    let damaged = page(&mut doc, &[("Im", img)], "");
+    let bad = doc.add(Object::Stream(damaged_flate(b"0 g\n", b"q 720 0 0 720 0 0 cm /Im Do Q")));
+    doc.update_dict(damaged, |d| d.set(b"Contents".to_vec(), Object::Ref(bad))).unwrap();
+    let whole = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+    assert_eq!(effective_resolutions(&doc, &[whole])[&img], 720.0);
+    let ppi = effective_resolutions(&doc, &[damaged, whole]).get(&img).copied().unwrap_or(f64::INFINITY);
+    assert_eq!(ppi, f64::INFINITY);
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 0, "{r:?}");
+    assert_eq!(doc.get(img).as_dict().and_then(|d| d.int(b"Width")), Some(720));
+}
+
 /// `levels` nested forms with their own resources, the innermost drawing `img` over the unit square.
 fn nested_forms(doc: &mut Document, img: ObjRef, levels: usize) -> ObjRef {
     let mut inner = form(doc, Some(Object::Dict(resources(xobjects(&[("Im", img)])))), "/Im Do");
