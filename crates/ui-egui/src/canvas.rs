@@ -3510,7 +3510,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         }
         Some(PageMenuAction::FlattenComments) => {
             app.views[index].comments.selected = None;
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false, keep_signature_fields: false });
         }
         Some(PageMenuAction::AddBookmark) => {
             app.bookmark_action(crate::panels::BmAction::New);

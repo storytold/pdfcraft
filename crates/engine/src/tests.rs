@@ -3802,6 +3802,8 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
     assert_eq!(s.get(id).unwrap().bytes, before);
 }
 
+/// Ordinary flattening preserves rendered comments and field text, removes their editable
+/// objects, and leaves one undo step that restores the form.
 #[test]
 fn flattening_keeps_the_look_and_drops_the_objects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -3809,7 +3811,7 @@ fn flattening_keeps_the_look_and_drops_the_objects() {
     s.apply(id, Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Ada".into()) }).unwrap();
     s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])).unwrap();
     let red_before = pixel(&s, id, 0, 100, 100);
-    s.apply(id, Edit::Flatten { comments: true, fields: true }).unwrap();
+    s.apply(id, Edit::Flatten { comments: true, fields: true, keep_signature_fields: false }).unwrap();
     let d = s.get(id).unwrap();
     assert!(d.info.annotations.is_empty() && d.form.is_empty(), "no comments or fields remain");
     assert_eq!(pixel(&s, id, 0, 100, 100), red_before, "the rectangle is now page content");
@@ -7519,6 +7521,8 @@ fn a_value_a_script_sets_reaches_every_field_bound_to_the_same_data_node() {
     );
 }
 
+/// Flattening XFA fields bakes their visible values into pages and removes the live XFA
+/// template/data so reopening does not lay the form out a second time.
 #[test]
 fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     let data = "<form><page1><country>JP</country><langs>English\nSpanish</langs></page1></form>";
@@ -7527,7 +7531,7 @@ fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     let id = s.open("fields.pdf", None, bytes, None).expect("opens");
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
     s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("typed here".into()) }).unwrap();
-    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    s.apply(id, Edit::Flatten { comments: false, fields: true, keep_signature_fields: false }).unwrap();
     let d = s.get(id).unwrap();
     assert!(d.form.is_empty(), "no fields remain");
     assert_eq!(d.info.xfa, None, "no longer an XFA form: Adobe's viewers show the baked pages");
@@ -7550,10 +7554,12 @@ fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     assert_eq!(d.info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
     assert_eq!(d.form.iter().find(|f| f.name == "other").unwrap().value, vec!["typed here".to_string()]);
     // Flattening comments alone leaves the XFA form as it is.
-    s.apply(id, Edit::Flatten { comments: true, fields: false }).unwrap();
+    s.apply(id, Edit::Flatten { comments: true, fields: false, keep_signature_fields: false }).unwrap();
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
 }
 
+/// An unrendered dynamic XFA form must keep its source packets and report that it could not
+/// be flattened, rather than silently discarding the only representation of its fields.
 #[test]
 fn a_dynamic_xfa_form_that_was_never_laid_out_keeps_its_xfa_and_the_user_is_told_what_went() {
     // A template that can't be read: the form keeps its placeholder page and its XFA.
@@ -7563,7 +7569,7 @@ fn a_dynamic_xfa_form_that_was_never_laid_out_keeps_its_xfa_and_the_user_is_told
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
     assert!(s.get(id).unwrap().xfa.is_none(), "not laid out");
     assert!(s.apply(id, Edit::XfaToStatic).is_err(), "nothing to keep");
-    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    s.apply(id, Edit::Flatten { comments: false, fields: true, keep_signature_fields: false }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.info.xfa, Some(pdfcraft_render::Xfa::Dynamic), "the XFA stays: Adobe can still render the form");
     assert!(d.info.warnings.iter().any(|w| w.contains("The XFA was kept")), "{:?}", d.info.warnings);
@@ -8991,12 +8997,16 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
 }
 
+/// A repaired signed PDF requiring a full rewrite refuses edits, including both signature
+/// retention choices, without changing its bytes or undo state. This covers the recovery
+/// rewrite guard, not a universal prohibition on incremental edits to signed documents.
 #[test]
 fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
     let mut s = Session::new().with_clock(|| 1_800_000_000);
     let id = s.open("fixture.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])).unwrap();
     let opts = SignOptions { page: 1, rect: Some([20.0, 20.0, 180.0, 60.0]), ..SignOptions::default() };
     let signed = s.sign(id, &digital_id, opts).unwrap();
     s.mark_signed(id, signed, None).unwrap();
@@ -9011,6 +9021,14 @@ fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     assert!(s.get(id).unwrap().editor.as_ref().unwrap().cos.revisions().is_empty(), "the fixture must be rebuilt");
     assert!(matches!(s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])), Err(EditError::SignedRewrite(_))));
     assert!(!s.get(id).unwrap().dirty);
+    let before = s.get(id).unwrap().bytes.clone();
+    for keep_signature_fields in [false, true] {
+        let edit = Edit::Flatten { comments: true, fields: true, keep_signature_fields };
+        assert!(matches!(s.apply(id, edit), Err(EditError::SignedRewrite(_))), "signature retention must not bypass the rewrite guard");
+        let document = s.get(id).unwrap();
+        assert_eq!(document.bytes, before);
+        assert!(!document.dirty && document.can_undo().is_none());
+    }
 }
 
 /// A one-page document whose only signature field is signed and named with `len` bytes. The

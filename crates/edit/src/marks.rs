@@ -61,7 +61,7 @@ impl Default for HeaderFooter {
 }
 
 impl HeaderFooter {
-    /// The first character [`add_header_footer`] would refuse, because the standard fonts can't
+    /// The first character [`crate::add_header_footer`] would refuse, because the standard fonts can't
     /// draw it (#125). Tokens only add ASCII (Bates prefixes and suffixes are part of the
     /// template), so checking the templates, split as `expand`'s output is, covers every page
     /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
@@ -139,7 +139,7 @@ pub struct Watermark {
 }
 
 impl Watermark {
-    /// The first character of a text watermark [`add_watermark`] would refuse, because the
+    /// The first character of a text watermark [`crate::add_watermark`] would refuse, because the
     /// standard fonts can't draw it (#125). A picture watermark draws no text.
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
