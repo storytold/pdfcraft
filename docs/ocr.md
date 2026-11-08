@@ -24,10 +24,10 @@ cargo xtask models
 ```
 
 This downloads the models and licence notices into `assets/models/`, verifies their pinned
-SHA-256 hashes, and leaves them outside Git. English needs `text-detection.rten` and
-`text-recognition.rten`; Chinese needs `text-detection.rten`, `chinese-recognition.onnx`
-and `chinese-keys.txt`; Latin needs `text-detection.rten`, `latin-recognition.onnx`
-and `latin-keys.txt`. Sources, versions, hashes and licences are in
+SHA-256 hashes, and leaves them outside Git. English needs `text-detection.onnx` and
+`text-recognition.onnx` (a complete legacy `.rten` pair still works). Chinese needs that
+detector, `chinese-recognition.onnx` and `chinese-keys.txt`. Latin needs that detector,
+`latin-recognition.onnx` and `latin-keys.txt`. Sources, versions, hashes and licences are in
 [ATTRIBUTION.toml](../ATTRIBUTION.toml).
 
 For an installed desktop app, put those files in a directory and launch with

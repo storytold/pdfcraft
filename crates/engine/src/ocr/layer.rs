@@ -1,5 +1,6 @@
 //! Unicode search text has no visible glyphs. A generated Type 3 font supplies advance widths
 //! and a ToUnicode map, with empty character programs; no display font is needed or embedded.
+//! Adapted from the searchable-layer implementation in #433 (32e09fbe).
 
 use std::collections::BTreeMap;
 
@@ -7,21 +8,38 @@ use pdfcraft_cos::{Dict, Document, Object, Stream};
 use pdfcraft_edit::EditError;
 use pdfcraft_ocr::PlacedWord;
 
+/// Refuse oversized text or invalid geometry before cloning words or allocating fonts.
+/// These limits apply to the complete input, including all editable export pages.
+pub(crate) fn validate_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>) -> Result<usize, EditError> {
+    let mut count = 0usize;
+    let mut length = 0usize;
+    for w in words {
+        count += 1;
+        length = length.checked_add(w.text.len()).ok_or_else(|| EditError::Invalid("OCR text layer is too large".into()))?;
+        if count > 65536 || length > 4 * 1024 * 1024 {
+            return Err(EditError::Invalid("OCR text layer is too large".into()));
+        }
+        if !w.origin.iter().chain(&w.across).chain(&w.up).all(|v| v.is_finite())
+            || !w.across[0].hypot(w.across[1]).is_finite()
+            || !w.up[0].hypot(w.up[1]).is_finite()
+            || (0..2).any(|i| !(w.origin[i] + 0.2 * w.up[i]).is_finite() || !(w.origin[i] + w.across[i] + 0.2 * w.up[i]).is_finite())
+        {
+            return Err(EditError::Invalid("OCR text coordinates must be finite".into()));
+        }
+    }
+    Ok(count)
+}
+
 pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
-    let length = words.iter().try_fold(0usize, |n, w| n.checked_add(w.text.len()));
-    if length.is_none_or(|n| n > 4 * 1024 * 1024) || words.len() > 65536 {
-        return Err(EditError::Invalid("OCR text layer is too large".into()));
-    }
-    if words.iter().any(|w| !w.origin.iter().chain(&w.across).chain(&w.up).all(|v| v.is_finite())) {
-        return Err(EditError::Invalid("OCR text coordinates must be finite".into()));
-    }
+    validate_words(words)?;
     // Keep the existing Latin layout, including Helvetica's proportional advance widths.
     if words.iter().all(|w| {
         w.text
             .chars()
             .all(|c| matches!(c, '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' | '€' | '‚' | '„' | '…' | '‘' | '’' | '“' | '”' | '•' | '–' | '—' | '™'))
     }) {
-        return pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words)).map(|_| ());
+        pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words, &pdfcraft_fonts::TextPlan::default()))?;
+        return Ok(());
     }
     let p = pdfcraft_model::pages(doc).get(page).cloned().ok_or_else(|| EditError::Invalid("OCR page does not exist".into()))?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -78,8 +96,9 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-    // `3 Tr` and the font are graphics state. `ET` does not reset them, and a page with no earlier
-    // content is not wrapped, so without `q … Q` text added afterwards draws invisibly (#3029).
+    // `3 Tr` and the font are graphics state, which `ET` doesn't reset: like
+    // `pdfcraft_ocr::text_layer` (#3029), the text is drawn inside `q … Q` so the invisible
+    // rendering mode cannot leak into later content streams on the page.
     let mut content = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
     for w in words {
         let count = w.text.chars().count();
@@ -121,5 +140,6 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
         }
     }
     content.push_str("ET\nQ\nEMC\n");
-    pdfcraft_edit::stamp(doc, page, "OCR", content.into_bytes()).map(|_| ())
+    pdfcraft_edit::stamp(doc, page, "OCR", content.into_bytes())?;
+    Ok(())
 }

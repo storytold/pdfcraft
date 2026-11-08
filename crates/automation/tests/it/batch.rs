@@ -255,3 +255,61 @@ fn mcp_batch_errors_keep_the_structured_per_file_report() {
     assert_eq!(report["result"]["isError"], true, "{report}");
     assert_eq!(report["result"]["structuredContent"]["failed"], 1);
 }
+
+#[test]
+fn dry_run_planned_files_are_not_counted_as_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("input/sub")).unwrap();
+    std::fs::create_dir_all(dir.path().join("out")).unwrap();
+    let original = pdf();
+    std::fs::write(dir.path().join("input/a.pdf"), &original).unwrap();
+    std::fs::write(dir.path().join("input/sub/a.pdf"), &original).unwrap();
+    std::fs::write(dir.path().join("out/a.pdf"), b"precious").unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let report = result(&mut auto, json!({"paths":["input","input/sub"],"steps":["optimize"],"out_dir":"out","dry_run":true}));
+    assert_eq!(report["dry_run"], true, "{report}");
+    assert_eq!(report["completed"], 0, "{report}");
+    assert_eq!(report["failed"], 0, "{report}");
+    assert_eq!(report["skipped"], 0, "planned files are not skipped: {report}");
+    let files = report["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{report}");
+    assert!(files.iter().all(|file| file["status"] == "planned"), "{report}");
+    assert!(files.iter().all(|file| file["steps"] == json!(["optimize"])), "planned files list the ordered steps: {report}");
+    assert!(files[0]["output"].as_str().unwrap().ends_with("out/a (2).pdf"), "existing output gets the publish collision name: {report}");
+    assert!(files[1]["output"].as_str().unwrap().ends_with("out/a (3).pdf"), "later planned files reserve their names: {report}");
+    assert_eq!(std::fs::read(dir.path().join("out/a.pdf")).unwrap(), b"precious");
+    assert!(!dir.path().join("out/a (2).pdf").exists(), "dry run writes nothing: {report}");
+    #[cfg(unix)]
+    {
+        // An output subfolder that resolves outside out_dir is a per-file error:
+        // it counts as failed, honors stop_on_error, and later files are skipped.
+        for outside_root in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join("input/sub")).unwrap();
+            std::fs::create_dir_all(dir.path().join("out")).unwrap();
+            std::fs::write(dir.path().join("input/a.pdf"), pdf()).unwrap();
+            std::fs::write(dir.path().join("input/sub/page.pdf"), pdf()).unwrap();
+            std::fs::write(dir.path().join("input/z.pdf"), pdf()).unwrap();
+            let target = if outside_root { outside.path().to_path_buf() } else { dir.path().join("outside") };
+            if !outside_root {
+                std::fs::create_dir(&target).unwrap();
+            }
+            std::os::unix::fs::symlink(&target, dir.path().join("out/sub")).unwrap();
+            let mut auto = Automation::new().with_root(dir.path()).unwrap();
+            let report = result(
+                &mut auto,
+                json!({"paths":["input"],"steps":["optimize"],"out_dir":"out","recursive":true,"dry_run":true,"stop_on_error":true}),
+            );
+            assert_eq!(report["failed"], 1, "preview target failure is per-file: {report}");
+            assert_eq!(report["stopped"], true, "{report}");
+            assert_eq!(report["skipped"], 1, "only the unprocessed file is skipped: {report}");
+            let files = report["files"].as_array().unwrap();
+            assert_eq!(files.len(), 3, "{report}");
+            assert_eq!(files[0]["status"], "planned", "{report}");
+            assert_eq!(files[1]["status"], "error", "{report}");
+            assert_eq!(files[2]["status"], "skipped", "stop_on_error leaves later files unplanned: {report}");
+            assert!(!dir.path().join("out/a.pdf").exists(), "dry run writes nothing: {report}");
+        }
+    }
+}

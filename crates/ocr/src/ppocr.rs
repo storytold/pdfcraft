@@ -194,7 +194,11 @@ mod tests {
             eprintln!("skipped: Latin OCR models not installed");
             return;
         };
-        let ocr = PpOcr::load(&models.recognition, &models.recognition.with_file_name(crate::LATIN_DICTIONARY), 504).unwrap();
+        let Some(dict) = crate::ocrs::dictionary_beside(&models.recognition, crate::ocrs::LATIN_DICTIONARY) else {
+            eprintln!("skipped: Latin dictionary not installed");
+            return;
+        };
+        let ocr = PpOcr::load(&models.recognition, &dict, 504).unwrap();
         let (w, h) = (6000u32, 40u32);
         let rgb = vec![255u8; (w * h * 3) as usize];
         let wide = ocr.recognize(&rgb, w, h, [0.0, 0.0, w as f32, h as f32], "");
@@ -244,7 +248,11 @@ mod tests {
             eprintln!("skipped: Latin OCR models not installed");
             return;
         };
-        let ocr = PpOcr::load(&models.recognition, &models.recognition.with_file_name(crate::LATIN_DICTIONARY), 504).unwrap();
+        let Some(dict) = crate::ocrs::dictionary_beside(&models.recognition, crate::ocrs::LATIN_DICTIONARY) else {
+            eprintln!("skipped: Latin dictionary not installed");
+            return;
+        };
+        let ocr = PpOcr::load(&models.recognition, &dict, 504).unwrap();
         let (w, h) = (120u32, 40u32);
         let mut rgb = vec![255u8; (w * h * 3) as usize];
         for x in 8..100 {

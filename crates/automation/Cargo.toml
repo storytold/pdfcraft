@@ -14,6 +14,8 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-prc = { workspace = true }
+pdfcraft-prc-render = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 # Bates numbering writes the numbered file beside the original through a temporary name.

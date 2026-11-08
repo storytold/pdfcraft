@@ -9,7 +9,7 @@ use pdfcraft_cos::{DecodeBudget, Dict, Document, ImageBudget, ObjRef, Object, St
 use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
-const MAX_PIXELS: u64 = 80_000_000;
+pub(crate) const MAX_PIXELS: u64 = 80_000_000;
 
 /// The resources of a page, inherited from the page tree if the page has none.
 pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
@@ -32,9 +32,10 @@ fn held_page_resources(doc: &Document, page: ObjRef) -> Option<(Dict, ObjRef)> {
 }
 
 /// The page content `contents` names, decoded against `budget` and joined. `None` when a stream
-/// doesn't decode or the budget runs out: the content is not all known.
+/// doesn't decode, is damaged partway or the budget runs out: the content is not all known.
 pub(crate) fn content_bytes(doc: &Document, contents: &Object, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
-    let pieces = budget.decode_contents(doc, contents).into_iter().collect::<Result<Vec<_>, _>>().ok()?;
+    let reads = budget.decode_contents_with_damage(doc, contents);
+    let pieces = reads.into_iter().map(|read| read.ok().filter(|(_, damaged)| !damaged).map(|(data, _)| data)).collect::<Option<Vec<_>>>()?;
     Some(Pieces::join(&pieces).data().to_vec())
 }
 
@@ -214,7 +215,7 @@ impl Walk<'_> {
             self.complete = false;
             return;
         }
-        let Ok(data) = self.budget.decode(s) else {
+        let Ok((data, false)) = self.budget.decode_with_damage(doc, s, usize::MAX) else {
             self.complete = false;
             return;
         };
@@ -245,9 +246,9 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
 ///
-/// If forms nest too deeply, are drawn too many times, or a page's content doesn't decode within
-/// its budget, every image is given `INFINITY` (never resampled), since its largest use may be
-/// among those missed.
+/// If forms nest too deeply, are drawn too many times, or a page's or form's content doesn't
+/// decode within its budget or is damaged partway, every image is given `INFINITY` (never
+/// resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
     walk_pages(doc, pages).0
 }
@@ -419,7 +420,7 @@ pub(crate) fn components(doc: &Document, cs: &Object) -> Option<usize> {
     }
 }
 
-fn is_dct(s: &Stream) -> Option<bool> {
+pub(crate) fn is_dct(s: &Stream) -> Option<bool> {
     match s.dict.get(b"Filter") {
         None => Some(false),
         Some(Object::Name(n)) => match n.as_slice() {
@@ -506,7 +507,7 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize, budget: &mut ImageBud
 /// to three bytes for each of them and of a PNG predictor's bytes a row (ASCIIHex text under
 /// Flate, its two digits a byte broken into lines or spaced). More can only be a decompression
 /// bomb, and the image is left alone.
-fn allowance(bytes: usize, rows: u32) -> Option<usize> {
+pub(crate) fn allowance(bytes: usize, rows: u32) -> Option<usize> {
     bytes.checked_add(usize::try_from(rows).ok()?)?.checked_mul(3)?.checked_add(4096)
 }
 
@@ -518,7 +519,7 @@ fn allowance(bytes: usize, rows: u32) -> Option<usize> {
 /// /ColorTransform contradict each other (PdfCraft's renderer lets /ColorTransform 0 win where
 /// the standard lets the marker win), either holds a value other than 0 or 1, or the parameters
 /// or the JPEG's segments can't be read.
-fn ycc_encoded(doc: &Document, s: &Stream) -> Option<bool> {
+pub(crate) fn ycc_encoded(doc: &Document, s: &Stream) -> Option<bool> {
     let entry = color_transform(doc, s)?;
     match adobe_transform(&s.raw)? {
         Some(t @ (0 | 1)) => entry.is_none_or(|c| c == i64::from(t)).then_some(t == 1),
@@ -658,7 +659,7 @@ fn scaled<P: image::Pixel<Subpixel = u8> + 'static>(img: &image::ImageBuffer<P, 
     }
 }
 
-fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
+pub(crate) fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
     let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
@@ -681,7 +682,7 @@ pub(crate) fn decodable(doc: &Document, s: &Stream) -> Option<bool> {
 
 /// Whether `decode` is the default decode array for `n` components ([0 1] each), which changes
 /// nothing. Scanners write it on page images (#490).
-fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> bool {
+pub(crate) fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> bool {
     let decode = doc.resolve(decode);
     let Some(a) = decode.as_array() else { return false };
     a.len() == 2 * n && a.chunks(2).all(|p| matches!(p, [lo, hi] if doc.resolve(lo).as_f64() == Some(0.0) && doc.resolve(hi).as_f64() == Some(1.0)))
@@ -1699,7 +1700,7 @@ mod dimension_tests {
         dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
         let image = Stream::flate(dict, &samples);
-        let read = (image.raw.len() + samples.len()) as u64 + 256 * 256;
+        let read = (image.raw.len() + samples.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * image.raw.len() as u64 + 256 * 256;
         let original = doc.add(Object::Stream(image.clone()));
         let mut xobjects = Dict::new();
         xobjects.set(b"I0".to_vec(), Object::Ref(original));
@@ -1791,7 +1792,7 @@ mod dimension_tests {
         };
         let mut doc = Document::new_empty();
         let mask = image("DeviceGray");
-        let cost = (mask.raw.len() + noise.len()) as u64 + 256 * 256;
+        let cost = (mask.raw.len() + noise.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * mask.raw.len() as u64 + 256 * 256;
         let masked = doc.add(Object::Stream(mask));
         let mut with_mask = image("DeviceGray");
         with_mask.dict.set(b"SMask".to_vec(), Object::Ref(masked));

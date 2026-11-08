@@ -24,11 +24,11 @@ pub(crate) use objects::Held;
 pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
-pub(crate) use state::ObjectReader;
-use state::{ObjStm, Slot};
+use state::{ObjStm, Slot, Unreadable};
+pub(crate) use state::{ObjectReader, held_bytes};
 pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
-use state::{SECTION_READS, held_bytes, objstm_member};
+use state::{SECTION_READS, objstm_member};
 use xref::XrefIndex;
 pub use xref::{Revision, XrefEntry};
 
@@ -48,8 +48,14 @@ pub struct Document {
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
+    /// What loading each file object gave, a failure as well: a damaged object is otherwise
+    /// loaded again on every read, and a member of an object stream that can't be decoded
+    /// decodes the stream again (`Document::load`).
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
+    /// See [`Self::unreadable_objects`]. Shared by clones, like the caches: it describes the
+    /// source, and is reset wherever they are.
+    unreadable: Arc<Mutex<Unreadable>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,
@@ -71,6 +77,9 @@ pub struct Document {
     encryption_changed: bool,
     /// Set by edits that must not leave earlier revisions in the file (redaction).
     full_save: bool,
+    /// The next full save also gives the file a new identifier (`/ID`), see
+    /// [`Document::require_full_save_with_new_id`].
+    new_id: bool,
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
     out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,
