@@ -9175,17 +9175,35 @@ fn a_complete_update_reads_as_before() {
     assert_eq!((count, size, model), (2, (300, 150), 2));
 }
 
-/// A file with data after `%%EOF` that holds no object (a web page glued to a served file) is read
-/// through its table as before, by the renderer and the model alike: the file has a stale copy of
-/// its page that only a rebuild would show.
+/// A file with data after `%%EOF` that holds no object header (a web page glued to a served file)
+/// is read through its table by the renderer, as before: the file has a stale copy of its page that
+/// only a rebuild would show. The model, finding no `startxref` in its footer window, rebuilds from
+/// object headers and takes that stale 999 x 999 copy, so here the two still differ, as they did
+/// before this change.
 #[test]
 fn trailing_data_without_objects_reads_as_before() {
     let mut junk = one_page_file_with(true);
-    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name</p>");
+    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name, 4294967296 0 obj</p>");
     junk.extend(std::iter::repeat_n(b' ', 5000));
     junk.extend_from_slice(b"</html>\n");
+    let doc = pdfcraft_cos::Document::open(Arc::new(junk.clone())).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let kid = doc.resolve(pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().first().unwrap());
+    let media = kid.as_dict().unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>();
+    assert_eq!(media, [0.0, 0.0, 999.0, 999.0], "the model's rebuilt page");
     let ((count, size), model) = renderer_and_model_pages(junk);
     assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
+/// A cut-off update whose object headers run straight into their dictionaries (`4 0 obj<<`) is
+/// still found: a delimiter ends the keyword (ISO 32000-2 §7.2.2), and the renderer shows the
+/// update's new first page.
+#[test]
+fn a_cut_off_update_with_obj_followed_by_a_delimiter_is_rebuilt() {
+    let file = String::from_utf8(with_update(&one_page_file(), 5000, false)).unwrap().replace(" obj\n<<", " obj<<").into_bytes();
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!((count, size, model), (2, (300, 150), 2));
 }
 
 /// A cut-off update that ends within the footer window leaves the older `startxref` near the end,
