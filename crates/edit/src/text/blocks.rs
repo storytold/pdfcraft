@@ -407,7 +407,7 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 pub struct BlockStyle {
     /// Disjoint UTF-8 ranges in the replacement, each preserving unspecified source style.
     pub ranges: Vec<RangeStyle>,
-    /// Explicit page font resource (from register_text_font or the page font inventory).
+    /// Explicit page font resource or bundled document-font choice from the page font inventory.
     pub resource: Option<String>,
     /// A standard font family, bold, italic.
     pub family: Option<(crate::added::Family, bool, bool)>,

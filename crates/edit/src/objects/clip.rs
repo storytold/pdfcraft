@@ -23,7 +23,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use super::{EditableObject, MAX_COORDINATE, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, checked_streams, editable_objects, valid_rect};
 use crate::EditError;
-use crate::ungroup::{CATEGORIES, DEFAULT_SPACES, page_blend_space, resource_operand, ungroup_ops};
+use crate::ungroup::{CATEGORIES, DEFAULT_SPACES, MAX_FORM_BYTES, Ungrouped, page_blend_space, resource_operand, ungroup_ops};
 
 /// How deep the copied graphics state may nest (`q`), as the page's own may.
 const MAX_NESTING: usize = 1024;
@@ -248,15 +248,16 @@ pub fn paste_objects(doc: &mut Document, page: usize, copied: &CopiedObjects, of
     let mut with_copy = res;
     with_copy.set(b"XObject".to_vec(), Object::Dict(xobjects));
     let space = page_blend_space(doc, &p.dict);
-    let (ops, mut merged, patterns) = ungroup_ops(
-        doc,
-        &with_copy,
-        &name,
-        false,
-        space.as_ref(),
-        Matrix::translate(offset[0], offset[1]),
-        "the copied objects can't be pasted here",
-    )?;
+    // Drawn by a `Do` of its own: not translucent, and in no path or text object.
+    let draw = [Op::new("Do", vec![Object::Name(name.clone())])];
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_FORM_BYTES, 0);
+    let Ungrouped { ops, resources: mut merged, patterns, .. } =
+        ungroup_ops(doc, &with_copy, &draw, 0, space.as_ref(), Matrix::translate(offset[0], offset[1]), &mut budget).map_err(|r| match r.error {
+            EditError::Invalid(why) => {
+                EditError::Invalid(why.replacen("this artwork can't be ungrouped", "the copied objects can't be pasted here", 1))
+            }
+            other => other,
+        })?;
     let mut work = doc.clone();
     if let Some(mut x) = merged.get(b"XObject").and_then(Object::as_dict).cloned() {
         x.remove(&name);

@@ -481,6 +481,10 @@ impl Automation {
                     self.apply(&a, Edit::EditPageImage { page, index, change })?
                 }
             }
+            "text_prepare" => {
+                let page = self.page(&a)?;
+                self.prepare_text(&a, page)?
+            }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
                 let doc = self.doc_to_copy(&a)?;

@@ -82,6 +82,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::DeleteObjects { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
+        | Edit::PrepareText { .. }
         | Edit::EditPageImage { .. }
         | Edit::EnhanceScan { .. }
         | Edit::AddText { .. }

@@ -707,6 +707,16 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             None => view.pending_text_open = None,
         }
     }
+    // A click on grouped text prepared the page (`image_input`): the paragraph now at the point
+    // clicked opens, and none if the point is on the group's artwork. A preparation that failed
+    // left the page as it was, where no paragraph is at that point. It is taken either way.
+    if let Some((_, [x, y])) = view.grouped_text_click.take_if(|(p, _)| *p == page)
+        && gate
+        && active.is_none()
+        && let Some((block, _)) = grab_at(&boxes, user_to_screen(xf, info, page, x, y), false)
+    {
+        open_editor(cx, lines, &boxes, block, view);
+    }
     if !gate {
         return false;
     }
