@@ -658,6 +658,8 @@ pub struct DocView {
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+    /// Pages checked for grouped source text during this Edit text activation.
+    pub(crate) prepared_text_pages: std::collections::HashSet<usize>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The paragraph editor whose edit was just queued. It opens again with its typing if the
     /// edit fails, as a refused form field does.
@@ -1059,6 +1061,7 @@ impl DocView {
             organize_range: Default::default(),
             pending_edit: None,
             edit_lines: HashMap::new(),
+            prepared_text_pages: Default::default(),
             line_editor: None,
             applied_editor: None,
             pending_text_open: None,

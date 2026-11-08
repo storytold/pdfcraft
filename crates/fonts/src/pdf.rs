@@ -116,22 +116,23 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         if face.charmap().mappings().next().is_some() {
             return Some(bytes);
         }
-        // Some PDF generators keep a Mac format-6 code→glyph cmap. egui accepts Unicode
-        // format-4/12 cmaps. Combine the PDF's Unicode meanings with the source glyph IDs;
-        // only this in-memory copy gets a new cmap, never the working PDF or a font asset.
-        let Ok(cmap) = face.cmap() else { continue };
+        // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
+        // cmap from ToUnicode and the actual CID-to-glyph map; source bytes stay unchanged.
         let metrics = Metrics::from_dict(doc, font);
-        if metrics.composite {
-            continue;
-        }
         let mut mappings = std::collections::BTreeMap::new();
-        for code in 0..=255 {
-            let Some(text) = metrics.unicode.text(code) else { continue };
-            let Some(ch) = only_char(&text) else { continue };
-            let Some(glyph) = cmap.map_codepoint(code).or_else(|| cmap.map_codepoint(code + 0xf000)) else { continue };
-            let glyph = glyph.to_u32();
-            if glyph > 0 {
-                mappings.entry(u32::from(ch)).or_insert(glyph);
+        if metrics.composite {
+            if let Some((map, _)) = composite_glyph_maps(doc, font, &bytes, &metrics, budget) {
+                mappings = map;
+            }
+        } else if let Ok(cmap) = face.cmap() {
+            for code in 0..=255 {
+                let Some(text) = metrics.unicode.text(code) else { continue };
+                let Some(ch) = only_char(&text) else { continue };
+                let Some(glyph) = cmap.map_codepoint(code).or_else(|| cmap.map_codepoint(code + 0xf000)) else { continue };
+                let glyph = glyph.to_u32();
+                if glyph > 0 {
+                    mappings.entry(u32::from(ch)).or_insert(glyph);
+                }
             }
         }
         if !mappings.is_empty()
@@ -214,14 +215,14 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
     }
 }
 
-/// Replace an existing cmap directory entry with a bounded Unicode format-12 table.
+/// Add or replace an editor-only cmap with a bounded Unicode format-12 table.
 /// Checked ranges prevent damaged sfnt offsets from indexing outside the source program.
 fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap<u32, u32>) -> Option<()> {
     if mappings.len() > 65536 {
         return None;
     }
     let count = u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?) as usize;
-    if count > 256 {
+    if count == 0 || count > 256 {
         return None;
     }
     let mut entry = None;
@@ -236,7 +237,10 @@ fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap
             head = Some(u32::from_be_bytes(record.get(8..12)?.try_into().ok()?) as usize);
         }
     }
-    let entry = entry?;
+    let (entry, head) = match entry {
+        Some(entry) => (entry, head),
+        None => insert_editor_cmap_slot(bytes, count, head)?,
+    };
     let mut cmap = Vec::with_capacity(28 + mappings.len() * 12);
     cmap.extend_from_slice(&[0, 0, 0, 1, 0, 3, 0, 10, 0, 0, 0, 12, 0, 12, 0, 0]);
     cmap.extend_from_slice(&(16_u32 + u32::try_from(mappings.len()).ok()? * 12).to_be_bytes());
@@ -264,12 +268,59 @@ fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap
     bytes.get_mut(entry + 8..entry + 12)?.copy_from_slice(&offset.to_be_bytes());
     bytes.get_mut(entry + 12..entry + 16)?.copy_from_slice(&u32::try_from(cmap.len()).ok()?.to_be_bytes());
     bytes.extend_from_slice(&cmap);
+    // SFNT directories are sorted by tag. Some readers tolerate the unsorted directory of
+    // a PDF subset, but shaping engines may binary-search it and otherwise miss the cmap.
+    // Adding a slot increased the directory count; include the new record in this sort.
+    let tables = usize::from(u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?));
+    let end = 12usize.checked_add(tables.checked_mul(16)?)?;
+    let mut records: Vec<[u8; 16]> = bytes.get(12..end)?.as_chunks::<16>().0.to_vec();
+    records.sort_by_key(|r| [r[0], r[1], r[2], r[3]]);
+    for (index, record) in records.iter().enumerate() {
+        let at = 12 + index * 16;
+        bytes.get_mut(at..at + 16)?.copy_from_slice(record);
+    }
     if let Some(head) = head {
         bytes.get_mut(head.checked_add(8)?..head.checked_add(12)?)?.fill(0);
         let adjustment = 0xb1b0afba_u32.wrapping_sub(checksum(bytes));
         bytes.get_mut(head + 8..head + 12)?.copy_from_slice(&adjustment.to_be_bytes());
     }
     Some(())
+}
+
+/// Reserve a new cmap directory slot, retaining every original table payload.
+fn insert_editor_cmap_slot(bytes: &mut Vec<u8>, mut count: usize, mut head: Option<usize>) -> Option<(usize, Option<usize>)> {
+    if count >= 256 {
+        return None;
+    }
+    let end = 12usize.checked_add(count.checked_mul(16)?)?;
+    bytes.get(..end)?;
+    // Keep all original table bytes, shifting them by one directory record.
+    for i in 0..count {
+        let at = 12 + i * 16;
+        let offset = u32::from_be_bytes(bytes.get(at + 8..at + 12)?.try_into().ok()?);
+        let len = u32::from_be_bytes(bytes.get(at + 12..at + 16)?.try_into().ok()?);
+        if (offset as usize) < end {
+            return None;
+        }
+        bytes.get(offset as usize..offset.checked_add(len)? as usize)?;
+    }
+    bytes.splice(end..end, [0; 16]);
+    for i in 0..count {
+        let at = 12 + i * 16;
+        let offset = u32::from_be_bytes(bytes.get(at + 8..at + 12)?.try_into().ok()?).checked_add(16)?;
+        bytes.get_mut(at + 8..at + 12)?.copy_from_slice(&offset.to_be_bytes());
+    }
+    head = head.and_then(|offset| offset.checked_add(16));
+    bytes.get_mut(end..end + 4)?.copy_from_slice(b"cmap");
+    count += 1;
+    let count = u16::try_from(count).ok()?;
+    let selector = count.ilog2() as u16;
+    let range = (1u16.checked_shl(u32::from(selector))?).checked_mul(16)?;
+    bytes.get_mut(4..6)?.copy_from_slice(&count.to_be_bytes());
+    bytes.get_mut(6..8)?.copy_from_slice(&range.to_be_bytes());
+    bytes.get_mut(8..10)?.copy_from_slice(&selector.to_be_bytes());
+    bytes.get_mut(10..12)?.copy_from_slice(&count.checked_mul(16)?.checked_sub(range)?.to_be_bytes());
+    Some((end, head))
 }
 
 fn descriptor_flags(doc: &Document, descriptor: &Dict) -> u32 {
@@ -885,6 +936,19 @@ impl Metrics {
             Some(w) => *w > 0.0 || code == 32,
             None => self.widths.is_empty() && !self.subset,
         }
+    }
+
+    /// Whether the embedded program draws an outline for `code`. Known (`Some`) only for a subset
+    /// Type 0 font over a readable TrueType program, where a dropped glyph is left empty; `None`
+    /// when the program can't tell, for example a simple or CFF font. [`Metrics::encode`] accepts
+    /// any code with a `/W` entry (#1443), so a caller that would rather use another subset of the
+    /// same face than draw nothing asks this too. An empty space glyph is normal.
+    pub fn has_outline(&self, code: u32) -> Option<bool> {
+        if !self.composite || self.outlined_cids.is_empty() {
+            return None;
+        }
+        let cid = self.cid(code);
+        Some(self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1))
     }
 
     /// Whether `code` shows exactly `c` and has a glyph for it.
@@ -1510,3 +1574,7 @@ mod encoding_tests {
         assert_eq!(budget.remaining(), 0);
     }
 }
+
+mod thai;
+use thai::composite_glyph_maps;
+pub use thai::{ExistingThaiRun, LegacyThaiFont, recovered_thai_map};

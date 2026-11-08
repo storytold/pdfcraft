@@ -76,6 +76,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
+    if tool != QuickTool::EditText {
+        view.prepared_text_pages.clear();
+    } else if can_modify && view.pending_edit.is_none() && view.line_editor.is_none() && view.prepared_text_pages.insert(i) && doc.can_prepare_text(i)
+    {
+        view.pending_edit = Some(pdfcraft_engine::Edit::PrepareText { page: i });
+        ui.ctx().request_repaint();
+    }
     let field_tool = match tool {
         QuickTool::Field(f) => Some(f),
         _ => None,
