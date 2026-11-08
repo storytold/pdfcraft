@@ -91,7 +91,13 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
             })),
         }
     }
-    let words = thai_words(atoms);
+    Ok(wrap_words(thai_words(atoms), width))
+}
+
+/// `words` (each a list of text and advance, with the spaces that follow it) laid into rows no
+/// wider than `width`: a word that doesn't fit what is left of a row starts the next one, and only
+/// a word wider than a whole row is split, between its clusters.
+fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
     let blank = |s: &str| s.chars().all(char::is_whitespace);
     let mut lines: Vec<String> = Vec::new();
     let (mut line, mut used) = (String::new(), 0.0);
@@ -123,7 +129,7 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
         }
     }
     lines.push(line);
-    Ok(lines)
+    lines
 }
 
 /// The shaped clusters `atoms` (text and advance) grouped into words: a word starts after spaces,
@@ -419,4 +425,41 @@ fn copy_key(c: &Content) -> Content {
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
     t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
+}
+
+#[cfg(test)]
+mod thai_wrap_tests {
+    use super::{thai_words, wrap_words};
+
+    /// One atom per character, each `advance` wide: what shaping hands over, without a Thai face.
+    fn atoms(text: &str, advance: f64) -> Vec<(String, f64)> {
+        text.chars().map(|c| (c.to_string(), advance)).collect()
+    }
+
+    fn texts(words: &[Vec<(String, f64)>]) -> Vec<String> {
+        words.iter().map(|w| w.iter().map(|(s, _)| s.as_str()).collect()).collect()
+    }
+
+    #[test]
+    fn thai_atoms_group_into_dictionary_words_with_their_spaces() {
+        assert_eq!(texts(&thai_words(atoms("น้ำประปาสะอาด", 1.0))), ["น้ำ", "ประปา", "สะอาด"]);
+        assert_eq!(texts(&thai_words(atoms("สวัสดี ครับ", 1.0))), ["สวัสดี ", "ครับ"]);
+        // A break the dictionary finds inside one shaped cluster is not a place to end a row.
+        assert_eq!(texts(&thai_words(vec![("น้ำประปา".into(), 8.0)])), ["น้ำประปา"]);
+        assert!(thai_words(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn words_wrap_whole_and_only_an_overlong_word_is_split() {
+        let words = || vec![vec![("ab".into(), 2.0), (" ".into(), 1.0)], vec![("cd".into(), 2.0)]];
+        assert_eq!(wrap_words(words(), 10.0), ["ab cd"]);
+        // The space that ends a row hangs past it, and the next row doesn't begin with it.
+        assert_eq!(wrap_words(words(), 3.0), ["ab", "cd"]);
+        let long = vec![vec![("a".into(), 2.0), ("b".into(), 2.0), ("c".into(), 2.0)]];
+        assert_eq!(wrap_words(long, 3.0), ["a", "b", "c"]);
+        // Spaces that open a paragraph stay, and a word too wide for the rest of their row is split.
+        let opening = vec![vec![(" ".into(), 1.0)], vec![("a".into(), 2.0), ("b".into(), 2.0)]];
+        assert_eq!(wrap_words(opening, 3.0), [" a", "b"]);
+        assert_eq!(wrap_words(Vec::new(), 3.0), [""]);
+    }
 }
