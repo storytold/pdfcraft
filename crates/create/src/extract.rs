@@ -183,12 +183,17 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
             .unwrap_or(false);
     // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
-    // a negative.
-    let as_is_negative = jpeg && !inverted && matches!(space(doc, s.dict.get(b"ColorSpace")), Ok(Space::Cmyk));
+    // a negative. The space is read once: an indexed one's lookup table is paid for each time.
+    let read = (jpeg && !inverted).then(|| space(doc, s.dict.get(b"ColorSpace"), budget));
+    let as_is_negative = matches!(read, Some(Ok(Space::Cmyk)));
     if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
         return as_is();
     }
-    let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
+    let mut space = match read {
+        _ if mask => Space::Gray,
+        Some(read) => read?,
+        None => space(doc, s.dict.get(b"ColorSpace"), budget)?,
+    };
     let (samples, bpc) = if jpeg {
         if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
             return Err(FilterError::Spent.to_string());
@@ -436,7 +441,10 @@ impl Space {
 /// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
 const MAX_LOOKUP: usize = 64 << 10;
 
-fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
+/// The colour space `cs` names; an indexed one's lookup table is read within `budget`, as the
+/// image's samples are, since each image reads it again and its filters can do work that makes
+/// nothing.
+fn space(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
     let unsupported = |n: &[u8]| Err(format!("{} images can't be exported yet", String::from_utf8_lossy(n)));
@@ -470,7 +478,7 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
-                let base = space(doc, a.get(1))?;
+                let base = space(doc, a.get(1), budget)?;
                 let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),
@@ -478,10 +486,14 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
                     // Through its parameters given by reference too, as the image's samples.
-                    Some(Object::Stream(t)) => doc
-                        .with_direct_parms(t)
-                        .decoded_within(MAX_LOOKUP)
-                        .map_err(|_| "an indexed colour space with an oversized or damaged lookup table".to_string())?,
+                    Some(Object::Stream(t)) => {
+                        let refused = budget.refused();
+                        match budget.decode_filters(doc, t, MAX_LOOKUP) {
+                            Ok(table) => table,
+                            Err(_) if budget.refused() > refused => return Err(FilterError::Spent.to_string()),
+                            Err(_) => return Err("an indexed colour space with an oversized or damaged lookup table".into()),
+                        }
+                    }
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
                 Ok(Space::Indexed(Box::new(base), hival, table))
