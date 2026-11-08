@@ -2024,6 +2024,29 @@ mod tests {
         assert_eq!(page, 0);
     }
 
+    /// A scan selected explicitly is rendered at its native scale, like the same page in an
+    /// all-pages job: selecting pages must not lose the native-resolution lookup and render
+    /// the scan above its own resolution at a higher chosen dpi.
+    #[test]
+    fn selected_scan_page_uses_native_scale_like_all_pages() {
+        let mut s = Session::new();
+        let page = export::encode_png(2480, 3508, &vec![255; (2480 * 3508 * 4) as usize]).unwrap();
+        let bytes = s.create_from_images(&[("a4.png".into(), page)]).unwrap();
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        let settings = OcrSettings { dpi: 300.0, ..Default::default() };
+        let all = s.ocr_job(id, &[], settings.clone()).unwrap();
+        let selected = s.ocr_job(id, &[0], settings).unwrap();
+        assert_eq!(selected.pages, vec![0]);
+        let wanted = 300.0 / 72.0;
+        assert!(all.render_scale(0) < wanted, "native resolution limits the all-pages job: {}", all.render_scale(0));
+        assert!(
+            (selected.render_scale(0) - all.render_scale(0)).abs() < 1e-4,
+            "selected page {} vs all-pages {}",
+            selected.render_scale(0),
+            all.render_scale(0)
+        );
+    }
+
     /// A job requested with the same page twice carries each page once: a duplicate would
     /// otherwise be recognized twice.
     #[test]
