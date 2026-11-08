@@ -856,7 +856,8 @@ impl Automation {
     /// `text_edit` by line number: replace the line's text.
     fn text_edit_line(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
-        let n = self.doc(a)?.text_lines(page).len();
+        let before = self.doc(a)?.text_lines(page);
+        let n = before.len();
         let line = a.int("line")?;
         if line < 1 || line as usize > n {
             return Err(ToolError::InvalidArgs(format!("line {line} is out of range: page {} has {n} lines", page + 1)));
@@ -869,11 +870,12 @@ impl Automation {
         // Only the line that now shows the requested text is the edited one: a neighbour that
         // took its number (the edit emptied the line) is the document's own text, echoed only
         // when the document allows copying it, as for a paragraph.
-        // An overlay copy of the line that comes before it in content order goes with the edit, so
-        // the edited line moved down as many places as lines are gone: look there first.
-        let gone = n.saturating_sub(after.len());
-        let at = (line as usize - 1).checked_sub(gone).into_iter().chain([line as usize - 1]);
-        if let Some(l) = at.filter_map(|i| after.get(i)).find(|l| l.text.split_whitespace().collect::<String>() == wanted) {
+        // Lines are numbered in content order, and only the edited line and copies of it drawn on
+        // its baseline go: the first line that differs from the page as it was is the edited one.
+        // Counting every removed line instead would also count ones removed after it.
+        let first_changed = before.iter().zip(&after).position(|(b, a)| b.text != a.text);
+        let mut at = first_changed.into_iter().chain([line as usize - 1]).filter_map(|i| after.get(i));
+        if let Some(l) = at.find(|l| l.text.split_whitespace().collect::<String>() == wanted) {
             out["line"] = json!({ "font": l.base_font });
             if doc.allows_copying() {
                 out["line"]["text"] = json!(l.text);
