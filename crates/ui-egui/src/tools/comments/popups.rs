@@ -425,7 +425,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                     if grip.hovered() || grip.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                     }
-                    if grip.drag_started() {
+                    if grip.drag_started_by(egui::PointerButton::Primary) {
                         view.comments.popup_drag = Some((page, a.index, pos));
                     }
                     if grip.dragged()
@@ -514,7 +514,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                     let stroke = egui::Stroke::new(1.0, pal.faint);
                     ui.painter().line_segment([corner - egui::vec2(3.0, inset), corner - egui::vec2(inset, 3.0)], stroke);
                 }
-                if grip.drag_started() {
+                if grip.drag_started_by(egui::PointerButton::Primary) {
                     view.comments.popup_resize = Some((page, a.index, size));
                 }
                 if grip.dragged()
