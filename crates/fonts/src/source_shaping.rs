@@ -18,30 +18,96 @@ pub struct ShapedRun {
 
 /// Complex scripts/marks require shaping instead of independently encoding characters.
 /// Layout processes such as kerning apply to a shaped run: a Thai base alone writes
-/// unshaped (so it stays editable on its own), but takes part in the run when Latin
-/// or a shaping mark is present: `"AV\u{0e01}"`.
+/// unshaped (so it stays editable on its own), and a Thai base with Latin alone also
+/// writes unshaped when no contextual shaping is needed, so a covered subset can use
+/// its PDF encoding. It takes part in the run when a shaping mark is present, when an
+/// extended-Latin letter is present, or when a Latin pair that can kern (such as
+/// `"AV\u{0e01}"`) is present.
 pub fn required(text: &str) -> bool {
     fn is_thai_base(c: char) -> bool {
         matches!(u32::from(c), 0x0e00..=0x0e5f) && !matches!(u32::from(c), 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e)
     }
+    fn is_extended_latin(c: char) -> bool {
+        matches!(u32::from(c), 0x00a0..=0x00ff | 0x0100..=0x024f) && c.is_alphabetic()
+    }
 
     // A Thai base is shaped only in a mixed run, where layout such as AV
-    // kerning applies to the whole run.
+    // kerning applies to the whole run. A single Latin letter next to a Thai
+    // base needs no such layout, so it does not force shaping on its own.
     let mut needs_shaping = false;
-    let mut thai_base_with_latin = false;
-    let has_latin = text.chars().any(|c| {
-        c.is_ascii_alphabetic() || (matches!(u32::from(c), 0x00a0..=0x00ff | 0x0100..=0x024f) && c.is_alphabetic())
-    });
+    let mut has_thai_base = false;
+    let mut has_extended_latin = false;
+    let mut has_latin_pair = false;
+    let mut previous_latin = false;
     for c in text.chars() {
         if matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
         {
             needs_shaping = true;
         }
         if is_thai_base(c) {
-            thai_base_with_latin |= has_latin;
+            has_thai_base = true;
+        }
+        if is_extended_latin(c) {
+            has_extended_latin = true;
+        }
+        let latin = c.is_ascii_alphabetic() || is_extended_latin(c);
+        if latin && previous_latin {
+            has_latin_pair = true;
+        }
+        previous_latin = latin;
+    }
+    let thai_base_with_latin = has_thai_base && (has_extended_latin || has_latin_pair);
+    needs_shaping || thai_base_with_latin
+}
+
+/// Whether the GPOS table in `bytes` has a mark-positioning lookup (MarkBasePos,
+/// MarkLigPos or MarkMarkPos, lookup types 4, 5 and 6, including through an
+/// extension lookup). Such a font can position Thai marks without GSUB, so it is
+/// not an incomplete subset for that purpose.
+fn gpos_has_mark_positioning(bytes: &[u8]) -> bool {
+    fn u16_at(bytes: &[u8], offset: usize) -> Option<usize> {
+        bytes.get(offset..offset.checked_add(2)?).map(|s| usize::from(u16::from_be_bytes([s[0], s[1]])))
+    }
+    fn u32_at(bytes: &[u8], offset: usize) -> Option<usize> {
+        bytes.get(offset..offset.checked_add(4)?).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize)
+    }
+    let result = (|| -> Option<bool> {
+    let Some(count) = u16_at(bytes, 4) else { return None };
+    let mut gpos = None;
+    for i in 0..count {
+        let record = 12usize.checked_add(i.saturating_mul(16))?;
+        if bytes.get(record..record.checked_add(4)?) == Some(b"GPOS".as_slice()) {
+            gpos = u32_at(bytes, record.checked_add(8)?);
+            break;
         }
     }
-    needs_shaping || thai_base_with_latin
+    let Some(gpos) = gpos else { return None };
+    let Some(lookup_list) = u16_at(bytes, gpos.checked_add(8)?).and_then(|o| gpos.checked_add(o)) else { return None };
+    let Some(lookup_count) = u16_at(bytes, lookup_list) else { return None };
+    for i in 0..lookup_count {
+        let Some(lookup) = u16_at(bytes, lookup_list.checked_add(2)?.checked_add(i.saturating_mul(2))?).and_then(|o| lookup_list.checked_add(o))
+        else {
+            continue;
+        };
+        let Some(lookup_type) = u16_at(bytes, lookup) else { continue };
+        if matches!(lookup_type, 4 | 5 | 6) {
+            return Some(true);
+        }
+        if lookup_type == 9 {
+            let Some(sub_count) = u16_at(bytes, lookup.checked_add(4)?) else { continue };
+            for j in 0..sub_count {
+                let Some(subtable) = u16_at(bytes, lookup.checked_add(6)?.checked_add(j.saturating_mul(2))?).and_then(|o| lookup.checked_add(o))
+                else {
+                    continue;
+                };
+                if u16_at(bytes, subtable.checked_add(2)?).is_some_and(|t| matches!(t, 4 | 5 | 6)) {
+                    return Some(true);
+                }
+            }
+        }
+    }
+    Some(false)
+    })().unwrap_or(false)
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
@@ -56,6 +122,7 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         .chars()
         .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff))
         && face.gsub().is_err()
+        && !gpos_has_mark_positioning(bytes)
     {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
@@ -137,6 +204,8 @@ mod tests {
         assert!(required("\u{0e01}\u{0e31}"), "a base with a combining mark still shapes");
         assert!(!required("\u{0e01}"), "a Thai base alone still writes unshaped");
         assert!(!required("AV"), "plain Latin still writes unshaped");
+        assert!(!required("A\u{0e01}"), "a Thai base plus Latin alone needs no contextual shaping");
+        assert!(!required("\u{0e01}A"), "a Thai base plus Latin alone needs no contextual shaping");
     }
 
     #[test]
@@ -180,6 +249,22 @@ mod tests {
     }
 
     #[test]
+    fn thai_marks_with_gpos_mark_positioning_without_gsub_are_allowed() {
+        let text = "\u{0e01}\u{0e31}";
+        let Some(face) =
+            crate::ui_thai_fonts().into_iter().find(|face| crate::embedding::covers(face.bytes, text) && gpos_has_mark_positioning(face.bytes))
+        else {
+            eprintln!("skipping the GPOS-only Thai mark check: no Thai face with GPOS mark positioning covers {text:?}");
+            return;
+        };
+        let bytes = without_gsub(face.bytes);
+        assert!(FontRef::new(&bytes).is_ok_and(|f| f.gsub().is_err()), "the fixture has no GSUB table");
+        assert!(gpos_has_mark_positioning(&bytes), "the fixture keeps GPOS mark positioning");
+        let shaped = shape(&bytes, text).expect("a GPOS-only font can position Thai marks");
+        assert!(shaped.advance.is_finite() && shaped.advance > 0.0, "{shaped:?}");
+    }
+
+    #[test]
     fn lao_and_syriac_clusters_without_gsub_are_rejected() {
         let bytes = without_gsub(crate::INTER_REGULAR);
         assert!(shape(&bytes, "\u{0e81}").is_err(), "Lao still requires substitution tables");
@@ -190,13 +275,14 @@ mod tests {
     fn a_latin_kerning_pair_in_a_shaped_run_uses_shaped_advances() {
         // AV\u{0e01} needs shaping as one run; the complete-face check shape() runs here
         // is the geometry the caller gets when the face covers every character.
-        let Some(face) = crate::document_thai_font() else {
-            eprintln!("skipping the AV kerning check: built without a craft-fonts Thai face (set CRAFT_FONTS_DIR)");
+        let text = "AV\u{0e01}";
+        let Some(face) = crate::ui_thai_fonts().into_iter().find(|face| crate::embedding::covers(face.bytes, text)) else {
+            eprintln!("skipping the AV kerning check: no Thai face covers every character of {text:?} (set CRAFT_FONTS_DIR)");
             return;
         };
         // This check covers that the complete face shapes the mixed run to finite
         // geometry. The caller shapes only when a candidate covers every character.
-        let shaped = shape(face.bytes, "AV\u{0e01}").expect("the complete face shapes the mixed run");
+        let shaped = shape(face.bytes, text).expect("the complete face shapes the mixed run");
         assert!(shaped.advance.is_finite() && shaped.advance > 0.0, "{shaped:?}");
     }
 }
