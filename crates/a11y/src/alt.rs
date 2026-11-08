@@ -106,13 +106,17 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
                 if !seen.insert(r) {
                     continue;
                 }
-                let Some(d) = doc.get(r).as_dict().cloned() else { continue };
-                if d.contains(b"S") {
-                    let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
-                    if let Some(kids) = d.get(b"K") {
-                        stack.push((kids.clone(), pg, Some(r), depth.saturating_add(1)));
+                match &*doc.get(r) {
+                    Object::Dict(d) if d.contains(b"S") => {
+                        let d = d.clone();
+                        let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
+                        if let Some(kids) = d.get(b"K") {
+                            stack.push((kids.clone(), pg, Some(r), depth.saturating_add(1)));
+                        }
+                        out.push(Element { object: r, dict: d, page: pg, parent, depth });
                     }
-                    out.push(Element { object: r, dict: d, page: pg, parent, depth });
+                    Object::Array(items) => stack.extend(items.iter().rev().cloned().map(|item| (item, pg, parent, depth))),
+                    _ => {}
                 }
             }
             Object::Dict(d) if d.contains(b"S") => {
@@ -528,17 +532,10 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
         }
     }
     // Out of its parent's kids.
-    if let Some(parent) = d.get(b"P").and_then(Object::as_ref) {
-        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned());
-        let keep = |o: &Object| o.as_ref() != Some(obj);
-        let new = match kids {
-            Some(Object::Array(a)) => Some(Object::Array(a.into_iter().filter(keep).collect())),
-            Some(Object::Ref(r)) if r == obj => Some(Object::Array(Vec::new())),
-            _ => None,
-        };
-        if let Some(k) = new {
-            doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
-        }
+    if let Some(parent) = d.get(b"P").and_then(Object::as_ref)
+        && let Some((kids, array)) = parent_kids(doc, parent, obj)
+    {
+        write_parent_kids(doc, parent, array, kids.into_iter().filter(|kid| kid.as_ref() != Some(obj)).collect())?;
     }
     Ok(())
 }
@@ -563,7 +560,7 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     let page_ref = element.page.ok_or(ArtifactError::NoPage)?;
     let page = pages.iter().find(|page| page.obj == page_ref).ok_or(ArtifactError::NoPage)?;
     let parent = element.dict.get(b"P").and_then(Object::as_ref).ok_or(ArtifactError::NoParent)?;
-    let replacement = replacement_kids(doc, parent, obj)?;
+    let (array, replacement) = replacement_kids(doc, parent, obj)?;
     let streams = decode_page_streams(doc, &page.dict).ok_or(ArtifactError::TooLarge)?;
     match artifact_marked_content(doc, page, streams, &ids, true)? {
         Marked::Done => {}
@@ -573,7 +570,7 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
         clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
     }
-    doc.update_dict(parent, |p| p.set(b"K".to_vec(), replacement))?;
+    write_parent_kids(doc, parent, array, replacement)?;
     // Keep the retired object valid if another object holds an out-of-tree reference to it.
     doc.update_dict(obj, |d| {
         d.remove(b"P");
@@ -593,17 +590,30 @@ fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
     tag.get(b"K").is_some_and(|items| child(doc, items))
 }
 
-fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<Object, ArtifactError> {
-    let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned()).ok_or(ArtifactError::NoParent)?;
+fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<(Option<ObjRef>, Vec<Object>), ArtifactError> {
+    let (kids, array) = parent_kids(doc, parent, obj).ok_or(ArtifactError::NoParent)?;
+    if kids.iter().filter(|item| item.as_ref() == Some(obj)).count() != 1 {
+        return Err(ArtifactError::AmbiguousParent);
+    }
+    Ok((array, kids.into_iter().filter(|item| item.as_ref() != Some(obj)).collect()))
+}
+
+fn parent_kids(doc: &Document, parent: ObjRef, child: ObjRef) -> Option<(Vec<Object>, Option<ObjRef>)> {
+    let kids = doc.get(parent).as_dict()?.get(b"K")?.clone();
     match kids {
-        Object::Array(items) => {
-            if items.iter().filter(|item| item.as_ref() == Some(obj)).count() != 1 {
-                return Err(ArtifactError::AmbiguousParent);
-            }
-            Ok(Object::Array(items.into_iter().filter(|item| item.as_ref() != Some(obj)).collect()))
-        }
-        Object::Ref(r) if r == obj => Ok(Object::Array(Vec::new())),
-        _ => Err(ArtifactError::NoParent),
+        Object::Array(items) => Some((items, None)),
+        Object::Ref(array) if array == child => Some((vec![Object::Ref(array)], None)),
+        Object::Ref(array) => doc.get(array).as_array().cloned().map(|items| (items, Some(array))),
+        _ => None,
+    }
+}
+
+fn write_parent_kids(doc: &mut Document, parent: ObjRef, array: Option<ObjRef>, kids: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {
+    if let Some(array) = array {
+        doc.set(array, Object::Array(kids));
+        Ok(())
+    } else {
+        doc.update_dict(parent, |p| p.set(b"K".to_vec(), Object::Array(kids)))
     }
 }
 

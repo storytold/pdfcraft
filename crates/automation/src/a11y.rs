@@ -508,11 +508,32 @@ impl Automation {
                     "object": t.object.num, "generation": t.object.generation, "type": t.kind,
                     "parent": t.parent.map(|p| json!({ "object": p.num, "generation": p.generation })), "depth": t.depth,
                     "title": t.title, "actual_text": t.actual_text, "alternate_text": t.alt,
-                    "language": t.language, "summary": t.summary, "scope": t.scope, "page": t.page.map(|p| p + 1),
+                    "language": t.language, "summary": t.summary, "scope": t.scope, "classes": t.classes, "page": t.page.map(|p| p + 1),
                 })
             })
             .collect();
         Ok(json!({ "count": count, "tags": tags, "next": next }))
+    }
+
+    pub(crate) fn accessibility_classes(&self, a: &Args) -> Result<Value> {
+        let offset = usize::try_from(a.opt_int("offset")?.unwrap_or(0)).map_err(|_| ToolError::InvalidArgs("offset must be 0 or more".into()))?;
+        let limit = a.opt_int("limit")?.unwrap_or(200);
+        let limit = usize::try_from(limit)
+            .ok()
+            .filter(|n| (1..=1000).contains(n))
+            .ok_or_else(|| ToolError::InvalidArgs("limit must be from 1 to 1000".into()))?;
+        let (count, classes) = self.doc(a)?.class_map(offset, limit);
+        let next = offset.checked_add(limit).filter(|n| *n < count);
+        let classes: Vec<Value> = classes.into_iter().map(|class| json!({ "name": class.name, "assignments": class.assignments })).collect();
+        Ok(json!({ "count": count, "classes": classes, "next": next }))
+    }
+
+    pub(crate) fn accessibility_rename_class(&mut self, a: &Args) -> Result<Value> {
+        let old = a.str("old")?.to_owned();
+        let new = a.str("new")?.to_owned();
+        let id = self.doc(a)?.id;
+        self.session.apply(id, pdfcraft_engine::Edit::RenameClass { old, new }).map_err(failed)?;
+        self.accessibility_classes(a)
     }
 
     pub(crate) fn accessibility_tag_content(&self, a: &Args) -> Result<Value> {

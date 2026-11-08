@@ -9160,11 +9160,11 @@ title = "Class map editor"
 area = "M"
 tier = "P3"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["a11y.tags"]
+tools = ["accessibility_classes", "accessibility_rename_class", "accessibility_set_tag_property"]
+evidence = ["crates/a11y/src/tests.rs::class_map_rename_keeps_attributes_and_updates_shared_array_assignments", "crates/a11y/src/tests.rs::class_assignment_requires_an_existing_class_and_can_be_cleared", "crates/automation/tests/it/automation.rs::structure_classes_list_rename_assign_undo_and_save_reopen", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_renames_a_structure_class"]
+notes = "The Tags panel and headless tools list ClassMap entries, assign existing classes to reachable tags and rename a class across all reachable /C name and array assignments as one undoable edit. Attribute objects and indirect ClassMap values are preserved. Arbitrary attribute authoring and inline structure tags remain unsupported."
 
 [[feature]]
 id = "a11y.order-panel"

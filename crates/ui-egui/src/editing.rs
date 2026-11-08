@@ -171,6 +171,9 @@ impl PdfCraftApp {
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
+                if matches!(edit, Edit::RenameClass { .. }) {
+                    self.tags_state.refresh_selected(doc);
+                }
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
@@ -361,9 +364,15 @@ impl PdfCraftApp {
             Some((s.page, target, ambiguous))
         });
         let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
+        let class_snapshot = self.session.get(id).and_then(|doc| self.tags_state.class_history_snapshot(doc));
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
+                if label.wording == "Rename structure class"
+                    && let (Some(selected), Some(doc)) = (class_snapshot, self.session.get(id))
+                {
+                    self.tags_state.sync_class_after_history(doc, selected);
+                }
                 if let Some(doc) = self.session.get(id)
                     && let Some(view) = self.views.get_mut(i)
                 {

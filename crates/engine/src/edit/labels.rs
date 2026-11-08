@@ -6,6 +6,7 @@ use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, Page
 pub const EDIT_LABELS: &[&str] = &[
     "Rotate page",
     "Change tag properties",
+    "Rename structure class",
     "Rotate pages",
     "Delete page",
     "Delete pages",
@@ -255,6 +256,7 @@ impl Edit {
             Edit::SetAltText { .. } => Label::of("Set alternate text"),
             Edit::AutoTagFormFields => Label::of("Tag form fields"),
             Edit::SetTagProperty { .. } => Label::of("Change tag properties"),
+            Edit::RenameClass { .. } => Label::of("Rename structure class"),
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui::Ui;
 use pdfcraft_cos::ObjRef;
-use pdfcraft_engine::a11y::{TagContentItem, TagInfo, TagPlacement, TagProperty};
+use pdfcraft_engine::a11y::{ClassMapEntry, TagContentItem, TagInfo, TagPlacement, TagProperty};
 use pdfcraft_engine::{DocId, Edit};
 
 use crate::{icons, theme::Tokens, widgets};
@@ -23,6 +23,9 @@ pub(crate) struct State {
     /// The selected tag's marked content per (document, edit generation, tag): reading it parses
     /// page content, so it isn't repeated every frame either.
     content_cache: Option<(DocId, u64, ObjRef, Arc<Vec<TagContentItem>>)>,
+    class_cache: Option<(DocId, u64, Arc<Vec<ClassMapEntry>>)>,
+    rename_from: String,
+    rename_to: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -32,6 +35,7 @@ struct Draft {
     actual_text: String,
     alt: String,
     language: String,
+    classes: String,
 }
 
 impl Draft {
@@ -42,6 +46,7 @@ impl Draft {
             actual_text: tag.actual_text.clone().unwrap_or_default(),
             alt: tag.alt.clone().unwrap_or_default(),
             language: tag.language.clone().unwrap_or_default(),
+            classes: tag.classes.join(", "),
         }
     }
 
@@ -58,6 +63,7 @@ impl Draft {
         add(TagProperty::ActualText, tag.actual_text.as_deref(), &self.actual_text);
         add(TagProperty::AlternateText, tag.alt.as_deref(), &self.alt);
         add(TagProperty::Language, tag.language.as_deref(), &self.language);
+        add(TagProperty::Class, (!tag.classes.is_empty()).then_some(tag.classes.join(", ")).as_deref(), &self.classes);
         match edits.len() {
             0 => None,
             1 => edits.pop(),
@@ -96,6 +102,19 @@ impl State {
         tags
     }
 
+    pub(crate) fn classes(&mut self, doc: &pdfcraft_engine::Document) -> Arc<Vec<ClassMapEntry>> {
+        let generation = doc.edit_generation();
+        if let Some((id, g, classes)) = &self.class_cache
+            && *id == doc.id
+            && *g == generation
+        {
+            return classes.clone();
+        }
+        let classes = Arc::new(doc.class_map_all().1);
+        self.class_cache = Some((doc.id, generation, classes.clone()));
+        classes
+    }
+
     /// Select a checker finding's tag without discarding an unfinished edit.
     pub(crate) fn select(&mut self, doc: DocId, tags: &[TagInfo], object: ObjRef) -> bool {
         let Some(tag) = tags.iter().find(|tag| tag.object == object) else { return false };
@@ -117,6 +136,40 @@ impl State {
         self.collapsed.clear();
         true
     }
+
+    pub(crate) fn refresh_selected(&mut self, doc: &pdfcraft_engine::Document) {
+        let tags = doc.tags();
+        if let Some(selected) = self.selected
+            && let Some(tag) = tags.iter().find(|tag| tag.object == selected)
+        {
+            self.draft = Draft::from_tag(tag);
+        }
+    }
+
+    pub(crate) fn class_history_snapshot(&self, doc: &pdfcraft_engine::Document) -> Option<ObjRef> {
+        let selected = self.selected?;
+        let tag = doc.tags().into_iter().find(|tag| tag.object == selected)?;
+        self.class_draft_matches_tag(&tag).then_some(selected)
+    }
+
+    pub(crate) fn sync_class_after_history(&mut self, doc: &pdfcraft_engine::Document, selected: ObjRef) {
+        if self.selected != Some(selected) {
+            return;
+        }
+        if let Some(tag) = doc.tags().into_iter().find(|tag| tag.object == selected) {
+            self.sync_classes_from_tag(&tag);
+        }
+    }
+
+    fn class_draft_matches_tag(&self, tag: &TagInfo) -> bool {
+        self.selected == Some(tag.object) && self.draft.classes == tag.classes.join(", ")
+    }
+
+    fn sync_classes_from_tag(&mut self, tag: &TagInfo) {
+        if self.selected == Some(tag.object) {
+            self.draft.classes = tag.classes.join(", ");
+        }
+    }
 }
 
 /// The chosen page and an edit to apply after the panel releases its document borrow.
@@ -129,12 +182,16 @@ pub(crate) fn panel(
     state: &mut State,
     can_edit: bool,
 ) -> (Option<usize>, Option<Edit>) {
+    let class_map = state.class_cache.as_ref().map(|(_, _, classes)| classes.clone()).unwrap_or_default();
+    let classes = class_map.as_slice();
     if state.doc != Some(doc) {
         state.doc = Some(doc);
         state.selected = None;
         state.draft = Draft::default();
         state.query.clear();
         state.collapsed.clear();
+        state.rename_from.clear();
+        state.rename_to.clear();
     }
     if tags.is_empty() {
         ui.label(tl!("This document has no editable structure tags."));
@@ -204,6 +261,9 @@ pub(crate) fn panel(
         field(ui, tl!("Actual text"), &mut state.draft.actual_text, true);
         field(ui, tl!("Alternate text"), &mut state.draft.alt, true);
         field(ui, tl!("Language"), &mut state.draft.language, false);
+        if !classes.is_empty() {
+            field(ui, tl!("Classes, separated by commas"), &mut state.draft.classes, false);
+        }
     });
     let edit = state.draft.edit(tag);
     let mut save = false;
@@ -217,6 +277,28 @@ pub(crate) fn panel(
             state.draft = Draft::from_tag(tag);
         }
     });
+    if !classes.is_empty() {
+        ui.separator();
+        ui.label(tl!("Structure classes"));
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            for class in classes {
+                ui.label(format!("{} · {}", class.name, class.assignments));
+            }
+        });
+        ui.add_enabled_ui(can_edit && !dirty, |ui| {
+            field(ui, tl!("Rename class"), &mut state.rename_from, false);
+            field(ui, tl!("New class name"), &mut state.rename_to, false);
+        });
+    }
+    let mut rename = false;
+    if !classes.is_empty() {
+        rename = ui
+            .add_enabled(
+                can_edit && !dirty && !state.rename_from.is_empty() && !state.rename_to.is_empty() && state.rename_from != state.rename_to,
+                egui::Button::new(tl!("Rename structure class")),
+            )
+            .clicked();
+    }
     let (mut earlier, mut later, mut artifact) = (false, false, false);
     ui.horizontal(|ui| {
         earlier = ui.add_enabled(can_edit && !dirty && before.is_some(), egui::Button::new(tl!("Move tag earlier"))).clicked();
@@ -243,6 +325,11 @@ pub(crate) fn panel(
         page,
         if save {
             edit
+        } else if rename {
+            let edit = Edit::RenameClass { old: state.rename_from.clone(), new: state.rename_to.clone() };
+            state.rename_from.clear();
+            state.rename_to.clear();
+            Some(edit)
         } else if earlier {
             before.map(|anchor| Edit::MoveTag { object: tag.object, anchor: anchor.object, placement: TagPlacement::Before })
         } else if later {
@@ -289,5 +376,48 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
         ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
     } else {
         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(object: ObjRef, classes: &[&str]) -> TagInfo {
+        TagInfo {
+            object,
+            parent: None,
+            depth: 0,
+            kind: "P".to_owned(),
+            title: None,
+            actual_text: None,
+            alt: None,
+            language: None,
+            summary: None,
+            scope: None,
+            classes: classes.iter().map(|name| (*name).to_owned()).collect(),
+            page: None,
+        }
+    }
+
+    #[test]
+    fn rename_history_syncs_only_a_clean_classes_draft() {
+        let object = ObjRef::new(4, 0);
+        let mut state = State { selected: Some(object), ..State::default() };
+        state.draft.classes = "Old".to_owned();
+        assert!(state.class_draft_matches_tag(&tag(object, &["Old"])));
+        let class_snapshot = state.class_draft_matches_tag(&tag(object, &["Old"])).then_some(object);
+        if let Some(selected) = class_snapshot {
+            state.sync_classes_from_tag(&tag(selected, &["New"]));
+        }
+        assert_eq!(state.draft.classes, "New");
+
+        state.draft.classes = "An unfinished edit".to_owned();
+        assert!(!state.class_draft_matches_tag(&tag(object, &["New"])));
+        let class_snapshot = state.class_draft_matches_tag(&tag(object, &["New"])).then_some(object);
+        if let Some(selected) = class_snapshot {
+            state.sync_classes_from_tag(&tag(selected, &["New"]));
+        }
+        assert_eq!(state.draft.classes, "An unfinished edit");
     }
 }
