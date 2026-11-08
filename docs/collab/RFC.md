@@ -319,6 +319,19 @@ Control-plane включается флагом `--control ADDR` (отдельн
 - `--documents` остаётся **dev-режимом** (комнаты из каталога, без кабинета);
   прод-путь — control-plane.
 
+Общий контракт пяти редакторов (общая архитектура кабинета, разделы 4.1 и
+5.2) описывает тот же вызов иначе: `Authorization: Bearer <service token>`, тело
+`{fileId, app, owner, roles, initialName, initialBytes?}` и ответ
+`{sessionId, wsUrl, expiresAt}`; callback —
+`POST /api/v1/internal/office/sessions/{sessionId}/commit` с
+`{fileId, name, bytes, expectedVersion?}` и ответом `{version, etag}`. Общий
+документ сам называет имена предложением, финальные фиксирует RFC проекта.
+PdfCraft v1: `jwt` в теле (тот же токен, что уходит в `hello`; сервисного
+токена у демона нет), `bytes`/`initialBytes` и `url` как источник, `etag` =
+`sha256` байтов, версии — нумерация комнаты, ответ callback не используется
+(важен код: `2xx`/`409`). Кабинету, который считает версии по-своему, нужен
+адаптер; это осознанная граница v1, а не забытая деталь.
+
 **Commit-callback** (`--callback-url`; токен — env
 `PDFCRAFT_COLLAB_CALLBACK_TOKEN`, заголовок `Authorization: Bearer`):
 

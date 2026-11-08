@@ -48,8 +48,9 @@ struct SessionRequest {
     /// `bytes` are sent it must be the etag of those bytes.
     #[serde(default)]
     etag: Option<String>,
-    /// The file inline, base64-encoded.
-    #[serde(default)]
+    /// The file inline, base64-encoded. `initialBytes` is the name the shared
+    /// cabinet contract for the five editors uses.
+    #[serde(default, alias = "initialBytes")]
     bytes: Option<String>,
     /// A plain-`http` URL the daemon fetches for the file.
     #[serde(default)]
@@ -287,6 +288,15 @@ mod tests {
                     session_id: "session-9".into(),
                     expires_at: u64::MAX,
                 }),
+                "good-2" => Ok(Claims {
+                    subject: "user-7".into(),
+                    audience: "lzmkm".into(),
+                    file_id: "file-2".into(),
+                    app: "pdfcraft".into(),
+                    role: Role::Editor,
+                    session_id: "session-9".into(),
+                    expires_at: u64::MAX,
+                }),
                 "other-file" => Ok(Claims {
                     subject: "user-7".into(),
                     audience: "lzmkm".into(),
@@ -317,9 +327,10 @@ mod tests {
     }
 
     fn post(address: std::net::SocketAddr, body: serde_json::Value) -> Result<(u16, serde_json::Value), String> {
+        let token = body.get("jwt").and_then(|jwt| jwt.as_str()).unwrap_or("good").to_owned();
         let client = Client { timeout: Duration::from_secs(5) };
         let encoded = body.to_string();
-        let (status, body) = client.post_json_body(&format!("http://{address}/v1/sessions"), Some("good"), encoded.as_bytes()).map_err(|e| e.0)?;
+        let (status, body) = client.post_json_body(&format!("http://{address}/v1/sessions"), Some(&token), encoded.as_bytes()).map_err(|e| e.0)?;
         Ok((status, serde_json::from_slice(&body).map_err(|e| e.to_string())?))
     }
 
@@ -339,6 +350,13 @@ mod tests {
         let (status, again) = post(address, body)?;
         assert_eq!(status, 200, "{again}");
         assert_eq!(again["created"], false);
+
+        // The shared cabinet contract names the file `initialBytes`; both spellings
+        // open a room.
+        let shared = serde_json::json!({"fileId": "file-2", "jwt": "good-2", "initialBytes": rooms::base64_encode(&pdf)});
+        let (status, reply) = post(address, shared)?;
+        assert_eq!(status, 201, "{reply}");
+        assert_eq!(reply["etag"], rooms::etag_of(&pdf));
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
