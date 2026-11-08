@@ -9872,6 +9872,8 @@ startxref
         let ops = pdfcraft_content::parse(&page_content_bytes(&reopen(&doc), 0)).ops;
         let mut shown: Vec<u8> = Vec::new();
         let mut adjustments: Vec<f64> = Vec::new();
+        // How many bytes had been drawn when each adjustment came: the gap must sit between the words.
+        let mut positions: Vec<usize> = Vec::new();
         for op in ops.iter().filter(|o| matches!(o.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"")) {
             for operand in &op.operands {
                 match operand {
@@ -9880,7 +9882,12 @@ startxref
                         for item in items {
                             match item {
                                 Object::String(s) => shown.extend_from_slice(&s.bytes),
-                                number => adjustments.extend(number.as_f64()),
+                                number => {
+                                    if let Some(adjustment) = number.as_f64() {
+                                        adjustments.push(adjustment);
+                                        positions.push(shown.len());
+                                    }
+                                }
                             }
                         }
                     }
@@ -9890,6 +9897,7 @@ startxref
         }
         assert_eq!(shown, b"abba", "{subtype}: the words are drawn and no code 32 at width 0 between them");
         assert!(matches!(adjustments.as_slice(), [gap] if *gap < 0.0), "{subtype}: one adjustment moves the second word right: {adjustments:?}");
+        assert_eq!(positions, [2], "{subtype}: the gap is between the words, after \"ab\"");
     }
 }
 
