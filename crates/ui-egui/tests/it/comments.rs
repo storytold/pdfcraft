@@ -4410,9 +4410,9 @@ fn an_arrow_with_a_menu_open_leaves_the_selected_comment_where_it_is() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the arrow");
 }
 
-/// Edit ▸ Delete from the menu with the comment's own menu still open removes the comment: the
-/// key a menu click stands for is the pages', whatever popup is open. A click in a native menu bar
-/// never reaches the window, so the popup stays open; the Delete did nothing.
+/// Edit ▸ Delete from a native menu with the comment's own menu still open removes the comment:
+/// the click never reaches the window, so Edit ▸ Delete closes the popup, as a click anywhere else
+/// would, before its key joins the pages'. The popup held the Delete.
 #[test]
 fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     let mut h = selected_square();
@@ -4431,38 +4431,8 @@ fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
-/// A native menu's click (Edit ▸ Select all here) leaves egui's popups open, and its own keys
-/// are the pages' all the same. The user's next keys aren't: with the comment's context menu still
-/// open, Delete leaves the comment and an arrow leaves it where it is. For two passes after the
-/// command, as the app idles, both acted on it.
-#[test]
-fn keys_after_a_native_menu_command_with_a_context_menu_open_leave_the_comment() {
-    for key in [egui::Key::Delete, egui::Key::ArrowRight] {
-        let mut h = selected_square();
-        let before = comments(&h)[0].rect;
-        let p = at(&h, 90.0, 70.0);
-        h.hover_at(p);
-        h.run_steps(1);
-        for pressed in [true, false] {
-            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
-            h.run_steps(1);
-        }
-        h.run_steps(2);
-        let ctx = h.ctx.clone();
-        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.select_all"));
-        // The pass the click wakes, then the one its repaint asks for; the app idles after them.
-        h.step();
-        h.step();
-        assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is still open");
-        h.key_press(key);
-        h.run_steps(3);
-        assert_eq!(comments(&h).len(), 1, "{key:?} with the comment's menu open deleted it");
-        assert_eq!(comments(&h)[0].rect, before, "{key:?} with the comment's menu open moved it");
-    }
-}
-
-/// A native menu's click leaves the Hotbar tools window open, like egui's popups, and its keys are
-/// the pages' all the same: Edit ▸ Delete removes the selected comment. It did nothing.
+/// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
+/// as it closes egui's popups, and removes the selected comment. The window held the Delete.
 #[test]
 fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_comment() {
     let mut h = selected_square();
@@ -4473,7 +4443,35 @@ fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_commen
     let ctx = h.ctx.clone();
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
     h.run_steps(4);
+    assert!(h.query_by_label("Close menu").is_none(), "Edit ▸ Delete closed the Hotbar tools window");
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// Edit ▸ Paste goes to a text field that has the keyboard, as the user's ⌘V does: with the Hotbar
+/// tools window's search field focused, a native Edit ▸ Paste leaves the window open and pastes
+/// into the field. Closed, the window took the field with it, and the paste went nowhere.
+#[test]
+fn edit_paste_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    let search = |h: &Harness<'static, PdfCraftApp>, text: &str| h.query_all_by_role(Role::TextInput).any(|n| n.value().as_deref() == Some(text));
+    assert!(search(&h, ""), "the search field is empty");
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("")).expect("the search field").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("pen".into()));
+    h.run_steps(2);
+    assert!(search(&h, "pen"), "typed into the search field");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.event(egui::Event::Paste("cil".into()));
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Edit ▸ Paste closed the Hotbar tools window");
+    assert!(search(&h, "pencil"), "Edit ▸ Paste pasted into the search field");
+    assert_eq!(comments(&h).len(), 1, "the comment is still there");
 }
 
 /// Full screen hides the hotbar and closes its tools window, which doesn't come back with the
@@ -4558,24 +4556,24 @@ fn keys_under_the_update_prompt_leave_the_selected_comment() {
     }
 }
 
-/// The update prompt doesn't turn the menus off, as a dialog does, so a native menu's click under
-/// it stands: Edit ▸ Delete removes the selected comment. Its Delete was held with the user's.
+/// The update prompt leaves the menus on, but covers the pages as a dialog does: Edit ▸ Delete from
+/// a native menu under it leaves the selected comment, which the prompt hides.
 #[test]
-fn edit_delete_from_a_native_menu_under_the_update_prompt_removes_the_comment() {
+fn edit_delete_from_a_native_menu_under_the_update_prompt_leaves_the_comment() {
     let mut h = selected_square_under_the_update_prompt();
     let ctx = h.ctx.clone();
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
     h.run_steps(4);
-    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete under the update prompt deleted the comment");
     assert!(h.query_by_label_contains("is available").is_some(), "the prompt is still open");
 }
 
 /// "Open in Full Screen mode?", asked for a document that wants it, leaves the menus on as the
-/// update prompt does, in full screen too: the user's Delete under it leaves the comment selected
-/// in another document, Edit ▸ Delete from a native menu removes it, and the Escape that answers
-/// the prompt is the prompt's alone. Edit ▸ Delete did nothing.
+/// update prompt does, and covers the pages as it does, in full screen too: neither the user's
+/// Delete nor Edit ▸ Delete from a native menu removes the comment selected in another document
+/// under it, and the Escape that answers the prompt is the prompt's alone.
 #[test]
-fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_removes_the_comment() {
+fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_leaves_the_comment() {
     for full_screen in [false, true] {
         let mut h = selected_square();
         if full_screen {
@@ -4598,7 +4596,7 @@ fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_removes_the_comme
         assert_eq!(comments(&h).len(), 1, "Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
         h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
         h.run_steps(4);
-        assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment (full screen: {full_screen})");
+        assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
         h.key_press(egui::Key::Escape);
         h.run_steps(3);
         assert!(h.state().pending_full_screen.is_none(), "Escape answered the prompt");

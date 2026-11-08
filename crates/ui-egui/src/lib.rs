@@ -651,15 +651,12 @@ pub struct PdfCraftApp {
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
-    /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
+    /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
+    /// `release_menu_input`).
     pub(crate) menu_input: Vec<egui::Event>,
-    /// When Edit ▸ Paste asked the platform for the clipboard (the pass, and its input time in
-    /// seconds), oldest first: each until its paste comes, the user does something else or
-    /// `MENU_PASTE_WAIT` has gone by without it (see `take_menu_input`). At most
-    /// `MENU_PASTES_PENDING`.
-    pub(crate) menu_paste_asked: Vec<(u64, f64)>,
-    /// This pass carries the input a menu click stands for (see `take_menu_input`).
-    pub(crate) menu_input_due: bool,
+    /// Edit ▸ Paste clicks waiting to ask the platform for the clipboard (see
+    /// `release_menu_input`).
+    pub(crate) menu_pastes: usize,
     /// This frame's keys as the pages see them: none while something is over them.
     pub(crate) page_keys: page_keys::PageKeys,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see

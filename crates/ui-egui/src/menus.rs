@@ -551,14 +551,7 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => {
-                // On Wayland each request is answered on its own, so a second one waits too.
-                if self.menu_paste_asked.len() >= crate::app::MENU_PASTES_PENDING {
-                    self.menu_paste_asked.remove(0);
-                }
-                self.menu_paste_asked.push((ctx.cumulative_pass_nr(), ctx.input(|i| i.time)));
-                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-            }
+            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),

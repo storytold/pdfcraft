@@ -47,8 +47,7 @@ impl PdfCraftApp {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {
-            // Edit ▸ Select all's ⌘A comes while the bar still reads as open.
-            if page_chords && (chords || self.menu_input_due) {
+            if page_chords && chords {
                 self.select_all_keys(i, ctx);
             }
             self.tool_keys(i, ctx);

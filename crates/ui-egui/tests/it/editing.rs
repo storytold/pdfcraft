@@ -10935,9 +10935,9 @@ fn escape_closing_a_dialog_over_a_paragraph_being_typed_keeps_the_typing() {
     assert!(open || applied, "the typing stays");
 }
 
-/// Edit ▸ Select all from the in-window menu bar selects every page in Organize. Its ⌘A comes on
-/// the next pass, while the bar still reads as open, and waited with the chords: nothing was
-/// selected.
+/// Edit ▸ Select all from the in-window menu bar selects every page in Organize. The bar reads
+/// as open on the pass after its click, and its ⌘A waits for the bar to let go of the keys, which
+/// the chords leave to it: nothing was selected.
 #[test]
 fn edit_select_all_from_the_menu_bar_selects_every_page() {
     let mut h = organize(3);
@@ -10948,8 +10948,8 @@ fn edit_select_all_from_the_menu_bar_selects_every_page() {
     assert_eq!(h.state().views[0].target_pages(), [0, 1, 2], "Edit ▸ Select all selected every page");
 }
 
-/// Edit ▸ Cut from the in-window menu bar cuts the selected page in Organize: its Cut comes on the
-/// next pass, while the bar still reads as open.
+/// Edit ▸ Cut from the in-window menu bar cuts the selected page in Organize: its Cut waits for
+/// the bar, which reads as open on the pass after its click, to let go of the keys.
 #[test]
 fn edit_cut_from_the_menu_bar_cuts_the_page() {
     let mut h = organize(3);
@@ -10964,7 +10964,7 @@ fn edit_cut_from_the_menu_bar_cuts_the_page() {
 }
 
 /// Edit ▸ Paste whose paste never comes (the platform answers only with text on the clipboard)
-/// lets no later paste through an open menu: its record ends once the wait for the paste is over.
+/// lets no later paste through an open menu: a paste is the pages' only with nothing over them.
 #[test]
 fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
     let mut h = organize(3);
@@ -10977,8 +10977,7 @@ fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
     let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
     let ctx = h.ctx.clone();
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    // Longer than the 4 seconds Edit ▸ Paste waits for its paste.
-    h.run_steps(20);
+    h.run_steps(4);
     assert_eq!(pages(&h), 3, "nothing is pasted without the platform's paste");
     support::open_menu(&mut h, "View");
     assert!(craft_menu::bar::is_open(&h.ctx), "the View menu is open");
@@ -10987,10 +10986,9 @@ fn an_unanswered_edit_paste_lets_no_later_paste_through_an_open_menu() {
     assert_eq!(pages(&h), 3, "a paste with the View menu open pasted a page");
 }
 
-/// The platform's answer to Edit ▸ Paste can come late (on Wayland egui-winit reads the clipboard
-/// asynchronously, within 3 seconds): a native menu's Edit ▸ Paste with a page's context menu
-/// still open pastes the page when the paste comes a second later. Its record ended two passes
-/// on, and the open menu then held the paste.
+/// A native menu's Edit ▸ Paste with a page's context menu open closes the menu, which the click
+/// never reached, and the platform's answer pastes the page, also when it comes late (on Wayland
+/// egui-winit reads the clipboard asynchronously, within 3 seconds).
 #[test]
 fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page() {
     let mut h = organize(3);
@@ -11009,15 +11007,14 @@ fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page
     h.step();
     assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     h.run_steps(3);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(3);
     assert_eq!(pages(&h), 4, "the late paste pasted the page");
 }
 
-/// Each Edit ▸ Paste waits for its own paste: on Wayland two requests are answered one by one, and
-/// with a page's context menu open each answer pastes the page. The first answer ended the wait
-/// of both, and the open menu held the second.
+/// Two native Edit ▸ Pastes with a page's context menu open each ask for the clipboard, and each
+/// answer pastes the page (on Wayland they come one by one).
 #[test]
 fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
     let mut h = organize(3);
@@ -11035,46 +11032,18 @@ fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
     for _ in 0..2 {
         h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
         h.step();
+        assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     }
     for pasted in [4, 5] {
-        assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
         h.event(egui::Event::Paste("clipboard text".into()));
         h.run_steps(3);
         assert_eq!(pages(&h), pasted, "each answer pastes the page");
     }
 }
 
-/// With a page's context menu already open, a native Edit ▸ Paste that gets no paste, then ⌘V:
-/// on macOS ⌘V is Edit ▸ Paste's key equivalent, which craft-menu hands to egui as the key press,
-/// and a key press ends the menu's wait. A paste after it stays behind the menu.
-#[test]
-fn command_v_after_an_unanswered_native_edit_paste_with_a_context_menu_open_pastes_nothing() {
-    let mut h = organize(3);
-    h.run_steps(2);
-    h.get_by_label("Page 2").click();
-    h.run_steps(2);
-    h.event(egui::Event::Copy);
-    h.run_steps(3);
-    assert!(h.state().page_clipboard.is_some(), "the page is copied");
-    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
-    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
-    h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
-    let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.run_steps(2);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
-    h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is still open");
-    h.event(egui::Event::Paste("clipboard text".into()));
-    h.run_steps(3);
-    assert_eq!(pages(&h), 3, "a paste behind the context menu pasted the page");
-}
-
-/// A paste that comes after the user does something else is theirs, not Edit ▸ Paste's: egui-winit
-/// answers ⌘V as it answers the menu. With Edit ▸ Paste's paste not come yet, a right-click
-/// opening a page's context menu ends the wait, and the paste then (⌘V's) stays behind the menu.
-/// It was taken for the menu's and pasted the page.
+/// A paste that comes after the user opens a page's context menu stays behind the menu, Edit ▸
+/// Paste's or ⌘V's (egui-winit answers both alike). It was taken for the menu's and pasted the
+/// page.
 #[test]
 fn a_paste_after_the_user_opens_a_context_menu_is_not_edit_pastes() {
     let mut h = organize(3);
@@ -11091,15 +11060,15 @@ fn a_paste_after_the_user_opens_a_context_menu_is_not_edit_pastes() {
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
     assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
-    // Well within the 4 seconds Edit ▸ Paste waits for its paste.
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(3);
     assert_eq!(pages(&h), 3, "the paste behind the context menu pasted the page");
 }
 
-/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The platform
-/// answers the menu's paste request on the next pass (kittest doesn't, so the test does), while
-/// the bar still reads as open, and the pages' clipboard dropped it.
+/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The bar reads as
+/// open on the pass after its click, so Edit ▸ Paste asks the platform for the clipboard once it
+/// has let go of the keys, and the answer (kittest gives none, so the test does) comes to the
+/// pages. Asked at once, the answer came while the bar held the keys, and was dropped.
 #[test]
 fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
     let mut h = organize(3);
@@ -11113,9 +11082,15 @@ fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
     assert_eq!(pages(&h), 3);
     support::open_menu(&mut h, "Edit");
     support::menu_row(&h, "Paste").click();
-    h.run_steps(1);
-    assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
-    assert!(craft_menu::bar::is_open(&h.ctx), "the bar still reads as open as the paste comes");
+    h.step();
+    assert!(craft_menu::bar::is_open(&h.ctx), "the bar reads as open on the pass after the click");
+    assert!(!support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked while the bar held the keys");
+    let mut asked = false;
+    for _ in 0..4 {
+        h.step();
+        asked |= support::asked_for_the_clipboard(&h);
+    }
+    assert!(asked, "Edit ▸ Paste asked the platform for the clipboard");
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(4);
     assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");

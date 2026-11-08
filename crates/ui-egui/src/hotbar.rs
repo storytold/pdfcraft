@@ -42,9 +42,14 @@ impl Hotbar {
     /// had been read without it.
     pub(crate) fn close_hidden_picker(&mut self, ctx: &egui::Context, hidden: bool) {
         if self.picker_open && (hidden || !self.picker_over_pages(ctx)) {
-            self.picker_open = false;
-            self.picker_shown = None;
+            self.close_picker();
         }
+    }
+
+    /// Closes the Hotbar tools window.
+    pub(crate) fn close_picker(&mut self) {
+        self.picker_open = false;
+        self.picker_shown = None;
     }
 }
 

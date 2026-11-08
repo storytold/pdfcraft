@@ -30,29 +30,6 @@ impl Default for PdfCraftApp {
     }
 }
 
-/// How long Edit ▸ Paste waits for the platform's paste, in seconds: it comes on the next pass,
-/// except on Wayland, where egui-winit reads the clipboard asynchronously within its 3-second
-/// delivery budget; a second more covers the pass that carries it.
-const MENU_PASTE_WAIT: f64 = 4.0;
-
-/// How many Edit ▸ Paste requests wait for their paste at once (more drop the oldest).
-pub(crate) const MENU_PASTES_PENDING: usize = 8;
-
-/// The user doing something: a key or a button pressed, a touch begun, text typed, a copy or a
-/// cut, or the window gaining or losing focus (copying in another application).
-fn user_acts(event: &egui::Event) -> bool {
-    matches!(
-        event,
-        egui::Event::Key { pressed: true, .. }
-            | egui::Event::PointerButton { pressed: true, .. }
-            | egui::Event::Touch { phase: egui::TouchPhase::Start, .. }
-            | egui::Event::Text(_)
-            | egui::Event::Copy
-            | egui::Event::Cut
-            | egui::Event::WindowFocused(_)
-    )
-}
-
 impl PdfCraftApp {
     /// The window's title and, on the web, the page's, from the active document (#3640). Done in
     /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
@@ -294,8 +271,7 @@ impl PdfCraftApp {
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
-            menu_paste_asked: Vec::new(),
-            menu_input_due: false,
+            menu_pastes: 0,
             page_keys: Default::default(),
             dialog_seen: None,
             dialog_epoch: 0,
@@ -371,54 +347,42 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
-    /// Whether something over the pages has the keyboard. Two kinds:
-    /// - What covers them ([`Self::covers_pages`]): no page key reaches the pages under it, a
-    ///   menu click's input included.
-    /// - What sits over them and leaves the menus on: the full-screen and update prompts, the
-    ///   hotbar's tools window, a popup, a menu of the menu bar, or the bar holding the keyboard
-    ///   (Alt, F10). On a pass that carries the input a menu click stands for (`menu_input_due`)
-    ///   these don't count, and that input is the pages'; the user's own keys on the passes after
-    ///   it are not.
+    /// Whether something over the pages has the keyboard: what covers them
+    /// ([`Self::covers_pages`]), the hotbar's tools window, a popup, a menu of the menu bar, or the
+    /// bar holding the keyboard (Alt, F10).
     pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
         self.covers_pages()
-            || !self.menu_input_due
-                && (self.pending_full_screen.is_some()
-                    || self.updates.prompt_open()
-                    || self.hotbar.picker_over_pages(ctx)
-                    || egui::Popup::is_any_open(ctx)
-                    || craft_menu::bar::is_open(ctx)
-                    || craft_menu::bar::is_focused(ctx))
+            || self.hotbar.picker_over_pages(ctx)
+            || egui::Popup::is_any_open(ctx)
+            || craft_menu::bar::is_open(ctx)
+            || craft_menu::bar::is_focused(ctx)
     }
 
-    /// Adds the keys a menu click stands for to this pass's input, and says whether this pass
-    /// carries a menu click's input: those keys (Edit ▸ Copy, Cut, Select all, Delete), or the
-    /// paste (text or a picture) the platform answers Edit ▸ Paste with: one for each request,
-    /// within `MENU_PASTE_WAIT` and before the user does anything else. A native menu's click runs in `logic`
-    /// before this, so its keys come on its own pass; an in-window menu's runs as the bar is
-    /// drawn, so they come on the next one, when the bar still reads as open (craft-menu stores
-    /// the menu as open on the pass its click closes it). A native menu's click leaves egui's
-    /// popups, the Hotbar tools window and the full-screen and update prompts open too. That input
-    /// is the pages' even so; the user's own keys on the passes after it are not.
-    fn take_menu_input(&mut self, ctx: &egui::Context) -> bool {
-        // egui-winit answers ⌘V exactly as it answers the menu, so a paste after the user's own
-        // key, click or copy is theirs, not the menu's: those end the wait. Read before the
-        // menu's keys join the input, and only after the pass that asked.
-        let (pass, now) = (ctx.cumulative_pass_nr(), ctx.input(|i| i.time));
-        let acted = ctx.input(|i| i.events.iter().any(user_acts));
-        let keys = !self.menu_input.is_empty();
-        if keys {
-            let events = std::mem::take(&mut self.menu_input);
-            ctx.input_mut(|i| i.events.extend(events));
+    /// Edit ▸ Copy, Cut, Select all and Delete stand for keys, and Edit ▸ Paste for the paste the
+    /// platform answers with. They go where the user's would: to a text field that has the
+    /// keyboard, else to the pages. They join the input once the menu bar has let go of the keys,
+    /// which an in-window menu's click does a pass later (craft-menu stores the menu as open on
+    /// the pass its click closes it). A native menu's click leaves egui's popups and the Hotbar
+    /// tools window open, which hold the pages' keys; a click anywhere else closes them, and so
+    /// does this. Edit ▸ Paste asks the platform for the clipboard only then, so its answer, on a
+    /// later pass, is an ordinary paste.
+    fn release_menu_input(&mut self, ctx: &egui::Context) {
+        if self.menu_input.is_empty() && self.menu_pastes == 0 {
+            return;
         }
-        self.menu_paste_asked.retain(|&(_, at)| now - at <= MENU_PASTE_WAIT);
-        let pastes = ctx.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_))).count());
-        let paste = pastes > 0 && !self.menu_paste_asked.is_empty();
-        // Each paste answers one request, the oldest.
-        self.menu_paste_asked.drain(..pastes.min(self.menu_paste_asked.len()));
-        if acted {
-            self.menu_paste_asked.retain(|&(on, _)| on >= pass);
+        if craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx) {
+            ctx.request_repaint();
+            return;
         }
-        keys || paste
+        if !ctx.text_edit_focused() {
+            egui::Popup::close_all(ctx);
+            self.hotbar.close_picker();
+        }
+        let events = std::mem::take(&mut self.menu_input);
+        ctx.input_mut(|i| i.events.extend(events));
+        for _ in 0..std::mem::take(&mut self.menu_pastes) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
     }
 
     /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.
@@ -426,14 +390,15 @@ impl PdfCraftApp {
         self.mode == crate::Mode::Read || self.full_screen
     }
 
-    /// The pages are covered: by a dialog or prompt that turns the menus off (`modal_open`), by
-    /// the palette, which turns them off too, or by the OCR Verify screen, which takes the pages'
-    /// place.
+    /// The pages are covered, and no page key reaches them, a menu click's included: by a dialog or
+    /// prompt that turns the menus off (`modal_open`), by the full-screen and update prompts, which
+    /// leave the menus on, by the palette, which turns them off, or by the OCR Verify screen, which
+    /// takes the pages' place.
     pub(crate) fn covers_pages(&self) -> bool {
         // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
         // entered over. Dialogs and prompts show there too.
         let shown = !(self.full_screen && self.active.is_some());
-        self.modal_open() || (self.palette_open || self.ocr_verify.open) && shown
+        self.modal_open() || self.pending_full_screen.is_some() || self.updates.prompt_open() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
@@ -699,7 +664,7 @@ impl eframe::App for PdfCraftApp {
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);
         // The input a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
-        self.menu_input_due = self.take_menu_input(ctx);
+        self.release_menu_input(ctx);
         // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
         // bar, so the chord runs in the same press, the pages' as well as the registry's.
         craft_menu::bar::leave_for_shortcut(ctx);
