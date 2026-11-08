@@ -1,15 +1,15 @@
 //! Edit a PDF ▸ edit existing images and grouped artwork (Image/Form XObjects painted by `Do`
 //! in its own content streams), and changing one: move/resize/rotate/flip (the `Do` is wrapped in
 //! `q … cm … Q` with the extra transform), replace (it draws another XObject in the same place),
-//! or delete. Only the stream that draws it is rewritten, as a new object.
+//! delete, or ungroup grouped artwork (its content drawn in place, see `ungroup`). Only the stream that draws it is rewritten, as a new object.
 
 use kurbo::{BezPath, Point, Shape};
-use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
+use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use std::sync::Arc;
 
 use crate::EditError;
-use crate::text::content_streams;
+use crate::text::{ContentStream, content_streams, joined};
 
 /// The identity of a soft mask (`/SMask`) in the PDF graphics state.
 #[derive(Clone, Debug)]
@@ -47,9 +47,9 @@ pub struct PageImage {
     pub width: u32,
     pub height: u32,
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
-    /// operators of the page's streams joined ([`Pieces`]).
+    /// operators of the page's streams joined ([`pdfcraft_content::Pieces`]).
     pub stream: usize,
-    op: usize,
+    pub(crate) op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
     draw_matrix: [f64; 6],
     clips: Vec<ClipPath>,
@@ -101,11 +101,6 @@ pub(crate) const MAX_PAGE_IMAGES: usize = 100_000;
 
 fn too_many_images() -> EditError {
     EditError::Invalid(format!("the page draws more than {MAX_PAGE_IMAGES} images"))
-}
-
-/// The page's streams joined into the one stream they are: an operator may span two of them.
-fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
-    Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
 }
 
 fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
@@ -379,34 +374,34 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
         forms: &mut Forms,
         out: &mut Vec<PageImage>,
     ) -> Result<(), EditError> {
-        let xo = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        let mut held = None;
+        let xo = crate::text::resource_dict(doc, resources, b"XObject", &mut held);
         for (i, op) in ops.iter().enumerate() {
             st.apply(op)?;
             let ctm = st.placement.matrix;
             if op.is("Do") {
                 let Some(name) = op.name(0) else { continue };
+                let drawn = xo.and_then(|xo| xo.get(name));
                 if let Some(form) = crate::text::form_call(doc, resources, name, ctm, &forms.path, &mut forms.budget) {
                     if let Some(r) = form.obj {
                         forms.path.push(r);
                     }
                     let bounds =
-                        xo.get(name).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(
-                            |b| {
-                                let a = b.as_array()?;
-                                let [x0, y0, x1, y1] = a.as_slice() else { return None };
-                                Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
-                            },
-                        );
+                        drawn.map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(|b| {
+                            let a = b.as_array()?;
+                            let [x0, y0, x1, y1] = a.as_slice() else { return None };
+                            Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
+                        });
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
                     let piece = stream(op);
-                    walk(doc, &parse(&form.data).ops, &form.resources, &mut inner, &|_| piece, forms, out)?;
+                    walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_| piece, forms, out)?;
                     if form.obj.is_some() {
                         forms.path.pop();
                     }
                     continue;
                 }
-                let Some(r) = xo.get(name).and_then(Object::as_ref) else { continue };
+                let Some(r) = drawn.and_then(Object::as_ref) else { continue };
                 let obj = doc.get(r);
                 let Object::Stream(s) = &*obj else { continue };
                 if s.dict.name(b"Subtype") != Some(b"Image") {
@@ -470,6 +465,9 @@ pub enum ImageChange {
     Arrange(ArrangeOrder),
     /// Remove any private crop on the image.
     RemoveCrop,
+    /// Grouped Form artwork only: draw the form's content in place of its `Do`, so its text and
+    /// pictures become the page's own and can be edited one by one (#2964).
+    Ungroup,
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
@@ -532,10 +530,15 @@ fn exclusive_clip(ops: &[Op], op: usize) -> Option<(usize, Matrix)> {
 /// The `q cm … Q` whose only content after its `cm` is `start..=end` (a `Do`, or a balanced
 /// `q … Q` scope), with the index and value of that `cm`. Another transform of the same
 /// placement is folded into it, so repeated moves and resizes don't nest one more `q` each.
-fn enclosing_transform(ops: &[Op], start: usize, end: usize) -> Option<(usize, Matrix)> {
+/// None when its `Q` is at or past `hidden` ([`crate::text::first_op_after_damage`]): a stream
+/// between that wasn't read may draw in that `cm` too.
+fn enclosing_transform(ops: &[Op], start: usize, end: usize, hidden: usize) -> Option<(usize, Matrix)> {
     let at = start.checked_sub(1)?;
     let cm = ops.get(at)?;
     if !ops.get(at.checked_sub(1)?)?.is("q") || !ops.get(end.checked_add(1)?)?.is("Q") || !cm.is("cm") || cm.operands.len() != 6 {
+        return None;
+    }
+    if end.checked_add(1)? >= hidden {
         return None;
     }
     let m = Matrix(cm.nums::<6>()?);
@@ -584,6 +587,10 @@ fn sequence_end(ops: &[Op], i: usize, end: usize, opens: &[&str], close: &str) -
     end
 }
 
+/// The stacking units of `ops[scan_start..scan_end]` that Arrange moves past one another, in
+/// paint order: a `q … Q`, `BT … ET` or marked-content sequence up to its matching close (or the
+/// end of the scan), a single `Do`, `sh` or inline image, or a run of other operators that ends
+/// at a path-painting operator or before the next unit. Units that paint nothing are left out.
 pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
     let mut units = Vec::new();
     let mut i = scan_start;
@@ -598,9 +605,9 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
             sequence_end(ops, i, scan_end, &["q"], "Q")
         } else if op.is("BT") {
             sequence_end(ops, i, scan_end, &[], "ET")
-        } else if op.is("BI") {
-            sequence_end(ops, i, scan_end, &[], "EI")
-        } else if op.is("Do") || op.is("sh") {
+        } else if op.is("BI") || op.is("Do") || op.is("sh") {
+            // The parser emits a whole inline image (`BI` … `ID` … `EI`) as one `BI` op, so it is a
+            // unit of its own (#3146).
             i.saturating_add(1)
         } else {
             let mut j = i;
@@ -1053,7 +1060,9 @@ fn determine_arrange_spans(
     has_other_paint: bool,
     marked_unit: bool,
 ) -> Result<(std::ops::Range<usize>, usize, usize, usize), EditError> {
-    let scope = image_scopes(ops, target, "arranged")
+    // Nothing is hidden for Arrange: it takes out the scope it finds, so a scope that closes past a
+    // stream not read whole changes a stream past it, which `rewritten_contents` refuses.
+    let scope = image_scopes(ops, target, "arranged", ops.len())
         .ok()
         .and_then(|s| s.isolated)
         .filter(|&(start, end, _)| start >= target_unit.start && end < target_unit.end);
@@ -1187,13 +1196,7 @@ fn build_relocated_unit_ops(
 }
 
 /// Change the stacking order of `img`, drawn on page `p` by its content streams `all`.
-fn arrange_image(
-    doc: &mut Document,
-    p: &pdfcraft_model::Page,
-    all: &[(Object, Vec<u8>)],
-    img: &PageImage,
-    order: ArrangeOrder,
-) -> Result<(), EditError> {
+fn arrange_image(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage, order: ArrangeOrder) -> Result<(), EditError> {
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
@@ -1260,7 +1263,7 @@ fn arrange_image(
         ops.get(dest_unit.start).map(|op| pieces.piece_of(op.span.start))
     };
     let owned_destination = destination_piece
-        .filter(|piece| all.get(*piece).is_some_and(|(obj, _)| doc.resolve(obj).as_dict().is_some_and(|d| d.get(b"PCAdded").is_some())));
+        .filter(|piece| all.get(*piece).is_some_and(|s| doc.resolve(&s.entry).as_dict().is_some_and(|d| d.get(b"PCAdded").is_some())));
     if let Some(piece) = owned_destination {
         let whole_unit = ops.iter().enumerate().all(|(index, op)| {
             let (first, last) = pieces.pieces_of(op);
@@ -1435,13 +1438,14 @@ fn arrange_image(
     };
 
     if let Some(piece) = owned_destination {
+        let insertion = piece.saturating_add(usize::from(insert_after));
+        crate::text::drawn_before_damage(all, insertion)?;
         let changed = pieces.splice([(target_span, removal_replacement)]);
-        let contents = crate::text::rewritten_contents(doc, all, changed);
+        let contents = crate::text::rewritten_contents(doc, all, changed)?;
         let mut list = match contents {
             Object::Array(list) => list,
             one => vec![one],
         };
-        let insertion = piece.saturating_add(usize::from(insert_after));
         if insertion > list.len() {
             return Err(EditError::Invalid("the destination content stream is missing".into()));
         }
@@ -1463,7 +1467,7 @@ fn arrange_image(
     }
 
     let changed = pieces.splice(edits);
-    let contents = crate::text::rewritten_contents(doc, all, changed);
+    let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1497,8 +1501,10 @@ impl ImageScopes {
     }
 }
 
-/// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`.
-fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, EditError> {
+/// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`. A scope
+/// still open at op `hidden` ([`crate::text::first_op_after_damage`]) holds a stream that wasn't
+/// read, which may paint there: it counts as painting something else.
+fn image_scopes(ops: &[Op], target: usize, done: &str, hidden: usize) -> Result<ImageScopes, EditError> {
     struct Scope {
         start: usize,
         matrix: Matrix,
@@ -1517,6 +1523,11 @@ fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, Ed
     let mut isolated = None;
     let mut outermost = None;
     for (index, op) in ops.iter().enumerate() {
+        if index == hidden {
+            for scope in &mut stack {
+                scope.other_paint = true;
+            }
+        }
         match op.op.as_slice() {
             b"q" => {
                 if stack.len() >= 256 {
@@ -1602,20 +1613,26 @@ fn app_crop_ranges(ops: &[Op], start: usize, target: usize) -> Vec<std::ops::Ran
 }
 
 /// Remove only crops written by PdfCraft, preserving the document author's clipping paths.
-fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[(Object, Vec<u8>)], img: &PageImage) -> Result<(), EditError> {
+fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage) -> Result<(), EditError> {
     let pieces = joined(all);
     let ops = pieces.parse().ops;
     let target = img.op;
-    let scope = image_scopes(&ops, target, "cropped")?;
-    let Some((start, _, _)) = scope.transform_scope(target) else {
-        return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
+    let crops = |hidden| -> Result<Vec<std::ops::Range<usize>>, EditError> {
+        let scope = image_scopes(&ops, target, "cropped", hidden)?;
+        Ok(scope.transform_scope(target).map(|(start, _, _)| app_crop_ranges(&ops, start, target)).unwrap_or_default())
     };
-    let crops = app_crop_ranges(&ops, start, target);
-    if crops.is_empty() {
-        return Err(EditError::Invalid("the image has no PdfCraft crop to remove".into()));
+    let crops_there = crops(crate::text::first_op_after_damage(all, &pieces, &ops))?;
+    if crops_there.is_empty() {
+        // A crop in a scope that closes past a stream not read whole may clip what that stream draws.
+        return Err(EditError::Invalid(if crops(ops.len())?.is_empty() {
+            "the image has no PdfCraft crop to remove".into()
+        } else {
+            "the image's crop may also clip what a content stream that is damaged or can't be decoded draws, so it isn't removed".into()
+        }));
     }
+    let crops = crops_there;
     let changed = crate::text::splice(&pieces, &ops, |index| (Vec::new(), !crops.iter().any(|r| r.contains(&index))));
-    let contents = crate::text::rewritten_contents(doc, all, changed);
+    let contents = crate::text::rewritten_contents(doc, all, changed)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1646,6 +1663,26 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         ImageChange::Crop(keep) => {
             return crop_image_impl(doc, &p, &all, &img, *keep);
         }
+        ImageChange::Ungroup => {
+            if !img.is_form {
+                return Err(EditError::Invalid("only grouped Form artwork can be ungrouped".into()));
+            }
+            let res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+            let space = crate::ungroup::page_blend_space(doc, &p.dict);
+            // One allowance for the form and everything it draws.
+            let mut budget = pdfcraft_cos::DecodeBudget::new(crate::ungroup::MAX_FORM_BYTES, 0);
+            let crate::ungroup::Ungrouped { ops: inline, resources: mut merged, patterns, .. } =
+                crate::ungroup::ungroup_ops(doc, &res, &ops, img.op, space.as_ref(), Matrix(img.matrix), &mut budget).map_err(|r| r.error)?;
+            if !patterns.is_empty() {
+                let mut table = merged.get(b"Pattern").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+                for (name, copy) in patterns {
+                    table.set(name, Object::Ref(doc.add(copy)));
+                }
+                merged.set(b"Pattern".to_vec(), Object::Dict(table));
+            }
+            resources = Some(merged);
+            inline
+        }
         ImageChange::Replace(r) => {
             if img.is_form {
                 return Err(EditError::Invalid(
@@ -1662,7 +1699,7 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         }
     };
     let changed = crate::text::splice(&pieces, &ops, |index| if index == img.op { (replacement.clone(), false) } else { (Vec::new(), true) });
-    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    let contents = crate::text::rewritten_contents(doc, &all, changed)?;
     doc.update_dict(p.obj, |d| {
         d.set(b"Contents".to_vec(), contents);
         if let Some(res) = resources {
@@ -1683,14 +1720,20 @@ pub(crate) fn selectable_images(
     Ok(page_images(doc, page)?
         .into_iter()
         .enumerate()
-        .filter(|(_, image)| !all.get(image.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
+        .filter(|(_, image)| !all.get(image.stream).and_then(|s| s.entry.as_ref()).is_some_and(|r| excluded.contains(&r)))
         .collect())
+}
+
+/// Whether an XObject drawn at or after operator `from` of the page's joined operators shows
+/// inside `rect` (user space).
+pub(crate) fn painted_over(doc: &Document, page: usize, rect: [f64; 4], from: usize) -> Result<bool, EditError> {
+    Ok(page_images(doc, page)?.iter().any(|i| i.op >= from && i.visible_rect.and_then(|v| intersection(v, rect)).is_some()))
 }
 
 fn transform_image(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
-    streams: &[(Object, Vec<u8>)],
+    streams: &[ContentStream],
     image: &PageImage,
     transform: [f64; 6],
 ) -> Result<(), EditError> {
@@ -1705,8 +1748,9 @@ fn transform_image(
     }
     // A private path crop moves with its image regardless of intervening state operators.
     // Shared crops retain the existing fixed-clip behavior, preserving neighbouring paint.
+    let hidden = crate::text::first_op_after_damage(streams, &pieces, &ops);
     let (start, end, placement) =
-        image_scopes(&ops, target, "transformed")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
+        image_scopes(&ops, target, "transformed", hidden)?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let local = placement.then(&Matrix(transform)).then(&inverse);
     if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
@@ -1715,7 +1759,7 @@ fn transform_image(
 
     // Already alone in a `q cm … Q` (its own placement, or the wrapper an earlier edit added):
     // change that `cm` in place. The CTM inside is `local · cm · outer` either way.
-    if let Some((at, cm)) = enclosing_transform(&ops, start, end) {
+    if let Some((at, cm)) = enclosing_transform(&ops, start, end, hidden) {
         let folded = local.then(&cm);
         if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the image transform is too large".into()));
@@ -1723,7 +1767,7 @@ fn transform_image(
         let changed = crate::text::splice(&pieces, &ops, |index| {
             if index == at { (vec![Op::new("cm", folded.0.map(Object::Real).to_vec())], false) } else { (Vec::new(), true) }
         });
-        let contents = crate::text::rewritten_contents(doc, streams, changed);
+        let contents = crate::text::rewritten_contents(doc, streams, changed)?;
         doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
         return Ok(());
     }
@@ -1744,7 +1788,7 @@ fn transform_image(
             (Vec::new(), true)
         }
     });
-    let contents = crate::text::rewritten_contents(doc, streams, changed);
+    let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1756,7 +1800,7 @@ fn transform_image(
 fn crop_image_impl(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
-    streams: &[(Object, Vec<u8>)],
+    streams: &[ContentStream],
     image: &PageImage,
     keep: [f64; 4],
 ) -> Result<(), EditError> {
@@ -1780,8 +1824,9 @@ fn crop_image_impl(
     if !ops.get(target).is_some_and(|op| op.is("Do")) {
         return Err(EditError::Invalid("the image operation could not be located".into()));
     }
-    let (start, end, placement) =
-        image_scopes(&ops, target, "cropped")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
+    let (start, end, placement) = image_scopes(&ops, target, "cropped", crate::text::first_op_after_damage(streams, &pieces, &ops))?
+        .transform_scope(target)
+        .unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inverse.apply(x, y));
     if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1e12 && y.abs() <= 1e12) {
@@ -1834,7 +1879,7 @@ fn crop_image_impl(
             (Vec::new(), true)
         }
     });
-    let contents = crate::text::rewritten_contents(doc, streams, changed);
+    let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -1862,6 +1907,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     }
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
+    let hidden = crate::text::first_op_after_damage(&all, &pieces, &ops);
     let mut inside_text = false;
     for (index, op) in ops.iter().enumerate() {
         if op.is("BT") {
@@ -1879,7 +1925,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let mut folds = std::collections::BTreeMap::new();
     for image in images.iter().filter(|image| image.has_editor_crop()) {
         let Some(&(_, _, offset)) = plans.get(&image.op) else { continue };
-        let Some((start, end, placement)) = image_scopes(&ops, image.op, "moved")?.transform_scope(image.op) else {
+        let Some((start, end, placement)) = image_scopes(&ops, image.op, "moved", hidden)?.transform_scope(image.op) else {
             return Err(EditError::Invalid("the image crop cannot be moved independently".into()));
         };
         let inverse = placement.invert().ok_or_else(|| EditError::Invalid("a selected image has no area".into()))?;
@@ -1896,7 +1942,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
         };
         // An enclosing cm is before the captured placement; an inside-scope cm is after it.
         // Their multiplication orders differ when that cm scales or shears a translation.
-        let folded = enclosing_transform(&ops, start, end)
+        let folded = enclosing_transform(&ops, start, end, hidden)
             .map(|(at, cm)| (at, local.then(&cm)))
             .or_else(|| leading_transform().map(|(at, cm)| (at, cm.then(&local))));
         if let Some((at, folded)) = folded {
@@ -1932,7 +1978,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     // An image already alone in `q cm Do Q` moves by changing that `cm`, not by nesting another.
     for index in 0..ops.len() {
         let Some(&(movement, _, _)) = plans.get(&index) else { continue };
-        let Some((at, cm)) = enclosing_transform(&ops, index, index) else { continue };
+        let Some((at, cm)) = enclosing_transform(&ops, index, index, hidden) else { continue };
         let folded = movement.then(&cm);
         if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the image move is too large".into()));
@@ -1967,7 +2013,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
         out.push(Op::new("Q", vec![]));
         (out, false)
     });
-    let contents = crate::text::rewritten_contents(doc, &all, data);
+    let contents = crate::text::rewritten_contents(doc, &all, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
