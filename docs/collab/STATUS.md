@@ -583,6 +583,10 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
 
 ### 6.6 Cleanup and submission
 
+- The publication slice (limitation 12) is `a47641fb` on
+  `feature/realtime-collaboration`, local and not pushed; the PR body in
+  `PR-DRAFT.md` gained the e2e line and a corrected limitation list, so the open
+  PR #6622 text needs the same edit when this slice is pushed.
 - Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
   limitation 12 (§8.2, §9, §16 p. 9).
 - Add an automation/parity entry once the feature is user-facing.
