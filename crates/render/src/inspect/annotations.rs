@@ -355,6 +355,24 @@ impl<'a> Inspector<'a> {
 
     // ── form fields ─────────────────────────────────────────────────────────────────────────
 
+    /// Whether `o` or one of its descendants under `/Kids` carries an action (`/A` or `/AA`). It
+    /// walks the same tree `field` does, bounded the same way: a field left out of the listing for
+    /// want of text allowance can still have its action on a widget several levels down.
+    fn has_action(&self, o: &Object, depth: u32) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        let Some(d) = self.dict(o) else { return false };
+        if d.get(b"A").is_ok() || d.get(b"AA").is_ok() {
+            return true;
+        }
+        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k,
+            _ => return false,
+        };
+        kids.iter().any(|k| self.has_action(k, depth + 1))
+    }
+
     pub(super) fn field(
         &self,
         o: &'a Object,
@@ -378,10 +396,10 @@ impl<'a> Inspector<'a> {
             Ok(Object::Array(k)) => k.as_slice(),
             _ => &[],
         };
-        // A field left unlisted for want of text allowance still has its actions counted.
+        // A field left unlisted for want of text allowance still has its actions counted, through
+        // its whole subtree: an action can sit on a descendant widget, not only on the field.
         let unlisted = || {
-            let acts = |x: &Dictionary| x.get(b"AA").is_ok() || x.get(b"A").is_ok();
-            if acts(d) || kids.iter().any(|k| self.dict(k).is_some_and(acts)) {
+            if self.has_action(o, 0) {
                 self.field_actions.set(true);
             }
         };
