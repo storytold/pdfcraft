@@ -255,22 +255,6 @@ impl ImageObb {
     }
 }
 
-/// Whether pointer `p` is on an image being cropped, its crop box or its handles (#5835).
-pub(crate) fn crop_contains_point(
-    img: &pdfcraft_engine::PageImage,
-    crop: &crate::edit_text_ui::CropMode,
-    xf: &PageXform,
-    info: &DocInfo,
-    page: usize,
-    p: Pos2,
-) -> bool {
-    let obb = ImageObb::from_image(img, xf, info, page);
-    let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
-    crate::edit_text_ui::quad_contains(obb.corners(), p)
-        || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
-        || crate::edit_text_ui::crop_controls_contain(img, crop, xf, info, page, p)
-}
-
 /// The page display as it was before full screen, put back on leaving it
 /// ([`DocView::enter_presentation`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -432,6 +416,63 @@ pub struct Snapshot {
     pub revision: usize,
     /// The name of the document it was opened from.
     pub from: String,
+}
+
+/// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
+/// or whether a signature's appearance draws it.
+pub(crate) fn signature_states_changed(before: &[pdfcraft_engine::SignatureInfo], after: &[pdfcraft_engine::SignatureInfo]) -> bool {
+    before.len() != after.len()
+        || before.iter().zip(after).any(|(b, a)| b.field != a.field || b.status != a.status || b.verdict_shown != a.verdict_shown)
+}
+
+/// The mark's side as a share of the widget's shorter side.
+const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points: a widget whose shorter side is under
+/// `MARK_SIDE_MIN / MARK_SIDE_SHARE` (32 points) keeps only its outline. A field over that at 100%
+/// can fall under it when the page is zoomed out to fit.
+const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+const MARK_ICON_SHARE: f32 = 0.64;
+
+/// The screen position of a widget's bottom-right corner on the page (`rect`, user space): where
+/// its validation mark goes, wherever the page's /Rotate and the view turn it.
+fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Pos2 {
+    let [_, bottom, right, _] = rect.map(|v| v as f32);
+    xf.user_rect(info, page, [right, bottom, right, bottom]).min
+}
+
+/// Where the validation mark sits in the part of a signature widget's screen rectangle that is on
+/// the page (`page`, on screen too), or `None` when that part is too small for a legible one. It
+/// goes in the corner nearest `anchor`, the screen position of the widget's bottom-right corner on
+/// the page, so it turns with the page and the view: off the middle, where a signer's artwork
+/// usually is, and clear of the state a named-layer appearance captions across its top.
+fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    // A widget past the crop box's edge shows its mark on the page, not beside it.
+    let widget = widget.intersect(page);
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    // A NaN anchor compares false either way and takes the bottom-right corner.
+    let left = anchor.x - widget.min.x < widget.max.x - anchor.x;
+    let top = anchor.y - widget.min.y < widget.max.y - anchor.y;
+    let x = if left { widget.min.x + inset } else { widget.max.x - inset - side };
+    let y = if top { widget.min.y + inset } else { widget.max.y - inset - side };
+    Some(Rect::from_min_size(pos2(x, y), vec2(side, side)))
 }
 
 /// The name shown for a document tab, the window title and the Combine picker.
@@ -676,8 +717,13 @@ pub struct DocView {
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// What the page modules claim for the cursor this frame; `document_area` sets it once.
     pub(crate) cursor: crate::page_cursor::PageCursor,
-    /// Who the press the pages hold belongs to.
-    pub(crate) router: crate::page_router::PageRouter,
+    /// Who the press the pages hold belongs to. Only the page view reads it: it tells each page
+    /// module what the press is to its page (`PagePress`).
+    pub(in crate::canvas) router: crate::page_router::PageRouter,
+    /// What the last right-click on a page went to, and on which page (`None` off the pages, and for
+    /// Add text, which takes every right-click): the page's menu shows its entries when it has a menu
+    /// and is the one selected, or else the page's own.
+    pub(in crate::canvas) menu_for: Option<(usize, crate::page_router::Owner)>,
     /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
     /// its release neither clicks nor ends a drag.
     pub(crate) press_cancelled: bool,
@@ -906,13 +952,20 @@ impl DocView {
         if let Some(q) = &mut self.camera {
             q.grab = None;
         }
-        self.block_drag = None;
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
         self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
+        self.cancel_edit_text_gestures();
+    }
+
+    /// Abandon Edit text's pointer gestures (a paragraph moved or rewrapped, a picture moved,
+    /// resized, turned or cropped, added content moved, the objects' area selection or move), as
+    /// [`Self::cancel_pointer_gestures`] does: what they were previewing is not applied.
+    pub(crate) fn cancel_edit_text_gestures(&mut self) {
+        self.block_drag = None;
         self.content.cancel_pointer_gesture();
         self.objects.cancel_pointer_gesture();
         if let Some(image) = &mut self.image_selection {
@@ -1060,6 +1113,7 @@ impl DocView {
             signature_drag: Default::default(),
             cursor: Default::default(),
             router: Default::default(),
+            menu_for: None,
             press_cancelled: false,
         }
     }
@@ -1272,11 +1326,10 @@ struct PageFrame<'a> {
 }
 
 impl PageFrame<'_> {
-    /// Where this frame's right-click is, on the page at `rect`, for the first page it is on: pages
-    /// that touch (the gaps hidden) can share a row of pixels, and a right-click there is one
-    /// page's, as a press is.
-    fn right_click_on(&mut self, rect: Rect) -> Option<Pos2> {
-        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && rect.contains(*p))?;
+    /// Where this frame's right-click is, for the first page it is `on`: pages that touch (the gaps
+    /// hidden) can share a row of pixels, and a right-click there is one page's, as a press is.
+    fn right_click_on(&mut self, on: impl FnOnce(Pos2) -> bool) -> Option<Pos2> {
+        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && on(*p))?;
         self.right_clicked = true;
         Some(p)
     }
@@ -1575,10 +1628,17 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
-        if let Some(p) = frame.right_click_on(xf.rect) {
+        if let Some(p) = frame.right_click_on(|p| xf.rect.contains(p)) {
             comments::anchor(&pcx, p, view);
         }
-        PageInput { consumed: true, area_tool: false, hover: None, released_over: false }
+        PageInput {
+            press: crate::page_router::PagePress::Elsewhere,
+            text_drag: false,
+            consumed: true,
+            area_tool: false,
+            hover: None,
+            released_over: false,
+        }
     } else {
         page_tool_input(ui, view, frame, &slot)
     };
@@ -1638,8 +1698,6 @@ fn draw_pages(
         prefs,
         preparing,
         selection_wheel,
-        ppp,
-        rects,
         single_paging,
         tool,
         unobstructed,
@@ -1708,54 +1766,10 @@ fn draw_pages(
         view.links.context = None;
         // Set again below by the page right-clicked: a right-click off the pages (between them,
         // beside one) anchors no page's menu, which then acts on the current page. It deselects the
-        // comment too (below), as one on a page's empty part does. A selected Prepare field keeps
-        // its menu, off the pages as on them.
+        // comment, and Edit text's picture, too (below), as one on a page's empty part does. A
+        // selected Prepare field stays selected, and the menu is the page's there too.
         view.comments.context_at = None;
-        let mut over_image = false;
-        if tool == QuickTool::EditText {
-            let pointer_pos = ptr.pos;
-            if let Some(p) = pointer_pos {
-                for &page_idx in visible_pages {
-                    let r = snap_to_pixels(rects[page_idx].translate(origin.to_vec2()), ppp);
-                    if !r.intersects(visible) {
-                        continue;
-                    }
-                    let xf =
-                        PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
-                    let images = cached_edit_images(view, doc, page_idx).to_vec();
-                    // Crop controls own the click even when another image overlaps them.
-                    if view.image_selection.as_ref().is_some_and(|s| {
-                        s.page == page_idx
-                            && s.crop
-                                .as_ref()
-                                .zip(images.get(s.index))
-                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
-                    }) {
-                        over_image = true;
-                        break;
-                    }
-                    for (idx, img) in images.iter().enumerate().rev() {
-                        let obb = ImageObb::from_image(img, &xf, info, page_idx);
-                        let b = image_screen_rect(img, &xf, info, page_idx);
-                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
-                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
-                        if hit {
-                            over_image = true;
-                            if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
-                                view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
-                            }
-                            break;
-                        }
-                    }
-                    if over_image {
-                        break;
-                    }
-                }
-            }
-        }
-        if !over_image && tool == QuickTool::EditText {
-            view.image_selection = None;
-        }
+        view.menu_for = None;
     }
     let mut frame = PageFrame {
         env: *env,
@@ -1793,9 +1807,13 @@ fn draw_pages(
         right_clicked,
         ..
     } = frame;
-    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's.
+    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's,
+    // and with Edit text the picture (one on a page went to that page, `page_input`).
     if resp.secondary_clicked() && !right_clicked {
         view.comments.selected = None;
+        if tool == QuickTool::EditText {
+            view.image_selection = None;
+        }
     }
     let PageOut {
         mut canvas_action,
@@ -1867,28 +1885,34 @@ fn draw_pages(
     if view.continuous {
         view.current = current;
     }
+    // The menu of what the right-click went to (`menu_for`), or else the page's.
+    use crate::page_router::{Owner, PicturePart};
+    let menu_for = view.menu_for.map(|(_, owner)| owner);
+    // A right-click while a press is held leaves the selections alone, so the menu is its owner's only
+    // when that owner is the one selected.
+    let on_selected_field = match menu_for {
+        Some(Owner::PrepareField { field, widget }) => {
+            form.get(field).is_some_and(|f| view.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
+        }
+        Some(Owner::PrepareCorner { .. }) => true,
+        _ => false,
+    };
     // The row as it is now: in continuous view the current page may have changed above.
     let row_on_screen =
         shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     resp.context_menu(|ui| {
-        let is_crop_over_image = tool == QuickTool::EditText
-            && view.image_selection.clone().is_some_and(|sel| {
-                let Some(ref crop) = sel.crop else { return false };
-                let pointer_pos = ptr.pos;
-                let Some(p) = pointer_pos else { return false };
-                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
-                let images = cached_edit_images(view, doc, sel.page).to_vec();
-                let Some(img) = images.get(sel.index) else { return false };
-                crop_contains_point(img, crop, &xf, info, sel.page, p)
-            });
-        if is_crop_over_image {
-            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+        // Crop mode has no menu: a right-click on the picture being cropped, its box or its grips is
+        // the crop's (#5835).
+        if matches!(menu_for, Some(Owner::Picture { part: PicturePart::Crop(_), .. })) {
             egui::Popup::close_all(ui.ctx());
             ui.close();
             return;
         }
-        // Preparing a form: the selected field's menu.
-        if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
+        // Preparing a form: the selected field's menu, on a field.
+        if preparing
+            && on_selected_field
+            && let Some((name, wi)) = view.prepare.selected.clone()
+        {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
             if !view.prepare.also.is_empty() {
                 use crate::prepare::Arrange as A;
@@ -1935,7 +1959,9 @@ fn draw_pages(
             }
             return;
         }
-        if let Some((page, index)) = view.links.context {
+        if matches!(menu_for, Some(Owner::Link { .. }))
+            && let Some((page, index)) = view.links.context
+        {
             if ui.button(tl!("Properties…")).clicked() {
                 view.links.open_existing = Some((page, index));
                 ui.close();
@@ -1956,31 +1982,24 @@ fn draw_pages(
             return;
         }
         let can_paste_image = env.can_paste_image;
-        let is_image_menu = tool == QuickTool::EditText
-            && (ui.ctx().data_mut(|d| d.get_temp::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
-                || view.image_selection.clone().is_some_and(|sel| {
-                    let pointer_pos = ptr.pos;
-                    let Some(p) = pointer_pos else { return false };
-                    let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
-                    let images = cached_edit_images(view, doc, sel.page).to_vec();
-                    let Some(img) = images.get(sel.index) else { return false };
-                    let obb = ImageObb::from_image(img, &xf, info, sel.page);
-                    let b = image_screen_rect(img, &xf, info, sel.page);
-                    obb.contains(b, p)
-                }));
-        if is_image_menu && let Some(sel) = view.image_selection.clone() {
+        if tool == QuickTool::EditText
+            && let Some((page, Owner::Picture { index, .. })) = view.menu_for
+            && let Some(sel) = view.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
+        {
             let images = cached_edit_images(view, doc, sel.page).to_vec();
-            // Paste lands where the menu opened only on the picture's page: where pages touch, the
-            // first page takes the right-click, and its point means nothing on the second.
+            // Paste lands where the menu opened, on the picture's page: the right-click that opened
+            // it went to that page (`page_input`), and another page's point means nothing there.
             let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
             let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
             crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
             return;
         }
-        // A selected comment, or connected lines being drawn (Complete, Undo last point): the
-        // comment menu.
+        // The comment the right-click went to, when it is the one selected, or connected lines being
+        // drawn (Complete, Undo last point): the comment menu.
+        let on_selected_comment =
+            matches!(view.menu_for, Some((page, Owner::Comment { index, .. })) if view.comments.selected == Some((page, index)));
         let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
-        if view.comments.selected.is_some() || drawing_points {
+        if on_selected_comment || drawing_points {
             canvas_action = comments::context_menu(
                 ui,
                 view,
@@ -2037,9 +2056,6 @@ fn draw_pages(
         };
         default_page_context_menu(ui, page, at, perms, &mut page_action);
     });
-    if !resp.context_menu_opened() {
-        ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
-    }
     // Copy comments / Paste comments from the page's menu or a Comments panel card.
     let copy_comments = std::mem::take(&mut view.comments.copy_request);
     let paste_comments_at = view.comments.paste_request.take();
