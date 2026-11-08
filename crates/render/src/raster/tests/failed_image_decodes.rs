@@ -210,20 +210,26 @@ fn a_picture_left_out_for_the_pages_allowance_draws_on_the_next_page() {
         [255, 255, 255, 255] => false,
         other => panic!("neither an image nor the page: {other:?}"),
     };
-    // Both pages through one cache, as a render worker keeps it.
-    let pages = |work: u64| {
+    // Both pages, or the first alone, through one cache, as a render worker keeps it.
+    let pages = |work: u64, count: usize| {
         let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
         let cache = RenderCache::new();
-        [0, 1].map(|page| {
-            let warnings = Arc::new(Mutex::new(Vec::new()));
-            let settings = warning_settings(&config.settings(), warnings.clone());
-            let req = RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() };
-            let (_, _, rgba, _) = render_page(&pdf, &cache, &settings, &config, req).expect("renders");
-            (rgba[..].to_vec(), take_warnings(&warnings))
-        })
+        (0..count)
+            .map(|page| {
+                let warnings = Arc::new(Mutex::new(Vec::new()));
+                let settings = warning_settings(&config.settings(), warnings.clone());
+                let req = RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() };
+                let (_, _, rgba, _) = render_page(&pdf, &cache, &settings, &config, req).expect("renders");
+                (rgba[..].to_vec(), take_warnings(&warnings))
+            })
+            .collect::<Vec<Drawn>>()
     };
-    let one = (1..1_000).find(|work| black(&pages(*work)[0], 10)).expect("a small image is cheap");
-    let [first, second] = pages(one);
+    // The smallest allowance that draws A on the first page. A larger allowance draws at least as
+    // much, so a binary search over the first page alone finds it in about ten draws.
+    let draws_a = |work: u64| pages(work, 1).first().is_some_and(|first| black(first, 10));
+    let candidates: Vec<u64> = (1..1_000).collect();
+    let one = candidates.get(candidates.partition_point(|work| !draws_a(*work))).copied().expect("a small image is cheap");
+    let Ok([first, second]) = <[Drawn; 2]>::try_from(pages(one, 2)) else { panic!("two pages") };
     assert_eq!((black(&first, 10), black(&first, 30)), (true, false), "the first page had enough for A alone");
     assert!(first.1.contains(&RenderWarning::ContentTruncated), "{:?}", first.1);
     assert!(black(&second, 30), "B, left out of the first page, draws on the second");
