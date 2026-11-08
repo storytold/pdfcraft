@@ -26,6 +26,11 @@ its undo/redo history.
 `page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
 follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
 
+`page_add_text` and `content_update` take one of `color` (`#RRGGBB` or a name, painted in
+DeviceRGB), `gray` (0 black to 1 white, DeviceGray `g`) and `cmyk` (`[c, m, y, k]`, each 0 to 1,
+DeviceCMYK `k`), so text added to a print file can be 100 K black. `content_list` reports `gray` or
+`cmyk` for such text.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
@@ -203,6 +208,30 @@ faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 b
 undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
+
+`text_fonts` also lists `builtin:thai` when the build includes the bundled Noto Sans Thai face
+(the optional craft-fonts input). Passing it as `text_edit.font_resource` explicitly replaces a
+paragraph or range with that face; the source font is never swapped for it silently. A build
+without the face never lists it, and `text_edit` refuses it there. A page whose own fonts fill
+the listing's 32 MiB preview budget can leave it out too; `text_edit` still accepts it then.
+
+### Preparing grouped text
+
+`text_prepare {doc, page}` makes supported grouped Form text editable on one page, as one click
+on grouped text in the GUI's Edit text does. It keeps the group's original glyph operators and shared source
+objects, records preparation and map repairs in the repair log, and is one undoable step. List
+`text_paragraphs` afterwards; its indices belong to the prepared page. Besides the document
+summary it returns what this edit did:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `prepared_groups` | integer | Form placements drawn in place, so their text is now the page's own. |
+| `repaired_fonts` | integer | Page fonts whose damaged legacy THSarabunPSK Thai map was repaired on a page-owned copy. |
+| `refused_groups` | array of strings | One `name: reason` per group left as it was: unsafe compositing, tags, malformed content, or text grouped more than eight levels deep. |
+
+The page's own fonts with that damaged map are repaired too, whether their text was grouped or
+not. It fails, changing nothing, when the page has nothing to prepare or repair (the error gives
+the first reason a group was left as it was) or the page is out of range.
 
 ### Superscript and subscript normalization
 

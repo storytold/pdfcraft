@@ -826,6 +826,26 @@ trailer << /Root 1 0 R >>
     assert_eq!(listed, [("Text", 1, Some("typed")), ("Square", 3, Some("untyped"))], "{:?}", info.annotations);
 }
 
+/// `/QuadPoints` is read by the rule redaction apply uses (`pdfcraft_geom::quad_points`): a quad
+/// with a non-number is left out rather than drawn with a zero, an indirect number is followed,
+/// and a trailing partial quad is dropped.
+#[test]
+fn only_usable_quads_are_listed() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >> endobj\n\
+         4 0 obj 40 endobj\n\
+         5 0 obj << /Type /Annot /Subtype /Redact /Rect [20 95 40 110] /QuadPoints \
+         [20 /oops 40 110 20 95 40 95  20 110 4 0 R 110 20 95 40 95  20 110 40 110] >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    let mark = info.annotations.iter().find(|a| a.subtype == "Redact").expect("listed");
+    assert_eq!(mark.quads, vec![[20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0]]);
+}
+
 /// One comment referenced many times, or a page-shared `/Annots` array, is listed once, and many
 /// small comments sharing one large `/Contents` string stop at the retained-bytes budget.
 #[test]
