@@ -39,7 +39,10 @@ pub(crate) static STANDARD: [u32; 256] = [
     0, 0, 0,
 ];
 
-/// Glyph names of the Latin character set (Annex D) → Unicode.
+/// Glyph names of the Latin character set (Annex D) → Unicode, with the three f-ligatures Annex D
+/// leaves out (`ff`, `ffi`, `ffl`: U+FB00, U+FB03, U+FB04, as the Adobe Glyph List specification
+/// names them). TeX fonts draw them by name through `/Differences`, beside the `fi` and `fl` the
+/// set has. Sorted: lookups binary-search it.
 pub(crate) static NAMES: &[(&str, u32)] = &[
     ("A", 0x41),
     ("AE", 0xc6),
@@ -160,6 +163,9 @@ pub(crate) static NAMES: &[(&str, u32)] = &[
     ("exclam", 0x21),
     ("exclamdown", 0xa1),
     ("f", 0x66),
+    ("ff", 0xfb00),
+    ("ffi", 0xfb03),
+    ("ffl", 0xfb04),
     ("fi", 0xfb01),
     ("five", 0x35),
     ("fl", 0xfb02),
