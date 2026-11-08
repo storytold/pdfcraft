@@ -10264,7 +10264,9 @@ fn restricted_pdf_mark_sources_are_refused() {
         replace: false,
         file: Some(MarkFile { name: "src.pdf".into(), bytes, page: 0 }),
     };
-    for withheld in [0b1_0000, 0b100_0000_0000] {
+    // Copying pages needs both bits cleared: copying (bit 5) and assembly (bit 11), and the
+    // second case clears bit 4 as well, which the source check reads too.
+    for withheld in [0b1_0000, 0b100_0000_1000] {
         let err = s.apply(id, mark(protected("", "owner", -1 ^ withheld))).unwrap_err();
         assert_eq!(err, EditError::Source("src.pdf: its security settings don't allow copying pages".into()));
     }
