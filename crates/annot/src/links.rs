@@ -80,8 +80,9 @@ pub struct LinkItem {
     pub style: LinkStyle,
 }
 
-/// Bytes of web-address text one listing keeps, counted after conversion to UTF-8; past it a link
-/// lists as [`LinkAction::Other`].
+/// Bytes of web-address text one listing keeps or examines, counted after conversion to UTF-8;
+/// past it a link lists as [`LinkAction::Other`]. A rejected address still charges the raw bytes
+/// it read, so an address shared by many links cannot be converted again for free.
 pub(crate) const MAX_URI_BYTES: usize = 16 << 20;
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -129,7 +130,15 @@ fn action_of(doc: &Document, d: &Dict, pages: &HashMap<ObjRef, usize>, uri_budge
             }
         }
         Some(b"GoTo") => a.get(b"D").and_then(dest_page).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page),
-        Some(s) => LinkAction::Other(String::from_utf8_lossy(s.get(..MAX_ACTION_NAME).unwrap_or(s)).into_owned()),
+        Some(s) => {
+            // Cut on a character boundary: cutting inside a sequence makes the lossy conversion
+            // add a replacement character, which would put the result past `MAX_ACTION_NAME`.
+            let mut end = MAX_ACTION_NAME.min(s.len());
+            while end > 0 && (s[end] & 0xC0) == 0x80 {
+                end -= 1;
+            }
+            LinkAction::Other(String::from_utf8_lossy(&s[..end]).into_owned())
+        }
         None => LinkAction::Other("no action".into()),
     }
 }
