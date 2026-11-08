@@ -303,11 +303,15 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                         if a.len() != 4 {
                             return None;
                         }
-                        let mut b = [0.0; 4];
+                        let mut b = [0.0_f64; 4];
                         for (n, v) in b.iter_mut().zip(a) {
                             *n = v.as_f64()?;
                         }
-                        Some(b)
+                        // A rectangle may give its corners in either order (ISO 32000-2 §7.9.5):
+                        // some writers put the top first, [0 842 595 0], and the Form is drawn
+                        // just the same (#6145).
+                        let [x0, y0, x1, y1] = b;
+                        Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
                     })
                 }) else {
                     continue;

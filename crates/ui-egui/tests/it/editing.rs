@@ -10768,3 +10768,57 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
         );
     }
 }
+
+/// #6145: a logo and a rule drawn through a Form whose /BBox gives its top first ([0 500 400 0],
+/// the same rectangle; ISO 32000-2 §7.9.5) are picked as its artwork in Edit text & images, as
+/// any Form's are, and the text drawn over the page beside them still opens as a paragraph.
+#[test]
+fn artwork_in_a_form_whose_bbox_gives_its_top_first_is_picked_in_edit_text() {
+    let stream = |dict: &str, body: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 6 0 R >> >> >>"
+            .to_string(),
+        stream("", "q /Fm0 Do Q BT /F1 14 Tf 40 200 Td (Paragraph over the page) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 500 400 0]", "0.04 0.51 0.25 rg 20 420 60 60 re f 20 400 360 2 re f"),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("logo.pdf", None, pdf.clone()).expect("opens");
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), 1, "the Form is the page's artwork");
+    assert!(h.state_mut().execute("edit.edit_text"));
+    crate::support::settle(&mut h);
+    let at = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        egui::pos2(r.left() + x / 400.0 * r.width(), r.top() + (500.0 - y) / 500.0 * r.height())
+    };
+    // The logo.
+    let logo = at(&h, 50.0, 450.0);
+    click_at(&mut h, logo);
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index)), Some((0, 0)), "the logo's Form is picked");
+    // The paragraph, which lies over the Form's box.
+    let text = at(&h, 60.0, 204.0);
+    click_at(&mut h, text);
+    crate::support::settle(&mut h);
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Paragraph over the page"), "the paragraph opens");
+}
