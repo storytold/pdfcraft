@@ -11,7 +11,7 @@
 //! Dialogs are drawn after the pages, so on the frame one opens egui has not met its layer yet:
 //! the reading also takes whether one is open.
 
-use egui::{Event, PointerButton, Pos2, Rect};
+use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
 /// A primary-button press or release, and where it happened.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,13 +54,19 @@ pub(crate) struct PagePointer {
     pub primary_down: bool,
     /// Some button is down, wherever it was pressed.
     pub any_down: bool,
+    /// The modifier keys held at this frame's first primary press, or else now: a press with Shift
+    /// or ⌘ adds to a selection.
+    pub modifiers: Modifiers,
+    /// A primary press the pages hold turned into a drag this frame. egui's own `drag_started()`
+    /// counts every button, so a right-button drag would start what a left-button drag does.
+    pub drag_started: bool,
 }
 
 impl PagePointer {
     /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
     /// a dialog is open over the window or not (`modal`).
     pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, samples, released, primary_down, any_down) = ui.input(|i| {
+        let (at, origin, edges, samples, released, primary_down, any_down, modifiers) = ui.input(|i| {
             (
                 i.pointer.interact_pos(),
                 i.pointer.press_origin(),
@@ -69,6 +75,7 @@ impl PagePointer {
                 last_release(&i.events),
                 i.pointer.primary_down(),
                 i.pointer.any_down(),
+                press_modifiers(&i.events).unwrap_or(i.modifiers),
             )
         });
         // egui's own answer to "do the pages hold a press?": from the press on until the frame
@@ -92,9 +99,20 @@ impl PagePointer {
         ui.data_mut(|d| d.insert_temp(holding, still_down));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), samples: Vec::new(), released: None, primary_down, any_down };
+            return Self {
+                pos,
+                origin: None,
+                edges: Vec::new(),
+                samples: Vec::new(),
+                released: None,
+                primary_down,
+                any_down,
+                modifiers,
+                drag_started: false,
+            };
         }
-        Self { pos, origin: press_origin, edges, samples, released, primary_down, any_down }
+        let drag_started = resp.drag_started_by(PointerButton::Primary);
+        Self { pos, origin: press_origin, edges, samples, released, primary_down, any_down, modifiers, drag_started }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -122,6 +140,14 @@ fn first_press(edges: &[Edge]) -> Option<Pos2> {
     edges.iter().find_map(|e| match e {
         Edge::Press(p) => Some(*p),
         Edge::Release(_) => None,
+    })
+}
+
+/// The modifier keys held at the first primary press among `events`.
+fn press_modifiers(events: &[Event]) -> Option<Modifiers> {
+    events.iter().find_map(|e| match e {
+        Event::PointerButton { button: PointerButton::Primary, pressed: true, modifiers, .. } => Some(*modifiers),
+        _ => None,
     })
 }
 

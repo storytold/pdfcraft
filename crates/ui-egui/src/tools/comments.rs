@@ -37,7 +37,7 @@ pub(crate) use geometry::{corner_ratio, page_rotation, resized};
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 #[cfg(test)]
 use input::hover_tip;
-pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input};
+pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input, tips_shown};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
 pub(crate) use menu::{
     MenuRights, apply_quick_bar_color, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls,

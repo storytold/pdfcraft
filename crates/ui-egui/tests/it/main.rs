@@ -77,6 +77,7 @@ mod scroll_prefetch;
 mod side_panels;
 mod signing;
 mod stamps;
+mod status_layers;
 mod text_select;
 mod theme;
 mod theme_button;
