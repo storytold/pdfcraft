@@ -141,6 +141,14 @@ impl ClientSession {
         self.pending.len()
     }
 
+    /// The operations still waiting for confirmation, oldest first. A reconnect
+    /// resends the merge ones after the snapshot: their `opId` makes the retry
+    /// safe, and a structural one is dropped because page positions may have
+    /// moved under it.
+    pub fn pending_ops(&self) -> Vec<Op> {
+        self.pending.iter().map(|p| p.op.clone()).collect()
+    }
+
     pub fn participants(&self) -> impl Iterator<Item = (&ActorId, &Presence)> {
         self.participants.iter()
     }
@@ -203,6 +211,13 @@ impl ClientSession {
         }
         self.outgoing.push_back(ClientMessage::Ping(pdfcraft_collab_proto::Ping { ts }));
         Ok(())
+    }
+
+    /// Ask for the journal tail (or a base) from the current version.
+    pub fn resync(&mut self) {
+        if self.joined {
+            self.request_resync();
+        }
     }
 
     /// Ask the server to commit the current version.

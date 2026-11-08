@@ -4659,6 +4659,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-collab-session"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-collab-client",
+ "pdfcraft-collab-hub",
+ "pdfcraft-collab-proto",
+ "pdfcraft-collab-server",
+ "pdfcraft-collab-ws",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tungstenite",
+]
+
+[[package]]
 name = "pdfcraft-collab-ws"
 version = "0.18.1"
 dependencies = [

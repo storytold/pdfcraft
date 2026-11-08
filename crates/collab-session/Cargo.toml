@@ -1,0 +1,24 @@
+[package]
+name = "pdfcraft-collab-session"
+description = "Background WebSocket driver for one collaborative PDF session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-collab-client = { workspace = true }
+pdfcraft-collab-proto = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tungstenite = "0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pdfcraft-collab-hub = { workspace = true }
+pdfcraft-collab-server = { workspace = true }
+pdfcraft-collab-ws = { workspace = true }
