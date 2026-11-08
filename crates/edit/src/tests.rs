@@ -12720,6 +12720,42 @@ fn grouped_source_text_preparation_edits_original_operators_without_changing_sha
     assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 0);
 }
 
+/// A text form whose resources would take the page's past the limit is refused itself, so a later
+/// form whose resources are all the page's already is still prepared.
+#[test]
+fn grouped_text_preparation_refuses_the_form_that_would_pass_the_resource_limit() {
+    let mut doc = page_with_forms(
+        "/A Do /B Do",
+        &[("A".into(), "BT /X 14 Tf 40 500 Td (a) Tj ET".into()), ("B".into(), "BT /F1 14 Tf 40 400 Td (b) Tj ET".into())],
+    );
+    let helvetica = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        // With F1, the 4 096 the limit allows.
+        for i in 0..4095 {
+            fonts.set(format!("P{i}").into_bytes(), helvetica.clone());
+        }
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    // A names Helvetica /X, which the page doesn't: merging it adds a name. B's /F1 is the page's.
+    for (object, name) in [(7, "X"), (8, "F1")] {
+        let Object::Stream(mut form) = doc.get(pdfcraft_cos::ObjRef::new(object, 0)).as_ref().clone() else { panic!("fixture") };
+        let mut fonts = Dict::new();
+        fonts.set(name.as_bytes().to_vec(), helvetica.clone());
+        let mut resources = Dict::new();
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        form.dict.set(b"Resources".to_vec(), Object::Dict(resources));
+        doc.set(pdfcraft_cos::ObjRef::new(object, 0), Object::Stream(form));
+    }
+    let prepared = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(prepared.expanded, 1);
+    assert!(prepared.refused.len() == 1 && prepared.refused[0].starts_with("A:"), "{:?}", prepared.refused);
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "b"));
+}
+
 #[test]
 fn grouped_text_preparation_keeps_unsafe_compositing_paths_and_malformed_forms_intact() {
     for (page_ops, form_ops, extra) in [

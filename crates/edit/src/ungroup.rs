@@ -240,6 +240,11 @@ pub(crate) fn ungroup_ops(
                 mine.set(fresh.clone(), value.clone());
                 map.push((key.to_vec(), fresh));
             }
+            // Counted after the merge: a page taken past the limit would refuse every later form,
+            // even one whose resources are all the page's already.
+            if mine.len() > MAX_RESOURCES {
+                return Err(refuse("too many resources"));
+            }
             merged.set(cat.to_vec(), Object::Dict(mine));
             if !map.is_empty() {
                 renames.push((cat, map));
