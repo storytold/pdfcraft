@@ -29,6 +29,21 @@ pub(crate) struct Updates {
     check_requested: bool,
 }
 
+impl Updates {
+    /// The prompt a check at start shows when it finds a newer release is open, over the whole
+    /// window. It isn't the Updates dialog (`open`).
+    pub(crate) fn prompt_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.updater.prompt_open()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
+}
+
 impl Default for Updates {
     fn default() -> Self {
         Self {

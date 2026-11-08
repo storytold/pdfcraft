@@ -356,8 +356,8 @@ impl PdfCraftApp {
 
     /// Adds the keys a menu click stands for to this pass's input, and says whether this pass
     /// carries a menu click's input: those keys (Edit ▸ Copy, Cut, Select all, Delete), or the
-    /// paste the platform answers Edit ▸ Paste with, on one of the two passes after it asked (one
-    /// later, or two with a discarded pass between). A native menu's click runs in `logic` before
+    /// paste the platform answers Edit ▸ Paste with, on the pass it asked or one of the two after
+    /// it (one later, or two with a discarded pass between). A native menu's click runs in `logic` before
     /// this, so its keys come on its own pass; an in-window menu's runs as the bar is drawn, so
     /// they come on the next one, when the bar still reads as open (craft-menu stores the menu as
     /// open on the pass its click closes it). A native menu's click leaves egui's popups and the
@@ -378,12 +378,13 @@ impl PdfCraftApp {
         keys || paste
     }
 
-    /// A dialog, a prompt, the palette or the OCR Verify screen is drawn over the pages.
+    /// A dialog, a prompt (the update prompt a check at start shows too), the palette or the OCR
+    /// Verify screen is drawn over the pages.
     pub(crate) fn covers_pages(&self) -> bool {
         // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
-        // entered over.
+        // entered over. Dialogs and prompts show there too.
         let shown = !(self.full_screen && self.active.is_some());
-        self.modal_open() || self.pending_full_screen.is_some() || (self.palette_open || self.ocr_verify.open) && shown
+        self.modal_open() || self.pending_full_screen.is_some() || self.updates.prompt_open() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act

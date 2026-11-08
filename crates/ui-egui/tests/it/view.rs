@@ -2524,10 +2524,13 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
 
-/// Delete and Escape over the Pages panel with a menu of the menu bar open are the menu's: no page
-/// is deleted, and the page selection stays. Delete deleted the selected page.
+/// Delete over the Pages panel with a menu of the menu bar open is the menu's, and the Escape that
+/// closes a thumbnail's context menu the menu's: no page is deleted, and the page selection stays.
+/// Delete deleted the selected pages, and the panel took the Escape: it dropped the selection and
+/// left the menu open. (The in-window bar takes an Escape with a menu open before the panel is
+/// drawn, and a dialog takes the panel's keyboard.)
 #[test]
-fn delete_and_escape_with_a_menu_open_leave_the_pages_panel() {
+fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_panel() {
     let mut h = harness(&[("panel", "pages")]);
     h.run_steps(2);
     // The first ⌘-click on another page picks it and the current page.
@@ -2535,19 +2538,34 @@ fn delete_and_escape_with_a_menu_open_leave_the_pages_panel() {
     h.run_steps(2);
     let selected = h.state().views[0].selected.clone();
     assert_eq!(selected.iter().copied().collect::<Vec<_>>(), [0, 1], "⌘-click picked pages 1 and 2");
-    crate::support::open_menu(&mut h, "View");
     let thumb = h.get_by_label("Page 2").rect().center();
+    crate::support::open_menu(&mut h, "View");
     h.hover_at(thumb);
     h.run_steps(1);
-    // Delete leaves the menu open; Escape closes it.
-    for key in [Key::Delete, Key::Escape] {
-        assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
-        h.key_press(key);
-        h.run_steps(3);
-        let s = h.state();
-        assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 3, "{key:?} with a menu open deleted a page");
-        assert_eq!(s.views[0].selected, selected, "{key:?} with a menu open dropped the page selection");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    assert_eq!(pages(&h), 3, "Delete with a menu open deleted pages");
+    assert_eq!(h.state().views[0].selected, selected, "Delete with a menu open dropped the page selection");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the menu");
+    // The thumbnail's own context menu, the panel keeping the keyboard: Escape closes the menu.
+    h.hover_at(thumb);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: thumb, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
     }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the thumbnail's menu is open");
+    assert_eq!(h.state().views[0].selected, selected, "the right-click kept the page selection");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the thumbnail's menu");
+    assert_eq!(h.state().views[0].selected, selected, "the Escape that closed the thumbnail's menu dropped the page selection");
+    assert_eq!(pages(&h), 3);
 }
 
 /// Full screen entered over the OCR Verify screen draws the page alone, and its keys are the

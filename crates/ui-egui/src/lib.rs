@@ -630,8 +630,8 @@ pub struct PdfCraftApp {
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
     /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
     pub(crate) menu_input: Vec<egui::Event>,
-    /// The pass Edit ▸ Paste asked the platform for the clipboard on, until its paste comes (see
-    /// `take_menu_input`).
+    /// The pass Edit ▸ Paste asked the platform for the clipboard on, until its paste comes or two
+    /// passes have gone by without it (see `take_menu_input`).
     pub(crate) menu_paste_pass: Option<u64>,
     /// This pass carries the input a menu click stands for (see `take_menu_input`).
     pub(crate) menu_input_due: bool,

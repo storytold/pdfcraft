@@ -4476,6 +4476,52 @@ fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_commen
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
+/// The update prompt a check at start shows covers the window: Delete under it leaves the selected
+/// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
+#[test]
+fn keys_under_the_update_prompt_leave_the_selected_comment() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let found = Arc::new(AtomicBool::new(false));
+    let answer = found.clone();
+    let mut h = harness(move |app| {
+        app.set_startup_update_check(true);
+        // The check waits until the comment is selected, then finds a newer release.
+        app.set_update_source(Arc::new(move || {
+            while !answer.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(Some(craft_update::Release {
+                tag: "v99.0.0".into(),
+                version: craft_update::parse_version("v99.0.0"),
+                html_url: "https://example.invalid/release".into(),
+                ..Default::default()
+            }))
+        }));
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    found.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.query_by_label_contains("is available").is_none() {
+        h.run_steps(2);
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the update prompt");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Delete under the update prompt deleted the comment");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("is available").is_none(), "Escape closed the prompt");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "Escape under the update prompt deselected the comment");
+}
+
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
 /// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
 /// which held every page key, H included.

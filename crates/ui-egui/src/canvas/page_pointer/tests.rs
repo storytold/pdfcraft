@@ -814,7 +814,8 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
     (
         "app/clipboard.rs",
         "clipboard_keys",
-        "the pages' clipboard: Copy, Cut and Paste (events and chords), which act only when `page_keys.over()` is false",
+        "the pages' clipboard: Copy, Cut and Paste (events and chords), which act only when `page_keys.over()` is false, \
+         and the pastes it hands on to text fields while something is over the pages",
     ),
     ("app/keys.rs", "select_all_keys", "Select all, a chord that waits for a menu of the menu bar as the registered commands' do"),
     ("canvas/area.rs", "glide_interrupted", "any key stops the touchpad's glide"),
