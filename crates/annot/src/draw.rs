@@ -81,7 +81,7 @@ fn page_with_inherited_boxes(doc: &Document, page: ObjRef) -> pdfcraft_model::Pa
 /// Pure from the dictionary, the objects it points at and the page, so [`AppearanceCache`] can
 /// reuse it.
 fn build_appearance(doc: &Document, d: &Dict, page: Option<[f64; 4]>) -> Option<Stream> {
-    let mut stream = appearance::build_on_page(d, page)?;
+    let mut stream = appearance::build_on_page(doc, d, page)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {

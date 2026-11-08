@@ -98,7 +98,7 @@ impl Geo<'_> {
                     // own placement: where it lands comes from each `/Rect`, so the first
                     // placement tells nothing about the others. Repeated decodes spend the
                     // same bounded budget as everything else.
-                    let Ok(data) = self.ctx.decode(&st) else {
+                    let Ok(data) = self.ctx.decode(self.doc, &st) else {
                         self.unverifiable("an annotation appearance can't be read in full");
                         continue;
                     };
@@ -278,7 +278,7 @@ impl Geo<'_> {
         {
             return;
         }
-        let Ok(data) = self.ctx.decode(s) else {
+        let Ok(data) = self.ctx.decode(self.doc, s) else {
             self.unverifiable("a form under the region can't be decoded in full");
             return;
         };
@@ -336,7 +336,7 @@ impl Geo<'_> {
         if depth > MAX_DEPTH {
             return Err(());
         }
-        let data = self.ctx.decode(s)?;
+        let data = self.ctx.decode(self.doc, s)?;
         let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
         let res = own.as_ref().unwrap_or(parent);
         let xobjects = res_dict(self.doc, res, b"XObject");
@@ -464,7 +464,7 @@ pub(super) fn image_cleared(doc: &Document, ctx: &Ctx, s: &Stream, ctm: &Matrix,
     if !matches!(bpc, 1 | 2 | 4 | 8 | 16) || ncomp == 0 || ncomp > 32 {
         return Err(());
     }
-    let data = ctx.decode(s)?;
+    let data = ctx.decode(doc, s)?;
     let bits = ncomp.checked_mul(bpc).ok_or(())?;
     let row = w.checked_mul(bits).ok_or(())?.div_ceil(8);
     if data.len() < row.checked_mul(h).ok_or(())? {
