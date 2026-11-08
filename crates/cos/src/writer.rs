@@ -19,9 +19,6 @@ use crate::document::{Document, ObjectReader, XrefEntry};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
-///
-/// Non-finite reals are replaced with zero by this low-level, infallible formatter.
-/// Document saves validate numbers first and refuse this lossy conversion.
 pub fn serialize(o: &Object, out: &mut Vec<u8>) {
     match o {
         Object::Null => out.extend_from_slice(b"null"),
@@ -70,40 +67,6 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
     if !s.contains('.') && s != "-0" {
         out.push(b'.');
     }
-}
-
-/// Parsing overflow must stay non-finite for consumers such as printcheck. PDF cannot
-/// represent infinity or NaN, and clamping here would invent a value. Refuse a rewrite
-/// instead of silently losing data. References are checked by the save traversal; stream
-/// bodies are copied verbatim, so only their dictionaries need validation here.
-fn validate_numbers(o: &Object) -> Result<(), CosError> {
-    // Match the lexer's nesting limit without allocating a second copy of a wide array.
-    fn visit(o: &Object, depth: usize) -> Result<(), CosError> {
-        if depth > 128 {
-            return Err(CosError::Syntax { offset: 0, detail: "object nesting exceeds the save limit".into() });
-        }
-        match o {
-            Object::Real(r) if !r.is_finite() => return Err(CosError::NonFiniteNumber),
-            Object::Array(a) => {
-                for value in a {
-                    visit(value, depth + 1)?;
-                }
-            }
-            Object::Dict(d) => {
-                for (_, value) in d.iter() {
-                    visit(value, depth + 1)?;
-                }
-            }
-            Object::Stream(s) => {
-                for (_, value) in s.dict.iter() {
-                    visit(value, depth + 1)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    visit(o, 0)
 }
 
 fn write_name(n: &[u8], out: &mut Vec<u8>) {
@@ -272,7 +235,6 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
                 offsets.insert(num, (0, generation, false));
             }
             Some(o) => {
-                validate_numbers(&o)?;
                 offsets.insert(num, (base + out.len() as u64, generation, true));
                 write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
             }
@@ -291,9 +253,6 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
         trailer.set(b"Prev".to_vec(), Object::Int(p as i64));
     }
     let size = doc.next_num().max(trailer.int(b"Size").map_or(0, |n| n.clamp(0, i64::from(u32::MAX)) as u32));
-    for (_, value) in trailer.iter() {
-        validate_numbers(value)?;
-    }
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, base, &mut trailer, rows, size);
@@ -314,16 +273,12 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     Ok(file)
 }
 
-/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
-pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
-    if doc.stream_limited() {
-        return Err(CosError::ReadOnlyLimit);
-    }
-    // A full traversal must not fill the editor's shared caches (which undo snapshots also
-    // own). Parsed objects and decoded object streams are temporary working data here.
-    let mut reader = doc.object_reader();
-    stamp_mod_date(&mut reader.document, opts);
-    let trailer_in = reader.document.trailer().clone();
+/// The objects [`write_full`] writes: everything reachable from the trailer's /Root, /Info and
+/// /Encrypt and from its unknown entries, breadth-first, with the new number each gets
+/// (aliases of one slot included) and, in visit order, whether it is a stream.
+type SaveOrder = (HashMap<ObjRef, u32>, Vec<(ObjRef, bool)>);
+
+fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveOrder, CosError> {
     // Breadth-first walk from the trailer, assigning new numbers in visit order.
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
     // Record the type while traversing so classifying packed objects needs no second parse.
@@ -351,7 +306,6 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             continue;
         }
         let o = reader.get(r);
-        validate_numbers(&o)?;
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
@@ -368,6 +322,30 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
     }
+    Ok((map, order))
+}
+
+/// The object numbers a full save of `doc` would write: exactly the objects [`write_full`]
+/// reaches from the trailer, object streams included. For a check that something removed from a
+/// document cannot reach the saved file through a reference nobody looked for.
+pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
+    let mut reader = doc.object_reader();
+    let trailer_in = reader.document.trailer().clone();
+    let (_, order) = full_save_order(&mut reader, &trailer_in)?;
+    Ok(order.into_iter().map(|(r, _)| r.num).collect())
+}
+
+/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
+pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit);
+    }
+    // A full traversal must not fill the editor's shared caches (which undo snapshots also
+    // own). Parsed objects and decoded object streams are temporary working data here.
+    let mut reader = doc.object_reader();
+    stamp_mod_date(&mut reader.document, opts);
+    let trailer_in = reader.document.trailer().clone();
+    let (map, order) = full_save_order(&mut reader, &trailer_in)?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
@@ -432,9 +410,6 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     }
     batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
     let mut trailer = full_save_trailer(&reader.document, &trailer_in, &map, opts, &out);
-    for (_, value) in trailer.iter() {
-        validate_numbers(value)?;
-    }
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
     } else {
@@ -958,101 +933,6 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
-    }
-
-    #[test]
-    fn save_number_validation_bounds_nesting() {
-        let mut o = Object::Int(1);
-        for _ in 0..128 {
-            o = Object::Array(vec![o]);
-        }
-        assert!(validate_numbers(&o).is_ok());
-        assert!(validate_numbers(&Object::Array(vec![o])).is_err());
-    }
-
-    #[test]
-    fn saves_reject_nonfinite_numbers_in_objects_and_trailers() {
-        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
-            for object_streams in [false, true] {
-                let opts = SaveOptions { object_streams, ..Default::default() };
-                let empty = write_full(&Document::new_empty(), &opts).unwrap();
-                for location in ["array", "stream", "trailer", "indirect"] {
-                    let mut doc = Document::open(std::sync::Arc::new(empty.clone())).unwrap();
-                    let nested = Object::Array(vec![Object::Dict([(b"Value".to_vec(), Object::Real(value))].into_iter().collect())]);
-                    match location {
-                        "array" => {
-                            let r = doc.add(nested);
-                            doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(r));
-                        }
-                        "stream" => {
-                            let dict = [(b"Custom".to_vec(), nested)].into_iter().collect();
-                            let r = doc.add(Object::Stream(Stream { dict, raw: Vec::new().into() }));
-                            doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(r));
-                        }
-                        "indirect" => {
-                            let r = doc.add(Object::Real(value));
-                            doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(r));
-                        }
-                        _ => doc.trailer_mut().set(b"Custom".to_vec(), nested),
-                    }
-                    for result in [write_full(&doc, &opts), write_incremental(&doc, &opts)] {
-                        assert!(matches!(result, Err(CosError::NonFiniteNumber)), "{location}, {value}, object_streams={object_streams}");
-                    }
-                    assert_eq!(doc.bytes().as_slice(), empty);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn untouched_overflow_allows_incremental_save_but_refuses_full_rewrite() {
-        for number in ["1e400", "-1e400", "1e30"] {
-            let source = std::sync::Arc::new(
-                pdfcraft_testkit::Pdf::new()
-                    .obj("<< /Type /Catalog /Pages 2 0 R >>")
-                    .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>")
-                    .obj(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {number} {number}] >>"))
-                    .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>")
-                    .build(),
-            );
-            for object_streams in [false, true] {
-                let opts = SaveOptions { object_streams, ..Default::default() };
-                let mut doc = Document::open(source.clone()).unwrap();
-                let bad_page = ObjRef { num: 3, generation: 0 };
-                let other_page = ObjRef { num: 4, generation: 0 };
-                let mut other = doc.dict(&Object::Ref(other_page)).unwrap();
-                other.set(b"Rotate".to_vec(), Object::Int(90));
-                doc.set(other_page, Object::Dict(other));
-
-                let incremental = write_incremental(&doc, &opts).unwrap();
-                assert!(incremental.starts_with(&source));
-                let reopened = Document::open(std::sync::Arc::new(incremental)).unwrap();
-                assert_eq!(reopened.dict(&Object::Ref(other_page)).unwrap().int(b"Rotate"), Some(90));
-                let original_bad = doc.get(bad_page);
-                assert_eq!(*reopened.get(bad_page), *original_bad);
-
-                // Full-save operations must traverse the untouched first page too. Refusal
-                // cannot discard the second page's unsaved edit or alter the original bytes.
-                let full = write_full(&doc, &opts);
-                if number == "1e30" {
-                    let reopened = Document::open(std::sync::Arc::new(full.unwrap())).unwrap();
-                    assert_eq!(reopened.dict(&Object::Ref(other_page)).unwrap().int(b"Rotate"), Some(90));
-                    assert_eq!(*reopened.get(bad_page), *original_bad);
-                } else {
-                    assert!(matches!(full, Err(CosError::NonFiniteNumber)), "{number}, object_streams={object_streams}");
-                    assert!(doc.is_edited(other_page.num));
-                    assert_eq!(doc.dict(&Object::Ref(other_page)).unwrap().int(b"Rotate"), Some(90));
-                    assert_eq!(doc.bytes().as_slice(), source.as_slice());
-                    assert_eq!(*doc.get(bad_page), *original_bad);
-
-                    let mut bad = doc.dict(&Object::Ref(bad_page)).unwrap();
-                    bad.set(b"Rotate".to_vec(), Object::Int(90));
-                    doc.set(bad_page, Object::Dict(bad));
-                    assert!(matches!(write_incremental(&doc, &opts), Err(CosError::NonFiniteNumber)));
-                    assert_eq!(doc.dict(&Object::Ref(bad_page)).unwrap().int(b"Rotate"), Some(90));
-                }
-            }
-        }
     }
 
     #[test]

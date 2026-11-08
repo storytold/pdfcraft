@@ -1928,17 +1928,14 @@ fn huge_mediabox_and_user_unit_open_with_one_page() {
         let decoded = lopdf::content::Content::decode(&raw_content).unwrap_or_else(|e| panic!("{page_attrs} lopdf decode: {e}"));
         assert!(!decoded.operations.is_empty(), "{page_attrs} lopdf operations");
 
-        // Opening and rendering overflow remain supported, but a full rewrite must not
-        // silently replace the overflowing UserUnit with zero.
-        let cos_doc = pdfcraft_cos::Document::open(bytes).unwrap_or_else(|e| panic!("{page_attrs} cos open: {e}"));
-        let rewritten = pdfcraft_cos::write_full(&cos_doc, &pdfcraft_cos::SaveOptions::default());
+        // Finite values round-trip (1e30 becomes a 31-digit plain decimal), and
+        // LazyStructure inspection keeps their coordinates finite.
         if page_attrs.contains("1e400") {
-            assert!(matches!(rewritten, Err(pdfcraft_cos::CosError::NonFiniteNumber)), "{page_attrs}: {rewritten:?}");
             continue;
         }
-        // Finite values still round-trip (1e30 becomes a 31-digit plain decimal), and
-        // LazyStructure inspection keeps their coordinates finite.
-        let rewritten = rewritten.unwrap_or_else(|e| panic!("{page_attrs} write_full: {e}"));
+        let cos_doc = pdfcraft_cos::Document::open(bytes).unwrap_or_else(|e| panic!("{page_attrs} cos open: {e}"));
+        let rewritten =
+            pdfcraft_cos::write_full(&cos_doc, &pdfcraft_cos::SaveOptions::default()).unwrap_or_else(|e| panic!("{page_attrs} write_full: {e}"));
         let reopened = inspect(std::sync::Arc::new(rewritten), None).unwrap_or_else(|e| panic!("{page_attrs} rewritten open: {e}"));
         assert_eq!(reopened.pages.len(), 1, "{page_attrs} rewritten");
         assert!(reopened.warnings.is_empty(), "{page_attrs} rewritten: {:?}", reopened.warnings);

@@ -30,7 +30,7 @@ pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
 };
-pub use writer::{SaveOptions, pdf_date, serialize, write_full, write_incremental};
+pub use writer::{SaveOptions, pdf_date, reachable_objects, serialize, write_full, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {
@@ -54,6 +54,4 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
-    #[error("cannot save a non-finite PDF number without changing its value; correct the overflowing or invalid number before saving")]
-    NonFiniteNumber,
 }
