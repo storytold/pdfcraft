@@ -106,8 +106,7 @@ pub(super) fn pages(
     // Escape remains with the panel after the pointer moves away.
     ui.memory_mut(|m| m.set_focus_lock_filter(focus_id, egui::EventFilter { escape: true, ..Default::default() }));
     // Escape drops the selection while the pointer is over the panel and nothing else wants the key.
-    if !modal
-        && !view.selected.is_empty()
+    if !view.selected.is_empty()
         && (owns_keyboard || !ui.ctx().egui_wants_keyboard_input())
         && (owns_keyboard || ui.rect_contains_pointer(ui.clip_rect()))
         && keys.take(ui.ctx(), egui::Key::Escape)
@@ -115,8 +114,7 @@ pub(super) fn pages(
         view.clear_page_selection(Some(view.current));
     }
     // Delete (or Backspace) deletes the selection, or the current page, likewise.
-    if !modal
-        && editable
+    if editable
         && (owns_keyboard || !ui.ctx().egui_wants_keyboard_input())
         && (owns_keyboard || ui.rect_contains_pointer(ui.clip_rect()))
         && (keys.take(ui.ctx(), egui::Key::Delete) || keys.take(ui.ctx(), egui::Key::Backspace))

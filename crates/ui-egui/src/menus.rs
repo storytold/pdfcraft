@@ -530,9 +530,6 @@ impl PdfCraftApp {
         let key = |key: egui::Key, modifiers: egui::Modifiers| {
             [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers })
         };
-        if matches!(command.id.as_str(), "edit.copy" | CUT | PASTE | SELECT_ALL | DELETE) {
-            self.menu_input_pass = Some(ctx.cumulative_pass_nr());
-        }
         match command.id.as_str() {
             "file.open_recent" if index.is_some() => {
                 if let Some(path) = index.and_then(|i| self.recent.get(i)).map(|r| r.path.clone()) {
@@ -546,7 +543,10 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+            PASTE => {
+                self.menu_paste_pass = Some(ctx.cumulative_pass_nr());
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),

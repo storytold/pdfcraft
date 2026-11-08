@@ -10811,6 +10811,21 @@ fn edit_select_all_from_the_menu_bar_selects_every_page() {
     assert_eq!(h.state().views[0].target_pages(), [0, 1, 2], "Edit ▸ Select all selected every page");
 }
 
+/// Edit ▸ Cut from the in-window menu bar cuts the selected page in Organize: its Cut comes on the
+/// next pass, while the bar still reads as open.
+#[test]
+fn edit_cut_from_the_menu_bar_cuts_the_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Cut").click();
+    h.run_steps(4);
+    assert!(h.state().page_clipboard.is_some(), "Edit ▸ Cut put the page on the clipboard");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2, "Edit ▸ Cut took the page out");
+}
+
 /// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The platform
 /// answers the menu's paste request on the next pass (kittest doesn't, so the test does), while
 /// the bar still reads as open, and the pages' clipboard dropped it.

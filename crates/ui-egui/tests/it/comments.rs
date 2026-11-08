@@ -4431,6 +4431,36 @@ fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
+/// A native menu's click (Edit ▸ Select all here) leaves egui's popups open, and its own keys
+/// are the pages' all the same. The user's next keys aren't: with the comment's context menu still
+/// open, Delete leaves the comment and an arrow leaves it where it is. For two passes after the
+/// command, as the app idles, both acted on it.
+#[test]
+fn keys_after_a_native_menu_command_with_a_context_menu_open_leave_the_comment() {
+    for key in [egui::Key::Delete, egui::Key::ArrowRight] {
+        let mut h = selected_square();
+        let before = comments(&h)[0].rect;
+        let p = at(&h, 90.0, 70.0);
+        h.hover_at(p);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.select_all"));
+        // The pass the click wakes, then the one its repaint asks for; the app idles after them.
+        h.step();
+        h.step();
+        assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is still open");
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "{key:?} with the comment's menu open deleted it");
+        assert_eq!(comments(&h)[0].rect, before, "{key:?} with the comment's menu open moved it");
+    }
+}
+
 /// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
 /// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
 /// which held every page key, H included.
