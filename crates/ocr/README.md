@@ -29,7 +29,7 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
 - **The tesseract process is fenced in.** The program comes from a user-configured location or
   the PATH, never from document data (the engine validates a configured path as an absolute
   path to an existing executable file before it is used). The language code is allow-listed
-  (`tesseract::language_code`, 12 codes) before anything reaches a process; the page image
+  (`tesseract::language_code`, 13 codes) before anything reaches a process; the page image
   goes to a private temp file (a fresh 0700 directory holding a 0600 file on Unix) that is
   deleted afterwards; the run has a 120 s timeout, a 64 MiB output cap and a 50 000-word
   reading cap (an incomplete reading is rejected rather than applied); every failure comes back through `OcrError` with its cause named. A configured
@@ -96,6 +96,10 @@ applies text corrections at the stored original boxes through its stale-document
 or discards the result. Empty corrections remove words. Searchable acceptance is one undo
 step; editable acceptance writes a separate file. `ocr_dictionary` reads or atomically
 updates the UI's per-language dictionary format through an explicitly root-confined path.
+
+Thai is read by an installed Tesseract alone, with its `tha` data; the engine refuses it on the
+built-in models rather than reading it as Latin letters. The `tha` data reports nearly every letter
+as a word, so `TesseractCli` rejoins each line into words and composes sara am (U+0E33).
 
 Not yet: languages beyond the tested set (the `ocrs` models read only unaccented Latin; the
 Tesseract side is bounded by its allow-list and whatever its installed language packs cover),

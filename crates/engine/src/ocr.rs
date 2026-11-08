@@ -14,14 +14,23 @@ use std::time::{Duration, Instant};
 use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
-pub use pdfcraft_ocr::{
-    ConfidenceBand, LANGUAGES, MergeStrategy, Models, Ocr, OcrError, PlacedWord, Recognizer, band_for, is_suspect, low_confidence,
-};
+pub use pdfcraft_ocr::{ConfidenceBand, MergeStrategy, Models, Ocr, OcrError, PlacedWord, Recognizer, band_for, is_suspect, low_confidence};
 
 use crate::{DocId, Edit, EditError, Session};
 
 pub mod dictionary;
 pub(crate) mod layer;
+
+/// The document languages a job can ask for, as `(code, English name)`. The built-in models read
+/// only the unaccented Latin alphabet ([`pdfcraft_ocr::LANGUAGES`]); the others are read by an
+/// installed Tesseract with that language's data ([`needs_tesseract`]).
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("th", "Thai")];
+
+/// Whether only Tesseract can read `language`. Such a job never goes to the built-in models: they
+/// would read the page as Latin letters and report it as a success.
+pub fn needs_tesseract(language: &str) -> bool {
+    LANGUAGES.iter().any(|l| l.0 == language) && !pdfcraft_ocr::LANGUAGES.iter().any(|l| l.0 == language)
+}
 
 /// Bound recognition/review inputs before cloning or planning glyphs.
 pub fn validate_ocr_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>) -> Result<usize, String> {
@@ -107,7 +116,8 @@ impl OutputMode {
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`LANGUAGES`]. The models read the Latin alphabet, whatever this says,
+    /// so a language they cannot read goes to Tesseract ([`needs_tesseract`]).
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
@@ -524,6 +534,17 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     let configured = configured_tesseract(settings);
     let tesseract =
         if matches!(settings.engine, EngineChoice::Tesseract | EngineChoice::Auto) { tesseract_engine(configured.as_deref()) } else { None };
+    if needs_tesseract(&settings.language) {
+        if settings.engine == EngineChoice::Ocrs {
+            return Err(built_in_language_refused());
+        }
+        // No ensemble: the built-in reading of this language would be noise for the merge to adopt.
+        let primary = tesseract.ok_or_else(tesseract_unavailable)?;
+        return match missing_language_data(primary.as_ref(), &settings.language) {
+            Some(why) => Err(why),
+            None => Ok(Recognizers { primary, secondary: None }),
+        };
+    }
     static ENGINES: Mutex<Option<EngineCache>> = Mutex::new(None);
     let mut slot = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
     let cache = slot.get_or_insert_with(|| EngineCache { ocrs: None });
@@ -553,6 +574,25 @@ fn tesseract_unavailable() -> String {
 #[cfg(target_arch = "wasm32")]
 fn tesseract_unavailable() -> String {
     "the tesseract engine is not available in the web build".into()
+}
+
+/// Why the built-in engine cannot read a language [`needs_tesseract`] names.
+fn built_in_language_refused() -> String {
+    "the built-in engine reads only English; choose Tesseract for this language".into()
+}
+
+/// Why an installed Tesseract cannot read `language`: its data file is not installed.
+#[cfg(not(target_arch = "wasm32"))]
+fn missing_language_data(engine: &dyn Recognizer, language: &str) -> Option<String> {
+    let data = pdfcraft_ocr::tesseract::language_code(language);
+    (!engine.languages().iter().any(|(code, _)| code == data))
+        .then(|| format!("tesseract has no {data} language data (install its {data} language pack)"))
+}
+
+/// The web build has no Tesseract, so nothing reaches this.
+#[cfg(target_arch = "wasm32")]
+fn missing_language_data(_engine: &dyn Recognizer, _language: &str) -> Option<String> {
+    None
 }
 
 /// Why the ocrs engine cannot run, in the end-user wording the UI catalogs translate (the
@@ -601,6 +641,28 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
             (false, Err(why)) => Some(format!("{}; {why}", models_missing())),
         },
     }
+}
+
+/// Why `engine` cannot read `language`, when [`engine_unavailable_reason`] has no objection to the
+/// engine itself. Like it, this never waits for a process.
+pub fn language_unavailable_reason(engine: EngineChoice, language: &str) -> Option<String> {
+    if !needs_tesseract(language) {
+        return None;
+    }
+    if engine == EngineChoice::Ocrs {
+        return Some(built_in_language_refused());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
+        match tesseract_engine_now(configured.as_deref()) {
+            Probe::Known(Some(t)) => missing_language_data(t.as_ref(), language),
+            Probe::Known(None) => Some(tesseract_unavailable()),
+            Probe::Pending => Some(tesseract_checking()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    Some(tesseract_unavailable())
 }
 
 /// Why Tesseract cannot be chosen yet: its probe is still running in the background.
@@ -1542,6 +1604,51 @@ mod tests {
         let wants = OcrSettings { engine: EngineChoice::Tesseract, tesseract_path: Some(program), ..Default::default() };
         let _ = recognizers(&wants);
         assert!(marker.exists(), "a tesseract job probes its program");
+    }
+
+    /// Thai is offered, and is Tesseract's alone; English and unknown codes keep their engines.
+    #[test]
+    fn thai_needs_tesseract() {
+        assert!(LANGUAGES.iter().any(|l| l.0 == "th"));
+        assert!(needs_tesseract("th"));
+        assert!(!needs_tesseract("en"));
+        assert!(!needs_tesseract("klingon"));
+    }
+
+    /// The built-in engine refuses Thai by name instead of reading it as Latin letters, and it
+    /// does so without starting a process.
+    #[test]
+    fn the_built_in_engine_refuses_thai() {
+        let thai = OcrSettings { engine: EngineChoice::Ocrs, language: "th".into(), ..Default::default() };
+        assert!(recognizers(&thai).err().is_some_and(|e| e.contains("Tesseract")));
+        assert!(language_unavailable_reason(EngineChoice::Ocrs, "th").is_some_and(|e| e.contains("Tesseract")));
+        assert_eq!(language_unavailable_reason(EngineChoice::Ocrs, "en"), None);
+    }
+
+    /// Thai needs Tesseract's `tha` data: with it Automatic is Tesseract alone (no built-in
+    /// ensemble partner); without it the job is refused naming the data, whichever engine is chosen.
+    #[cfg(unix)]
+    #[test]
+    fn thai_uses_tesseract_alone_and_names_missing_data() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = |name: &str, langs: &str| {
+            let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-thai-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let program = dir.join("fake-tesseract");
+            std::fs::write(&program, format!("#!/bin/sh\nprintf 'List of available languages (2):\\n{langs}'\n")).unwrap();
+            let mut perms = std::fs::metadata(&program).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&program, perms).unwrap();
+            program.to_string_lossy().into_owned()
+        };
+        let auto = |program| OcrSettings { engine: EngineChoice::Auto, language: "th".into(), tesseract_path: Some(program), ..Default::default() };
+
+        let r = recognizers(&auto(fake("with", "eng\\ntha\\n"))).unwrap();
+        assert_eq!(r.primary.id(), "tesseract");
+        assert!(r.secondary.is_none(), "no built-in partner for Thai");
+
+        let e = recognizers(&auto(fake("without", "eng\\n"))).err().unwrap();
+        assert!(e.contains("tha language data"), "{e}");
     }
 
     /// A fake engine for the batch skip logic: reads one confident word from anything, counts

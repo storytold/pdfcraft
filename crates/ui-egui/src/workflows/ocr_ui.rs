@@ -361,10 +361,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         };
         ui.label(egui::RichText::new(text).small().color(t.text_muted));
         ui.add_space(6.0);
+    } else if let Some(why) = pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language) {
+        ui.label(egui::RichText::new(crate::i18n::t(&why).to_string()).small().color(t.text_muted));
+        ui.add_space(6.0);
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none()
+        && pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language).is_none();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
@@ -412,7 +416,9 @@ impl PdfCraftApp {
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
         let mut settings = self.ocr_draft.settings();
-        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some() {
+        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some()
+            || pdfcraft_engine::ocr::language_unavailable_reason(settings.engine, &settings.language).is_some()
+        {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
