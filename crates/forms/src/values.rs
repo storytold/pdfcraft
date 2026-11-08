@@ -206,6 +206,11 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
             }
+            // Thai this build can't draw is refused (before any script runs), rather than stored
+            // and drawn as `?`.
+            if let Some(why) = appearance::thai_refusal(doc, f, t) {
+                return invalid(format!("{:?} can't take this text: {why}", f.name));
+            }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
@@ -447,12 +452,29 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     };
     let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     let mut undrawn = false;
+    // The Format script again with English month and weekday names, once, for widgets whose
+    // fonts can't draw the date language's (#5303).
+    let mut english: Option<Option<String>> = None;
     for w in &f.widgets {
-        let (stream, missing) = match &shown {
-            Some(s) => appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false),
+        let (mut stream, missing) = match &shown {
+            Some(s) => {
+                let drawn = appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false);
+                // Taken when the English run happened and draws whole, even where it is the
+                // stored value ("18-Oct-26" printed again from itself).
+                let again = match (&drawn.1, values) {
+                    (Some(_), [one]) => english.get_or_insert_with(|| scripting::formatted_in_english(doc, f, one, scripts)).as_ref(),
+                    _ => None,
+                };
+                match again.map(|e| appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(e), false)) {
+                    Some(english) if english.1.is_none() => english,
+                    _ => drawn,
+                }
+            }
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
+        // Thai glyphs are streams of their own.
+        pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
         let existing_ap = in_place
             .then(|| {
                 doc.get(w.obj)

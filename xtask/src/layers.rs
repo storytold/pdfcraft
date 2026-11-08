@@ -45,6 +45,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ops", Class::Layer(2)),
     // L3 core services
     ("render", Class::Layer(3)),
+    ("prc-render", Class::Layer(3)),
     ("text", Class::Layer(3)),
     ("annot", Class::Layer(3)),
     ("forms", Class::Layer(3)),
@@ -89,6 +90,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("pdfcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    ("ocr-worker", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 
@@ -355,7 +357,7 @@ mod tests {
 
     #[test]
     fn apps_exempt() {
-        for app in ["pdfcraft", "pdfcraft-cli", "pdfcraft-web", "xtask"] {
+        for app in ["pdfcraft", "pdfcraft-cli", "pdfcraft-web", "pdfcraft-ocr-worker", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("pdfcraft-ui-egui", Normal, true)])]).is_empty());
         }
     }

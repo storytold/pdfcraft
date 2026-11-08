@@ -1,20 +1,47 @@
 //! Appearance streams (§12.5.5) for the comment types PdfCraft creates, execution plan M5.2.
 //!
-//! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary alone, so the
-//! same code serves new comments and restyled ones. Drawings are in page space with
+//! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary and the
+//! objects it points at, so the same code serves new comments and restyled ones. Drawings are in page space with
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
-//! endings, indirect geometry), so callers never replace an appearance with a worse one.
+//! endings), so callers never replace an appearance with a worse one.
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! Helvetica font with WinAnsi encoding, and draw Thai from the craft-fonts Thai face as Type 3
+//! glyphs (`pdfcraft_fonts::shaped_text`, the writer Add text uses); line breaking uses
+//! [`text_width`], the standard-14 metrics and the Thai face's shaped advances.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+use pdfcraft_fonts::shaped_text;
+use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, win_ansi, wrap_with};
 
-use crate::{NOTE_SIZE, Rgb, n};
+/// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
+/// face that text boxes draw it with.
+pub fn text_width(text: &str, size: f64) -> f64 {
+    shaped_text::thai_width(text, size, helvetica_width)
+}
+
+/// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    wrap_with(text, size, width, text_width)
+}
+
+/// How far a text box's `lines` reach, in em: above the first baseline (0.9 of the 1.2 em line)
+/// and below the last (0.3), or further where Thai stacked marks or descenders reach, so the box
+/// is sized to their ink and doesn't clip them.
+fn reach(lines: &[String]) -> [f64; 2] {
+    let ink = |line: Option<&String>| line.and_then(|l| shaped_text::thai_reach(l));
+    [ink(lines.first()).map_or(0.9, |r| r[1].max(0.9)), ink(lines.last()).map_or(0.3, |r| (-r[0]).max(0.3))]
+}
+
+/// The height a text box's `lines` take at `size`, inside its padding: 1.2 em a line, and more
+/// for Thai that reaches further ([`reach`]).
+pub fn text_lines_height(lines: &[String], size: f64) -> f64 {
+    let [up, down] = reach(lines);
+    lines.len().max(1) as f64 * size * 1.2 + (up - 0.9 + down - 0.3) * size
+}
+
+use crate::{Document, NOTE_SIZE, Rgb, n};
 
 mod symbols;
 
@@ -166,6 +193,18 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
 }
 
+/// The usable `/QuadPoints` quads, by the rule redaction apply reads them with
+/// ([`pdfcraft_geom::quad_points::usable_quads`]): a malformed or non-finite quad is not drawn (it
+/// would write `NaN` into the stream) and the others still are. The array and its entries are
+/// resolved first, as the other readers resolve them, so an indirect quad is drawn too. `None`
+/// when none is usable.
+fn quads(context: &AppearanceContext<'_>) -> Option<Vec<[f64; 8]>> {
+    let doc = context.doc;
+    let q =
+        pdfcraft_geom::quad_points::usable_quads(doc.resolve(context.dict.get(b"QuadPoints")?).as_array()?.iter().map(|x| doc.resolve(x).as_f64()));
+    (!q.is_empty()).then_some(q)
+}
+
 /// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
 fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     let c = match d.get(key) {
@@ -232,6 +271,31 @@ fn rg_stroke(c: Rgb) -> String {
     format!("{} {} {} RG\n", n(c[0]), n(c[1]), n(c[2]))
 }
 
+/// A FreeText's border colour where it has its own: the stroking colour in `/DA` (`RG`, or `G`
+/// for grey). `None`: the border takes the text colour.
+pub fn da_border(d: &Dict) -> Option<Rgb> {
+    let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned())?;
+    let toks: Vec<&str> = da.split_whitespace().collect();
+    let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok()).filter(|x| x.is_finite());
+    let mut col = None;
+    for (i, t) in toks.iter().enumerate() {
+        match *t {
+            "RG" if i >= 3 => {
+                if let (Some(r), Some(g), Some(b)) = (num(i - 3), num(i - 2), num(i - 1)) {
+                    col = Some([r, g, b].map(|x| x.clamp(0.0, 1.0)));
+                }
+            }
+            "G" if i >= 1 => {
+                if let Some(g) = num(i - 1) {
+                    col = Some([g.clamp(0.0, 1.0); 3]);
+                }
+            }
+            _ => {}
+        }
+    }
+    col
+}
+
 /// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt.
 pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
@@ -262,19 +326,47 @@ pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     (col.map(|x| x.clamp(0.0, 1.0)), size.min(400.0))
 }
 
-fn ext_gstate(opacity: f64, multiply: bool) -> Option<Dict> {
-    if opacity >= 1.0 && !multiply {
+/// How opaque a comment's parts are drawn, 0–1: its line or border (`/CA`); its fill or
+/// background (`/ca`, which PDF 2.0 gives the non-stroking operations; without it, as the line);
+/// and a text box's text (`/PCTextOpacity`, PdfCraft's own; without it, as the fill, since text
+/// is filled too). A comment with only `/CA` is drawn at that opacity throughout, as before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartOpacity {
+    pub line: f64,
+    pub fill: f64,
+    pub text: f64,
+}
+
+/// The parts' opacities of the comment `d` (see [`PartOpacity`]).
+pub fn part_opacity(d: &Dict) -> PartOpacity {
+    let get = |key: &[u8]| d.get(key).and_then(|o| o.as_f64()).filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0));
+    let line = get(b"CA").unwrap_or(1.0);
+    let fill = get(b"ca").unwrap_or(line);
+    let text = get(b"PCTextOpacity").unwrap_or(fill);
+    PartOpacity { line, fill, text }
+}
+
+/// `/GS0`: the line's opacity for strokes and the fill's for everything filled; `/GS1`, where the
+/// text's differs from the fill's: the text's for its glyphs.
+fn ext_gstate(parts: PartOpacity, multiply: bool) -> Option<Dict> {
+    if parts.line >= 1.0 && parts.fill >= 1.0 && parts.text >= 1.0 && !multiply {
         return None;
     }
-    let mut gs = Dict::new();
-    gs.set(b"Type".to_vec(), Object::name("ExtGState"));
-    if multiply {
-        gs.set(b"BM".to_vec(), Object::name("Multiply"));
-    }
-    gs.set(b"CA".to_vec(), Object::Real(opacity));
-    gs.set(b"ca".to_vec(), Object::Real(opacity));
+    let gs = |stroke: f64, fill: f64| {
+        let mut gs = Dict::new();
+        gs.set(b"Type".to_vec(), Object::name("ExtGState"));
+        if multiply {
+            gs.set(b"BM".to_vec(), Object::name("Multiply"));
+        }
+        gs.set(b"CA".to_vec(), Object::Real(stroke));
+        gs.set(b"ca".to_vec(), Object::Real(fill));
+        Object::Dict(gs)
+    };
     let mut res = Dict::new();
-    res.set(b"GS0".to_vec(), Object::Dict(gs));
+    res.set(b"GS0".to_vec(), gs(parts.line, parts.fill));
+    if parts.text != parts.fill {
+        res.set(b"GS1".to_vec(), gs(parts.line, parts.text));
+    }
     Some(res)
 }
 
@@ -313,19 +405,29 @@ fn stamp_turn(d: &Dict) -> i64 {
 
 /// The page `/Rotate` a text box's or Fill & Sign text's lines are turned back by
 /// (`/PCTextRotate`, written when it is added to a turned page).
-fn text_turn(d: &Dict) -> i64 {
+pub(crate) fn text_turn(d: &Dict) -> i64 {
     d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
+}
+
+/// A FreeText's `/RD`: how far its text box lies inside `/Rect` from the left, bottom, right and
+/// top. A distance a hair below 0 (rounding) reads as 0; `None` when one is negative or they can't
+/// be read.
+pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
+    let rd: [f64; 4] = nums(d, b"RD")?.try_into().ok()?;
+    rd.iter().all(|x| x.is_finite() && *x > -0.001).then(|| rd.map(|x| x.max(0.0)))
 }
 
 /// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
 /// they can't, which would come out as `?`: what it is (for the message) and the character. The
-/// text of a text box, callout or Fill & Sign text, a line's caption, a measurement's label, a
+/// text of a text box, callout or Fill & Sign text (whose Thai the Thai face draws, where this
+/// build has one), a line's caption, a measurement's label, a
 /// dynamic stamp's "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
 /// it can be drawn.
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
+        // A text box draws Thai too.
+        b"FreeText" => return Some(("the comment's text", shaped_text::first_undrawable(&text(b"Contents")?)?)),
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
@@ -338,6 +440,11 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
 pub(crate) fn helvetica_resource() -> Object {
+    Object::Dict(helvetica_fonts())
+}
+
+/// [`helvetica_resource`]'s dictionary.
+fn helvetica_fonts() -> Dict {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
@@ -345,7 +452,7 @@ pub(crate) fn helvetica_resource() -> Object {
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let mut fonts = Dict::new();
     fonts.set(b"Helv".to_vec(), Object::Dict(font));
-    Object::Dict(fonts)
+    fonts
 }
 
 /// Where a caret and its paragraph symbol go within `rect`: the box the caret is drawn in, and for
@@ -387,11 +494,14 @@ fn caret_layout(d: &Dict, rect: [f64; 4]) -> ([f64; 4], Option<(f64, f64, f64)>)
 
 #[derive(Clone, Copy)]
 struct AppearanceContext<'a> {
+    doc: &'a Document,
     dict: &'a Dict,
     subtype: &'a [u8],
     rect: [f64; 4],
     cloudy: bool,
+    /// The line's opacity (`parts.line`).
     opacity: f64,
+    parts: PartOpacity,
     stroke: Option<Rgb>,
     width: f64,
 }
@@ -408,7 +518,7 @@ impl AppearanceDrawing {
     fn new(context: &AppearanceContext<'_>) -> Self {
         let mut drawing = Self::default();
         if let Some(gs) = ext_gstate(
-            context.opacity,
+            context.parts,
             context.subtype == b"Highlight" || (context.subtype == b"Ink" && context.dict.name(b"IT") == Some(b"FreehandHighlight")),
         ) {
             drawing.resources.set(b"ExtGState".to_vec(), Object::Dict(gs));
@@ -421,8 +531,8 @@ impl AppearanceDrawing {
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
-pub fn build(d: &Dict) -> Option<Stream> {
-    let context = appearance_context(d)?;
+pub fn build(doc: &Document, d: &Dict) -> Option<Stream> {
+    let context = appearance_context(doc, d)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
@@ -436,7 +546,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
     finish_appearance(&context, drawing)
 }
 
-fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
+fn appearance_context<'a>(doc: &'a Document, d: &'a Dict) -> Option<AppearanceContext<'a>> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
@@ -451,11 +561,13 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         return None;
     }
     Some(AppearanceContext {
+        doc,
         dict: d,
         subtype,
         rect,
         cloudy,
-        opacity: d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0),
+        opacity: part_opacity(d).line,
+        parts: part_opacity(d),
         stroke: color(d, b"C")?,
         width: border_width(d),
     })
@@ -497,13 +609,12 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
 }
 
 fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
-    let d = context.dict;
     let subtype = context.subtype;
     let stroke = context.stroke;
     let c = &mut drawing.content;
-    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+    let q = quads(context)?;
     let col = stroke?;
-    for quad in q.as_chunks::<8>().0.iter() {
+    for quad in q.iter() {
         let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
         let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
         let h = (p1.0 - p3.0).hypot(p1.1 - p3.1);
@@ -544,14 +655,13 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
 }
 
 fn draw_redaction(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
-    let d = context.dict;
     let stroke = context.stroke;
     let c = &mut drawing.content;
     // While marked: the outline of each area (the fill comes when applied).
-    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+    let q = quads(context)?;
     let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
     c.push_str(&format!("{}1 w\n", rg_stroke(col)));
-    for quad in q.as_chunks::<8>().0.iter() {
+    for quad in q.iter() {
         c.push_str(&format!(
             "{} {} m {} {} l {} {} l {} {} l h S\n",
             n(quad[0]),
@@ -845,46 +955,25 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     let [x0, y0, x1, y1] = draw;
     let (w, h) = (x1 - x0, y1 - y0);
     let lw = w.min(h) * 0.12;
+    // The strokes come from `FillMark::strokes`, which a copy's outline draws too.
+    let path = |mark: crate::FillMark| {
+        let ops: Vec<String> = mark
+            .strokes(draw)
+            .iter()
+            .flat_map(|s| s.iter().enumerate().map(|(i, p)| format!("{} {} {}", n(p[0]), n(p[1]), if i == 0 { "m" } else { "l" })))
+            .collect();
+        format!("{} S\n", ops.join(" "))
+    };
     match name {
-        b"PCCheck" => c.push_str(&format!(
-            "{}{} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
-            rg_stroke(col),
-            n(lw),
-            n(x0 + w * 0.15),
-            n(y0 + h * 0.5),
-            n(x0 + w * 0.4),
-            n(y0 + h * 0.2),
-            n(x0 + w * 0.88),
-            n(y0 + h * 0.85)
-        )),
-        b"PCCross" => c.push_str(&format!(
-            "{}{} w 1 J\n{} {} m {} {} l {} {} m {} {} l S\n",
-            rg_stroke(col),
-            n(lw),
-            n(x0 + w * 0.18),
-            n(y0 + h * 0.18),
-            n(x1 - w * 0.18),
-            n(y1 - h * 0.18),
-            n(x0 + w * 0.18),
-            n(y1 - h * 0.18),
-            n(x1 - w * 0.18),
-            n(y0 + h * 0.18)
-        )),
+        b"PCCheck" => c.push_str(&format!("{}{} w 1 J 1 j\n{}", rg_stroke(col), n(lw), path(crate::FillMark::Check))),
+        b"PCCross" => c.push_str(&format!("{}{} w 1 J\n{}", rg_stroke(col), n(lw), path(crate::FillMark::Cross))),
         b"PCDot" => {
             let r = w.min(h) * 0.3;
             c.push_str(&rg(col));
             c.push_str(&ellipse(x0 + w / 2.0 - r, y0 + h / 2.0 - r, x0 + w / 2.0 + r, y0 + h / 2.0 + r));
             c.push_str("f\n");
         }
-        b"PCLine" => c.push_str(&format!(
-            "{}{} w 1 J\n{} {} m {} {} l S\n",
-            rg_stroke(col),
-            n(h.clamp(0.5, 2.0)),
-            n(x0),
-            n(y0 + h / 2.0),
-            n(x1),
-            n(y0 + h / 2.0)
-        )),
+        b"PCLine" => c.push_str(&format!("{}{} w 1 J\n{}", rg_stroke(col), n(h.clamp(0.5, 2.0)), path(crate::FillMark::Line))),
         other => {
             // Only stamps PdfCraft made: others keep their own artwork.
             if !matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) {
@@ -902,14 +991,59 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     Some(form(rect, c.as_bytes(), res))
 }
 
+/// The oval or circle (`shape`) around a text box whose whole box is `full`: its background
+/// and border go into `c`; returns the text box inside it.
+#[allow(clippy::too_many_arguments)]
+fn shaped_border(
+    d: &Dict,
+    shape: crate::BorderShape,
+    full: [f64; 4],
+    turn: i64,
+    bw: f64,
+    bg: Option<Rgb>,
+    line_color: Rgb,
+    c: &mut String,
+) -> Option<[f64; 4]> {
+    // Laid out as displayed: a quarter turn swaps the sides' differences.
+    let rect = match inset(d) {
+        Some(rd) => {
+            let (dx, dy) = if matches!(turn, 90 | 270) { (rd[1], rd[0]) } else { (rd[0], rd[1]) };
+            [full[0] + dx, full[1] + dy, full[2] - dx, full[3] - dy]
+        }
+        None => shape.inside(full, bw, full),
+    };
+    if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+        return None;
+    }
+    let h = bw / 2.0;
+    let [x0, y0, x1, y1] = [full[0] + h, full[1] + h, full[2] - h, full[3] - h];
+    let path = match shape {
+        crate::BorderShape::Circle => {
+            let (cx, cy, r) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0).min(y1 - y0) / 2.0);
+            ellipse(cx - r, cy - r, cx + r, cy + r)
+        }
+        _ => ellipse(x0, y0, x1, y1),
+    };
+    if let Some(bg) = bg {
+        c.push_str(&format!("{}{path}f\n", rg(bg)));
+    }
+    if bw > 0.0 {
+        c.push_str(&format!("{}{} w\n{}{path}S\n[] 0 d\n", rg_stroke(line_color), n(bw), dash(d)));
+    }
+    Some(rect)
+}
+
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
     let d = context.dict;
+    let parts = context.parts;
     let rect = context.rect;
     let stroke = context.stroke;
     let mut c = std::mem::take(&mut drawing.content);
     let mut res = std::mem::take(&mut drawing.resources);
     let _tail = std::mem::take(&mut drawing.tail);
     let (text_color, size) = parse_da(d);
+    // The box's border and a callout's leader line: their own colour, else the text's.
+    let line_color = da_border(d).unwrap_or(text_color);
     let bg = stroke;
     let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
     // A callout: the leader line (arrowhead at its first point), and the text box inside
@@ -948,7 +1082,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         if pts.len() < 2 || pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
             return None;
         }
-        c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
+        c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
         for (i, p) in pts.iter().enumerate() {
             c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
         }
@@ -957,26 +1091,40 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             return None;
         }
     }
-    if let Some(bg) = bg {
-        c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
-    }
-    if bw > 0.0 {
-        let h = bw / 2.0;
-        c.push_str(&format!(
-            "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
-            rg_stroke(text_color),
-            n(bw),
-            dash(d),
-            n(rect[0] + h),
-            n(rect[1] + h),
-            n(rect[2] - rect[0] - bw),
-            n(rect[3] - rect[1] - bw)
-        ));
+    // An oval or a circle (`/PCBorderShape`) around the text box, which is `/Rect` inset by
+    // `/RD` and keeps its place: background and border take the shape, the text is laid out
+    // in the text box as in a rectangle.
+    let shape = crate::BorderShape::of(d);
+    if shape != crate::BorderShape::Rectangle {
+        rect = shaped_border(d, shape, full, turn, bw, bg, line_color, &mut c)?;
+    } else {
+        if let Some(bg) = bg {
+            c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
+        }
+        if bw > 0.0 {
+            let h = bw / 2.0;
+            c.push_str(&format!(
+                "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
+                rg_stroke(line_color),
+                n(bw),
+                dash(d),
+                n(rect[0] + h),
+                n(rect[1] + h),
+                n(rect[2] - rect[0] - bw),
+                n(rect[3] - rect[1] - bw)
+            ));
+        }
     }
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
-    let q = d.int(b"Q").unwrap_or(0);
+    // In an oval or a circle the lines are centred in the text box, up and down too.
+    let round = shape != crate::BorderShape::Rectangle;
+    let q = if round { 1 } else { d.int(b"Q").unwrap_or(0) };
+    // The text at its own opacity, where it has one.
+    if parts.text != parts.fill {
+        c.push_str("/GS1 gs\n");
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),
@@ -987,24 +1135,32 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         rg(text_color)
     ));
     let mut out = c.into_bytes();
-    let mut y = rect[3] - pad - size * 0.9;
-    for line in wrap(&text, size, width) {
+    let lines = wrap(&text, size, width);
+    let mut y = rect[3] - pad - size * reach(&lines)[0];
+    if round {
+        y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
+    }
+    // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
+    // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
+    // `?`, which `undrawable_text` reports), in Helvetica.
+    let mut fonts = helvetica_fonts();
+    let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
+    let mut current = None;
+    for pieces in &pieces {
         if y < rect[1] - size {
             break;
         }
-        let lw = text_width(&line, size);
+        let lw = shaped_text::pieces_width(pieces, size, 0.0, helvetica_width);
         let x = match q {
             1 => rect[0] + pad + (width - lw) / 2.0,
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        out.extend(literal(&win_ansi(&line)));
-        out.extend_from_slice(b" Tj\n");
+        shaped.show_line(&mut out, pieces, x, y, size, "Helv", win_ansi, |s| helvetica_width(s, size), &mut current);
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
-    res.set(b"Font".to_vec(), helvetica_resource());
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
