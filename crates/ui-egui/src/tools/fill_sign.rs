@@ -1299,6 +1299,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        draft.poll(&mut result, &ctx);
         assert!(draft.worker.running.is_none(), "replacement cleanup did not finish");
         assert_eq!(result, Some(source));
         assert!(draft.problem.is_none());
