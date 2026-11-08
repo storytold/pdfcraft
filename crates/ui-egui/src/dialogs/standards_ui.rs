@@ -48,12 +48,17 @@ impl PdfCraftApp {
     }
 }
 
+/// A declared PDF/A part and conformance as people write it: (2, "B") is "PDF/A-2b".
+pub(crate) fn pdfa_name(part: u8, conformance: &str) -> String {
+    format!("PDF/A-{part}{}", conformance.to_lowercase())
+}
+
 /// Returns `true` to close.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("PDF/A").font(theme::semibold(18.0)));
     ui.add_space(6.0);
     let declared = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.standards()).unwrap_or_default();
-    let mut standards: Vec<String> = declared.pdfa.iter().map(|(p, c)| format!("PDF/A-{p}{}", c.to_lowercase())).collect();
+    let mut standards: Vec<String> = declared.pdfa.iter().map(|(p, c)| pdfa_name(*p, c)).collect();
     standards.extend(declared.pdfua.map(|p| format!("PDF/UA-{p}")));
     let shown = if standards.is_empty() { tl!("none").to_string() } else { standards.join(", ") };
     let removal = pdfcraft_engine::Edit::RemoveStandardId { standard: pdfcraft_engine::Standard::PdfA };
