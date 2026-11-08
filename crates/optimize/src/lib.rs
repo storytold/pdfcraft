@@ -146,9 +146,22 @@ pub struct MonoSettings {
     pub target_ppi: f64,
     pub above_ppi: f64,
     pub compression: MonoCompression,
-    /// Binarize pristine near-bilevel scanned text (≥98% extreme levels, ≤0.5% midtones) to
-    /// 1-bit mono (compressed with [`MonoCompression`], typically CCITT Group 4 or JBIG2).
-    /// Scans with faint content, midtones, or ambiguous histograms are left unconverted.
+    /// Whether to binarize pristine near-bilevel scanned text (8-bit DeviceGray or DeviceRGB)
+    /// to 1-bit monochrome (compressed with [`MonoCompression`], typically CCITT Group 4 or JBIG2).
+    ///
+    /// This is an opt-in lossy optimization (default `false` in [`MonoSettings::REDUCE`]). It uses
+    /// conservative multi-stage guards to ensure no photos, color content, faint handwriting, or
+    /// prepress assets are degraded:
+    /// - **Pristine bilevel threshold**: requires ≥98% of pixels in extreme levels (dark text ≤65,
+    ///   bright paper ≥215), ≤0.5% in midtones (66..=214), at least 0.5% dark text, and at least
+    ///   50% paper-bright background.
+    /// - **Chroma Guard (RGB)**: rejects any image with colored content (chroma > 30 anywhere, or
+    ///   chroma > 10 for ink/content with luminance < 225, protecting colored seals, signatures,
+    ///   and highlighters while tolerating yellowed or aged paper backgrounds).
+    /// - **Content-Loss Guard**: clamps Otsu's threshold to 100..=180 and rejects if >0.05% of
+    ///   pixels fall in `[threshold..215)` to avoid bleaching faint pencil strokes or light text.
+    /// - **Prepress & structural safety**: strictly skips images with `/SMask`, `/SMaskInData`,
+    ///   `/OPI`, non-identity `/Decode`, or page-level default color spaces.
     pub binarize_scans: bool,
 }
 

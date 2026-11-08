@@ -992,32 +992,12 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     }
 
     // -------------------------------------------------------------
-    // GUARD 1: CHROMA GUARD (Only applies to RGB, n == 3)
+    // COMBINED CHROMA & BIMODAL HISTOGRAM GUARD (Pass 1)
     // Inspects ink/content pixels (lum < 225) to avoid false rejections
     // on slightly aged or yellowed scan paper, while strictly rejecting
     // any bright colored pixels (highlighters, stamps, colored ink).
-    // -------------------------------------------------------------
-    if n == 3 {
-        for row in samples.chunks(row_len).take(h) {
-            let row_pixels = row.get(..w.checked_mul(3)?)?;
-            for chunk in row_pixels.as_chunks::<3>().0 {
-                let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-                let lum = ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8;
-                let max_c = r.max(g).max(b);
-                let min_c = r.min(g).min(b);
-                let chroma = max_c - min_c;
-                if chroma > BRIGHT_CHROMA_LIMIT || (lum < 225 && chroma > CHROMA_TOLERANCE) {
-                    // Color detail detected! Immediately reject to preserve color appearance.
-                    return None;
-                }
-            }
-        }
-    }
-
-    // -------------------------------------------------------------
-    // GUARD 2: BIMODAL HISTOGRAM GUARD
-    // Fully partitions all 256 luminance levels (0..=65 dark, 66..=214 mid,
-    // 215..=255 bright) so faint pencil or midtone strokes cannot hide.
+    // Concurrently builds the luminance histogram and early-exits
+    // if midtones exceed 0.5% of total pixels.
     // -------------------------------------------------------------
     let mut hist = [0u32; 256];
     let mut dark = 0usize;
@@ -1027,15 +1007,34 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     for row in samples.chunks(row_len).take(h) {
         let row_pixels = row.get(..w.checked_mul(n)?)?;
         for chunk in row_pixels.chunks_exact(n) {
-            let lum =
-                if n == 1 { chunk[0] } else { ((u32::from(chunk[0]) * 299 + u32::from(chunk[1]) * 587 + u32::from(chunk[2]) * 114) / 1000) as u8 };
+            let lum = if n == 1 {
+                chunk[0]
+            } else {
+                let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
+                let lum = ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8;
+                let max_c = r.max(g).max(b);
+                let min_c = r.min(g).min(b);
+                let chroma = max_c - min_c;
+                if chroma > BRIGHT_CHROMA_LIMIT || (lum < 225 && chroma > CHROMA_TOLERANCE) {
+                    // Color detail detected! Immediately reject to preserve color appearance.
+                    return None;
+                }
+                lum
+            };
+
             if let Some(entry) = hist.get_mut(usize::from(lum)) {
                 *entry += 1;
             }
             match lum {
                 0..=65 => dark += 1,
                 215..=255 => bright += 1,
-                66..=214 => mid += 1,
+                66..=214 => {
+                    mid += 1;
+                    // Early exit if midtones already exceed 0.5% (mid / total > 0.005)
+                    if (mid as u64).saturating_mul(200) > total as u64 {
+                        return None;
+                    }
+                }
             }
         }
     }
@@ -2153,7 +2152,7 @@ mod binarize_tests {
             samples[i * 3 + 2] = 20;
         }
 
-        // Add a red seal stamp pixel [220, 30, 30] (chroma diff = 190 > 8)
+        // Add a red seal stamp pixel [220, 30, 30] (chroma diff = 190 > CHROMA_TOLERANCE 10)
         samples[800 * 3] = 220;
         samples[800 * 3 + 1] = 30;
         samples[800 * 3 + 2] = 30;
@@ -2173,7 +2172,7 @@ mod binarize_tests {
             samples[i * 3 + 2] = 20;
         }
 
-        // Add a light blue signature pixel [180, 185, 200] (diff = 20 > 8)
+        // Add a light blue signature pixel [180, 185, 200] (diff = 20 > CHROMA_TOLERANCE 10)
         samples[600 * 3] = 180;
         samples[600 * 3 + 1] = 185;
         samples[600 * 3 + 2] = 200;
@@ -2368,7 +2367,7 @@ mod binarize_tests {
         }
 
         // Add 0.1% faint pencil strokes at lum 190 (40 pixels).
-        // Total midtones = 40 / 40000 = 0.1% (<= 1.5%), so midtone_ratio alone passes.
+        // Total midtones = 40 / 40000 = 0.1% (<= 0.5%), so midtone_ratio alone passes.
         // But 190 is in [threshold..215) and 40 / 40000 = 0.001 > 0.0005.
         // Content-Loss Guard must trigger and reject to prevent bleaching out faint strokes!
         for s in samples.iter_mut().skip(2000).take(40) {
@@ -2388,5 +2387,113 @@ mod binarize_tests {
         // All pixels are identical dark (25) -> no bimodal distribution
         let samples = vec![25u8; w * h];
         assert_eq!(try_binarize_scan(&samples, w, w, h, 1), None, "Must reject degenerate histogram");
+    }
+
+    #[test]
+    fn binarize_scans_is_off_by_default_and_leaves_scans_untouched() {
+        use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+
+        // MonoSettings::REDUCE must have binarize_scans set to false by default
+        const { assert!(!crate::MonoSettings::REDUCE.binarize_scans) };
+
+        let (w, h) = (100usize, 100usize);
+        let mut samples = vec![245u8; w * h];
+        for s in samples.iter_mut().take(500) {
+            *s = 25;
+        }
+
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(w as i64));
+        dict.set(b"Height".to_vec(), Object::Int(h as i64));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+
+        let stream = Stream::from_raw(dict, samples);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+
+        // When binarize_scans is false, near-bilevel scan must NOT be converted to 1-bit
+        let res_off = super::one_bit(&Document::new_empty(), &stream, true, false, false, &mut budget);
+        assert_eq!(res_off, None, "Near-bilevel scan must remain untouched when binarize_scans is false");
+
+        // When binarize_scans is true, it is converted
+        let res_on = super::one_bit(&Document::new_empty(), &stream, true, false, true, &mut budget);
+        assert!(res_on.is_some(), "Near-bilevel scan is binarized when binarize_scans is true");
+    }
+
+    #[test]
+    fn compute_otsu_direct_unit_tests() {
+        // Degenerate single-level distributions must return None
+        let mut degenerate_dark = [0u32; 256];
+        degenerate_dark[25] = 1000;
+        assert_eq!(super::compute_otsu(&degenerate_dark, 1000), None);
+
+        let mut degenerate_bright = [0u32; 256];
+        degenerate_bright[245] = 1000;
+        assert_eq!(super::compute_otsu(&degenerate_bright, 1000), None);
+
+        // Classic bimodal distribution (500 ink pixels at 20, 500 paper pixels at 220)
+        let mut bimodal = [0u32; 256];
+        bimodal[20] = 500;
+        bimodal[220] = 500;
+        let t = super::compute_otsu(&bimodal, 1000);
+        assert!(t.is_some());
+        let threshold = t.unwrap();
+        assert!((20..220).contains(&threshold));
+    }
+
+    #[test]
+    fn scan_candidate_direct_unit_tests() {
+        use pdfcraft_cos::{Dict, Document, Object, Stream};
+
+        let mut doc = Document::new_empty();
+
+        // 8-bit DeviceGray stream is a candidate
+        let mut gray_dict = Dict::new();
+        gray_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        gray_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let r_gray = doc.add(Object::Stream(Stream::from_raw(gray_dict, vec![0u8; 10])));
+        assert!(super::scan_candidate(&doc, r_gray));
+
+        // 8-bit DeviceRGB stream is a candidate
+        let mut rgb_dict = Dict::new();
+        rgb_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        rgb_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        let r_rgb = doc.add(Object::Stream(Stream::from_raw(rgb_dict, vec![0u8; 30])));
+        assert!(super::scan_candidate(&doc, r_rgb));
+
+        // 1-bit stream is not a candidate
+        let mut one_bit_dict = Dict::new();
+        one_bit_dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        one_bit_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let r_1bit = doc.add(Object::Stream(Stream::from_raw(one_bit_dict, vec![0u8; 10])));
+        assert!(!super::scan_candidate(&doc, r_1bit));
+
+        // Stream with SMask is rejected
+        let mut smask_dict = Dict::new();
+        smask_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        smask_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        smask_dict.set(b"SMask".to_vec(), Object::Dict(Dict::new()));
+        let r_smask = doc.add(Object::Stream(Stream::from_raw(smask_dict, vec![0u8; 10])));
+        assert!(!super::scan_candidate(&doc, r_smask));
+
+        // Stream with SMaskInData is rejected
+        let mut smask_in_data_dict = Dict::new();
+        smask_in_data_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        smask_in_data_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        smask_in_data_dict.set(b"SMaskInData".to_vec(), Object::Int(1));
+        let r_smask_in_data = doc.add(Object::Stream(Stream::from_raw(smask_in_data_dict, vec![0u8; 10])));
+        assert!(!super::scan_candidate(&doc, r_smask_in_data));
+
+        // Stream with OPI is rejected
+        let mut opi_dict = Dict::new();
+        opi_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        opi_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        opi_dict.set(b"OPI".to_vec(), Object::Dict(Dict::new()));
+        let r_opi = doc.add(Object::Stream(Stream::from_raw(opi_dict, vec![0u8; 10])));
+        assert!(!super::scan_candidate(&doc, r_opi));
+
+        // Non-stream object is rejected
+        let r_dict = doc.add(Object::Dict(Dict::new()));
+        assert!(!super::scan_candidate(&doc, r_dict));
     }
 }
