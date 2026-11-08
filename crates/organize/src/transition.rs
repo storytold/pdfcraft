@@ -48,6 +48,7 @@ pub struct TransitionSpec {
     pub display: Option<f32>,
 }
 
+/// Check that `t`'s style, duration, direction, and scale satisfy ISO 32000-2 table 164.
 fn validate_transition(t: &Transition) -> Result<(), OrganizeError> {
     let bad = OrganizeError::Invalid;
     let style = t.style.as_str();
@@ -64,19 +65,20 @@ fn validate_transition(t: &Transition) -> Result<(), OrganizeError> {
         Some(d) if !TRANSITION_DIRECTIONS.contains(&d) => {
             return Err(bad(format!("the direction must be one of {:?} degrees", TRANSITION_DIRECTIONS)));
         }
-        Some(315) if matches!(style, "Fly" | "Push" | "Cover" | "Uncover") => {
+        Some(315) if matches!(style, "Fly" | "Push" | "Cover" | "Uncover" | "Wipe") => {
             return Err(bad(format!("direction 315 degrees is not valid for {style} transitions")));
         }
         _ => {}
     }
     if !(t.scale.is_finite() && t.scale > 0.0) {
-        return Err(bad("the Fly scale must be more than zero".into()));
+        return Err(bad("the Fly scale must be greater than zero".into()));
     }
     Ok(())
 }
 
 /// Set (or remove) the transition and display time of `pages` (0-based). Every value is checked
-/// before any page changes: an unknown style, a direction that is not one of the five, a negative
+/// before any page changes: an unknown style, a direction that is not one of the five, `None` on a
+/// non-`Fly` style, `315` degrees on `Fly`, `Push`, `Cover`, `Uncover`, or `Wipe`, or a negative
 /// or non-finite duration, scale or display time are refused.
 pub fn set_transition(doc: &mut Document, pages: &[usize], spec: &TransitionSpec) -> Result<(), OrganizeError> {
     if let Some(t) = &spec.transition {
@@ -178,13 +180,26 @@ mod tests {
         let mut doc = one_page_doc();
         for style in ["Wipe", "Glitter", "Push", "Cover", "Uncover", "Split"] {
             let spec = TransitionSpec { transition: Some(Transition { direction: None, ..Transition::new(style) }), display: None };
-            assert!(set_transition(&mut doc, &[0], &spec).is_err(), "{style} must reject direction: None");
+            assert!(
+                matches!(set_transition(&mut doc, &[0], &spec), Err(OrganizeError::Invalid(msg)) if msg.contains("direction")),
+                "{style} must reject direction: None"
+            );
         }
-        for style in ["Fly", "Push", "Cover", "Uncover"] {
+        let fly_none = TransitionSpec { transition: Some(Transition { direction: None, ..Transition::new("Fly") }), display: None };
+        assert!(set_transition(&mut doc, &[0], &fly_none).is_ok(), "Fly allows direction: None");
+
+        for style in ["Fly", "Push", "Cover", "Uncover", "Wipe"] {
             let spec = TransitionSpec { transition: Some(Transition { direction: Some(315), ..Transition::new(style) }), display: None };
-            assert!(set_transition(&mut doc, &[0], &spec).is_err(), "{style} must reject 315 degrees");
+            assert!(
+                matches!(set_transition(&mut doc, &[0], &spec), Err(OrganizeError::Invalid(msg)) if msg.contains("direction")),
+                "{style} must reject 315 degrees"
+            );
+            for deg in [0, 90, 180, 270] {
+                let spec = TransitionSpec { transition: Some(Transition { direction: Some(deg), ..Transition::new(style) }), display: None };
+                assert!(set_transition(&mut doc, &[0], &spec).is_ok(), "{style} allows {deg} degrees");
+            }
         }
-        for style in ["Wipe", "Glitter"] {
+        for style in ["Glitter", "Split"] {
             let spec = TransitionSpec { transition: Some(Transition { direction: Some(315), ..Transition::new(style) }), display: None };
             assert!(set_transition(&mut doc, &[0], &spec).is_ok(), "{style} allows 315 degrees");
         }
