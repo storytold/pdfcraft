@@ -286,6 +286,7 @@ impl Edit {
                     pdfcraft_edit::ArrangeOrder::SendToBack => "Send to back",
                 },
                 ImageEdit::RemoveCrop => "Remove crop",
+                ImageEdit::Ungroup => "Ungroup artwork",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),

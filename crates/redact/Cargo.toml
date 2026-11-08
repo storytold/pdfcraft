@@ -20,6 +20,7 @@ pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 # CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
 pdfcraft-filters = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
 # NFKC for the metadata check; already in the build through pdfcraft-crypt (stringprep).
 unicode-normalization = "0.1"
