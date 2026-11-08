@@ -123,7 +123,7 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         .chars()
         .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff))
         && face.gsub().is_err()
-        && !gpos_has_mark_positioning(bytes)
+        && !(gpos_has_mark_positioning(bytes) && crate::embedding::covers(bytes, text))
     {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
