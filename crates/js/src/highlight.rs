@@ -3,8 +3,8 @@
 //! the script nor the engine's parser, so showing a script from any document reaches neither.
 //!
 //! A wrong colour is only that, but editing mustn't change what a script holds on a guess, so what
-//! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of, or a `\` the
-//! parser refuses.
+//! it asks ([`in_literal`]) stops trusting the colouring at the first thing the lexer can't be sure
+//! of: a `/` that could go either way, a `\`, or a character that is no part of a script's code.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -40,81 +40,15 @@ pub struct Token {
     pub bytes: Range<usize>,
 }
 
-const KEYWORDS: &[&str] = &[
-    "async",
-    "await",
-    "break",
-    "case",
-    "catch",
-    "class",
-    "const",
-    "continue",
-    "debugger",
-    "default",
-    "delete",
-    "do",
-    "else",
-    "enum",
-    "export",
-    "extends",
-    "finally",
-    "for",
-    "function",
-    "if",
-    "import",
-    "in",
-    "instanceof",
-    "let",
-    "new",
-    "return",
-    "static",
-    "super",
-    "switch",
-    "this",
-    "throw",
-    "try",
-    "typeof",
-    "var",
-    "void",
-    "while",
-    "with",
-    "yield",
-];
-
-const LITERALS: &[&str] = &["true", "false", "null", "undefined", "NaN", "Infinity"];
-
-/// The words of [`KEYWORDS`] that a script may also use as names, and so spell with escapes. The parser
-/// refuses the rest spelled so, and `true`, `false` and `null` too: they are reserved words.
-const NOT_RESERVED: &[&str] = &["async", "await", "let", "static", "yield"];
+/// Globals coloured as literals. Unlike `true`, `false` and `null`, they are names, so a script may
+/// spell them with escapes.
+const VALUES: &[&str] = &["undefined", "NaN", "Infinity"];
 
 /// Globals PdfCraft provides from Acrobat's object model (see the crate documentation).
 pub(crate) const API: &[&str] = &["app", "color", "console", "display", "event", "getField", "util"];
 
-/// Keywords after which a `/` starts a regular expression rather than dividing. A line end ends
-/// `break`, `continue` and `debugger`, so a `/` on the next line starts a new statement; on their own
-/// line, it would be a syntax error.
-const BEFORE_REGEX: &[&str] = &[
-    "return",
-    "typeof",
-    "case",
-    "do",
-    "else",
-    "in",
-    "of",
-    "new",
-    "delete",
-    "void",
-    "throw",
-    "instanceof",
-    "yield",
-    "await",
-    "extends",
-    "break",
-    "continue",
-    "debugger",
-];
-
-/// Deepest `${` nesting of template literals tracked; deeper ones are coloured as template text.
+/// Deepest `${` nesting of template literals tracked; deeper ones are coloured as template text, and
+/// the lexer is unsure past them.
 const MAX_TEMPLATE_DEPTH: usize = 64;
 
 /// The coloured stretches of `source`, in order and not overlapping; text between them (names,
@@ -128,17 +62,18 @@ pub fn highlight(source: &str) -> Vec<Token> {
 /// script holds. After its closing quote, or between `${` and `}`, it isn't; at the end of one never
 /// closed, it is.
 ///
-/// Without a parser, a `/` after a `}`, or after a word that may be a name, can start a regular
-/// expression or divide: `{ valueOf() { return 6; } } / 2` is valid. Read the wrong way, it hides what
+/// Without a parser, a `/` after a `}`, after a word that may be a name, or at the start of a line,
+/// can start a regular expression or divide: `{ valueOf() { return 6; } } / 2` is valid, and so is
+/// `var x` with `/re/.test(s)` on the next line. Read the wrong way, it hides what
 /// follows on its line, a template's opening `` ` `` among them, or turns a `/*` in a regular
 /// expression into a comment to the end. So past the first such `/`, this is always true: it errs
-/// towards leaving the text alone rather than guess. So it is past a `\` the parser refuses: one
-/// outside a name (`\x`), an escape that spells no name (`\uzzzz`, `\u0020`), and a reserved word
-/// spelled with escapes (`\u0072eturn`). What the script was meant to say there, and so what a `/`
-/// after it is, is a guess too.
+/// towards leaving the text alone rather than guess. So it is past a `\` in code, as the parser
+/// refuses many names spelled with escapes (`\u0072eturn`, `\u0020`) and any other `\` there, and past
+/// a character that is no part of a script's code (`@`, `²`): what the script means there is a guess
+/// too. So is the code in a `${…}` nested deeper than the lexer tracks.
 pub fn in_literal(source: &str, at: usize) -> bool {
     let (tokens, doubt) = lex(source);
-    doubt.is_some_and(|slash| slash < at)
+    doubt.is_some_and(|unsure| unsure < at)
         || tokens.iter().filter(|t| matches!(t.kind, TokenKind::String | TokenKind::Template)).any(|t| {
             let token = source.get(t.bytes.clone()).unwrap_or_default();
             let open_at_its_end = match t.kind {
@@ -155,25 +90,99 @@ fn closed_by(token: &str, end: &str) -> bool {
     token.strip_suffix(end).is_some_and(|rest| !rest.is_empty() && rest.chars().rev().take_while(|c| *c == '\\').count().is_multiple_of(2))
 }
 
-/// The tokens of `source`, and where the lexer first stops being sure of them: a `/` read as starting
-/// a regular expression that could be dividing, or a `\` the parser refuses.
+/// The tokens of `source`, and where the lexer first stops being sure of them (see [`Lexer::doubt`]).
 fn lex(source: &str) -> (Vec<Token>, Option<usize>) {
     let mut lexer = Lexer {
         s: source,
         i: 0,
         out: Vec::new(),
-        regex_ok: true,
-        after_dot: false,
+        slash: Slash::StartsRegex,
+        next: Next::Any,
         braces: Vec::new(),
-        keyword_paren: false,
         parens: Vec::new(),
         line_start: false,
-        label_next: false,
-        may_be_value: false,
         doubt: None,
     };
     lexer.run();
     (lexer.out, lexer.doubt)
+}
+
+/// What a `/` is at some point of a script, which only the parser can always tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slash {
+    /// It starts a regular expression: what came before it is no value.
+    StartsRegex,
+    /// It divides the value before it.
+    Divides,
+    /// It may do either: what came before it may be a value or not, as an object's `}` or a block's,
+    /// or `yield` as a name or a keyword. The lexer reads it as starting a regular expression, and is
+    /// unsure from it on.
+    Either,
+}
+
+/// What the last token makes of the next one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Next {
+    /// Nothing in particular.
+    Any,
+    /// After a `.`, a name is a property's, never a keyword or a global: `x.default`, `this.event`.
+    Property,
+    /// After `break` or `continue`, a name on their line is a label, after which a `/` starts a
+    /// regular expression as after the keyword alone.
+    Label,
+    /// After `if`, `while`, `for` (or `for await`) or `with`, a `(` opens brackets that a regular
+    /// expression may follow (`if (x) /re/.test(s)`), unlike other brackets (`(a + b) / 2`).
+    Condition,
+}
+
+/// A word of the language, as the lexer reads it.
+#[derive(Clone, Copy)]
+struct Word {
+    colour: Option<TokenKind>,
+    /// What a `/` right after it is.
+    slash: Slash,
+    next: Next,
+}
+
+/// What `word` is, spelled plainly: its colour, what a `/` right after it is, and what it makes of the
+/// next token. `None` for a name, which is coloured only as a global, and after which a `/` divides.
+/// Spelled with escapes, no word is one of these: the parser refuses a keyword so spelled, or reads it
+/// as a name, and the same for `true`, `false` and `null`.
+fn known(word: &str) -> Option<Word> {
+    let keyword = |slash, next| Some(Word { colour: Some(TokenKind::Keyword), slash, next });
+    match word {
+        // No value ends with these, so a `/` after them starts a regular expression.
+        "return" | "typeof" | "case" | "do" | "else" | "in" | "new" | "delete" | "void" | "throw" | "instanceof" | "extends" => {
+            keyword(Slash::StartsRegex, Next::Any)
+        }
+        // A line end ends these, so a `/` on the next line starts a statement; on their own line, it
+        // would be a syntax error. After `break` and `continue`, a name on their line is a label.
+        "debugger" => keyword(Slash::StartsRegex, Next::Any),
+        "break" | "continue" => keyword(Slash::StartsRegex, Next::Label),
+        // A statement follows their `(…)`.
+        "if" | "while" | "for" | "with" => keyword(Slash::Divides, Next::Condition),
+        // Keywords in generators and async functions, and names elsewhere.
+        "await" | "yield" => keyword(Slash::Either, Next::Any),
+        // A value (`this / 2`) or a name (`let / 2`). A `/` can follow the others only on the next
+        // line, where the lexer is unsure of any `/` after a word.
+        "async" | "catch" | "class" | "const" | "default" | "enum" | "export" | "finally" | "function" | "import" | "let" | "static" | "super"
+        | "switch" | "this" | "try" | "var" => keyword(Slash::Divides, Next::Any),
+        "true" | "false" | "null" => Some(Word { colour: Some(TokenKind::Literal), slash: Slash::Divides, next: Next::Any }),
+        // A keyword only in `for (x of y)`, so not coloured as one, and a name elsewhere.
+        "of" => Some(Word { colour: None, slash: Slash::Either, next: Next::Any }),
+        _ => None,
+    }
+}
+
+/// How the global `name` is coloured, or `None` if it isn't one the lexer colours.
+fn global(name: &str) -> Option<TokenKind> {
+    if VALUES.contains(&name) {
+        Some(TokenKind::Literal)
+    } else if API.contains(&name) {
+        Some(TokenKind::Api)
+    } else {
+        None
+    }
 }
 
 struct Lexer<'a> {
@@ -181,27 +190,20 @@ struct Lexer<'a> {
     /// The next byte to read; always on a character boundary.
     i: usize,
     out: Vec<Token>,
-    /// Whether a `/` here starts a regular expression.
-    regex_ok: bool,
-    /// Whether the last token was a `.` (a name after it is a property, never a keyword).
-    after_dot: bool,
+    /// What a `/` here is.
+    slash: Slash,
+    /// What the last token makes of the next.
+    next: Next,
     /// For each open `${`, the `{` opened inside it and not yet closed.
     braces: Vec<usize>,
-    /// Whether the last token was `if`, `while`, `for` or `with`, whose `(…)` a regular
-    /// expression may follow (`if (x) /re/.test(s)`), unlike other brackets' (`(a + b) / 2`).
-    keyword_paren: bool,
-    /// For each open `(`, whether it was such a keyword's.
+    /// For each open `(`, whether it was a condition's (see [`Next::Condition`]).
     parens: Vec<bool>,
     /// Whether only white space and comments stand between here and a line end before it, where
-    /// `-->` starts a comment. Not on the script's first line, where the parser reads `--` and `>`.
+    /// `-->` starts a comment, a `++` is the next value's, and a `/` after a value may start a regular
+    /// expression. Not on the script's first line, where the parser reads `--` and `>`.
     line_start: bool,
-    /// Whether the last token was `break` or `continue`, so that a name on its line is a label, and a
-    /// `/` after it can't divide, just as after the keyword alone.
-    label_next: bool,
-    /// Whether a `/` here, read as starting a regular expression, could instead be dividing what
-    /// came last: an object's `}` rather than a block's, or `of` as a name.
-    may_be_value: bool,
-    /// Where the first such `/` is, or a `\` the parser refuses if one comes first.
+    /// Where the lexer first stops being sure of what it reads: a `/` that could go either way, a `\`,
+    /// or a character that is no part of a script's code.
     doubt: Option<usize>,
 }
 
@@ -256,18 +258,18 @@ impl Lexer<'_> {
                 // HTML-like comments, as the parser reads a script (ECMAScript Annex B.1.1).
                 self.skip_to_line_end();
                 self.push(TokenKind::Comment, start);
-            } else if c == '/' && self.regex_ok {
-                if self.may_be_value {
-                    self.doubt = self.doubt.or(Some(start));
+            } else if c == '/' && self.slash != Slash::Divides {
+                if self.slash == Slash::Either {
+                    self.unsure(start);
                 }
                 self.regex();
                 self.push(TokenKind::Regex, start);
-                self.after(false, false);
+                self.after(Slash::Divides);
             } else if c == '\'' || c == '"' {
                 self.bump();
                 self.string(c);
                 self.push(TokenKind::String, start);
-                self.after(false, false);
+                self.after(Slash::Divides);
             } else if c == '`' {
                 self.bump();
                 self.template(start);
@@ -276,67 +278,111 @@ impl Lexer<'_> {
                 self.braces.pop();
                 self.bump();
                 self.template(start);
+            } else if self.at("...") || self.at("<<") {
+                // Read whole, as the parser does: the `.1` in `...1.` is no number, and the `<!--` in
+                // `<<!--` no comment. A value follows either.
+                for _ in 0..if c == '.' { 3 } else { 2 } {
+                    self.bump();
+                }
+                self.after(Slash::StartsRegex);
             } else if c.is_ascii_digit() || (c == '.' && self.peek2().is_some_and(|d| d.is_ascii_digit())) {
                 self.number();
                 self.push(TokenKind::Number, start);
-                self.after(false, false);
+                self.after(Slash::Divides);
             } else if is_name_start(c) || self.at("\\u") {
                 self.word(start);
+            } else if c == '#' && self.peek2().is_some_and(is_name_start) {
+                // A private name, `#count`: never a keyword or a global.
+                self.bump();
+                while self.name_part() {}
+                self.after(Slash::Divides);
             } else if matches!(c, '+' | '-') && self.peek2() == Some(c) {
-                // An increment leaves a `/` meaning what it did before it: after a value it
-                // divides (`i++ / 2`), and before one it starts a regular expression.
+                // An increment on the line of a value is that value's, and leaves a `/` dividing
+                // (`i++ / 2`). Past a line end it is the next value's, since none may come between a
+                // value and its `++`, and so is it where no value came before: a `/` after it starts a
+                // regular expression (`++/re/.lastIndex`).
                 self.bump();
                 self.bump();
-                let may_be_value = self.may_be_value;
-                self.after(self.regex_ok, false);
-                self.may_be_value = may_be_value;
+                self.after(if self.line_start { Slash::StartsRegex } else { self.slash });
+            } else if is_line_end(c) {
+                self.bump();
+                self.line_start = true;
+            } else if is_space(c) {
+                self.bump();
             } else {
                 self.bump();
-                // Whether a `/` after `c` starts a regular expression: not after a value's
-                // closing bracket, but after a keyword's `(…)` and after a block's `}`.
-                let mut regex_ok = c != ']';
-                match c {
+                let slash = match c {
                     '{' => {
                         if let Some(open) = self.braces.last_mut() {
                             *open = open.saturating_add(1);
                         }
+                        Slash::StartsRegex
                     }
+                    // A block's or an object's: `{}\n/re/.test(s)` and `x = {} / 2` are both valid.
                     '}' => {
                         if let Some(open) = self.braces.last_mut() {
                             *open = open.saturating_sub(1);
                         }
+                        Slash::Either
                     }
-                    '(' => self.parens.push(self.keyword_paren),
-                    ')' => regex_ok = self.parens.pop().unwrap_or(false),
-                    // Outside a literal or a comment, the parser takes a `\` only in a name's `\u` escape.
-                    '\\' => self.doubt = self.doubt.or(Some(start)),
-                    _ => {}
-                }
-                if is_line_end(c) {
-                    self.line_start = true;
-                } else if !c.is_whitespace() {
-                    // What follows a spread is a value, not a property: `f(...event)`.
-                    let spread = c == '.' && self.s.get(..self.i).is_some_and(|b| b.ends_with("..."));
-                    self.after(regex_ok, c == '.' && !spread);
-                    self.may_be_value = regex_ok && !wants_a_value_next(c);
+                    '(' => {
+                        self.parens.push(self.next == Next::Condition);
+                        Slash::StartsRegex
+                    }
+                    // A statement follows a condition's brackets, and an operator other brackets.
+                    ')' => {
+                        if self.parens.pop().unwrap_or(false) {
+                            Slash::StartsRegex
+                        } else {
+                            Slash::Divides
+                        }
+                    }
+                    ']' => Slash::Divides,
+                    // Dividing, as far as the lexer can tell. But past a line end, the parser ends a
+                    // statement before a `/` that can't continue it, which then starts a regular
+                    // expression (`var x`, and `/re/.test(s)` on the next line), and the engine does so
+                    // after `let`, `async` and `(() => {})` too: there, the lexer is unsure from it on.
+                    '/' => {
+                        if self.line_start {
+                            self.unsure(start);
+                        }
+                        Slash::StartsRegex
+                    }
+                    '[' | ';' | ',' | '.' | '<' | '>' | '=' | '!' | '+' | '-' | '*' | '%' | '&' | '|' | '^' | '~' | '?' | ':' => Slash::StartsRegex,
+                    // Outside a literal or a comment, a `\` is only a name's `\u` escape, and anything else
+                    // is no part of a script's code.
+                    _ => {
+                        self.unsure(start);
+                        Slash::StartsRegex
+                    }
+                };
+                self.after(slash);
+                if c == '.' {
+                    self.next = Next::Property;
                 }
             }
         }
     }
 
-    fn after(&mut self, regex_ok: bool, after_dot: bool) {
-        self.regex_ok = regex_ok;
-        self.after_dot = after_dot;
-        self.keyword_paren = false;
+    /// Records what the token just read leaves: what a `/` after it is, and nothing in particular for
+    /// the next one.
+    fn after(&mut self, slash: Slash) {
+        self.slash = slash;
+        self.next = Next::Any;
         self.line_start = false;
-        self.label_next = false;
-        self.may_be_value = false;
+    }
+
+    /// Records that the lexer stops being sure at byte `at`, unless it already has.
+    fn unsure(&mut self, at: usize) {
+        self.doubt = self.doubt.or(Some(at));
     }
 
     /// Takes a character of a name, or a `\u` escape spelling one (`\u0061`, `\u{61}`), and says
-    /// whether it did. Outside literals and comments, a `\` can only start such an escape.
+    /// whether it did. The parser refuses many names spelled with escapes (`\u0072eturn`, `\u0020`),
+    /// and the lexer doesn't tell which: it is unsure past any escape.
     fn name_part(&mut self) -> bool {
         if self.at("\\u") {
+            self.unsure(self.i);
             self.bump();
             self.bump();
             // `\u0061` needs nothing more, its digits being name characters too.
@@ -419,82 +465,68 @@ impl Lexer<'_> {
                 }
                 '`' => {
                     self.push(TokenKind::Template, start);
-                    self.after(false, false);
+                    self.after(Slash::Divides);
                     return;
                 }
                 '$' if self.peek() == Some('{') && self.braces.len() < MAX_TEMPLATE_DEPTH => {
                     self.bump();
                     self.push(TokenKind::Template, start);
                     self.braces.push(0);
-                    self.after(true, false);
+                    self.after(Slash::StartsRegex);
                     return;
                 }
+                // Deeper than tracked, the code in a `${…}` is read as the template's text: a guess.
+                '$' if self.peek() == Some('{') => self.unsure(self.i.saturating_sub(1)),
                 _ => {}
             }
         }
         self.push(TokenKind::Template, start);
     }
 
+    /// A number, to where the parser ends it: `1.5e+3`, `.5`, `0x1F`, `10n`, `1_000`. A `.` after a
+    /// fraction, an exponent, a radix's digits, a BigInt's `n` or an old script's octal number is a
+    /// property's: `1.5.toFixed(2)`, `1e3.toFixed(1)`, `0x1F.toString()`, `10n.toString()`, `017.x`.
     fn number(&mut self) {
-        let hex = self.peek() == Some('0') && matches!(self.peek2(), Some('x' | 'X'));
-        let (mut last, mut dot) = ('\0', false);
+        let radix = self.peek() == Some('0') && matches!(self.peek2(), Some('x' | 'X' | 'o' | 'O' | 'b' | 'B'));
+        // Whether what it has taken is a `0` and octal digits only, as `017` is.
+        let mut octal = self.peek() == Some('0');
+        let (mut taken, mut last, mut dot, mut letter) = (0_usize, '\0', false, false);
         while let Some(c) = self.peek() {
-            let sign = matches!(c, '+' | '-') && matches!(last, 'e' | 'E') && !hex;
-            // A second `.` is a property's: `1.5.toFixed(2)`, `1..toString()`.
-            if !(c.is_ascii_alphanumeric() || c == '_' || (c == '.' && !dot) || sign) {
+            let sign = matches!(c, '+' | '-') && matches!(last, 'e' | 'E') && !radix;
+            let fraction = c == '.' && !dot && !letter && !(octal && taken > 1);
+            if !(c.is_ascii_alphanumeric() || c == '_' || fraction || sign) {
                 break;
             }
+            octal &= taken == 0 || matches!(c, '0'..='7');
             dot |= c == '.';
-            last = c;
+            letter |= c.is_ascii_alphabetic();
+            (taken, last) = (taken.saturating_add(1), c);
             self.bump();
         }
     }
 
     fn word(&mut self, start: usize) {
         while self.name_part() {}
-        let word = self.s.get(start..self.i).unwrap_or_default();
-        let label = self.label_next && !self.line_start;
-        // A name spelled with escapes is the name it spells (`\u0061pp` is `app`). The parser refuses
-        // one that spells no name (`\uzzzz`, `\u0020`, `\u0031x`), and a reserved word spelled so other
-        // than as a property's name, but reads `of`, `yield`, `let` and the like spelled so as names.
-        let name = unescaped(word);
-        let refused = word.contains('\\') && !name.as_deref().is_some_and(|name| is_name(name) && (self.after_dot || !reserved(name)));
-        if refused {
-            // The parser takes a reserved word as a key (`{ \u0074his: 1 }`), which this can't tell:
-            // there, it costs only the indentation.
-            self.doubt = self.doubt.or(Some(start));
-        }
-        if self.after_dot {
+        if self.next == Next::Property {
             // A property: `x.default`, `this.event` …
-            self.after(false, false);
+            self.after(Slash::Divides);
             return;
         }
-        let name = name.unwrap_or_default();
-        let kind = if KEYWORDS.contains(&word) {
-            Some(TokenKind::Keyword)
-        } else if refused {
-            None
-        } else if LITERALS.contains(&name.as_ref()) {
-            Some(TokenKind::Literal)
-        } else if API.contains(&name.as_ref()) {
-            Some(TokenKind::Api)
-        } else {
-            None
-        };
-        if let Some(kind) = kind {
+        let word = self.s.get(start..self.i).unwrap_or_default();
+        let label = self.next == Next::Label && !self.line_start;
+        let for_await = self.next == Next::Condition && word == "await";
+        let Word { colour, slash, next } = known(word).unwrap_or_else(|| Word {
+            // A name spelled with escapes is coloured as the name it spells: `\u0061pp` is `app`.
+            colour: unescaped(word).and_then(|name| global(&name)),
+            slash: Slash::Divides,
+            next: Next::Any,
+        });
+        if let Some(kind) = colour {
             self.push(kind, start);
         }
-        self.after(label || BEFORE_REGEX.contains(&word), false);
-        // The ones not reserved outside some contexts: the rest can't be names, so a `/` can't divide them.
-        self.may_be_value = matches!(word, "of" | "yield" | "await");
-        self.keyword_paren = matches!(word, "if" | "while" | "for" | "with");
-        self.label_next = matches!(word, "break" | "continue");
+        self.after(if label { Slash::StartsRegex } else { slash });
+        self.next = if for_await { Next::Condition } else { next };
     }
-}
-
-/// Whether `name` is a reserved word, which a script can't spell with escapes.
-fn reserved(name: &str) -> bool {
-    (KEYWORDS.contains(&name) && !NOT_RESERVED.contains(&name)) || matches!(name, "true" | "false" | "null")
 }
 
 /// The name `word` spells, its `\u` escapes (`\u0061`, `\u{61}`) decoded, or `None` if one of them
@@ -526,26 +558,20 @@ fn unescaped(word: &str) -> Option<Cow<'_, str>> {
     Some(Cow::Owned(out))
 }
 
-/// Whether what comes after `c` starts a value, so that a `/` there can't be dividing. A `)` gets here
-/// only as a keyword's, as in `if (x) /re/.test(s)`.
-fn wants_a_value_next(c: char) -> bool {
-    matches!(c, '(' | ')' | '[' | '{' | ',' | ';' | ':' | '=' | '!' | '&' | '|' | '?' | '+' | '-' | '*' | '/' | '%' | '<' | '>' | '~' | '^' | '.')
-}
-
 fn is_line_end(c: char) -> bool {
     matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// Whether `c` is white space to the parser, other than a line end: Unicode's White_Space but for
+/// U+0085, which ECMAScript doesn't count, and with the byte order mark, which it does.
+fn is_space(c: char) -> bool {
+    c == '\u{FEFF}' || (c.is_whitespace() && c != '\u{85}' && !is_line_end(c))
 }
 
 /// Whether a name may start with `c`: ECMAScript's IdentifierStartChar, by Unicode's ID_Start, as the
 /// parser reads it (`\u00b2` can't start a name, `\u2118` can).
 fn is_name_start(c: char) -> bool {
     c == '$' || c == '_' || CodePointSetData::new::<IdStart>().contains(c)
-}
-
-/// Whether `name` is all a name's characters, as its first and the rest.
-fn is_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars.next().is_some_and(is_name_start) && chars.all(is_name_part)
 }
 
 /// Whether a name may hold `c` after its first character: ECMAScript's IdentifierPartChar, by
