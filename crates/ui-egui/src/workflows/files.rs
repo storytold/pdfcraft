@@ -191,6 +191,8 @@ pub enum SplitPlan {
 /// Organize ▸ Extract options.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExtractDraft {
+    /// The document whose name and page range were filled into the dialog.
+    pub source: Option<DocId>,
     /// Each page as its own file.
     pub separate: bool,
     /// Delete the pages after extracting them.
@@ -199,9 +201,12 @@ pub struct ExtractDraft {
     /// the document's name when it opens; empty means that name too. As separate files each
     /// page is `<name> (page N).pdf`, and a single page the user renamed is `<name>.pdf`.
     pub name: String,
-    /// The pages to extract as typed ranges, 1-based ("1-5, 8, 11-13") (#3593). Empty means the
-    /// selected pages (or the current one); the dialog opens with it empty.
+    /// The pages to extract as typed ranges, 1-based ("1-5, 8, 11-13") (#3593). The dialog opens
+    /// prefilled with the selected/current range. If the user clears it, the selected pages
+    /// (or the current one) are used instead.
     pub pages: String,
+    /// Focus and select the Pages field on the dialog's first frame.
+    pub focus_pages: bool,
 }
 
 impl ExtractDraft {
@@ -660,18 +665,30 @@ impl PdfCraftApp {
         }
     }
 
-    /// Show Extract pages, its file name filled in with the active document's (#737) and no
-    /// page ranges typed, so it takes the selected pages until some are (#3593).
+    /// Show Extract pages with the document's file name and the selected/current page range.
+    /// Select the Pages field once so typing immediately replaces that range.
     pub fn open_extract_dialog(&mut self) {
+        self.extract_draft.source = self.active_ids().map(|(_, id)| id);
         self.extract_draft.name =
             self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
-        self.extract_draft.pages.clear();
+        let (selected, total) = self.active_ids().map_or((Vec::new(), 0), |(i, _)| (self.views[i].target_pages(), self.views[i].page_count()));
+        self.extract_draft.pages = match crate::combine_ui::range_of(&selected, total) {
+            all if all.is_empty() && total > 1 => format!("1-{total}"),
+            all if all.is_empty() => "1".to_string(),
+            some => some,
+        };
+        self.extract_draft.focus_pages = true;
         self.dialog = Some(crate::Dialog::Extract);
     }
 
     /// Copy the pages typed in Extract pages, else the selected pages (or the current page), into
-    /// a new unsaved document tab.
+    /// a new unsaved document tab. If the draft has a source that no longer matches the active
+    /// document, refuse with a notification and no edits.
     pub fn extract_selection(&mut self) {
+        if self.extract_draft.source.is_some() && self.extract_draft.source != self.active_ids().map(|(_, id)| id) {
+            self.notify_tr("The document changed while you were choosing a file, so nothing was changed.");
+            return;
+        }
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
