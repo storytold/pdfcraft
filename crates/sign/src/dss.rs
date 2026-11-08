@@ -38,9 +38,11 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     let mut crls: Vec<Vec<u8>> = Vec::new();
     if let Some(d) = &existing {
         let mut budget = MAX_EXISTING_EVIDENCE;
-        pull(&doc, d, b"Certs", &mut certs, &mut budget)?;
-        pull(&doc, d, b"OCSPs", &mut ocsps, &mut budget)?;
-        pull(&doc, d, b"CRLs", &mut crls, &mut budget)?;
+        // Shared by the three reads: a stream listed under two keys is decoded and charged once.
+        let mut decoded = std::collections::HashMap::new();
+        pull(&doc, d, b"Certs", &mut certs, &mut budget, &mut decoded)?;
+        pull(&doc, d, b"OCSPs", &mut ocsps, &mut budget, &mut decoded)?;
+        pull(&doc, d, b"CRLs", &mut crls, &mut budget, &mut decoded)?;
     }
     let add = |list: &mut Vec<Vec<u8>>, blob: &[u8]| {
         if !list.iter().any(|b| b.as_slice() == blob) {
@@ -113,7 +115,14 @@ const MAX_EXISTING_EVIDENCE: usize = 256 << 20;
 
 /// Pull the raw bytes of an existing DSS array into `into`, each stream once (however often the
 /// array lists it) and each distinct content once, spending the decoded size from `budget`.
-fn pull(doc: &Document, dss: &Dict, key: &[u8], into: &mut Vec<Vec<u8>>, budget: &mut usize) -> Result<(), SignError> {
+fn pull(
+    doc: &Document,
+    dss: &Dict,
+    key: &[u8],
+    into: &mut Vec<Vec<u8>>,
+    budget: &mut usize,
+    decoded: &mut std::collections::HashMap<pdfcraft_cos::ObjRef, Vec<u8>>,
+) -> Result<(), SignError> {
     let Some(a) = dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) else {
         return Ok(());
     };
@@ -123,20 +132,31 @@ fn pull(doc: &Document, dss: &Dict, key: &[u8], into: &mut Vec<Vec<u8>>, budget:
         if item.as_ref().is_some_and(|r| !seen_refs.insert(r)) {
             continue;
         }
-        let o = doc.resolve(&item);
-        let Object::Stream(s) = &*o else { continue };
-        let too_big = || SignError::Pdf("the document's existing validation data is too large to extend".into());
-        match s.decoded_within(*budget) {
-            Ok(bytes) => {
-                *budget = budget.checked_sub(bytes.len()).ok_or_else(too_big)?;
-                if seen_content.insert(crate::keys::DigestAlg::Sha256.digest(&[bytes.as_slice()])) {
-                    into.push(bytes);
+        // A stream another DSS array already read is reused: it is neither decoded again nor
+        // charged twice, so a store that lists the same evidence under two keys still fits.
+        let bytes = match item.as_ref().and_then(|r| decoded.get(&r).cloned()) {
+            Some(bytes) => bytes,
+            None => {
+                let o = doc.resolve(&item);
+                let Object::Stream(s) = &*o else { continue };
+                let too_big = || SignError::Pdf("the document's existing validation data is too large to extend".into());
+                match s.decoded_within(*budget) {
+                    Ok(bytes) => {
+                        *budget = budget.checked_sub(bytes.len()).ok_or_else(too_big)?;
+                        if let Some(r) = item.as_ref() {
+                            decoded.insert(r, bytes.clone());
+                        }
+                        bytes
+                    }
+                    // The allowance is spent: refuse, rather than drop evidence the store holds.
+                    Err(e) if e.to_string().contains("exceeds the limit") => return Err(too_big()),
+                    // Not decodable at all: skipped, as before.
+                    Err(_) => continue,
                 }
             }
-            // The allowance is spent: refuse, rather than drop evidence the store holds.
-            Err(e) if e.to_string().contains("exceeds the limit") => return Err(too_big()),
-            // Not decodable at all: skipped, as before.
-            Err(_) => {}
+        };
+        if seen_content.insert(crate::keys::DigestAlg::Sha256.digest(&[bytes.as_slice()])) {
+            into.push(bytes);
         }
     }
     Ok(())
@@ -159,12 +179,12 @@ mod tests {
         let (doc, dss) = store(&[&[1; 100], &[1; 100], &[2; 50]], &[0, 0, 0, 1, 2, 2]);
         let mut out = Vec::new();
         let mut budget = 1000;
-        pull(&doc, &dss, b"Certs", &mut out, &mut budget).unwrap();
+        pull(&doc, &dss, b"Certs", &mut out, &mut budget, &mut std::collections::HashMap::new()).unwrap();
         // Two distinct streams are listed with the same bytes: one copy; the repeats were not read.
         assert_eq!(out, [vec![1; 100], vec![2; 50]]);
         assert_eq!(budget, 1000 - 100 - 100 - 50);
         // Past the allowance the store is refused, not trimmed.
         let mut budget = 120;
-        assert!(pull(&doc, &dss, b"Certs", &mut Vec::new(), &mut budget).is_err());
+        assert!(pull(&doc, &dss, b"Certs", &mut Vec::new(), &mut budget, &mut std::collections::HashMap::new()).is_err());
     }
 }
