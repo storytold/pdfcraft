@@ -104,7 +104,7 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
     let mut run: Vec<Want> = Vec::new();
     // Instances queued in this run, by parent and name: asking for more only queues the rest.
     let mut queued: HashMap<(&DataPath, &str), usize> = HashMap::new();
-    let (mut ensured, mut ensured_bytes, mut capped) = (0usize, 0usize, false);
+    let (mut ensured, mut ensured_bytes, mut capped, mut capped_bytes) = (0usize, 0usize, false, false);
     let flush = |run: &mut Vec<Want>, steps: &mut Vec<Vec<Want>>, removes: &mut Vec<Option<DataPath>>| {
         if !run.is_empty() {
             let mut seen = std::collections::HashSet::new();
@@ -124,8 +124,12 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
                 let done = queued.entry((parent, name.as_str())).or_insert(0);
                 let per_instance = parent.iter().fold(name.len().saturating_mul(2), |n, (p, _)| n.saturating_add(p.len()).saturating_add(16));
                 while *done < (*count).min(MAX_INDEX) {
-                    if ensured >= MAX_ENSURED || ensured_bytes.saturating_add(per_instance) > MAX_ENSURED_BYTES {
+                    if ensured >= MAX_ENSURED {
                         capped = true;
+                        break;
+                    }
+                    if ensured_bytes.saturating_add(per_instance) > MAX_ENSURED_BYTES {
+                        capped_bytes = true;
                         break;
                     }
                     ensured += 1;
@@ -160,6 +164,11 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
     let mut written = rewrite(doc, &plan, reuse)?;
     if capped {
         written.warnings.push(format!("XFA data instances not written past {MAX_ENSURED}: the rows were added and removed too often"));
+    }
+    if capped_bytes {
+        written
+            .warnings
+            .push(format!("XFA data instances not written past {MAX_ENSURED_BYTES} bytes of names: the rows were added and removed too often"));
     }
     Ok(written)
 }
