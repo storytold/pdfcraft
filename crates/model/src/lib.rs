@@ -303,6 +303,35 @@ mod tests {
         assert_ne!(p.view_matrix(&d), view_matrix_for(0, [0.0, 0.0, 300.0, 400.0]), "the origin is kept");
     }
 
+    /// The nearest ancestor's `/MediaBox` wins over the root's, origin and all: the crop and the view matrix come from
+    /// the intermediate `/Pages` node's box.
+    #[test]
+    fn a_page_takes_its_nearest_ancestors_media_box_and_origin() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_string(),
+            "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 /MediaBox [100 200 400 600] >>".to_string(),
+            "<< /Type /Page /Parent 3 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [100.0, 200.0, 400.0, 600.0]);
+        assert_eq!(p.view_matrix(&d), view_matrix_for(0, [100.0, 200.0, 400.0, 600.0]));
+    }
+
+    /// An intermediate `/Pages` node's `/MediaBox` without area is the inherited one, so the page is US Letter, not
+    /// its grandparent's box.
+    #[test]
+    fn a_nearest_media_box_without_area_gives_letter_not_a_further_ancestors() {
+        let d = doc_from(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+            "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 /MediaBox [0 0 0 0] >>".to_string(),
+            "<< /Type /Page /Parent 3 0 R >>".to_string(),
+        ]);
+        let p = &pages(&d)[0];
+        assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0]);
+    }
+
     /// A `/MediaBox` without area (`[0 0 0 0]`) is US Letter too, as the renderer draws it.
     #[test]
     fn a_page_whose_media_box_has_no_area_is_letter() {
