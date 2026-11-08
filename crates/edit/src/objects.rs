@@ -169,7 +169,7 @@ pub fn set_line_properties(
     let parsed_lines = parse_page_lines(&streams)?;
     let target_line = parsed_lines.get(target.index).ok_or_else(|| EditError::Invalid("line no longer exists".into()))?;
 
-    let pieces = Pieces::join(&streams.iter().map(|(_, bytes)| bytes.as_slice()).collect::<Vec<_>>());
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
 
     let m_op = ops.get(target_line.m_op_idx).ok_or_else(|| EditError::Invalid("line moveto operator missing".into()))?;
@@ -278,7 +278,7 @@ pub fn set_line_properties(
     edits.sort_by_key(|(span, _)| span.start);
 
     let data = pieces.splice(edits);
-    let contents = crate::text::rewritten_contents(doc, &streams, data);
+    let contents = crate::text::rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -310,7 +310,7 @@ pub fn update_line_endpoints(doc: &mut Document, page: usize, target: ObjectTarg
         return Err(EditError::Invalid("transformed coordinates must be finite".into()));
     }
 
-    let pieces = Pieces::join(&streams.iter().map(|(_, bytes)| bytes.as_slice()).collect::<Vec<_>>());
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
 
     if let Some((re_idx, edge_idx)) = target_line.re_info {
@@ -367,7 +367,7 @@ pub fn update_line_endpoints(doc: &mut Document, page: usize, target: ObjectTarg
         }
         let edits = vec![(re_op.span.clone(), re_bytes)];
         let data = pieces.splice(edits);
-        let contents = crate::text::rewritten_contents(doc, &streams, data);
+        let contents = crate::text::rewritten_contents(doc, &streams, data)?;
         doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
         return Ok(());
     }
@@ -438,7 +438,7 @@ pub fn update_line_endpoints(doc: &mut Document, page: usize, target: ObjectTarg
     edits.sort_by_key(|(span, _)| span.start);
 
     let data = pieces.splice(edits);
-    let contents = crate::text::rewritten_contents(doc, &streams, data);
+    let contents = crate::text::rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -733,8 +733,8 @@ struct ParsedLine {
     re_info: Option<(usize, usize)>,
 }
 
-fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, EditError> {
-    let pieces = Pieces::join(&streams.iter().map(|(_, bytes)| bytes.as_slice()).collect::<Vec<_>>());
+fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditError> {
+    let pieces = crate::text::joined(streams);
     let parsed = pieces.parse();
     let ops = &parsed.ops;
 

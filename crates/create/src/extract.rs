@@ -450,12 +450,7 @@ fn space(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget) -> Resul
     space_bounded(doc, cs, budget, 0)
 }
 
-fn space_bounded(
-    doc: &Document,
-    cs: Option<&Object>,
-    budget: &mut ImageBudget,
-    depth: usize,
-) -> Result<Space, String> {
+fn space_bounded(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget, depth: usize) -> Result<Space, String> {
     if depth > 4 {
         return Err("colour space nesting exceeded maximum depth".into());
     }

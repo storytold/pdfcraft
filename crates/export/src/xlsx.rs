@@ -448,7 +448,7 @@ pub fn xlsx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut global_image_counter = 0usize;
 
     for (page_index, p) in pages.iter().enumerate() {
-        let (tables, consumed) = crate::tables(&p.blocks);
+        let (tables, consumed) = crate::tables(&p.blocks, &p.rules);
         let mut rows: Vec<XlsxRow> = Vec::new();
         let mut row_tops: Vec<(f64, usize)> = Vec::new();
         let mut merges: Vec<String> = Vec::new();
@@ -713,6 +713,7 @@ mod tests {
                 rotation: 0.0,
             }],
             background: None,
+            rules: Vec::new(),
         };
 
         let bytes = xlsx(&[p], "Test Invoice");

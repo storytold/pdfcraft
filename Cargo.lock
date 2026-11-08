@@ -4414,7 +4414,6 @@ version = "0.18.1"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
- "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-model",
  "thiserror 2.0.21",
@@ -4792,6 +4791,7 @@ dependencies = [
  "pdfcraft-render",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
+ "regex",
  "sha2 0.11.0",
  "thiserror 2.0.21",
 ]
