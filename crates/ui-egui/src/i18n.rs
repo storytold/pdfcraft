@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 37;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -150,6 +150,13 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Norwegian Bokmål; every `nb-*` locale resolves here, and so do general Norwegian (`no-*`) and
     // Nynorsk (`nn-*`), which have no catalog of their own (see `candidates`).
     LangInfo { code: "nb", rtl: false },
+    // Bengali; every `bn-*` locale (`bn-BD`, `bn-IN`, `bn_BD.UTF-8`) resolves here. CLDR `bn` has
+    // "one" (0 and 1) and "other". No craft-fonts face covers Bengali yet: an installed one draws
+    // it (`system_fonts::bengali_fallback`), and the picker shows "Bengali" when none can.
+    LangInfo { code: "bn", rtl: false },
+    // Urdu; every `ur-*` locale (`ur-PK`, `ur-IN`, `ur_PK.UTF-8`) resolves here. Right to left like
+    // Arabic, whose craft-fonts face it shares: see `LangInfo::rtl`. CLDR `ur` counts: one, other.
+    LangInfo { code: "ur", rtl: true },
 ];
 
 /// Per language of [`LANGUAGES`], the (context, source) keys of PdfCraft's own catalog as written
@@ -277,6 +284,8 @@ impl Lang {
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
+            "bn" => "Bengali",
+            "ur" => "Urdu",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
             code => code,

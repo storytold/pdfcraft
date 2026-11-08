@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 37] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -575,6 +575,27 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    // Bengali (Bengali script). Month and weekday names are the same with and after a day number.
+    DateLanguage {
+        code: "bn",
+        name: "বাংলা",
+        months: ["জানুয়ারি", "ফেব্রুয়ারি", "মার্চ", "এপ্রিল", "মে", "জুন", "জুলাই", "আগস্ট", "সেপ্টেম্বর", "অক্টোবর", "নভেম্বর", "ডিসেম্বর"],
+        months_with_day: None,
+        months_short: ["জানু", "ফেব", "মার্চ", "এপ্রি", "মে", "জুন", "জুলা", "আগ", "সেপ্টে", "অক্টো", "নভে", "ডিসে"],
+        days: ["রবিবার", "সোমবার", "মঙ্গলবার", "বুধবার", "বৃহস্পতিবার", "শুক্রবার", "শনিবার"],
+        days_short: ["রবি", "সোম", "মঙ্গল", "বুধ", "বৃহস্পতি", "শুক্র", "শনি"],
+    },
+    // Urdu (Arabic script, right to left). Urdu has no customary short month or weekday names,
+    // so the short forms are the full ones.
+    DateLanguage {
+        code: "ur",
+        name: "اردو",
+        months: ["جنوری", "فروری", "مارچ", "اپریل", "مئی", "جون", "جولائی", "اگست", "ستمبر", "اکتوبر", "نومبر", "دسمبر"],
+        months_with_day: None,
+        months_short: ["جنوری", "فروری", "مارچ", "اپریل", "مئی", "جون", "جولائی", "اگست", "ستمبر", "اکتوبر", "نومبر", "دسمبر"],
+        days: ["اتوار", "پیر", "منگل", "بدھ", "جمعرات", "جمعہ", "ہفتہ"],
+        days_short: ["اتوار", "پیر", "منگل", "بدھ", "جمعرات", "جمعہ", "ہفتہ"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -896,6 +917,8 @@ mod tests {
         assert_eq!(in_lang("ddd d mmm", "sq"), "sht 7 mar");
         assert_eq!(in_lang("dddd d. mmmm yyyy", "nb"), "lørdag 7. mars 2026");
         assert_eq!(in_lang("ddd d. mmm", "nb"), "lør. 7. mar.");
+        assert_eq!(in_lang("dddd d mmmm yyyy", "bn"), "শনিবার 7 মার্চ 2026");
+        assert_eq!(in_lang("dddd d mmmm yyyy", "ur"), "ہفتہ 7 مارچ 2026");
         assert_eq!(date_language("PT-BR").map(|l| l.code), Some("pt-br"));
         assert!(date_language("xx").is_none());
         for l in &DATE_LANGUAGES {
