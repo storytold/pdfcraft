@@ -36,6 +36,7 @@ fn listing(name: &str, page: usize, rect: [f64; 4]) -> SignatureInfo {
         status: pdfcraft_engine::SignatureStatus::Unknown,
         modification: pdfcraft_engine::sign::Modification::None,
         details: Vec::new(),
+        verdict_shown: false,
     }
 }
 
