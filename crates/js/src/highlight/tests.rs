@@ -171,9 +171,40 @@ fn a_slash_that_can_only_start_a_regex_does_not_make_code_a_literal() {
         "++/`/.lastIndex;\n    ",
         // A `/` after a `${` can only start one, whatever came before the template.
         "x = {} `${/a/.source}`;\n    ",
+        // Nor after these, or a label on their line.
+        "while (x) { break\n/`/.test(x); }\n    ",
+        "while (x) { continue\n/`/.test(x); }\n    ",
+        "debugger\n/`/.test(x);\n    ",
+        "a: while (x) { break a\n/`/.test(x); }\n    ",
+        "a: while (x) { continue /* c */ a\n/`/.test(x); }\n    ",
+        "class A extends /`/.constructor {}\n    ",
     ] {
         assert!(!in_literal(script, script.len()), "{script}");
     }
+}
+
+/// A line end ends `break`, `continue` and `debugger`, so a `/` on the next line starts a regular
+/// expression, after a label on their line too: on that line itself, it would be a syntax error. After
+/// `extends`, it can only start one. Read as dividing, it hid a template's opening `` ` ``, and Enter
+/// and `}` changed the white space the template holds. A name past the line end isn't a label.
+#[test]
+fn a_slash_after_break_continue_debugger_or_extends_starts_a_regex() {
+    for (script, closer) in [
+        ("while (x) { break\n/`/.test(x); }\nvar s = `hello\n    ", "`;"),
+        ("while (x) { continue\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
+        ("debugger\n/`/.test(x);\nvar s = `a\n    ", "`;"),
+        ("a: while (x) { break a\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
+        ("a: while (x) { continue /* c */ a\n/`/.test(x); }\nvar s = `a\n    ", "`;"),
+        ("class A extends /`/.constructor {}\nvar s = `a\n    ", "`;"),
+        // Not labels, so the `/` divides: `b` past a line end, a comment's or not, or past a `;`.
+        ("while (x) { break\nb / `a\n    ", "`; }"),
+        ("while (x) { break // c\nb / `a\n    ", "`; }"),
+        ("while (x) { break; b / `a\n    ", "`; }"),
+    ] {
+        assert!(parses(&format!("{script}{closer}")), "{script}");
+        assert!(in_literal(script, script.len()), "{script}");
+    }
+    assert!(kinds("while (x) { break\n/'/.test(x); }").contains(&(TokenKind::Regex, "/'/")), "coloured as one");
 }
 
 /// The price of erring towards leaving the text alone: past a `/` that could go either way, nothing

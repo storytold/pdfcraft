@@ -80,9 +80,29 @@ const LITERALS: &[&str] = &["true", "false", "null", "undefined", "NaN", "Infini
 /// Globals PdfCraft provides from Acrobat's object model (see the crate documentation).
 pub(crate) const API: &[&str] = &["app", "color", "console", "display", "event", "getField", "util"];
 
-/// Keywords after which a `/` starts a regular expression rather than dividing.
-const BEFORE_REGEX: &[&str] =
-    &["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield", "await"];
+/// Keywords after which a `/` starts a regular expression rather than dividing. A line end ends
+/// `break`, `continue` and `debugger`, so a `/` on the next line starts a new statement; on their own
+/// line, it would be a syntax error.
+const BEFORE_REGEX: &[&str] = &[
+    "return",
+    "typeof",
+    "case",
+    "do",
+    "else",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "throw",
+    "instanceof",
+    "yield",
+    "await",
+    "extends",
+    "break",
+    "continue",
+    "debugger",
+];
 
 /// Deepest `${` nesting of template literals tracked; deeper ones are coloured as template text.
 const MAX_TEMPLATE_DEPTH: usize = 64;
@@ -135,6 +155,7 @@ fn lex(source: &str) -> (Vec<Token>, Option<usize>) {
         keyword_paren: false,
         parens: Vec::new(),
         line_start: false,
+        label_next: false,
         may_be_value: false,
         doubt: None,
     };
@@ -161,6 +182,9 @@ struct Lexer<'a> {
     /// Whether only white space and comments stand between here and a line end before it, where
     /// `-->` starts a comment. Not on the script's first line, where the parser reads `--` and `>`.
     line_start: bool,
+    /// Whether the last token was `break` or `continue`, so that a name on its line is a label, and a
+    /// `/` after it can't divide, just as after the keyword alone.
+    label_next: bool,
     /// Whether a `/` here, read as starting a regular expression, could instead be dividing what
     /// came last: an object's `}` rather than a block's, or `of` as a name.
     may_be_value: bool,
@@ -290,6 +314,7 @@ impl Lexer<'_> {
         self.after_dot = after_dot;
         self.keyword_paren = false;
         self.line_start = false;
+        self.label_next = false;
         self.may_be_value = false;
     }
 
@@ -390,6 +415,7 @@ impl Lexer<'_> {
             self.bump();
         }
         let word = self.s.get(start..self.i).unwrap_or_default();
+        let label = self.label_next && !self.line_start;
         if self.after_dot {
             // A property: `x.default`, `this.event` …
             self.after(false, false);
@@ -407,10 +433,11 @@ impl Lexer<'_> {
         if let Some(kind) = kind {
             self.push(kind, start);
         }
-        self.after(BEFORE_REGEX.contains(&word), false);
+        self.after(label || BEFORE_REGEX.contains(&word), false);
         // The ones not reserved outside some contexts: the rest can't be names, so a `/` can't divide them.
         self.may_be_value = matches!(word, "of" | "yield" | "await");
         self.keyword_paren = matches!(word, "if" | "while" | "for" | "with");
+        self.label_next = matches!(word, "break" | "continue");
     }
 }
 
