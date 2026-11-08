@@ -171,7 +171,8 @@ pub(crate) fn painted(rects: Vec<([f64; 4], i8)>, even_odd: bool, work: &mut usi
         let (y0, y1) = (row[0], row[1]);
         let mut runs: Vec<(f64, f64)> = Vec::new();
         for col in xs.windows(2) {
-            if !filled((col[0] + col[1]) / 2.0, (y0 + y1) / 2.0) {
+            // Halve each edge before adding: both can sit near 1e308, where the sum is infinite.
+            if !filled(col[0] / 2.0 + col[1] / 2.0, y0 / 2.0 + y1 / 2.0) {
                 continue;
             }
             match runs.last_mut() {
