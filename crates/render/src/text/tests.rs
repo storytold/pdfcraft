@@ -708,6 +708,7 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
 /// that counts its glyphs in order of first use from code 1 (`/Differences [1 /C1 /C2 … /C80]`)
 /// names its own codes too, but `/C65` there is the 65th glyph used, not `A`: a numbered name at
 /// a control code (`C1` at 1, `C9` at 9) gives the counter away and the font reads nothing.
+/// Code 32 is the first code a numbered name may name: `C32` at 32 reads as a space.
 #[test]
 fn numbered_glyph_names_read_as_their_own_code() {
     use lopdf::{Object, dictionary};
@@ -739,12 +740,15 @@ fn numbered_glyph_names_read_as_their_own_code() {
     let numbered_otherwise = encoding(vec![Object::Integer(1), name("C70"), name("C105"), Object::Integer(64), name("MT40")]);
     let counter = encoding(std::iter::once(Object::Integer(1)).chain((1..=80).map(|n| name(&format!("C{n}")))).collect());
     let own_and_a_control = encoding(vec![Object::Integer(9), name("C9"), Object::Integer(70), name("C70"), name("C0071")]);
+    // Code 32 is the first code a numbered name may name: `/C32` at 32 is a space, not a counter.
+    let own_from_32 = encoding(vec![Object::Integer(32), name("C32"), Object::Integer(70), name("C70"), name("C0071")]);
     let pages = [
         one_per_line(b"FGHI\xe9'\xae"),
         one_per_line(b"F\xe9"),
         one_per_line(b"\x01\x02@"),
         one_per_line(b"\x01\x20\x41\x42\x50"),
         one_per_line(b"\x09FG"),
+        b"BT /F1 20 Tf 20 290 Td <462047> Tj ET".to_vec(),
     ];
     let pdf = encoded_pages(&[
         (own, &pages[0][..]),
@@ -752,6 +756,7 @@ fn numbered_glyph_names_read_as_their_own_code() {
         (numbered_otherwise, &pages[2][..]),
         (counter, &pages[3][..]),
         (own_and_a_control, &pages[4][..]),
+        (own_from_32, &pages[5][..]),
     ]);
     let lines = |page| {
         let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
@@ -762,6 +767,8 @@ fn numbered_glyph_names_read_as_their_own_code() {
     assert!(lines(2).is_empty(), "/MT40 at 0x40 among names numbering other codes: {:?}", lines(2));
     assert!(lines(3).is_empty(), "a first-use counter /C1 … /C80 from code 1: {:?}", lines(3));
     assert!(lines(4).is_empty(), "/C9 at 9 beside /C70 at 70: {:?}", lines(4));
+    let page5 = extract_page(&pdf, 5, &InterpreterSettings::default()).unwrap().plain_text();
+    assert_eq!(page5.trim_matches('\n'), "F G", "/C32 at 32 beside /C70 at 70 reads as a space");
 }
 
 /// `numbered_glyph_names_read_as_their_own_code` in a Type 3 font, which already reads codes
