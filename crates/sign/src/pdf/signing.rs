@@ -1,4 +1,4 @@
-use super::listing::{mk_rotation, nums, sig_fields};
+use super::listing::{mk_rotation, nums, sig_fields, text, walk_sig_fields};
 use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, ObjRef, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
@@ -62,7 +62,16 @@ impl AppearanceLabels {
     /// can't draw, and that character. Signing refuses such a label when it is shown, so an
     /// interface checks its translated labels here and falls back to [`Default`] if one fails.
     pub fn first_undrawable(&self) -> Option<(&'static str, char)> {
-        self.fields().into_iter().find_map(|(field, text)| pdfcraft_fonts::first_undrawable(text).map(|c| (field, c)))
+        self.fields().into_iter().find_map(|(field, text)| {
+            text.chars()
+                .find(|c| {
+                    !bidi_control(*c)
+                        && !c.is_whitespace()
+                        && !pdfcraft_fonts::win_ansi_encodable(*c)
+                        && !(is_arabic(*c) && pdfcraft_fonts::arabic_has(*c))
+                })
+                .map(|c| (field, c))
+        })
     }
 }
 
@@ -119,14 +128,44 @@ fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), S
 /// Placeholder `/ByteRange` values: fixed width, patched after writing.
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
+/// Whether `doc` already holds a signature or a document timestamp: a signature dictionary whose
+/// `/Contents` holds a nonzero byte (a field whose `/V` has an empty or zero-filled `/Contents`
+/// is not signed yet). A signature field without a name (`/T`) counts too: indirect signature
+/// dictionaries and document timestamps are found in one pass over the file (by `/ByteRange`,
+/// or as timestamps), not through the field tree.
+pub fn has_signatures(doc: &Document) -> bool {
+    let signed = |d: &Dict| {
+        let contents = d.get(b"Contents").map(|c| doc.resolve(c));
+        // Hex strings decode to the DER when parsed; a literal string carries hex text.
+        let der = contents
+            .as_deref()
+            .and_then(Object::as_string)
+            .and_then(|s| if s.hex { Some(s.bytes.clone()) } else { super::validate::unhex(&s.bytes) });
+        der.is_some_and(|der| der.iter().any(|b| *b != 0))
+    };
+    sig_fields(doc).iter().any(|f| f.dict.get(b"V").map(|v| doc.resolve(v)).as_deref().and_then(Object::as_dict).is_some_and(signed))
+        || doc
+            .scan_objects()
+            .any(|(_, o)| o.as_dict().is_some_and(|d| (d.contains(b"ByteRange") || super::validate::is_doc_timestamp(d)) && signed(d)))
+}
+
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
+///
+/// The document's first signature (no [`has_signatures`]) removes the AcroForm's
+/// `/NeedAppearances` flag: Acrobat does not recognise a signature while it is set. Later
+/// signatures leave the flag as it is. This function draws no field appearances: once the flag is
+/// gone, viewers show each field's stored normal appearance (`/AP /N`), so a filled field whose
+/// stored appearance draws no text (an empty placeholder such as `/Tx BMC EMC`, or a look left
+/// from an earlier value) shows that instead of its value. A caller that wants the values kept
+/// draws the fields first, as `Session::sign` in the engine does.
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
     sign_inner(doc, id, opts, None)
 }
 
 /// Sign and embed an RFC 3161 signature timestamp from `tsa` (PAdES B-T). The transport is the
 /// caller's: this crate never opens a socket, and a rejected or malformed token fails the
-/// signing before any file is produced.
+/// signing before any file is produced. The form's `/NeedAppearances` flag is handled as in
+/// [`sign`].
 pub fn sign_with_timestamp(
     doc: &Document,
     id: &DigitalId,
@@ -153,6 +192,7 @@ fn sign_inner(
     }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
+    let earlier_signatures = has_signatures(&doc);
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
@@ -232,6 +272,10 @@ fn sign_inner(
             w.set(b"Subtype".to_vec(), Object::name("Widget"));
             w.set(b"FT".to_vec(), Object::name("Sig"));
             w.set(b"T".to_vec(), PdfString::text(&fname));
+            // The walk lists no field without a usable name, and counts a signed one as unread.
+            if text(&doc, &w, b"T").is_none() {
+                return Err(SignError::Pdf("a signature field needs a name that isn't blank".into()));
+            }
             w.set(b"V".to_vec(), Object::Ref(sig));
             w.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|x| Object::Real(*x)).collect()));
             w.set(b"P".to_vec(), Object::Ref(page));
@@ -280,6 +324,14 @@ fn sign_inner(
                 // Inline (or new) AcroForms stay in the catalog.
                 None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
             }
+            // The walk has to read the whole form, the new field included: past its caps the
+            // signature would be listed as unread fields, and its name could repeat an unread one.
+            if !walk_sig_fields(&doc).1 {
+                return Err(SignError::Pdf(
+                    "this form has too many fields, or a field name too long, for PdfCraft to read them all, so it can't add a signature field"
+                        .into(),
+                ));
+            }
             (wr, rect, turn)
         }
     };
@@ -292,6 +344,24 @@ fn sign_inner(
         if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
             doc.update_dict(r, |af| af.set(b"SigFlags".to_vec(), Object::Int(3)))?;
         }
+    }
+    // Acrobat does not recognise a signature in a form that asks viewers to redraw its fields
+    // (`/NeedAppearances true`): redrawing would change what the signature covers. The first
+    // signature drops the flag; a later one leaves it, as removing it would count as a change
+    // to the earlier signatures. Without the flag viewers draw each field's stored `/AP /N`, so
+    // a filled field whose stored appearance draws no text (an empty placeholder, or a stale
+    // look) shows that instead of its value unless the caller drew the fields first (see `sign`).
+    if !earlier_signatures {
+        if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
+            doc.update_dict(r, |af| {
+                af.remove(b"NeedAppearances");
+            })?;
+        }
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(af)) = c.get_mut(b"AcroForm") {
+                af.remove(b"NeedAppearances");
+            }
+        })?;
     }
     // The appearance.
     let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
@@ -428,12 +498,9 @@ fn cluster_key(c: &pdfcraft_fonts::ShapedCluster) -> ClusterKey {
     (c.text.clone(), c.glyphs.iter().map(|(id, [x, y])| (*id, [x.to_bits(), y.to_bits()])).collect(), c.advance.to_bits())
 }
 
-/// Add an outlined Arabic Type 3 font and return its reference and cluster-to-code mapping.
+/// Add an outlined Arabic Type 3 font and return its reference and codes in drawing order.
 /// Includes ToUnicode text; refuses more than 240 unique clusters or unavailable glyph outlines.
-fn type3_arabic(
-    doc: &mut Document,
-    clusters: &[pdfcraft_fonts::ShapedCluster],
-) -> Result<(ObjRef, std::collections::HashMap<ClusterKey, u8>), SignError> {
+fn type3_arabic(doc: &mut Document, clusters: &[pdfcraft_fonts::ShapedCluster]) -> Result<(ObjRef, Vec<u8>), SignError> {
     let mut charprocs = Dict::new();
     let mut differences = vec![Object::Int(1)];
     let mut widths = Vec::with_capacity(clusters.len());
@@ -441,17 +508,23 @@ fn type3_arabic(
     let mut to_unicode = Vec::new();
     let mut unique_clusters: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
     let mut cluster_to_code = std::collections::HashMap::new();
+    let mut codes = Vec::with_capacity(clusters.len());
 
     for c in clusters {
         let key = cluster_key(c);
-        if let std::collections::hash_map::Entry::Vacant(e) = cluster_to_code.entry(key) {
-            if unique_clusters.len() >= 240 {
-                return Err(SignError::Pdf("too many Arabic characters in signature appearance".into()));
+        let code = match cluster_to_code.entry(key) {
+            std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                if unique_clusters.len() >= 240 {
+                    return Err(SignError::Pdf("too many Arabic characters in signature appearance".into()));
+                }
+                unique_clusters.push(c.clone());
+                let code = u8::try_from(unique_clusters.len()).map_err(|_| SignError::Pdf("character code overflow".into()))?;
+                e.insert(code);
+                code
             }
-            unique_clusters.push(c.clone());
-            let code = u8::try_from(unique_clusters.len()).map_err(|_| SignError::Pdf("character code overflow".into()))?;
-            e.insert(code);
-        }
+        };
+        codes.push(code);
     }
 
     for (i, c) in unique_clusters.iter().enumerate() {
@@ -522,12 +595,12 @@ fn type3_arabic(
     font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
     font.set(b"ToUnicode".to_vec(), Object::Ref(cmap_ref));
     let font_ref = doc.add(Object::Dict(font));
-    Ok((font_ref, cluster_to_code))
+    Ok((font_ref, codes))
 }
 
 enum SignatureAtom {
     Arabic(pdfcraft_fonts::ShapedCluster),
-    Latin(char),
+    Latin(char, f64),
 }
 
 impl SignatureAtom {
@@ -535,15 +608,7 @@ impl SignatureAtom {
     fn advance(&self) -> f64 {
         match self {
             Self::Arabic(c) => c.advance,
-            Self::Latin(c) => {
-                let mut buf = [0; 4];
-                let text = c.encode_utf8(&mut buf);
-                if pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, text) {
-                    pdfcraft_fonts::inter_width(text, 1.0)
-                } else {
-                    pdfcraft_fonts::helvetica_width(text, 1.0)
-                }
-            }
+            Self::Latin(_, advance) => *advance,
         }
     }
 }
@@ -554,14 +619,18 @@ fn bidi_control(c: char) -> bool {
 }
 
 /// Shape directional runs, not the whole mixed-script row. Latin keeps its own font.
-fn signature_atoms(text: &str, base: Option<unicode_bidi::Level>) -> Result<Vec<SignatureAtom>, SignError> {
+fn signature_atoms(
+    text: &str,
+    base: unicode_bidi::Level,
+    advances: &mut std::collections::HashMap<char, f64>,
+) -> Result<Vec<SignatureAtom>, SignError> {
     #[cfg(test)]
     arabic_tests::ATOM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if text.is_empty() {
         // visual_runs requires a nonempty range.
         return Ok(Vec::new());
     }
-    let bidi = unicode_bidi::ParagraphBidiInfo::new(text, base);
+    let bidi = unicode_bidi::ParagraphBidiInfo::new(text, Some(base));
     let (levels, runs) = bidi.visual_runs(0..text.len());
     let mut atoms = Vec::new();
     for run in runs {
@@ -587,7 +656,18 @@ fn signature_atoms(text: &str, base: Option<unicode_bidi::Level>) -> Result<Vec<
                         .map(SignatureAtom::Arabic),
                 );
             } else {
-                atoms.extend(text.chars().map(SignatureAtom::Latin));
+                atoms.extend(text.chars().map(|c| {
+                    let advance = *advances.entry(c).or_insert_with(|| {
+                        let mut buf = [0; 4];
+                        let text = c.encode_utf8(&mut buf);
+                        if pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, text) {
+                            pdfcraft_fonts::inter_width(text, 1.0)
+                        } else {
+                            pdfcraft_fonts::helvetica_width(text, 1.0)
+                        }
+                    });
+                    SignatureAtom::Latin(c, advance)
+                }));
             }
         }
     }
@@ -599,60 +679,186 @@ struct SignatureLine {
     rtl: bool,
 }
 
+impl SignatureLine {
+    /// Measured advance at one point, shared by fitting and drawing.
+    fn width(&self) -> f64 {
+        self.atoms.iter().map(SignatureAtom::advance).sum()
+    }
+}
+
+/// Per-appearance shaping cache. Both retained candidates and cumulative shaping work are
+/// bounded: adversarial long words must not turn a small field into quadratic memory or CPU.
+#[derive(Default)]
+struct SignatureLayout {
+    candidates: std::collections::HashMap<(String, bool), std::sync::Arc<SignatureLine>>,
+    advances: std::collections::HashMap<char, f64>,
+    cached_bytes: usize,
+    shaped_bytes: usize,
+}
+
+/// Tell callers how to recover rather than silently clipping or drawing microscopic text.
+fn appearance_fit_error() -> SignError {
+    SignError::Unsupported("visible signature text does not fit at 6 pt; enlarge the signature box, shorten the text, or hide a detail".into())
+}
+
+impl SignatureLayout {
+    /// Reuse a size-independent visual candidate, retaining at most 4 MiB of estimated data.
+    fn candidate(&mut self, text: &str, base: unicode_bidi::Level) -> Result<std::sync::Arc<SignatureLine>, SignError> {
+        let key = (text.to_owned(), base.is_rtl());
+        if let Some(line) = self.candidates.get(&key) {
+            return Ok(line.clone());
+        }
+        self.shaped_bytes = self.shaped_bytes.saturating_add(text.len());
+        if self.shaped_bytes > 2_000_000 {
+            return Err(SignError::Unsupported("visible signature layout is too complex; shorten the text or hide a detail".into()));
+        }
+        let line = std::sync::Arc::new(SignatureLine { atoms: signature_atoms(text, base, &mut self.advances)?, rtl: base.is_rtl() });
+        let bytes = line.atoms.iter().fold(text.len().saturating_add(128), |total, atom| {
+            total.saturating_add(64).saturating_add(match atom {
+                SignatureAtom::Arabic(c) => c.text.len().saturating_add(c.glyphs.len().saturating_mul(32)),
+                SignatureAtom::Latin(..) => 0,
+            })
+        });
+        if self.cached_bytes.saturating_add(bytes) <= 4 * 1024 * 1024 {
+            self.cached_bytes = self.cached_bytes.saturating_add(bytes);
+            self.candidates.insert(key, line.clone());
+        }
+        Ok(line)
+    }
+
+    /// Fit at no less than 6 pt. Unwrapped text uses an analytic scale; wrapped text
+    /// uses five bounded refinements, sharing candidates across every attempted size.
+    fn fit(
+        &mut self,
+        text: &[String],
+        max_size: f64,
+        width: f64,
+        height: f64,
+        leading: f64,
+    ) -> Result<(f64, Vec<std::sync::Arc<SignatureLine>>), SignError> {
+        const MIN_SIZE: f64 = 6.0;
+        if text.is_empty() {
+            return Ok((MIN_SIZE, Vec::new()));
+        }
+        if !width.is_finite() || width <= 0.0 || !height.is_finite() || height <= 0.0 || !max_size.is_finite() || max_size < MIN_SIZE {
+            return Err(appearance_fit_error());
+        }
+        let unbounded = text.iter().map(|s| self.lines(s, 1.0, f64::MAX)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>();
+        let longest = unbounded.iter().map(|line| line.width()).fold(0.01, f64::max);
+        let size = max_size.min(width / longest).min(height / (unbounded.len().max(1) as f64 * leading));
+        if size >= MIN_SIZE {
+            return Ok((size, unbounded));
+        }
+        let mut layout = |size| -> Result<Vec<std::sync::Arc<SignatureLine>>, SignError> {
+            let lines = text.iter().map(|s| self.lines(s, size, width)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>();
+            if lines.len() as f64 * size * leading > height {
+                return Err(appearance_fit_error());
+            }
+            Ok(lines)
+        };
+        let mut best = layout(MIN_SIZE)?;
+        let mut low = MIN_SIZE;
+        let mut high = max_size;
+        for _ in 0..5 {
+            let mid = (low + high) / 2.0;
+            match layout(mid) {
+                Ok(lines) => {
+                    low = mid;
+                    best = lines;
+                }
+                Err(SignError::Unsupported(message)) if message.starts_with("visible signature text does not fit") => high = mid,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok((low, best))
+    }
+}
+
 /// Break logical text before applying bidi and shaping each final line. In particular the
 /// first RTL line must contain the beginning, not the end, of the logical paragraph.
 /// `f64::MAX` measures without wrapping, shaping each paragraph once. Finite widths measure
 /// complete candidates and split oversized words at grapheme boundaries. Refuses text over
 /// 16,384 UTF-8 bytes and propagates shaping errors.
-fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<SignatureLine>, SignError> {
-    use unicode_segmentation::UnicodeSegmentation;
-    // Bound shaping, layout retries, and the generated appearance even for hostile certificate
-    // subjects and script arguments. Labels are included by the caller in `text`.
-    if text.len() > 16_384 {
-        return Err(SignError::Unsupported("visible signature text is limited to 16384 UTF-8 bytes per row; shorten it or hide that detail".into()));
-    }
-    let mut lines = Vec::new();
-    for para in text.replace("\r\n", "\n").split(['\r', '\n']) {
-        let bidi = unicode_bidi::ParagraphBidiInfo::new(para, None);
-        let base = bidi.paragraph_level;
-        if width == f64::MAX {
-            // The name-width pass has no wrapping limit. Preserve the empty-line rule that
-            // drops leading spaces, but shape the final paragraph only once.
-            lines.push(SignatureLine { atoms: signature_atoms(para.trim_start_matches(' '), Some(base))?, rtl: base.is_rtl() });
-            continue;
+#[cfg(test)]
+fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<std::sync::Arc<SignatureLine>>, SignError> {
+    SignatureLayout::default().lines(text, size, width)
+}
+
+impl SignatureLayout {
+    /// Wrap logical paragraphs using cached, complete visual candidates. Refuse a single
+    /// grapheme wider than the box; tabs and breakable Unicode spaces behave as spaces.
+    fn lines(&mut self, text: &str, size: f64, width: f64) -> Result<Vec<std::sync::Arc<SignatureLine>>, SignError> {
+        use unicode_segmentation::UnicodeSegmentation;
+        // Bound shaping, layout retries, and the generated appearance even for hostile certificate
+        // subjects and script arguments. Labels are included by the caller in `text`.
+        if text.len() > 16_384 {
+            return Err(SignError::Unsupported(
+                "visible signature text is limited to 16384 UTF-8 bytes per row; shorten it or hide that detail".into(),
+            ));
         }
-        let measure =
-            |s: &str| -> Result<f64, SignError> { Ok(signature_atoms(s, Some(base))?.iter().map(SignatureAtom::advance).sum::<f64>() * size) };
-        let mut line = String::new();
-        for word in para.split(' ') {
-            // Font selection for spaces depends on the complete bidi run, and joining can
-            // change Arabic advances. Measure exactly the candidate that would be drawn.
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if measure(&candidate)? <= width {
-                line = candidate;
+        if !size.is_finite() || size <= 0.0 || !width.is_finite() || width <= 0.0 {
+            return Err(appearance_fit_error());
+        }
+        let mut lines = Vec::new();
+        for para in text.replace("\r\n", "\n").split(['\r', '\n']) {
+            let para: String = para.chars().map(|c| if c.is_whitespace() && !matches!(c, '\u{00a0}' | '\u{202f}') { ' ' } else { c }).collect();
+            let bidi = unicode_bidi::ParagraphBidiInfo::new(&para, None);
+            let base = bidi.paragraph_level;
+            if width == f64::MAX {
+                // The name-width pass has no wrapping limit. Preserve the empty-line rule that
+                // drops leading spaces, but shape the final paragraph only once.
+                lines.push(self.candidate(para.trim_start_matches(' '), base)?);
                 continue;
             }
-            if !line.is_empty() {
-                lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
-                line.clear();
-            }
-            if measure(word)? <= width {
-                line.push_str(word);
-            } else {
-                // Never detach vowel marks from a letter when breaking a long word.
-                for grapheme in word.graphemes(true) {
-                    let candidate = format!("{line}{grapheme}");
-                    if !line.is_empty() && measure(&candidate)? > width {
-                        lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
-                        line.clear();
+            let mut line = String::new();
+            let mut measured = None;
+            for word in para.split(' ') {
+                // Font selection for spaces depends on the complete bidi run, and joining can
+                // change Arabic advances. Measure exactly the candidate that would be drawn.
+                let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+                let shaped = self.candidate(&candidate, base)?;
+                if shaped.width() * size <= width {
+                    line = candidate;
+                    measured = Some(shaped);
+                    continue;
+                }
+                if !line.is_empty() {
+                    if let Some(shaped) = measured.take() {
+                        lines.push(shaped);
                     }
-                    line.push_str(grapheme);
+                    line.clear();
+                }
+                let shaped = self.candidate(word, base)?;
+                if shaped.width() * size <= width {
+                    line.push_str(word);
+                    measured = Some(shaped);
+                } else {
+                    // Never detach vowel marks from a letter when breaking a long word.
+                    for grapheme in word.graphemes(true) {
+                        let candidate = format!("{line}{grapheme}");
+                        let mut shaped = self.candidate(&candidate, base)?;
+                        if !line.is_empty() && shaped.width() * size > width {
+                            if let Some(shaped) = measured.take() {
+                                lines.push(shaped);
+                            }
+                            line.clear();
+                            shaped = self.candidate(grapheme, base)?;
+                        }
+                        if shaped.width() * size > width {
+                            return Err(appearance_fit_error());
+                        }
+                        line.push_str(grapheme);
+                        measured = Some(shaped);
+                    }
                 }
             }
+            lines.push(match measured {
+                Some(shaped) => shaped,
+                None => self.candidate("", base)?,
+            });
         }
-        lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
+        Ok(lines)
     }
-    Ok(lines)
 }
 
 /// Recognize the Arabic Unicode blocks supported by the signature appearance dispatcher.
@@ -674,15 +880,25 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
         return Ok((false, false));
     }
     let a = &opts.appearance;
-    let shown = [
+    let mut shown = vec![
         (a.name, "the signer's name", Some(name)),
         (a.distinguished_name, "the certificate's subject", Some(dn)),
         (a.reason, "the reason", opts.reason.as_deref()),
         (a.location, "the location", opts.location.as_deref()),
     ];
+    let has = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
+    let drawn = [a.name, a.distinguished_name, a.reason && has(opts.reason.as_deref()), a.location && has(opts.location.as_deref()), a.date];
+    let labels: Vec<_> = opts
+        .appearance_labels
+        .fields()
+        .into_iter()
+        .zip(drawn)
+        .filter(|&(_, on)| a.labels && on)
+        .map(|((field, text), _)| (true, field, Some(text)))
+        .collect();
     let mut needs_arabic = false;
     let mut needs_unicode = false;
-    for (on, _, text) in shown {
+    for &(on, _, text) in shown.iter().chain(&labels) {
         if on && let Some(s) = text {
             if contains_arabic(s) {
                 needs_arabic = true;
@@ -692,12 +908,14 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
         }
     }
     if needs_arabic {
+        shown.extend(labels.iter().copied());
         let arabic_face = pdfcraft_fonts::document_arabic_font().ok_or_else(|| {
             SignError::Unsupported(
-                "this text needs PdfCraft's Arabic font (Noto Sans Arabic), which this build doesn't include (official releases do; to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout)".into(),
+                "this text needs PdfCraft's Arabic font (Noto Sans Arabic), which this build doesn't include; use a release that includes the Arabic font, or sign without a visible appearance".into(),
             )
         })?;
-        for (on, what, text) in shown {
+        let mut coverage = std::collections::HashMap::new();
+        for &(on, what, text) in &shown {
             if on && let Some(s) = text {
                 if s.len() > 16_384 {
                     return Err(SignError::Unsupported(format!(
@@ -705,13 +923,17 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
                     )));
                 }
                 for c in s.chars() {
-                    if matches!(c, '\n' | '\r') || bidi_control(c) {
+                    if c.is_whitespace() || bidi_control(c) {
                         continue;
                     }
-                    if !pdfcraft_fonts::embedding::covers(arabic_face.bytes, &c.to_string())
-                        && !pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &c.to_string())
-                        && !pdfcraft_fonts::win_ansi_encodable(c)
-                    {
+                    let covered = *coverage.entry(c).or_insert_with(|| {
+                        let mut buf = [0; 4];
+                        let text = c.encode_utf8(&mut buf);
+                        pdfcraft_fonts::embedding::covers(arabic_face.bytes, text)
+                            || pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, text)
+                            || pdfcraft_fonts::win_ansi_encodable(c)
+                    });
+                    if !covered {
                         return Err(SignError::Unsupported(format!(
                             "{}; sign without a visible appearance, or leave {what} out of it",
                             undrawable_message(&format!("{what} of the visible signature"), c)
@@ -721,7 +943,8 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
             }
         }
     } else if needs_unicode {
-        for (on, what, text) in shown {
+        let mut coverage = std::collections::HashMap::new();
+        for &(on, what, text) in &shown {
             if on
                 && let Some(s) = text
                 && first_undrawable(s).is_some()
@@ -730,7 +953,10 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
                     if matches!(c, '\n' | '\r') {
                         continue;
                     }
-                    if !pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &c.to_string()) {
+                    if !*coverage.entry(c).or_insert_with(|| {
+                        let mut buf = [0; 4];
+                        pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, c.encode_utf8(&mut buf))
+                    }) {
                         return Err(SignError::Unsupported(format!(
                             "{}; sign without a visible appearance, or leave {what} out of it",
                             undrawable_message(&format!("{what} of the visible signature"), c)
@@ -740,10 +966,7 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
             }
         }
     }
-    let has = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
-    let drawn = [a.name, a.distinguished_name, a.reason && has(opts.reason.as_deref()), a.location && has(opts.location.as_deref()), a.date];
-    let mut labels = opts.appearance_labels.fields().into_iter().zip(drawn).filter(|&(_, on)| a.labels && on);
-    if let Some((field, c)) = labels.find_map(|((field, text), _)| first_undrawable(text).map(|c| (field, c))) {
+    if !needs_arabic && let Some((field, c)) = labels.iter().find_map(|(_, field, text)| text.and_then(first_undrawable).map(|c| (field, c))) {
         return Err(SignError::Unsupported(format!(
             "{}; pass that label in Western European characters, or leave the labels out of the visible signature",
             undrawable_message(&format!("the {field} label of the visible signature"), c)
@@ -761,25 +984,35 @@ struct AppearanceBox {
 }
 
 struct SignatureFonts {
-    codes: std::collections::HashMap<ClusterKey, u8>,
     latin_tag: String,
     latin: pdfcraft_fonts::pdf::Metrics,
 }
 
 impl SignatureFonts {
     /// Append one visual line at baseline `y`, aligned within `[left, width, padding]`.
-    /// Uses the Arabic cluster map or Latin fallback fonts and refuses unmapped glyphs.
-    fn draw_line(&self, out: &mut Vec<u8>, line: &SignatureLine, size: f64, rect: [f64; 3], y: f64) -> Result<(), SignError> {
+    /// Consumes Arabic codes in drawing order or uses Latin fallback fonts; refuses overflow.
+    fn draw_line(
+        &self,
+        out: &mut Vec<u8>,
+        line: &SignatureLine,
+        codes: &mut std::slice::Iter<'_, u8>,
+        size: f64,
+        rect: [f64; 3],
+        y: f64,
+    ) -> Result<(), SignError> {
         let [left, width, pad] = rect;
-        let line_w = line.atoms.iter().map(SignatureAtom::advance).sum::<f64>() * size;
-        let mut pen = if line.rtl { (left + width - line_w).max(left) } else { left } + pad;
+        let line_w = line.width() * size;
+        if !line_w.is_finite() || line_w > width + 0.000_001 {
+            return Err(appearance_fit_error());
+        }
+        let mut pen = if line.rtl { left + width - line_w } else { left } + pad;
         for atom in &line.atoms {
             let (tag, encoded) = match atom {
-                SignatureAtom::Arabic(c) => {
-                    let code = self.codes.get(&cluster_key(c)).ok_or_else(|| SignError::Pdf("signature glyph is not in its font".into()))?;
+                SignatureAtom::Arabic(_) => {
+                    let code = codes.next().ok_or_else(|| SignError::Pdf("signature glyph is not in its font".into()))?;
                     ("PCFull0", format!("<{code:02X}>"))
                 }
-                SignatureAtom::Latin(c) => {
+                SignatureAtom::Latin(c, _) => {
                     let text = c.to_string();
                     let (tag, bytes) = if let Some(bytes) = self.latin.encode(&text) {
                         (self.latin_tag.as_str(), bytes)
@@ -813,38 +1046,27 @@ fn draw_arabic_appearance(
     let mut fonts = Dict::new();
     let mut image = None;
 
-    let mut name_size = (b.h * 0.4).min(36.0);
-    let fit = (b.left_w - 2.0 * b.pad).max(1.0);
+    let mut layout = SignatureLayout::default();
+    let fit = b.left_w - 2.0 * b.pad;
+    let height = b.h - 2.0 * b.pad;
     let shown_name = if a.name && opts.graphic.is_none() { name } else { "" };
-    let longest =
-        signature_lines(shown_name, 1.0, f64::MAX)?.iter().map(|l| l.atoms.iter().map(SignatureAtom::advance).sum::<f64>()).fold(0.01, f64::max);
-    name_size = name_size.min(fit / longest).max(4.0);
-    let name_lines = signature_lines(shown_name, name_size, fit)?;
-
-    let mut detail_size = (b.h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
-    let wrapped_detail_lines = loop {
-        let all = lines
-            .iter()
-            .map(|l| signature_lines(l, detail_size, b.right_w))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        if all.len() as f64 * detail_size * 1.15 <= b.h - 2.0 * b.pad || detail_size <= 3.0 {
-            break all;
-        }
-        detail_size *= 0.9;
-    };
+    let (name_size, name_lines) =
+        if shown_name.is_empty() { (6.0, Vec::new()) } else { layout.fit(&[shown_name.to_owned()], (b.h * 0.4).min(36.0), fit, height, 1.1)? };
+    // right_w already excludes the outer right padding; unlike the name column it
+    // starts at right_x, so inset its left edge as well without extending the right.
+    let detail_width = b.right_w - b.pad;
+    let (detail_size, wrapped_detail_lines) = layout.fit(lines, 12.0, detail_width, height, 1.15)?;
 
     let mut all_clusters = Vec::new();
     for line in name_lines.iter().chain(&wrapped_detail_lines) {
         all_clusters.extend(line.atoms.iter().filter_map(|atom| match atom {
             SignatureAtom::Arabic(c) => Some(c.clone()),
-            SignatureAtom::Latin(_) => None,
+            SignatureAtom::Latin(..) => None,
         }));
     }
 
-    let (font_ref, cluster_to_code) = type3_arabic(doc, &all_clusters)?;
+    let (font_ref, codes) = type3_arabic(doc, &all_clusters)?;
+    let mut codes = codes.iter();
     fonts.set(b"PCFull0".to_vec(), Object::Ref(font_ref));
     let latin_tag = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter")
         .map_err(|e| SignError::Pdf(format!("failed to embed signature font: {e}")))?;
@@ -853,7 +1075,7 @@ fn draw_arabic_appearance(
         .map(|o| doc.resolve(o))
         .and_then(|o| o.as_dict().cloned())
         .ok_or_else(|| SignError::Pdf("embedded signature font dictionary not found".into()))?;
-    let font_data = SignatureFonts { codes: cluster_to_code, latin_tag, latin: pdfcraft_fonts::pdf::Metrics::from_dict(doc, &latin_dict) };
+    let font_data = SignatureFonts { latin_tag, latin: pdfcraft_fonts::pdf::Metrics::from_dict(doc, &latin_dict) };
     let mut helvetica = Dict::new();
     helvetica.set(b"Type".to_vec(), Object::name("Font"));
     helvetica.set(b"Subtype".to_vec(), Object::name("Type1"));
@@ -871,13 +1093,13 @@ fn draw_arabic_appearance(
         let total = name_lines.len() as f64 * name_size * 1.1;
         let mut y = (b.h + total) / 2.0 - name_size * 0.85;
         for line in &name_lines {
-            font_data.draw_line(&mut out, line, name_size, [0.0, fit, b.pad], y)?;
+            font_data.draw_line(&mut out, line, &mut codes, name_size, [0.0, fit, b.pad], y)?;
             y -= name_size * 1.1;
         }
     }
     let mut y = b.h - b.pad - detail_size * 0.9;
     for line in &wrapped_detail_lines {
-        font_data.draw_line(&mut out, line, detail_size, [b.right_x, b.right_w, 0.0], y)?;
+        font_data.draw_line(&mut out, line, &mut codes, detail_size, [b.right_x, detail_width, b.pad], y)?;
         y -= detail_size * 1.15;
     }
     out.extend_from_slice(b"ET\n");
@@ -1075,9 +1297,83 @@ mod arabic_tests {
             .iter()
             .map(|a| match a {
                 SignatureAtom::Arabic(c) => c.text.clone(),
-                SignatureAtom::Latin(c) => c.to_string(),
+                SignatureAtom::Latin(c, _) => c.to_string(),
             })
             .collect()
+    }
+
+    /// A grapheme that cannot fit is an error, not permission to draw outside the box.
+    #[test]
+    fn overwide_graphemes_are_refused() {
+        assert!(signature_lines("W", 12.0, 1.0).is_err());
+    }
+
+    /// Tabs and Unicode spacing are wrapping opportunities, not visible fallback glyphs.
+    #[test]
+    fn whitespace_wraps_without_drawing_controls() {
+        let lines = signature_lines("a\tb\u{2003}c", 12.0, 8.0).unwrap();
+        assert_eq!(lines.iter().map(|line| visual_text(line)).collect::<Vec<_>>(), ["a", "b", "c"]);
+    }
+
+    /// Completed lines reuse their measured atoms rather than shaping them again.
+    #[test]
+    fn finite_line_reuses_candidate_shaping() {
+        ATOM_CALLS.with(|calls| calls.set(0));
+        assert_eq!(signature_lines("Smith", 12.0, 1000.0).unwrap().len(), 1);
+        assert_eq!(ATOM_CALLS.with(std::cell::Cell::get), 1);
+    }
+
+    /// The same candidate at another size reuses atoms and cached Latin advances.
+    #[test]
+    fn size_retries_share_bounded_candidates() {
+        let mut layout = SignatureLayout::default();
+        ATOM_CALLS.with(|calls| calls.set(0));
+        let first = layout.lines("Smith Smith", 12.0, 1000.0).unwrap();
+        let calls = ATOM_CALLS.with(std::cell::Cell::get);
+        let second = layout.lines("Smith Smith", 6.0, 1000.0).unwrap();
+        assert_eq!(ATOM_CALLS.with(std::cell::Cell::get), calls);
+        assert!(std::sync::Arc::ptr_eq(&first[0], &second[0]));
+        assert_eq!(layout.advances.len(), 6);
+        assert!(layout.cached_bytes <= 4 * 1024 * 1024);
+        layout.shaped_bytes = 2_000_000;
+        assert!(layout.lines("uncached text", 6.0, 1000.0).is_err());
+    }
+
+    /// The drawer refuses over-wide lines in either direction before emitting operators.
+    #[test]
+    fn drawing_rejects_rtl_and_ltr_overflow() {
+        let fonts = SignatureFonts { latin_tag: "Helv".into(), latin: pdfcraft_fonts::pdf::Metrics::fallback() };
+        for rtl in [false, true] {
+            let line = SignatureLine { atoms: vec![SignatureAtom::Latin('W', 1.0)], rtl };
+            let mut out = Vec::new();
+            assert!(fonts.draw_line(&mut out, &line, &mut [].iter(), 12.0, [0.0, 1.0, 0.0], 10.0).is_err());
+            assert!(out.is_empty());
+        }
+    }
+
+    /// Both writing directions respect the padded left and right advance boundaries.
+    #[test]
+    fn drawing_insets_both_directions() {
+        let fonts = SignatureFonts { latin_tag: "Helv".into(), latin: pdfcraft_fonts::pdf::Metrics::fallback() };
+        for (rtl, pen) in [(false, 12), (true, 26)] {
+            let line = SignatureLine { atoms: vec![SignatureAtom::Latin('W', 1.0)], rtl };
+            let mut out = Vec::new();
+            fonts.draw_line(&mut out, &line, &mut [].iter(), 6.0, [10.0, 20.0, 2.0], 10.0).unwrap();
+            assert!(String::from_utf8(out).unwrap().contains(&format!("1 0 0 1 {pen} 10 Tm")));
+        }
+    }
+
+    /// Fitting cannot shrink below 6 pt or draw an oversized name through the box.
+    #[test]
+    fn fitting_enforces_minimum_size_and_height() {
+        let mut layout = SignatureLayout::default();
+        assert!(layout.fit(&["W".into()], 36.0, 1.0, 100.0, 1.1).is_err());
+        assert!(layout.fit(&["a\nb\nc".into()], 12.0, 100.0, 10.0, 1.15).is_err());
+        ATOM_CALLS.with(|calls| calls.set(0));
+        let (size, lines) = layout.fit(&["Smith".into()], 12.0, 100.0, 30.0, 1.15).unwrap();
+        assert!((6.0..=12.0).contains(&size));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(ATOM_CALLS.with(std::cell::Cell::get), 1, "unwrapped name fitting must shape only once");
     }
 
     /// Check that Arabic ordering does not reverse adjacent Latin text or numbers.
@@ -1182,7 +1478,9 @@ mod arabic_tests {
         assert!(lines[1].atoms.is_empty());
         assert_eq!(visual_text(&lines[2]), "Smith");
         assert_eq!(visual_text(&lines[3]), "123");
-        let lines = signature_lines("بَبَبَ", 12.0, 1.0).unwrap();
+        let single = signature_lines("بَ", 12.0, f64::MAX).unwrap();
+        let width = single[0].width() * 12.0 + 0.001;
+        let lines = signature_lines("بَبَبَ", 12.0, width).unwrap();
         assert_eq!(lines.len(), 3);
         for line in lines {
             let text = visual_text(&line);

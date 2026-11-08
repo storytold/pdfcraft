@@ -7,6 +7,16 @@ Set `PDFCRAFT_TEST_ARABIC_REQUIRED=1` only in font-enabled test environments to
 fail rather than skip if the Arabic face is missing. `CRAFT_FONTS_REQUIRED`
 checks for a Hans face, not Arabic. Leave the Arabic flag unset for no-font builds.
 
+Arabic visible appearances fit text at no less than 6 pt. A box that cannot hold
+the text returns an error asking the caller to enlarge it, shorten the text, or
+hide a detail, rather than clipping. Displayed Arabic labels use the same font
+path as field values. Tabs and breakable Unicode spaces are wrapping opportunities;
+nonbreaking spaces remain nonbreaking within ordinary word wrapping (oversized
+words may still split at grapheme boundaries). CR/LF remain explicit line breaks.
+Per-appearance candidate caching is capped at 4 MiB of estimated data and shaping
+work at 2,000,000 UTF-8 input bytes across candidate attempts. These bounds supplement
+the 16,384-byte per-row input limit; excessive layout work returns a shortening error.
+
 ```rust
 let id = pkcs12::open(&std::fs::read("me.p12")?, "password")?;          // a digital ID
 let signed = sign(&doc, &id, &SignOptions { page: 0, rect: Some(r), date, ..Default::default() })?;
@@ -55,6 +65,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   RFC 6960 OCSP responses (responder identity, OCSP-signing EKU for delegated responders,
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
+- **Status layers:** `show_status_layers` draws each signature's validated state (icon, and a
+  caption in the caller's words) into named-layer appearances, whose `/N` draws one layer form
+  that holds and draws `n1` and `n3`; `has_status_layers` says whether a document has any. It
+  works on a display copy and never edits an original object, so saving keeps the signed bytes.
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
 configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.

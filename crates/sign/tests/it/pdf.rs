@@ -122,6 +122,122 @@ fn signing_then_validating_with_and_without_trust() {
     }
 }
 
+/// The form dictionary of `bytes`, with the catalog's reference resolved.
+fn form_of(bytes: &[u8]) -> Dict {
+    let doc = open(bytes);
+    let form = doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a))).unwrap();
+    form.as_dict().unwrap().clone()
+}
+
+/// A form with `/NeedAppearances true` makes Acrobat ignore the signature (#5939): the first
+/// signature drops the flag, whether the AcroForm is inline or indirect, and keeps /Fields and
+/// sets /SigFlags.
+#[test]
+fn signing_drops_need_appearances() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let inline = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true >> >>", &[]);
+    let indirect =
+        fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>", &[b"<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) >>"]);
+    for (what, bytes) in [("inline", inline), ("indirect", indirect)] {
+        assert_eq!(form_of(&bytes).get(b"NeedAppearances"), Some(&Object::Bool(true)), "{what}");
+        let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        let form = form_of(&signed);
+        assert!(form.get(b"NeedAppearances").is_none(), "{what}");
+        assert_eq!(form.get(b"SigFlags"), Some(&Object::Int(3)), "{what}");
+        assert!(form.get(b"Fields").is_some(), "{what}");
+        let doc = open(&signed);
+        assert!(signatures(&doc, &signed, &TrustStore::default()).iter().any(|s| s.field == "Approval" && s.signed), "{what}");
+    }
+}
+
+/// A field whose /V has an empty /Contents is no earlier signature: the first real one still
+/// drops `/NeedAppearances`.
+#[test]
+fn an_empty_signature_value_does_not_count_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let bytes = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+        &[
+            b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Empty) /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>",
+            b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /Contents <> >>",
+        ],
+    );
+    assert!(!pdfcraft_sign::has_signatures(&open(&bytes)));
+    let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert!(form_of(&signed).get(b"NeedAppearances").is_none());
+}
+
+/// A signature dictionary whose /Contents is still the zero-filled placeholder (hex or literal
+/// hex text, with a /ByteRange) is not signed either: the first real signature drops the flag.
+#[test]
+fn a_zero_filled_signature_placeholder_does_not_count_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    for contents in [&b"<0000000000000000>"[..], b"(00000000)"] {
+        let sig = [&b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 10 20 10] /Contents "[..], contents, b" >>"]
+            .concat();
+        let bytes = fixture_with(
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+            &[b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Pending) /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>", &sig],
+        );
+        assert!(!pdfcraft_sign::has_signatures(&open(&bytes)), "{}", String::from_utf8_lossy(contents));
+        let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        assert!(form_of(&signed).get(b"NeedAppearances").is_none());
+        assert!(pdfcraft_sign::has_signatures(&open(&signed)));
+    }
+}
+
+/// A document timestamp outside the field tree counts by its /Contents alone, even without a
+/// /ByteRange; a zero-filled one does not.
+#[test]
+fn a_document_timestamp_counts_unless_its_contents_are_zero_filled() {
+    for (contents, stamped) in [(&b"<3080>"[..], true), (b"<0000>", false)] {
+        let ts = [&b"<< /Type /DocTimeStamp /SubFilter /ETSI.RFC3161 /Contents "[..], contents, b" >>"].concat();
+        let bytes = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true >> >>", &[&ts]);
+        assert_eq!(pdfcraft_sign::has_signatures(&open(&bytes)), stamped, "{}", String::from_utf8_lossy(contents));
+    }
+}
+
+/// A signed field without a name (`/T` is optional) is an earlier signature too: signing another
+/// field leaves `/NeedAppearances` as it is.
+#[test]
+fn an_unnamed_signed_field_counts_as_an_earlier_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let bytes = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /NeedAppearances true >> >>",
+        &[
+            b"<< /Type /Annot /Subtype /Widget /FT /Sig /Rect [10 20 100 70] /P 3 0 R /F 4 /V 8 0 R >>",
+            b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 10 20 10] /Contents <3080> >>",
+        ],
+    );
+    assert!(pdfcraft_sign::has_signatures(&open(&bytes)));
+    let signed = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert_eq!(form_of(&signed).get(b"NeedAppearances"), Some(&Object::Bool(true)));
+}
+
+/// A second signer leaves the form's flags alone: changing them would count as a change to
+/// what the first signature covered.
+#[test]
+fn a_later_signature_does_not_change_need_appearances() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let first = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let mut doc = open(&first);
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        if let Some(Object::Dict(af)) = c.get_mut(b"AcroForm") {
+            af.set(b"NeedAppearances".to_vec(), Object::Bool(true));
+        }
+    })
+    .unwrap();
+    if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
+        doc.update_dict(r, |af| af.set(b"NeedAppearances".to_vec(), Object::Bool(true))).unwrap();
+    }
+    let flagged = write_incremental(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let second = pdfcraft_sign::sign(&open(&flagged), &id, &opts()).unwrap();
+    assert_eq!(form_of(&second).get(b"NeedAppearances"), Some(&Object::Bool(true)));
+    let doc = open(&second);
+    assert!(signatures(&doc, &second, &TrustStore::default()).iter().any(|s| s.field == "Approval" && s.signed));
+}
+
 #[test]
 fn signing_an_existing_field_and_counter_signing() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2770,7 +2886,7 @@ fn visible_appearance_draws_arabic_characters_with_embedded_font() {
     let shown =
         pdfcraft_sign::Appearance { name: true, distinguished_name: true, reason: true, location: true, ..pdfcraft_sign::Appearance::default() };
     let sl = SignOptions {
-        rect: Some([150.0, 20.0, 280.0, 70.0]),
+        rect: Some([10.0, 10.0, 290.0, 290.0]),
         reason: Some("موافق على المستند".into()),
         location: Some("دمشق، سورية".into()),
         appearance: shown,
@@ -2805,10 +2921,10 @@ fn visible_appearance_draws_arabic_characters_with_embedded_font() {
             metrics.decode(&codes)
         })
         .collect();
-    // Drawing order: large name, signed-by name, the DN's wrapped organization and
-    // common name, reason, location. Shape each expected Arabic run RTL so ligature
+    // Drawing order: large name, signed-by name, the DN's organization and
+    // common name, wrapped reason, location. Shape each expected Arabic run RTL so ligature
     // clusters retain their logical text while the clusters themselves are visual-order.
-    let expected: String = ["فراس شماس", "فراس شماس", "مجلس", "الإدارة", "فراس شماس", "موافق على المستند", "دمشق، سورية"]
+    let expected: String = ["فراس شماس", "فراس شماس", "مجلس الإدارة", "فراس شماس", "موافق على", "المستند", "دمشق، سورية"]
         .into_iter()
         .flat_map(|run| pdfcraft_fonts::shape_arabic(run, true).unwrap())
         .map(|cluster| cluster.text)
@@ -2820,6 +2936,46 @@ fn visible_appearance_draws_arabic_characters_with_embedded_font() {
     assert_eq!(s.reason.as_deref(), Some("موافق على المستند"));
 }
 
+/// Reject details that cannot fit at a readable size instead of silently clipping them.
+#[test]
+fn arabic_appearance_refuses_unreadable_overflow() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let options = SignOptions {
+        reason: Some("موافق\n".repeat(100)),
+        appearance: pdfcraft_sign::Appearance { name: false, date: false, reason: true, ..Default::default() },
+        ..opts()
+    };
+    let result = pdfcraft_sign::sign(&open(&fixture()), &id, &options);
+    assert!(result.is_err(), "oversized details must be refused");
+    let error = result.unwrap_err();
+    assert!(matches!(error, SignError::Unsupported(_)), "{error}");
+    assert!(error.to_string().contains("enlarge"), "{error}");
+}
+
+/// Arabic labels alone select the Arabic renderer, even when all field values are Latin.
+#[test]
+fn arabic_appearance_accepts_arabic_labels() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let options = SignOptions {
+        reason: Some("Approved".into()),
+        appearance: pdfcraft_sign::Appearance { name: false, date: false, reason: true, ..Default::default() },
+        appearance_labels: pdfcraft_sign::AppearanceLabels { reason: "السبب: ".into(), ..Default::default() },
+        ..opts()
+    };
+    assert!(options.appearance_labels.first_undrawable().is_none());
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+    let (content, _) = appearance_of(&signed, "Signature1");
+    assert!(content.contains("/PCFull0 "), "{content}");
+}
+
 /// Mixed scripts use real fallback fonts, and CR/LF are layout breaks, not glyphs.
 #[test]
 fn visible_arabic_appearance_supports_latin_fallback_and_line_breaks() {
@@ -2829,8 +2985,12 @@ fn visible_arabic_appearance_supports_latin_fallback_and_line_breaks() {
     }
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     for reason in ["موافق Luka Petravić", "موافق\r\nApproved\nدمشق"] {
-        let options =
-            SignOptions { reason: Some(reason.into()), appearance: pdfcraft_sign::Appearance { reason: true, ..Default::default() }, ..opts() };
+        let options = SignOptions {
+            rect: Some([20.0, 20.0, 280.0, 120.0]),
+            reason: Some(reason.into()),
+            appearance: pdfcraft_sign::Appearance { reason: true, ..Default::default() },
+            ..opts()
+        };
         let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
         let doc = open(&signed);
         let (content, resources) = appearance_of(&signed, "Signature1");
@@ -2880,6 +3040,8 @@ fn visible_appearance_arabic_without_craft_fonts_returns_actionable_error() {
     let err = pdfcraft_sign::sign(&open(&fixture()), &firas_id, &sl).unwrap_err();
     assert!(matches!(err, SignError::Unsupported(_)), "{err:?}");
     assert!(err.to_string().contains("Noto Sans Arabic"), "{err}");
+    assert!(err.to_string().contains("release") && err.to_string().contains("without a visible appearance"), "{err}");
+    assert!(!err.to_string().contains("CRAFT_FONTS_DIR"), "{err}");
 }
 
 /// A label Helvetica can't draw is refused even when a detail already needs the embedded font: the
