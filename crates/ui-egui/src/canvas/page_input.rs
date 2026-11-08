@@ -1,10 +1,13 @@
 //! Page input: what the tools do with the pointer on one page, what lies under it for the page
 //! router, the text layer, and what is drawn over the page after its text.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_render::{DocInfo, LinkTarget, PageText};
 
-use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
+use super::{
+    DocView, MARK_ICON_SHARE, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, mark_anchor,
+    signature_badges, verdict_mark_rect,
+};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Owner, PagePress, top};
@@ -842,7 +845,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         unobstructed,
         ..
     } = frame.env;
-    let PageSlot { i, xf, .. } = *slot;
+    let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
@@ -957,27 +960,29 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
             view.flash = None;
         }
     }
-    // Validation is viewer chrome over the signer's original artwork, which
-    // may still say "Signature Not Verified". These badges never enter document
-    // streams, image/text exports, vector printing or Print as Image.
+    // Validation badges are viewer chrome over the widget. A recognised named-layer appearance may
+    // show the verdict in the display copy too; saves retain its original streams. Badges never
+    // enter document streams, exports or either print path. Their tips show where the comments'
+    // do (`comments::tips_shown`).
+    let tips = comments::tips_shown(tool, view);
     for badge in signature_badges(&doc.signatures, i) {
         let [x0, y0, x1, y1] = badge.rect;
         let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
-        let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
-        painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
-        // A widget too small for the mark keeps its outline: the verdict still shows.
-        if sr.width() < 4.0 || sr.height() < 4.0 {
+        // The page transform can turn a finite widget into one the screen cannot place; stroking
+        // it would put NaN into the mesh.
+        if !sr.is_finite() {
             continue;
         }
-        // Big enough to read at a glance, small enough to leave the signer's own
-        // text visible around it.
-        let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
-        let mark = Rect::from_center_size(sr.center(), vec2(side, side));
-        icons::paint(ui, mark, icon, side * 0.64, color);
-        // Overlapping widgets paint in order, so the topmost badge's verdict is the tip, with
-        // any tool; a link's or a comment's tip wins over any badge.
-        if pointer.is_some_and(|p| mark.expand(2.0).contains(p)) {
-            view.cursor.describe(Subject::SignatureBadge, badge.summary.to_string());
+        let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
+        painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
+        if let Some(mark) = verdict_mark_rect(sr, r, mark_anchor(&xf, info, i, badge.rect)) {
+            icons::paint(ui, mark, icon, mark.width() * MARK_ICON_SHARE, color);
+        }
+        // The whole widget answers the pointer, so a field too small for a mark still says its
+        // verdict; only where it is on the page, though. Overlapping widgets paint in order, so
+        // the topmost badge's verdict is the tip; a link's or a comment's tip wins over any badge.
+        if tips && pointer.is_some_and(|p| sr.expand(2.0).intersect(r).contains(p)) {
+            view.cursor.describe(Subject::SignatureBadge, crate::i18n::t(badge.summary).to_string());
         }
     }
 }
