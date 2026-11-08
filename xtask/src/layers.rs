@@ -82,6 +82,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // L7 platform + frontends
     ("platform", Class::Layer(7)),
     ("collab-client", Class::Layer(7)),
+    ("collab-client-pdf", Class::Layer(7)),
     ("collab-hub", Class::Layer(7)),
     ("collab-pdf", Class::Layer(7)),
     ("collab-server", Class::Layer(7)),
