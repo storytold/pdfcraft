@@ -2,8 +2,10 @@
 //!
 //! - **XFDF** (ISO 19444-1, Acrobat's "Export all to data file" / "Import comments", and form
 //!   data): comments with their geometry, colours, flags, authors, dates, replies, pop-ups,
-//!   ink, quadrilaterals, line ends and callouts; field values, nested by name.
-//! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax.
+//!   ink, quadrilaterals, line ends, callouts, formatting (rich text, default style, border
+//!   style and dashes, rotation, justification, fringe, line leaders) and a stamp's appearance;
+//!   field values, nested by name.
+//! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax, with their appearances.
 //! - Form data as **XML**, **CSV** and **tab-delimited text** (Acrobat's Export data formats).
 //!
 //! Import merges: a comment whose name (`/NM`) already exists on its page replaces it; field
@@ -18,6 +20,7 @@ use std::io::Write as _;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
+mod appearance;
 mod common;
 mod fdf;
 mod xfdf;
@@ -36,6 +39,8 @@ use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_format;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DataError {
@@ -85,6 +90,9 @@ pub struct Report {
     pub fields: usize,
     /// Field values the form refused (format, validation, unknown options).
     pub rejected: Vec<String>,
+    /// What the import left out of a comment it did import, each as "name: why" (an appearance
+    /// it could not read: the comment is drawn from its other entries instead).
+    pub skipped: Vec<String>,
 }
 
 /// Form data as XML, CSV or tab-delimited text (Acrobat's Export data formats).

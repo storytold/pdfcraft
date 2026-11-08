@@ -438,8 +438,10 @@ fn fdf_keeps_replies_and_review_status_on_their_note() {
     // Every cross-reference entry points at its object (other readers trust the table).
     let tail = std::str::from_utf8(&fdf[fdf.windows(5).position(|w| w == b"xref\n").unwrap()..]).unwrap();
     let xref: usize = tail.lines().skip_while(|l| *l != "startxref").nth(1).unwrap().parse().unwrap();
-    assert!(fdf[xref..].starts_with(b"xref\n0 6\n"), "{tail}");
-    for (num, line) in tail.lines().skip(3).take(5).enumerate() {
+    // The root, the four comments and their appearance streams.
+    let count: usize = tail.lines().nth(1).and_then(|l| l.strip_prefix("0 ")).unwrap().parse().unwrap();
+    assert!(fdf[xref..].starts_with(b"xref\n") && count >= 6, "{tail}");
+    for (num, line) in tail.lines().skip(3).take(count - 1).enumerate() {
         let at: usize = line[..10].parse().unwrap();
         assert!(fdf[at..].starts_with(format!("{} 0 obj\n", num + 1).as_bytes()), "object {}: {line}", num + 1);
     }
