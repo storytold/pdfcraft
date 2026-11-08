@@ -218,6 +218,15 @@ pub(super) fn js_action(js: &str) -> Object {
     Object::Dict(a)
 }
 
+/// [`js_action`] with the script as a text string: ASCII as it is, anything else in UTF-16
+/// (a currency sign), which every reader decodes as the characters written.
+pub(super) fn js_text_action(js: &str) -> Object {
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name("JavaScript"));
+    a.set(b"JS".to_vec(), Object::String(PdfString::text(js)));
+    Object::Dict(a)
+}
+
 #[cfg(test)]
 mod js_string_tests {
     use super::js_string;

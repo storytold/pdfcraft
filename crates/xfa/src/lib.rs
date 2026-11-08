@@ -12,6 +12,7 @@ pub mod fixtures;
 pub mod image;
 pub mod layout;
 pub mod model;
+pub mod number;
 pub mod packets;
 pub mod parse;
 pub mod pdf;
