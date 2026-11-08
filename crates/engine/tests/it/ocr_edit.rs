@@ -191,6 +191,21 @@ fn an_edited_ocr_phrase_is_drawn_at_one_size() {
     assert!(lines[1].rect[0] >= lines[0].rect[2] - 0.5, "Example runs into John");
 }
 
+/// Only invisible OCR text is set in one phrase size: visible text keeps each run's own size, and
+/// a phrase whose size is NaN, zero, negative or infinite falls back to its words' sizes (#3313).
+#[test]
+fn only_an_ocr_phrase_with_a_usable_size_is_set_in_one_size() {
+    let (s, id) = uneven_phrase();
+    let block = s.get(id).unwrap().text_blocks(0).remove(0);
+    assert!(block.invisible);
+    assert_eq!(block.phrase_size(), Some(block.size));
+    let visible = pdfcraft_engine::TextBlock { invisible: false, ..block.clone() };
+    assert_eq!(visible.phrase_size(), None, "visible text keeps its runs' sizes");
+    for size in [f64::NAN, 0.0, -3.0, f64::INFINITY] {
+        assert_eq!(pdfcraft_engine::TextBlock { size, ..block.clone() }.phrase_size(), None, "a {size} pt phrase falls back to its words");
+    }
+}
+
 /// Choosing a font sends the phrase through the single-style rewrite, which takes its size from
 /// the first run: that is the phrase's size too, not the first word's guess.
 #[test]
