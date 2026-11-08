@@ -7964,6 +7964,28 @@ fn field_actions_through_tools() {
     assert!(a.call("form_set_actions", &json!({ "doc": doc, "field": "Go", "actions": [{ "trigger": "wave" }] })).is_err());
 }
 
+/// #6159: `js_run` on a button can make the click with Shift or Ctrl held, which its script
+/// reads as `event.shift` and `event.modifier`; without them both are false.
+#[test]
+fn js_run_clicks_a_button_with_modifier_keys() {
+    let dir = workdir("js-run-keys");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "button", "rect": [20, 20, 120, 42], "name": "Go" }));
+    let keys = "event.shift + ',' + event.modifier";
+    let run = |a: &mut Automation, extra: Value| {
+        let mut args = json!({ "doc": doc, "script": keys, "field": "Go" });
+        if let (Some(args), Some(extra)) = (args.as_object_mut(), extra.as_object()) {
+            args.extend(extra.clone());
+        }
+        ok(a, "js_run", args)["result"].clone()
+    };
+    assert_eq!(run(&mut a, json!({})), "false,false");
+    assert_eq!(run(&mut a, json!({ "shift": true })), "true,false");
+    assert_eq!(run(&mut a, json!({ "modifier": true })), "false,true");
+    assert!(a.call("js_run", &json!({ "doc": doc, "script": keys, "field": "Go", "shift": "yes" })).is_err(), "shift is a boolean");
+}
+
 #[test]
 fn detecting_form_fields_through_tools() {
     let dir = workdir("detect-fields");

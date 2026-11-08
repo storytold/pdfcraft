@@ -139,11 +139,17 @@ impl PdfCraftApp {
 
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+        self.run_button_script_with_keys(id, field, script, pdfcraft_engine::js::Keys::default());
+    }
+
+    /// [`Self::run_button_script`] for a click made with modifier keys `keys` held, which the
+    /// script reads (`event.shift`, #6159).
+    pub fn run_button_script_with_keys(&mut self, id: DocId, field: &str, script: &str, keys: pdfcraft_engine::js::Keys) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
             return;
         }
-        match self.session.run_javascript(id, script, Some(field)) {
+        match self.session.run_javascript_with_keys(id, script, Some(field), keys) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())

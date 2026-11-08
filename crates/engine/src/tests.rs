@@ -7749,6 +7749,32 @@ fn hostile_xfa_scripts_cannot_hang_or_bloat_the_document() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
 }
 
+/// #6159: an XFA button's click script reads the modifier keys the click was made with
+/// (`xfa.event.shift`): a Shift-click on this form's Add row adds three rows and a plain click
+/// one, as the issue's form does with a hundred. The calculations that run after the click see
+/// no key held. Through `js_run`'s path (`run_javascript_with_keys`), as the app's click is.
+#[test]
+fn an_xfa_click_script_reads_the_shift_key_and_the_calculations_after_it_dont() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"table._row.addInstance(1);</script></event></field>"#,
+        r#"if (xfa.event.shift) { for (var i = 0; i != 3; i++) table._row.addInstance(1); } else { table._row.addInstance(1); }</script></event></field>
+  <field name="keys" w="1in" h="0.3in" access="readOnly"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">xfa.event.shift ? "shift" : "none"</script></calculate></field>"#,
+    );
+    assert!(tpl.contains("xfa.event.shift ? "), "the fixture's Add row script was found");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let rows = |s: &Session| s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("amount")).count();
+    let keys = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "keys").map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(rows(&s), 1);
+    let shift = crate::js::Keys { shift: true, modifier: false };
+    let o = s.run_javascript_with_keys(id, "", Some("addRow"), shift).unwrap();
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(rows(&s), 4, "a Shift-click adds three rows");
+    assert_eq!(keys(&s), ["none"], "the calculations after the click see no key held");
+    s.run_javascript(id, "", Some("addRow")).unwrap();
+    assert_eq!(rows(&s), 5, "a plain click adds one");
+}
+
 #[test]
 fn xfa_scripts_can_remove_rows_twice_and_reset_fields_by_name() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
@@ -9989,7 +10015,7 @@ fn an_xfa_button_may_show_a_side_panel_and_other_events_may_not() {
     let mut s = Session::new();
     let id = s.open("files.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
     s.take_js_output(id);
-    s.apply(id, Edit::XfaEvent { som: "form[0].files[0]".into(), activity: "click".into() }).unwrap();
+    s.apply(id, Edit::XfaEvent { som: "form[0].files[0]".into(), activity: "click".into(), keys: Default::default() }).unwrap();
     let out = s.take_js_output(id);
     assert_eq!(out.requests, [pdfcraft_js::Request::ShowPanel(pdfcraft_js::Panel::Attachments)], "{out:?}");
     s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("x".into()) }).unwrap();

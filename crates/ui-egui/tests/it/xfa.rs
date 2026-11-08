@@ -143,6 +143,43 @@ fn xfa_buttons_run_their_scripts_in_the_app() {
     assert!(h.query_by_label_contains("Hello 2").is_some(), "script console: {:?}", h.state().js_console.log);
 }
 
+/// #6159: a button clicked in the app with Shift held tells its script (`xfa.event.shift`): this
+/// Add row adds three rows for a Shift-click and one for a plain click.
+#[test]
+fn a_shift_click_on_an_xfa_button_reaches_its_script() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        "table._row.addInstance(1);</script>",
+        "if (xfa.event.shift) { for (var i = 0; i != 3; i++) table._row.addInstance(1); } else { table._row.addInstance(1); }</script>",
+    );
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
+    crate::support::settle(&mut h);
+    let rows = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().filter(|f| f.name.starts_with("amount")).count()
+    };
+    assert_eq!(rows(&h), 1);
+    // Shift is held from before the press until after the release, as a user holds it.
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "addRow").expect("the Add row button");
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    let shift = egui::Modifiers::SHIFT;
+    h.event(egui::Event::ModifiersChanged(shift));
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: shift });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: shift });
+    h.run_steps(4);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+    assert_eq!(rows(&h), 4, "script console: {:?}", h.state().js_console.log);
+    click_field(&mut h, "addRow");
+    assert_eq!(rows(&h), 5, "a plain click adds one row");
+}
+
 #[test]
 fn messages_from_scripts_run_on_open_show_right_away() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template()

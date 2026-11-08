@@ -45,8 +45,15 @@ pub(super) fn page_scroll<R>(
     out
 }
 
-/// Run a push button's action (the ones that need no JavaScript engine).
-pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
+/// Run a push button's action (the ones that need no JavaScript engine). `keys` are the modifier
+/// keys the click was made with, which a script reads.
+pub(super) fn run_button(
+    app: &mut PdfCraftApp,
+    index: usize,
+    name: &str,
+    action: pdfcraft_engine::form_scripts::ButtonAction,
+    keys: pdfcraft_engine::js::Keys,
+) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
@@ -120,7 +127,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
         B::ImportIcon => app.choose_field_image(name),
         B::Script(js) => {
             let id = app.views[index].id;
-            app.run_button_script(id, name, &js);
+            app.run_button_script_with_keys(id, name, &js, keys);
         }
     }
 }

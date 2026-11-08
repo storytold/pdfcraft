@@ -2560,3 +2560,40 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
 }
+
+/// The keys a frame with `events` gives a button click, with `held` the modifiers held when the
+/// frame runs (changed to after the events).
+fn keys_of_click(held: egui::Modifiers, mut events: Vec<egui::Event>) -> pdfcraft_engine::js::Keys {
+    let ctx = egui::Context::default();
+    events.push(egui::Event::ModifiersChanged(held));
+    let input = egui::RawInput { events, ..Default::default() };
+    let mut keys = None;
+    ctx.run_ui(input, |ui| keys = Some(click_keys(ui))).drop_without_applying_deltas();
+    keys.expect("the frame ran")
+}
+
+fn release(modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::PointerButton { pos: pos2(10.0, 10.0), button: egui::PointerButton::Primary, pressed: false, modifiers }
+}
+
+/// #6159: a button click's keys are its release's own, not what is held by the time the frame
+/// runs: Shift let go just after a Shift-click keeps it one, and Shift pressed just after a plain
+/// click doesn't make it one. Only a frame without a release reads the keys held.
+#[test]
+fn a_clicks_keys_are_its_releases_own() {
+    use egui::Modifiers as M;
+    use pdfcraft_engine::js::Keys;
+    let shift = Keys { shift: true, modifier: false };
+    let none = Keys::default();
+    assert_eq!(keys_of_click(M::NONE, vec![release(M::SHIFT)]), shift, "Shift let go after the release");
+    assert_eq!(keys_of_click(M::SHIFT, vec![release(M::NONE)]), none, "Shift pressed after the release");
+    assert_eq!(keys_of_click(M::NONE, vec![release(M::COMMAND)]), Keys { shift: false, modifier: true });
+    assert_eq!(keys_of_click(M::SHIFT, vec![release(M::SHIFT)]), shift);
+    // A secondary-button release isn't the click's.
+    let right = egui::Event::PointerButton { pos: pos2(10.0, 10.0), button: egui::PointerButton::Secondary, pressed: false, modifiers: M::SHIFT };
+    assert_eq!(keys_of_click(M::NONE, vec![right]), none);
+    // No release in the frame: the keys held.
+    assert_eq!(keys_of_click(M::SHIFT, Vec::new()), shift);
+    // Two releases in one frame: the first one's (egui doesn't say which one clicked).
+    assert_eq!(keys_of_click(M::NONE, vec![release(M::SHIFT), release(M::NONE)]), shift);
+}
