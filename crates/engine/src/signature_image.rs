@@ -188,7 +188,7 @@ impl SignatureImageSource {
             !(x == 0 || y == 0 || x + 1 == w || y + 1 == h) || p[3] == 0
         });
         let transparent_pixels = self.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 0).count();
-        if options.remove_background && transparent_border && transparent_pixels > w * h / 2 && transparent_pixels < w * h {
+        if options.remove_background && transparent_border && transparent_pixels > 0 && transparent_pixels < w * h {
             return self.normalized();
         }
         let image = if options.remove_background {
@@ -448,6 +448,22 @@ mod tests {
             assert!(pixels.iter().any(|p| p[3] > 100), "light strokes survive");
             assert!(pixels.iter().all(|p| p[..3] == [0, 0, 0]), "extracted ink is black");
         }
+    }
+
+    /// A dense colored cutout is already isolated even when ink covers most of its canvas.
+    #[test]
+    fn signature_cleanup_preserves_dense_transparent_cutout() {
+        let mut rgba = image::RgbaImage::from_pixel(80, 40, image::Rgba([0, 0, 0, 0]));
+        for y in 1..39 {
+            for x in 1..79 {
+                rgba.put_pixel(x, y, image::Rgba([45, 80, 170, 255]));
+            }
+        }
+        let source = SignatureImage::from_rgba(rgba).unwrap();
+        let cleaned = source.clean_background(SignatureCleanup::default()).unwrap();
+        assert_eq!(cleaned, source);
+        assert_eq!(cleaned.size(), [80, 40]);
+        assert_eq!(cleaned.rgba().as_chunks::<4>().0[81], [45, 80, 170, 255]);
     }
 
     /// Automatic light-ink detection preserves strokes and rejects blank or invalid inputs.

@@ -169,7 +169,7 @@ impl SigDraft {
 /// Rebuild from the immutable original; never clean an already cleaned preview again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageImportDraft {
-    pub original: SignatureImageSource,
+    pub original: std::sync::Arc<SignatureImageSource>,
     pub options: SignatureCleanup,
     pub problem: Option<String>,
     worker: ImageCleanupWorker,
@@ -177,6 +177,9 @@ pub struct ImageImportDraft {
 
 /// Keep engine errors typed across the worker boundary; localize only on the UI thread.
 type CleanupAnswer = Result<Result<SignatureImage, SignatureImageError>, String>;
+
+/// Limit desktop cleanup to one image at a time, including replaced imports.
+static IMAGE_CLEANUP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Default)]
 struct ImageCleanupWorker {
@@ -207,7 +210,7 @@ impl std::fmt::Debug for ImageCleanupWorker {
 impl ImageImportDraft {
     /// Start a reversible import with cleanup enabled and no worker running.
     fn new(original: impl Into<SignatureImageSource>) -> Self {
-        Self { original: original.into(), options: SignatureCleanup::default(), problem: None, worker: Default::default() }
+        Self { original: std::sync::Arc::new(original.into()), options: SignatureCleanup::default(), problem: None, worker: Default::default() }
     }
 
     /// Reopen a saved signature without cleaning its pixels again.
@@ -250,14 +253,18 @@ impl ImageImportDraft {
         if cfg!(target_arch = "wasm32") || ctx.is_none() {
             return self.apply(image, Self::run(&self.original, self.options));
         }
-        let original = self.original.clone();
+        // A queued job must not retain a replaced import's decoded image.
+        let original = std::sync::Arc::downgrade(&self.original);
         let options = self.options;
         let ctx = ctx.cloned();
         let (tx, rx) = std::sync::mpsc::channel();
         if std::thread::Builder::new()
             .name("signature-cleanup".into())
             .spawn(move || {
-                let _ = tx.send(Self::run(&original, options));
+                let _serial = IMAGE_CLEANUP_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(original) = original.upgrade() {
+                    let _ = tx.send(Self::run(&original, options));
+                }
                 if let Some(ctx) = ctx {
                     ctx.request_repaint();
                 }
@@ -1284,15 +1291,32 @@ mod tests {
         tx.send(Err("an obsolete failure".into())).unwrap();
         let ctx = egui::Context::default();
         draft.poll(&mut result, &ctx);
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
             draft.poll(&mut result, &ctx);
             if draft.worker.running.is_none() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        assert!(draft.worker.running.is_none(), "replacement cleanup did not finish");
         assert_eq!(result, Some(source));
         assert!(draft.problem.is_none());
+    }
+
+    #[test]
+    fn queued_replaced_import_releases_its_image() {
+        use super::*;
+        let _serial = IMAGE_CLEANUP_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([0, 0, 0, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let source = SignatureImageSource::from_bytes(&bytes.into_inner()).unwrap();
+        let mut draft = ImageImportDraft::new(source);
+        let original = std::sync::Arc::downgrade(&draft.original);
+        draft.rebuild(&mut None, Some(&egui::Context::default()));
+        assert!(draft.worker.running.is_some());
+        drop(draft);
+        assert!(original.upgrade().is_none(), "queued cleanup retained a replaced image");
     }
 
     #[test]
