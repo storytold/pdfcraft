@@ -38,6 +38,9 @@ pub struct PdfAdapter {
     session: Session,
     id: DocId,
     epoch: u64,
+    /// Where a commit writes the working file, atomically. `None` keeps bytes in
+    /// memory only (tests, headless adapters).
+    commit_path: Option<std::path::PathBuf>,
 }
 
 impl PdfAdapter {
@@ -61,7 +64,7 @@ impl PdfAdapter {
                 false,
             ));
         }
-        Ok(Self { session, id, epoch: 0 })
+        Ok(Self { session, id, epoch: 0, commit_path: None })
     }
 
     pub fn session(&self) -> &Session {
@@ -74,6 +77,12 @@ impl PdfAdapter {
 
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// Write every commit to this path (temporary file + rename, so a reader
+    /// never sees half a PDF).
+    pub fn set_commit_path(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.commit_path = Some(path.into());
     }
 
     fn apply_edit(&mut self, edit: Edit) -> Result<(), AdapterError> {
@@ -291,6 +300,17 @@ impl Adapter for PdfAdapter {
 
     fn commit(&mut self) -> Result<CommitOutcome, AdapterError> {
         let bytes = self.session.save_bytes(self.id).map_err(map_edit)?;
+        if let Some(path) = &self.commit_path {
+            let Some(dir) = path.parent() else {
+                return Err(AdapterError::new(ErrorCode::Invalid, "the commit path has no directory", false));
+            };
+            std::fs::create_dir_all(dir).map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not create {dir:?}: {e}"), false))?;
+            let temporary = path.with_extension("pdf.tmp");
+            std::fs::write(&temporary, bytes.as_slice())
+                .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not write the commit: {e}"), true))?;
+            std::fs::rename(&temporary, path)
+                .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("could not replace the working file: {e}"), true))?;
+        }
         Ok(CommitOutcome { sha256: sha256_hex(&bytes), bytes: bytes.len() as u64, conflict: false })
     }
 

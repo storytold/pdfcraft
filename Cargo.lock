@@ -4619,6 +4619,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-collab-daemon"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-collab-hub",
+ "pdfcraft-collab-pdf",
+ "pdfcraft-collab-proto",
+ "pdfcraft-collab-server",
+ "pdfcraft-collab-ws",
+ "serde_json",
+]
+
+[[package]]
 name = "pdfcraft-collab-hub"
 version = "0.18.1"
 dependencies = [
@@ -5114,6 +5126,9 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "pdfcraft-collab-client-pdf",
+ "pdfcraft-collab-proto",
+ "pdfcraft-collab-session",
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-engine",

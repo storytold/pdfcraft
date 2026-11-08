@@ -67,6 +67,10 @@ impl PdfCraftApp {
     /// Construct an application with the default session, panels, theme and control state.
     pub fn new() -> Self {
         Self {
+            #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+            collab: None,
+            #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+            collab_off: false,
             panes: Default::default(),
             session: Session::new(),
             status_captions_lang: None,
@@ -561,6 +565,8 @@ impl PdfCraftApp {
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
+        #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+        self.poll_collab(ctx);
         // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:
         // `logic` also runs alone while hidden, where the input events and time are stale.
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
@@ -838,6 +844,8 @@ impl PdfCraftApp {
         });
         // FitWindow and CenterWindow, once the document just opened is laid out.
         self.window_preferences_frame(&ctx);
+        #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+        self.show_collab(&ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

@@ -236,6 +236,7 @@ fn attach(
     // A structural operation must not be replayed onto a moved page tree; a
     // merge one is re-addressed to the new head and kept safe by its `opId`.
     let held: Vec<Op> = retry.drain(..).filter(|op| op.class == ConflictClass::Merge).collect();
+    let mut last_ping = Instant::now();
     let mut held = if behind {
         // The resync answers first; the retry is re-addressed to the new head.
         held
@@ -333,6 +334,13 @@ fn attach(
             }
         }
 
+        // A heartbeat keeps the writing lease alive while the user reads (ADR-0008).
+        if last_ping.elapsed() >= Duration::from_secs(30) {
+            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            if session.ping(ts).is_ok() {
+                last_ping = Instant::now();
+            }
+        }
         for message in session.take_outgoing() {
             if send(&mut ws, &message).is_err() {
                 *client = Some(session);

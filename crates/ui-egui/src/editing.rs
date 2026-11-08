@@ -134,6 +134,10 @@ fn form_edit_pages(
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
+        #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+        if let Some(result) = self.collab_apply_edit(&edit) {
+            return result;
+        }
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
         let target_arrange_image = match &edit {
@@ -366,6 +370,10 @@ impl PdfCraftApp {
     }
 
     fn history_step(&mut self, undo: bool) {
+        #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+        if self.collab_history_step(undo) {
+            return;
+        }
         let Some((i, id)) = self.active_ids() else { return };
         if !self.close_text_editors(i, id) {
             return;

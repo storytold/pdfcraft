@@ -111,6 +111,8 @@ pub struct Room<A: Adapter> {
     op_windows: HashMap<ActorId, (u64, u32)>,
     lease: Option<LeaseState>,
     journal: VecDeque<JournalEntry>,
+    /// The version last written to the cabinet's file.
+    committed_version: u64,
     applied_order: VecDeque<String>,
     applied: HashMap<String, Applied>,
 }
@@ -128,6 +130,7 @@ impl<A: Adapter> Room<A> {
             op_windows: HashMap::new(),
             lease: None,
             journal: VecDeque::new(),
+            committed_version: 0,
             applied_order: VecDeque::new(),
             applied: HashMap::new(),
         }
@@ -357,6 +360,20 @@ impl<A: Adapter> Room<A> {
             return Err(server_error(ErrorCode::Stale, "the document changed; resync and commit again", true));
         }
         let outcome = self.adapter.commit().map_err(|e| server_error(e.code, e.message, e.retryable))?;
+        self.committed_version = self.version;
+        Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
+    }
+
+    /// The session has changes the cabinet file does not have yet.
+    pub fn is_dirty(&self) -> bool {
+        self.version > self.committed_version
+    }
+
+    /// The server commits on its own (last participant leaving, RFC §8). No
+    /// actor or expected version: the room's head is what is written.
+    pub fn commit_now(&mut self) -> Result<CommitResult, ServerError> {
+        let outcome = self.adapter.commit().map_err(|e| server_error(e.code, e.message, e.retryable))?;
+        self.committed_version = self.version;
         Ok(CommitResult { version: self.version, sha256: outcome.sha256, bytes: outcome.bytes, conflict: outcome.conflict })
     }
 

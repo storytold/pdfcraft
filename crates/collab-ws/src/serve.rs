@@ -82,8 +82,15 @@ impl<A: Adapter> Shared<A> {
             // Ephemeral state is allowed to go stale; a version is not.
             Err(TrySendError::Full(ServerMessage::Presence(_))) => {}
             Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                let doc = self.hub.client_doc(id);
                 self.sinks.remove(&id);
                 self.hub.disconnect(id);
+                if let Some(doc) = doc
+                    && self.hub.members(&doc) == 0
+                {
+                    // A client that fell too far behind still leaves its work on disk.
+                    let _ = self.hub.commit_if_dirty(&doc);
+                }
             }
         }
     }
@@ -104,11 +111,16 @@ impl<A: Adapter> WsServer<A> {
 impl<A: Adapter + Send + 'static> WsServer<A> {
     /// Listen on `addr` and serve until the returned handle is dropped.
     pub fn bind(self, addr: &str) -> io::Result<ServerHandle> {
+        Arc::new(self).bind_arc(addr)
+    }
+
+    /// The same, keeping the shared server so `/metrics` can read it later.
+    pub fn bind_arc(self: Arc<Self>, addr: &str) -> io::Result<ServerHandle> {
         let listener = TcpListener::bind(addr)?;
         let local_addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let server = Arc::new(self);
+        let server = self;
         let thread = thread::Builder::new().name("collab-ws-accept".into()).spawn(move || {
             while !flag.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -181,6 +193,7 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
             Err(e) => return reject(&mut ws, ErrorCode::Invalid, e.to_string()),
         };
 
+        let doc = hello.doc.clone();
         let (sink, outbox) = sync_channel(self.config.outbox.max(1));
         let connected = {
             let mut shared = lock(&self.shared)?;
@@ -204,6 +217,10 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
             let mut shared = lock(&self.shared)?;
             shared.sinks.remove(&id);
             shared.hub.disconnect(id);
+            if shared.hub.members(&doc) == 0 {
+                // Last participant out: the server commits so the cabinet has the work (RFC §8).
+                let _ = shared.hub.commit_if_dirty(&doc);
+            }
         }
         let _ = ws.close(None);
         let _ = ws.flush();
@@ -262,6 +279,27 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
         }
         shared.pump();
         Ok(())
+    }
+}
+
+/// A point-in-time snapshot for `/health` and `/metrics`; no document content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Metrics {
+    pub rooms: usize,
+    pub clients: usize,
+    pub versions: Vec<(String, u64, u64)>,
+}
+
+impl<A: Adapter> WsServer<A> {
+    pub fn metrics(&self) -> Result<Metrics, TransportError> {
+        let shared = lock(&self.shared)?;
+        let mut versions = Vec::new();
+        for doc in shared.hub.docs() {
+            if let Some(room) = shared.hub.room(doc) {
+                versions.push((doc.as_str().to_owned(), room.version(), room.epoch()));
+            }
+        }
+        Ok(Metrics { rooms: shared.hub.rooms(), clients: shared.sinks.len(), versions })
     }
 }
 

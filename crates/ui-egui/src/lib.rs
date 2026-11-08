@@ -36,6 +36,8 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
+#[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+mod collab;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
@@ -290,6 +292,12 @@ pub struct PdfCraftApp {
     pub panes: panes::Panes,
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
+    /// The open collaboration session, when the feature and the environment ask for one.
+    #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+    pub(crate) collab: Option<collab::CollabUi>,
+    /// A refused token or an unrecoverable session: never retry automatically.
+    #[cfg(all(feature = "collab", not(target_arch = "wasm32")))]
+    pub(crate) collab_off: bool,
     pub session: Session,
     /// The interface language signature status captions were last drawn in.
     pub(crate) status_captions_lang: Option<i18n::Lang>,

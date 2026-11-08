@@ -60,6 +60,11 @@ getrandom = "0.4"
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).
 pollster = "1.0"
+# Collaboration (feature `collab`, off by default): the session worker and the
+# operation projection. Native-only; the web client uses the host bridge.
+pdfcraft-collab-session = { workspace = true, optional = true }
+pdfcraft-collab-client-pdf = { workspace = true, optional = true }
+pdfcraft-collab-proto = { workspace = true, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.
@@ -104,6 +109,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
 proptest = { workspace = true }
+
+[features]
+default = []
+# Real-time collaboration: the session worker, the operation projection and the
+# participants window. Off by default; the native app enables it explicitly.
+collab = ["dep:pdfcraft-collab-session", "dep:pdfcraft-collab-client-pdf", "dep:pdfcraft-collab-proto"]
 
 [build-dependencies]
 serde_json = { workspace = true }

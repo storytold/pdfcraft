@@ -137,6 +137,33 @@ impl<A: Adapter> Hub<A> {
     pub fn members(&self, doc: &DocKey) -> usize {
         self.rooms.get(doc).map_or(0, |entry| entry.members.len())
     }
+
+    /// The document a connected client belongs to.
+    pub fn client_doc(&self, id: ClientId) -> Option<DocKey> {
+        self.clients.get(&id).map(|client| client.doc.clone())
+    }
+
+    pub fn docs(&self) -> impl Iterator<Item = &DocKey> {
+        self.rooms.keys()
+    }
+
+    pub fn rooms(&self) -> usize {
+        self.rooms.len()
+    }
+
+    pub fn clients(&self) -> usize {
+        self.clients.len()
+    }
+
+    /// Write the session's head to its file when it changed and nobody reconnected.
+    /// Returns the commit result, or `None` when the room is clean or unknown.
+    pub fn commit_if_dirty(&mut self, doc: &DocKey) -> Option<Result<pdfcraft_collab_proto::CommitResult, ServerError>> {
+        let entry = self.rooms.get_mut(doc)?;
+        if !entry.room.is_dirty() {
+            return None;
+        }
+        Some(entry.room.commit_now())
+    }
 }
 
 fn deliver(clients: &mut HashMap<ClientId, Client>, id: ClientId, message: ServerMessage) {

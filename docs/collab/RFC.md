@@ -1,9 +1,11 @@
 # RFC: совместное редактирование PDF в PdfCraft
 
-- Статус: Draft
+- Статус: Implemented, draft PR
 - Автор: `pdfcraft/envoy` (по ADR-0001…0010 и `ARCHITECTURE.md`)
 - ADR: `.craft/bus/decisions/0001-op-unit.md` … `0010-undo-offline.md`
-- Upstream issue/PR: будет открыт после review; ветка `collab/impl`
+- Upstream issue/PR: ветка `collab/impl`; PR открывается отдельно
+- Реализация: `crates/collab-{proto,server,pdf,hub,client,client-pdf,session,ws}`,
+  `apps/pdfcraft-collab-server`, UI за фичей `collab`
 - Основание: `TASK.md`, `INTEGRATION.md`, `docs/collab/study.md`, `docs/collab/options.md`
 
 ## 1. Контекст
@@ -65,6 +67,11 @@ Op {
 - `primitive` — узкая операция (например, правка текста аннотации);
 - `structural` — операция над страницами/деревом.
 
+Реализованные действия v1: `annotation.add` (только sticky note), `annotation.set_contents`,
+`annotation.reply`, `annotation.delete`, `field.set_value`, `page.rotate`, `page.move`,
+`page.delete`. Остальные правки в общей сессии отклоняются как `unsupported`, а не
+применяются только локально.
+
 ### 3.2 Идентификаторы (ADR-0002)
 
 | Сущность | Адрес на время сессии |
@@ -77,9 +84,14 @@ Op {
 | закладка | путь + `epoch` |
 | слой | `ObjRef` OCG `(num, generation)` |
 
-`ObjRef` страницы/аннотации — внутренний идентификатор сервера; на провод он
-не попадает. Узкий API движка (`page_ref`, `annotation_ref`) добавляется
-следующим шагом, wire-формат от него не зависит.
+`ObjRef` страницы/аннотации — внутренний идентификатор сервера; на провод он не
+попадает. Узкий API движка (`page_ref`, `annotation_ref`) реализован
+(`de98b6e3`), но wire-формат от него не зависит.
+
+`/NM` назначает клиент: `annotation.add`/`annotation.reply` несут поле `nm`,
+сервер проверяет уникальность и сохраняет его (`Edit::AddAnnotationNamed`,
+`Edit::ReplyToAnnotationNamed`). Если поле не передано, имя генерирует движок и
+возвращает его в `applied.op.payload.nm`; клиент обязан применять именно его.
 
 ### 3.3 Документ на сервере
 
@@ -106,7 +118,7 @@ web-клиент: `web-sys` WebSocket **или** host-мост `postMessage`
 | `hello` | C→S | `v`, `app`, `doc`, `jwt`, `client` | JWT только здесь, не в URL |
 | `welcome` | S→C | `sessionId`, `actorId`, `role`, `lease`, `version`, `epoch`, `limits` | сессия открыта |
 | `op` | C→S | см. §3.1 | намерение |
-| `applied` | S→C | `opId`, `version`, `epoch`, `result`, `actorId` | авторитетный результат |
+| `applied` | S→C | `opId`, `version`, `epoch`, `actorId`, `op`, `result` | авторитетный результат; `op` — принятое намерение с нормализованным автором и `/NM`, по нему реплики применяют правку |
 | `rejected` | S→C | `opId`, `code`, `retryable`, `hint{version,epoch}` | отказ |
 | `presence` | C↔S | `page`, `viewport`, `cursor`, `selection`, `role`, `color` | эфемерно, ≤2 KiB, ≤10 Гц |
 | `resync` | C→S | `lastVersion` | догон после разрыва |
@@ -260,25 +272,66 @@ Headless, без GUI, 2–3 клиента:
 
 ## 13. Открытые вопросы
 
-1. Узкий API `engine` для `ObjRef` страницы/аннотации (`page_ref`,
-   `annotation_ref`) — нужен для отказа от `epoch`.
-2. Headless-применение без пересборки view: `Session::apply` делает
-   incremental write + `RenderPool` на каждую правку; нужен `apply_headless`
-   или батч на окно commit.
-3. Транспорт web: `web-sys` WebSocket vs host-мост `postMessage`.
-4. Судьба `/NM` при commit: сохранять клиентские UUID или переназначать.
-5. Точная политика snapshot/compaction и TTL.
-6. Ограничение размера документа для collab-сессии (500 страниц?).
+1. ~~Узкий API `engine` для `ObjRef`~~ — `page_ref`/`annotation_ref` есть;
+   `epoch` оставлен как консервативная защита адресов страниц.
+2. Headless-применение без пересборки view — **открыт**: `apply_remote`
+   обновляет `RenderPool` на каждую правку; батч на окно commit не сделан.
+3. ~~Транспорт web~~ — native: блокирующий WS; web: host-мост (не подключён).
+4. ~~Судьба `/NM`~~ — клиент назначает, сервер проверяет и сохраняет; при
+   отсутствии имени движок генерирует и возвращает его в `applied.op`.
+5. ~~Snapshot/compaction и TTL~~ — commit пишет рабочую копию (атомарно), TTL
+   сессии не реализован; журнал между рестартами **не сохраняется**.
+6. ~~Лимиты~~ — `max_participants` и `max_ops_per_sec` проверяются комнатой;
+   ограничение размера документа не задано.
+7. **Не разделяются в v1**: произвольные аннотации (highlight/shape/ink/stamp/
+   text box), вставка/дублирование/замена страниц, закладки, слои, вложения,
+   изменение содержимого страницы, повтор/redo структурных правок. Клиент
+   показывает «not shared yet» и не применяет их локально.
 
-## 14. План поставки
+## 14. План поставки и состояние
 
-1. **PR-1:** `pdfcraft-collab-proto` — конверт, типы, валидация, тесты.
-2. **PR-2:** узкий API движка для стабильных ID + тесты.
-3. **PR-3:** `pdfcraft-collab-server` — комната, журнал, lease, presence,
-   apply через `engine`; in-memory storage.
-4. **PR-4:** клиентский слой: flag, `apply_remote`, resync, presence UI.
-5. **PR-5:** commit в кабинет, 409, тесты 2–3 клиента, большой PDF.
-6. **PR-6:** документация и feature flag по умолчанию off.
+1. **PR-1:** `collab-proto` — конверт, типы, валидация. Готово (`54bfd810`).
+2. **PR-2:** узкий API движка для стабильных ID. Готово (`de98b6e3`).
+3. **PR-3:** комната (`collab-server`), PDF-адаптер (`collab-pdf`), hub
+   (`collab-hub`). Готово (`a3ebb809`, `2068b4b0`, `0c7ad5e3`,
+   `63025edf`, `96a4916b`).
+4. **PR-4:** клиент: `apply_remote` (`6ecd94f0`), машина состояний
+   (`5a6dcb26`), проекция (`a5120280`), фоновый воркер (`02f45cdb`), UI за
+   фичей `collab` (в этой ветке).
+5. **PR-5:** транспорт WS+JWT (`4f7ea0c2`), серверный бинарь
+   `apps/pdfcraft-collab-server`, commit в рабочую копию; e2e на 3 клиента
+   (`5f2a8d7c`); большой PDF — TODO.
+6. **PR-6:** документация и флаг по умолчанию off — этот раздел и `--features
+   collab`.
 
-Каждый PR — отдельная ветка от `main`, без изменений CI; ADR и этот RFC не
-переписываются в feature-PR.
+Северная звезда prod: кабинет поднимает сервер, кладёт `fileId.pdf` в
+`--documents`, выдаёт короткий JWT; клиент открывает iframe/нативное окно с
+`PDFCRAFT_COLLAB_URL/TOKEN/DOC`.
+
+## 15. Запуск сервера
+
+```bash
+cargo run -p pdfcraft-collab-daemon --release -- \
+  --documents /srv/collab/documents --data /srv/collab/data \
+  --jwt-key /srv/collab/cabinet-public.pem --jwt-audience lzmkm \
+  --listen 127.0.0.1:8787 --health 127.0.0.1:8788
+```
+
+- одна комната на `<fileId>.pdf`; рабочая копия — `--data/<fileId>.pdf`;
+- commit (кнопка, или последний участник ушёл при непустой сессии) пишет
+  рабочую копию атомарно; исходный файл в `--documents` не меняется;
+- `/health` → `{"ok":true,"rooms":N,"clients":M}`; `/metrics` — Prometheus-текст;
+- логи не содержат токенов, текста комментариев и байтов PDF.
+
+## 16. Известные ограничения (до prod)
+
+1. Журнал операций не переживает рестарт: восстановление идёт с последней
+   рабочей копии, правки после последнего commit теряются.
+2. Web-клиент к серверу не подключён (нужен host-мост `pdfcraft:session`).
+3. Presence: панель участников и страница/зум; курсоры и выделения не рисуются.
+4. Undo покрывает обратимые операции (комментарии, текст, поворот, перенос,
+   поля); удаление аннотации/страницы не отменяется.
+5. Не разделяются произвольные аннотации и часть структурных операций (см. §13.7).
+6. Комнаты заводятся каталогом файлов; control-plane кабинета (`POST /v1/sessions`)
+   не реализован.
+7. Нет WSS/TLS termination внутри сервера (ожидается reverse proxy).
