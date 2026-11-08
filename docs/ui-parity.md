@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (→ / ← scroll a page wider than the window before turning it; a comment's text, border or line, and fill each at an opacity of its own) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-02 · **Change:** minor (single-key R, I, X and M pick the reviewing tools, #3002; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -57,7 +57,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Cursor coordinates, line weights | yes | no | planned |
 | Measuring snap to paths, endpoints, midpoints, intersections | yes | yes | shipped |
 | Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608); a selected comment: a screen pixel, ⌘/Ctrl or Shift ten | shipped |
-| Single-key tool accelerators (H, V, Z, …) | yes, opt-in | no | planned |
+| Single-key tool accelerators (H, V, Z, …) | yes, opt-in | V, H, R, I, X, M, always on | partial |
 | Context menus on pages, thumbnails, comments, fields | yes | thumbnails, comments, fields | partial |
 | Comment pop-ups as movable windows, connector lines | yes | inline in the panel | planned |
 | Disabled commands explain why | no | yes | ahead |

@@ -1533,6 +1533,10 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
         (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
+        (named("R"), tl!("Replace text").to_string()),
+        (named("I"), tl!("Insert text").to_string()),
+        (named("X"), tl!("Strikethrough").to_string()),
+        (named("M"), tl!("Highlight").to_string()),
         (crate::i18n::key_name("Delete").to_string(), tl!("Delete selected pages (Organize)").to_string()),
         (key(SELECT_ALL), tl!("Select all pages (Organize)").to_string()),
     ] {

@@ -608,6 +608,117 @@ fn selected_text_replace_action_opens_replacement_composer() {
 }
 
 #[test]
+fn single_keys_pick_the_reviewing_tools() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    for (key, tool) in [
+        (egui::Key::R, CommentTool::ReplaceText),
+        (egui::Key::I, CommentTool::Caret),
+        (egui::Key::X, CommentTool::StrikeOut),
+        (egui::Key::M, CommentTool::Highlight),
+    ] {
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.key_press(key);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Comment(tool), "{key:?}");
+    }
+
+    // A chord is someone else's, and a key typed into a field is text.
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::R);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "only the plain key");
+    h.state_mut().palette_open = true;
+    h.run_steps(2);
+    h.key_press(egui::Key::X);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "not while the palette has the keyboard");
+}
+
+#[test]
+fn a_single_key_marks_the_words_selected_before_it() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.key_press(egui::Key::X);
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.iter().map(|a| a.subtype.as_str()).collect::<Vec<_>>(), ["StrikeOut"], "{c:?}");
+    assert!(h.state().views[0].selected_text().is_none());
+}
+
+#[test]
+fn a_single_key_changes_nothing_where_comments_are_forbidden() {
+    let plain = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(plain.to_vec())).expect("fixture parses");
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: 0b0100,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .expect("encrypts");
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes");
+    let mut h = harness(move |app| {
+        app.open_bytes("restricted.pdf", None, bytes).expect("opens restricted");
+    });
+    let id = h.state().active_ids().expect("active document").1;
+    assert!(!h.state().session.get(id).expect("document").allows_annotation(), "commenting is forbidden");
+    h.key_press(egui::Key::R);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.get_by_label_contains("security settings don't allow");
+
+    // A refused key takes no tool, so Space still hands back the one it borrowed.
+    let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.event(space(true));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.key_press(egui::Key::R);
+    h.run_steps(2);
+    h.event(space(false));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// An open menu holds the keys: a letter it doesn't take must not reach the page, where it
+/// would mark the selected words.
+#[test]
+fn a_single_key_leaves_the_page_alone_while_a_menu_is_open() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::X);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// F10 puts the keyboard on the in-window bar, which holds the keys as an open menu does. macOS
+/// has no keyboard on the bar.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_single_key_leaves_the_page_alone_while_the_menu_bar_has_the_keyboard() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
+    h.key_press(egui::Key::X);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+#[test]
 fn selected_text_comment_action_opens_note_composer() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);

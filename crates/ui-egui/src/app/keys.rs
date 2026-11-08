@@ -85,11 +85,13 @@ impl PdfCraftApp {
 
 impl PdfCraftApp {
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
-    /// is released. Plain letters, so not while a text field, a form field, a dialog or the
-    /// palette has the keyboard.
+    /// is released. R, I, X and M pick the reviewing tools (#3002). Plain letters, so not while a
+    /// text field, a form field, a dialog, the palette or the menu bar has the keyboard.
     fn tool_keys(&mut self, i: usize, ctx: &egui::Context) {
         use egui::Key;
-        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
+        let menu_bar = craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx);
+        let free =
+            self.dialog.is_none() && !self.palette_open && !menu_bar && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
         let (plain, space) = ctx.input(|input| (input.modifiers.is_none(), input.key_down(Key::Space)));
         if let Some(previous) = self.space_hand
             && !space
@@ -109,6 +111,15 @@ impl PdfCraftApp {
         if ctx.input(|input| input.key_pressed(Key::H)) {
             self.quick_tool = QuickTool::Hand;
             self.space_hand = None;
+        }
+        for (key, command) in [(Key::R, "comment.replace"), (Key::I, "comment.caret"), (Key::X, "comment.strikeout"), (Key::M, "comment.highlight")] {
+            if ctx.input(|input| input.key_pressed(key)) {
+                // Through the command, so a document that forbids comments says why. Refused, it
+                // took no tool, so Space still has one to hand back.
+                if self.execute(command) {
+                    self.space_hand = None;
+                }
+            }
         }
         if space && self.space_hand.is_none() && self.quick_tool != QuickTool::Hand {
             self.space_hand = Some(self.quick_tool);
