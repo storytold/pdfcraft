@@ -708,6 +708,16 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             None => view.pending_text_open = None,
         }
     }
+    // A click on grouped text prepared the page (`image_input`): the paragraph now at the point
+    // clicked opens, and none if the point is on the group's artwork. A preparation that failed
+    // left the page as it was, where no paragraph is at that point. It is taken either way.
+    if let Some((_, [x, y])) = view.grouped_text_click.take_if(|(p, _)| *p == page)
+        && gate
+        && active.is_none()
+        && let Some((block, _)) = grab_at(&boxes, user_to_screen(xf, info, page, x, y), false)
+    {
+        open_editor(cx, lines, &boxes, block, view);
+    }
     if !gate {
         return false;
     }
@@ -1347,6 +1357,49 @@ C", &picked
         assert!(app.views[0].line_editor.is_none(), "the paragraph was applied");
         let doc = app.session.get(app.views[0].id).unwrap();
         assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
+    }
+
+    /// Typing in a recognised phrase whose words OCR sized at 15, 9 and 11 pt lays every word out
+    /// at the phrase's one size, as the engine redraws it (#3313); each word used its own.
+    #[test]
+    fn typing_in_an_ocr_phrase_lays_every_word_out_at_one_size() {
+        use pdfcraft_engine::ocr::PlacedWord;
+        // A word box as OCR draws it around capitals: the cap height of a `size` pt word.
+        let word = |text: &str, x0: f64, x1: f64, size: f64| PlacedWord {
+            text: text.into(),
+            origin: [x0, 70.0],
+            across: [x1 - x0, 0.0],
+            up: [0.0, 0.718 * size],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        let mut app = crate::PdfCraftApp::new();
+        let png = pdfcraft_engine::export::encode_png(200, 100, &[235u8; 200 * 100 * 4]).unwrap();
+        let bytes = app.session.create_from_images(&[("scan.png".into(), png)]).unwrap();
+        app.open_bytes("scan.pdf", None, bytes.as_ref().clone()).unwrap();
+        let id = app.views[0].id;
+        let words = vec![word("JOHN", 20.0, 45.0, 15.0), word("SMITH", 49.0, 78.0, 9.0), word("EXAMPLE", 82.0, 124.0, 11.0)];
+        app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let doc = app.session.get(id).unwrap();
+        let block = doc.text_blocks(0).remove(0);
+        assert!(block.invisible && block.lines.len() == 3, "one phrase of three recognised words: {block:?}");
+        let (_, mut ed) = preview_app();
+        ed.text = format!("{}S", block.editor_text);
+        ed.original = block.editor_text.clone();
+        ed.look = look_of(&block);
+        ed.look0 = look_of(&block);
+        ed.source = Some((block, doc.text_lines(0)));
+
+        let ctx = egui::Context::default();
+        let mut sizes = Vec::new();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let job = editor_job(ui, &ed, &ed.text, 1.0, f32::INFINITY);
+            sizes = job.sections.iter().map(|section| section.format.font_id.size).collect();
+        })
+        .textures_delta
+        .clear();
+        assert!(sizes.len() >= 3, "a section for each word: {sizes:?}");
+        assert!(sizes.iter().all(|size| (size - 11.0).abs() < 0.05), "every word at the phrase's 11 pt: {sizes:?}");
     }
 
     #[test]
