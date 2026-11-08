@@ -201,9 +201,57 @@ fn copying_refuses_a_stale_selection_and_deleting_several_objects_is_one_step() 
     assert!(doc.copy_objects(0, &[ObjectTarget { kind: ObjectKind::Text, index: 7 }]).is_err());
     assert!(doc.copy_objects(3, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }]).is_err());
     let delete = Edit::delete_objects(0, vec![ObjectTarget { kind: ObjectKind::Text, index: 0 }, ObjectTarget { kind: ObjectKind::Image, index: 0 }]);
-    assert!(matches!(delete, Some(Edit::Batch { .. })));
+    assert!(matches!(delete, Some(Edit::DeleteObjects { .. })));
     assert!(Edit::delete_objects(0, Vec::new()).is_none());
     s.apply(a, delete.unwrap()).unwrap();
     assert_eq!(s.get(a).unwrap().can_undo(), Some("Delete content"));
     assert!(s.get(a).unwrap().editable_objects(0).unwrap().iter().all(|o| o.text.as_deref() == Some("Left")));
+}
+
+/// Two pastes of a paragraph and a picture exactly over each other: deleting a paragraph also
+/// removes a copy drawn exactly over it, so deleting all four objects together found the second
+/// paragraph's number gone and refused the whole delete. Both copies go, in one step.
+#[test]
+fn objects_pasted_exactly_over_each_other_delete_together_in_one_step() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let a = s.open("a.pdf", None, source(), None).unwrap();
+    let blank = s.create_blank(300.0, 300.0, 1).unwrap();
+    let b = s.open_new("b.pdf", blank).unwrap();
+    let mut clipboard = ObjectClipboard::new(copy_all_but_left(&s, a));
+    let Edit::PasteObjects { clip, .. } = clipboard.paste(s.get(b).unwrap(), 0).unwrap() else { panic!("a paste") };
+    for _ in 0..2 {
+        s.apply(b, Edit::PasteObjects { page: 0, clip: Arc::clone(&clip), offset: [0.0, 0.0] }).unwrap();
+    }
+    let pasted = s.get(b).unwrap().editable_objects(0).unwrap();
+    assert_eq!(pasted.iter().filter(|o| o.text.as_deref() == Some("Copied")).count(), 2, "{pasted:?}");
+    assert_eq!(pasted.len(), 4);
+    let delete = Edit::delete_objects(0, pasted.iter().map(|o| o.target).collect()).unwrap();
+    s.apply(b, delete).unwrap();
+    assert!(s.get(b).unwrap().editable_objects(0).unwrap().is_empty());
+    assert_eq!(s.get(b).unwrap().can_undo(), Some("Delete content"));
+    s.undo(b).unwrap();
+    assert_eq!(s.get(b).unwrap().editable_objects(0).unwrap(), pasted, "one undo brings both copies back");
+}
+
+/// Deleting renumbers what follows in the same inventory, so paragraphs and pictures go from
+/// the last to the first, and added content (outside those inventories) after them.
+#[test]
+fn several_objects_delete_last_first() {
+    let content =
+        "BT /F1 12 Tf 20 250 Td (A) Tj ET BT /F1 12 Tf 20 180 Td (B) Tj ET BT /F1 12 Tf 20 110 Td (C) Tj ET BT /F1 12 Tf 20 40 Td (D) Tj ET";
+    let mut doc = pdfcraft_cos::Document::open(pdf(&[(content, "<< /Font << /F1 5 0 R >> >>")], &[HELVETICA.into()])).unwrap();
+    let t = |kind, index| ObjectTarget { kind, index };
+    let targets = [t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 3), t(ObjectKind::Added, 2)];
+    let mut order = Vec::new();
+    delete(&mut doc, 0, &targets, |_, e| {
+        order.push(match e {
+            Edit::EditTextBlock { block, text, .. } if text.is_empty() => ('t', *block),
+            Edit::EditPageImage { index, change: crate::ImageEdit::Delete, .. } => ('i', *index),
+            Edit::DeleteContent { index, .. } => ('a', *index),
+            other => panic!("unexpected {other:?}"),
+        });
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
 }

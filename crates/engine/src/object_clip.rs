@@ -131,28 +131,58 @@ impl ObjectClipboard {
 
 impl Edit {
     /// The edit that deletes `targets` (indexes into one inventory of `page`) as one undo step:
-    /// what Delete and Cut do to objects selected together. Each deletion renumbers only what
-    /// follows it in its own inventory, so paragraphs and images go from the last to the first,
-    /// and added content, which the source inventories leave out, after them.
+    /// what Delete and Cut do to objects selected together. One object is deleted by its own
+    /// edit, several by [`Edit::DeleteObjects`]; none is no edit.
     pub fn delete_objects(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
-        use crate::ObjectKind;
-        targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
+        targets.sort();
         targets.dedup();
-        let mut edits: Vec<Edit> = targets
-            .into_iter()
-            .map(|t| match t.kind {
-                ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
-                ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
-                ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
-            })
-            .collect();
-        if edits.len() > 1 {
-            // "Delete content" is an edit label already, so the history reads the same in every language.
-            Some(Edit::Batch { label: "Delete content".into(), edits })
-        } else {
-            edits.pop()
+        match targets.as_slice() {
+            [] => None,
+            [t] => Some(delete_one(page, *t)),
+            _ => Some(Edit::DeleteObjects { page, objects: targets }),
         }
     }
+}
+
+fn delete_one(page: usize, t: ObjectTarget) -> Edit {
+    use crate::ObjectKind;
+    match t.kind {
+        ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
+        ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
+        ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+    }
+}
+
+/// [`Edit::DeleteObjects`], each object by its own edit (`run`). A deletion renumbers what follows
+/// it in its own inventory, so pictures go from the last to the first, and added content, which
+/// the other inventories leave out, after them. Deleting a paragraph also removes a copy drawn
+/// exactly over it (fake bold, a paste onto itself), which renumbers paragraphs before it too: so
+/// each paragraph is found again by its text and box, and one already gone with another is done.
+pub(crate) fn delete(
+    doc: &mut pdfcraft_cos::Document,
+    page: usize,
+    objects: &[ObjectTarget],
+    mut run: impl FnMut(&mut pdfcraft_cos::Document, &Edit) -> Result<(), EditError>,
+) -> Result<(), EditError> {
+    use crate::ObjectKind;
+    let mut targets = objects.to_vec();
+    targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
+    targets.dedup();
+    let blocks = pdfcraft_edit::text_blocks(doc, page)?;
+    for t in targets {
+        let edit = match t.kind {
+            ObjectKind::Text => {
+                let key = blocks.get(t.index).map(crate::BlockKey::of).ok_or_else(|| {
+                    EditError::Edit(pdfcraft_edit::EditError::Invalid("a selected paragraph no longer exists; select the objects again".into()))
+                })?;
+                let Some(block) = key.find(&pdfcraft_edit::text_blocks(doc, page)?, t.index) else { continue };
+                delete_one(page, ObjectTarget { kind: t.kind, index: block })
+            }
+            _ => delete_one(page, t),
+        };
+        run(doc, &edit)?;
+    }
+    Ok(())
 }
 
 /// [`Edit::PasteObjects`]: the copy's resources as `doc` holds them, then the paste.

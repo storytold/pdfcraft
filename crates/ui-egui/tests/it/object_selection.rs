@@ -576,9 +576,8 @@ fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_documen
     let moved = objects(&h).into_iter().filter(|o| o.text.as_deref() == Some("Keep here")).map(|o| o.rect).collect::<Vec<_>>();
     assert!((moved[1][0] - moved[0][0] - 18.0).abs() < 0.01 && (moved[0][1] - moved[1][1] - 18.0).abs() < 0.01, "{moved:?}");
 
-    // Into another open document (a blank page), where it was.
-    let blank = h.state_mut().session.create_blank(400.0, 500.0, 1).unwrap();
-    h.state_mut().open_bytes("other.pdf", None, blank.as_ref().clone()).unwrap();
+    // Into another open document, where it was: exactly over its own copy of the same page.
+    h.state_mut().open_bytes("other.pdf", None, fixture(false)).unwrap();
     h.run_steps(4);
     let other = h.state().active.unwrap();
     assert_eq!(other, 1);

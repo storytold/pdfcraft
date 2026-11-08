@@ -598,26 +598,14 @@ mod tests {
         ObjectTarget { kind, index }
     }
 
-    /// Deleting renumbers what follows in the same inventory, so the batch takes each inventory
-    /// from its last item to its first, and added content (outside the source inventories) last.
+    /// Several objects are one step, each object once (the engine orders the deletions).
     #[test]
-    fn several_objects_delete_last_first_in_one_step() {
-        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 3), t(ObjectKind::Added, 2)];
-        let Some(Edit::Batch { label, edits }) = Edit::delete_objects(0, targets) else { panic!("several objects make one batch") };
-        assert_eq!(label, "Delete content");
-        let order: Vec<(char, usize)> = edits
-            .iter()
-            .map(|e| match e {
-                Edit::EditTextBlock { block, text, .. } => {
-                    assert!(text.is_empty());
-                    ('t', *block)
-                }
-                Edit::EditPageImage { index, change: pdfcraft_engine::ImageEdit::Delete, .. } => ('i', *index),
-                Edit::DeleteContent { index, .. } => ('a', *index),
-                other => panic!("unexpected {}", other.label().wording),
-            })
-            .collect();
-        assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
+    fn several_objects_delete_in_one_step() {
+        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 1)];
+        let edit = Edit::delete_objects(0, targets).unwrap();
+        let once = [t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0)];
+        assert!(matches!(&edit, Edit::DeleteObjects { page: 0, objects } if *objects == once), "{edit:?}");
+        assert_eq!(edit.label().wording, "Delete content");
     }
 
     #[test]
