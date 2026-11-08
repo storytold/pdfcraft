@@ -237,7 +237,8 @@ fn rgb_of(c: Color32) -> Rgb {
 
 /// One round swatch; `on` rings it as the current colour.
 fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let size = crate::touch::control_size(ui.ctx(), 22.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     ui.painter().circle_filled(r.center(), 9.0, color32(c));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
@@ -249,7 +250,8 @@ fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response 
 
 /// The "+" swatch that opens "Other colour…": a ring with a plus, the size of a swatch.
 fn other_colour_swatch(ui: &mut egui::Ui, open: bool) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let size = crate::touch::control_size(ui.ctx(), 22.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     let ink = ui.visuals().widgets.inactive.fg_stroke.color;
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, ink.gamma_multiply(0.6)));
     let c = r.center();
@@ -328,7 +330,8 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     let mut picked = None;
     ui.push_id("fill-picker", |ui| {
         ui.vertical(|ui| {
-            if ui.selectable_label(current.is_none(), tl!("No fill")).clicked() {
+            let target = crate::touch::control_size(ui.ctx(), 0.0);
+            if ui.add(egui::Button::selectable(current.is_none(), tl!("No fill")).min_size(vec2(target, target))).clicked() {
                 picked = Some(None);
             }
             if let Some(c) = swatch_grid(ui, current) {
@@ -340,10 +343,11 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
 }
 
 pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let size = crate::touch::control_size(ui.ctx(), 32.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(current));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Colour")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Colour")));
     let resp = resp.on_hover_text(tl!("Colour"));
     let mut picked = None;
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
@@ -357,8 +361,9 @@ pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
 
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
+    let size = crate::touch::control_size(ui.ctx(), 32.0);
     let style = prefs.style(tool);
-    if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
+    if icons::button(ui, "pin", size, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
     let selected_color = quick_bar_colour(ui, style.color);
@@ -375,7 +380,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             }
         });
     }
-    let resp = icons::button(ui, "blend", 32.0, false, tl!("Opacity"));
+    let resp = icons::button(ui, "blend", size, false, tl!("Opacity"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(180.0);
         let mut percent = (style.opacity * 100.0).round();
@@ -387,7 +392,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         }
     });
     if tool.has_width() {
-        let resp = icons::button(ui, "sliders-horizontal", 32.0, false, tl!("Line thickness"));
+        let resp = icons::button(ui, "sliders-horizontal", size, false, tl!("Line thickness"));
         egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_min_width(180.0);
             let mut w = style.width;
@@ -430,7 +435,8 @@ pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline
 /// for no fill.
 fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let size = crate::touch::control_size(ui.ctx(), 32.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     let sq = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
     let edge = Stroke::new(1.0, Color32::from_black_alpha(90));
     match fill {
@@ -451,6 +457,16 @@ fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
     };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     resp.on_hover_text(label)
+}
+
+/// Apply a quick-bar colour to the selected comments this tool made (locked ones keep theirs),
+/// as long as the document allows commenting. Shared by the quick bar and the touch toolbar.
+pub(crate) fn apply_quick_bar_color(app: &mut crate::PdfCraftApp, tool: CommentTool, color: Rgb) {
+    if let Some((_, id)) = app.active_ids()
+        && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
+    {
+        app.colour_selection(color, |a| super::made_by(a, tool));
+    }
 }
 
 /// Status badge icon and label for a review state name.

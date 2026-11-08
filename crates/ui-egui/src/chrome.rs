@@ -31,6 +31,8 @@ const STRIP_BUTTON: f32 = 28.0;
 /// reordering, and platform window controls.
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // A phone or a narrow tablet window: Discord becomes an icon, so the tabs keep their room.
+    let compact = ui.available_width() < 600.0;
     // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
     // buttons shrink to keep a margin above and below.
     let mac = cfg!(target_os = "macos") && app.integrated_titlebar;
@@ -70,10 +72,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.combine_tab.focused = false;
                 }
                 // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
-                let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 3.0 * button
-                    + 54.0
-                    + window_controls::width(&controls.right);
+                let controls_width = if compact {
+                    4.0 * button + 16.0
+                } else {
+                    ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x) + 3.0 * button + 54.0
+                } + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
                 let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
@@ -310,7 +313,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
                     // One click to the community, from anywhere in the app.
-                    if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
+                    let discord = if compact {
+                        icons::button(ui, "messages-square", button, false, "Discord")
+                    } else {
+                        widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h)
+                    };
+                    if discord.on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
                         app.execute("help.discord");
                     }
                 });
@@ -479,6 +487,9 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let target = crate::touch::control_size(ui.ctx(), 32.0);
+    // A narrow window keeps Save and search, and leaves Print and Properties to the menus.
+    let compact = ui.available_width() < 600.0;
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
@@ -494,36 +505,66 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 // Acrobat's mode bar has no Read tab: reading is what the viewer does with no tool
                 // in use. Read mode (the panes hidden) stays a View command and a default workspace.
-                for (mode, label) in [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")] {
-                    if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
-                        app.switch_mode(mode, true);
+                let modes = [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
+                let mode_width: f32 = modes
+                    .iter()
+                    .map(|(_, label)| ui.fonts_mut(|f| f.layout_no_wrap(tl!(label).to_owned(), theme::semibold(13.5), t.text).size().x) + 24.0)
+                    .sum();
+                let actions_width = (target + 4.0) * if compact { 2.0 } else { 4.0 } + 8.0;
+                if mode_width + actions_width <= ui.available_width() {
+                    for (mode, label) in modes {
+                        if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
+                            app.switch_mode(mode, true);
+                        }
                     }
+                } else {
+                    // Too narrow for the tabs: one button names the workspace and lists the others.
+                    let label = modes.iter().find(|(mode, _)| *mode == app.mode).map_or("All tools", |(_, label)| *label);
+                    let response = widgets::ghost_button_sized(ui, "chevron-down", tl!(label), target);
+                    egui::Popup::menu(&response).show(|ui| {
+                        for (mode, label) in modes {
+                            if ui.add(egui::Button::selectable(app.mode == mode, tl!(label)).min_size(egui::vec2(140.0, target))).clicked() {
+                                app.switch_mode(mode, true);
+                                ui.close();
+                            }
+                        }
+                    });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
-                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
-                        // A document that forbids printing says so here, before the dialog (#2669).
-                        let may_print = !has_doc || pdfcraft_engine::commands::command("print.dialog").is_some_and(|c| app.command_enabled(c));
-                        let mut print = ui.add_enabled_ui(may_print, |ui| icons::button(ui, "printer", 32.0, false, &tip)).inner;
-                        if !may_print {
-                            print = print.on_disabled_hover_text(crate::print_refused());
-                        }
-                        if print.clicked() {
-                            app.run_command("print.dialog");
+                        if !compact {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
+                            // A document that forbids printing says so here, before the dialog (#2669).
+                            let may_print = !has_doc || pdfcraft_engine::commands::command("print.dialog").is_some_and(|c| app.command_enabled(c));
+                            let mut print = ui.add_enabled_ui(may_print, |ui| icons::button(ui, "printer", target, false, &tip)).inner;
+                            if !may_print {
+                                print = print.on_disabled_hover_text(crate::print_refused());
+                            }
+                            if print.clicked() {
+                                app.run_command("print.dialog");
+                            }
                         }
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
-                        if icons::button(ui, "save", 32.0, false, &tip).clicked() {
+                        if icons::button(ui, "save", target, false, &tip).clicked() {
                             app.run_command("file.save");
                         }
-                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
-                        if icons::button(ui, "info", 32.0, false, &tip).clicked() {
-                            app.dialog = Some(Dialog::Properties(PropsTab::Description));
+                        if !compact {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
+                            if icons::button(ui, "info", target, false, &tip).clicked() {
+                                app.dialog = Some(Dialog::Properties(PropsTab::Description));
+                            }
                         }
                     });
                     ui.add_space(8.0);
-                    if widgets::search_box(ui, tl!("Find tools and commands"), 260.0).clicked() {
+                    // Touch and narrow windows get a search button the size of the others.
+                    let search = if !app.touch_active() && ui.available_width() >= 260.0 {
+                        widgets::search_box(ui, tl!("Find tools and commands"), 260.0)
+                    } else {
+                        icons::button(ui, "search", target, false, tl!("Find tools and commands"))
+                    };
+                    if search.clicked() {
                         app.palette_open = true;
                     }
                 });

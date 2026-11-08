@@ -38,6 +38,8 @@
 //!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
+//!   `touch-mode=auto|on|off` controls the larger drawing toolbar; `ui.state` reports the choice
+//!   and whether it is currently active. It does not change the document.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
 //!   `hotbar-tools` accepts comma-separated command IDs (empty clears the bar), and
 //!   `hotbar-side=float|left|right|top|bottom` floats or docks the customizable hotbar;

@@ -145,6 +145,8 @@ impl Host for crate::PdfCraftApp {
             "palette_open": self.palette_open,
             "theme": format!("{:?}", self.theme),
             "theme_preference": self.theme_preference,
+            "touch_mode": self.touch_mode,
+            "touch_active": self.touch_active(),
             "show_page_edge_shadows": self.show_page_edge_shadows,
             "language": self.language,
             "notice": self.toast.as_ref().map(|t| t.0.clone()),

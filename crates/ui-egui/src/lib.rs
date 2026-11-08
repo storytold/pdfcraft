@@ -140,6 +140,7 @@ use platform::pickers;
 pub use platform::portable;
 #[cfg(not(target_arch = "wasm32"))]
 use platform::system_fonts;
+pub use platform::touch;
 pub use platform::ui_scale;
 pub use platform::updates;
 pub use platform::window_controls;
@@ -333,6 +334,9 @@ pub struct PdfCraftApp {
     pub language: String,
     /// Preferences ▸ Interface size as a factor, or `None` to follow [`Self::system_text_scale`].
     pub ui_scale: Option<f32>,
+    /// Larger drawing tools: automatic after touch input, always on, or off.
+    pub touch_mode: touch::TouchMode,
+    touch_input: touch::TouchState,
     /// The desktop's text scaling (GNOME's text scaling factor), which the desktop app reads at
     /// launch. 1.0 elsewhere, so tests and screenshots don't depend on the machine.
     pub system_text_scale: f32,

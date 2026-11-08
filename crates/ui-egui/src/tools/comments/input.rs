@@ -443,35 +443,44 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        if cx.ptr.drag_started
+        // A pen or finger stroke can press, move and release before egui calls it a drag, so
+        // freehand drawing starts at the press the pages hold and ends at its release.
+        let dots = matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight);
+        let drawing = matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page);
+        if (cx.ptr.drag_started || (dots && cx.ptr.pressed().is_some()))
+            && !drawing
             && pressed_here
             && let Some(o) = origin
         {
             cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
             cv.selected = None;
         }
+        // A stroke ends where the button came up, not where the pointer hovers after it.
+        let release = cx.ptr.released;
         if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
             && *page == cx.page
-            && let Some(p) = pointer
+            && let Some(p) = release.or(pointer)
         {
             let p = clamp_to(page_rect, p);
-            let u = cx.to_user(p);
             if matches!(*tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
-                let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
-                if last.distance(p) >= 1.5 {
-                    points.push(u);
+                // Every point the pointer passed this frame, then where it is now.
+                for sample in &cx.ptr.samples {
+                    append_ink_sample(points, cx, clamp_to(page_rect, *sample));
                 }
+                append_ink_sample(points, cx, p);
             } else {
                 points.truncate(1);
                 let line = matches!(*tool, CommentTool::Line | CommentTool::Arrow);
-                points.push(held(points.first(), u, line && shift));
+                points.push(held(points.first(), cx.to_user(p), line && shift));
             }
         }
-        if resp.drag_stopped()
+        let mut placed = false;
+        if (resp.drag_stopped() || (dots && release.is_some()))
             && let Some(Gesture::Draw { page, tool, points }) = cv.gesture.clone()
             && page == cx.page
         {
             cv.gesture = None;
+            placed = true;
             if tool == CommentTool::Eraser {
                 view.pending_edit = erase(cx, &points);
             } else if let Some(shape) = drawn_shape(tool, &points) {
@@ -483,7 +492,9 @@ impl Gestures<'_> {
         // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
         // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
         // single PDF point is visible and remains editable like any other drawing.
-        if matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight)
+        if dots
+            && !placed
+            && cv.gesture.is_none()
             && self.clicked()
             && over_page
             && let Some(p) = pointer
@@ -802,3 +813,23 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
         view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
     }
 }
+
+/// Adds a stroke's next point, skipping one that does not move (under a quarter of a screen
+/// point) and any that is not finite. A stroke that reaches [`MAX_STROKE_POINTS`] keeps every
+/// other point it has, so a long one stays bounded and still ends where the pen is.
+fn append_ink_sample(points: &mut Vec<[f64; 2]>, cx: &PageCx<'_>, sample: Pos2) {
+    if !sample.is_finite() || points.last().is_some_and(|last| cx.to_screen(*last).distance(sample) < 0.25) {
+        return;
+    }
+    if points.len() >= MAX_STROKE_POINTS {
+        let mut index = 0;
+        points.retain(|_| {
+            index += 1;
+            index % 2 == 1
+        });
+    }
+    points.push(cx.to_user(sample));
+}
+
+/// The most points one freehand stroke keeps.
+const MAX_STROKE_POINTS: usize = 65_536;

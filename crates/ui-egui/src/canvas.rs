@@ -973,6 +973,17 @@ impl DocView {
         }
     }
 
+    /// Abandon the press the pages hold, as Escape does: nothing it drives is placed, drawn or
+    /// moved, a text selection being dragged goes with it, and the press is ignored until the
+    /// button is up. A second finger takes a press this way for navigation.
+    pub(crate) fn cancel_press(&mut self) {
+        if self.selection_drag {
+            self.clear_selection();
+        }
+        self.cancel_pointer_gestures();
+        self.press_cancelled = true;
+    }
+
     /// A view of a newly opened document, shown as `defaults` say. Opening a file then applies
     /// any layout or zoom the PDF itself asks for.
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
@@ -1236,6 +1247,8 @@ struct PageEnv<'a> {
     form: &'a Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
     glide: Vec2,
+    /// Two fingers' pan this frame, when they began over the page view.
+    touch_delta: Vec2,
     hand: bool,
     info: &'a DocInfo,
     initials: &'a Option<crate::fill_sign::SavedSig>,
@@ -1695,6 +1708,7 @@ fn draw_pages(
         modal,
         navigation_enabled,
         precise_scroll,
+        touch_delta,
         prefs,
         preparing,
         selection_wheel,
@@ -1705,8 +1719,8 @@ fn draw_pages(
         y_shift,
         ..
     } = *env;
-    // egui's drag responses accept every pointer button. Keep a wheel gesture from also
-    // selecting text, drawing a mark, or panning with the Hand tool.
+    // egui's drag responses accept every pointer button. Keep a wheel gesture (or two fingers)
+    // from also selecting text, drawing a mark, or panning with the Hand tool.
     if middle_gesture {
         let opacity = ui.opacity();
         ui.disable();
@@ -1718,7 +1732,7 @@ fn draw_pages(
     // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
     // until after the text widgets when a selection owns that drag.
     let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + coarse_scroll };
-    let delta = auto_delta + edge_delta - vec2(key_side, key_scroll) + wheel_delta + glide;
+    let delta = auto_delta + edge_delta - vec2(key_side, key_scroll) + wheel_delta + glide + touch_delta;
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
@@ -2486,13 +2500,15 @@ struct ScrollGeometry<'a> {
     avail: Rect,
     middle_gesture: bool,
     hand: bool,
+    /// One finger scrolls the view: with the Select and Hand tools, not while drawing.
+    drag_scrolls: bool,
 }
 
 /// The page view's scroll area, with the offset this frame's jumps, drags and zoom anchor ask for.
 fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
-    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
+    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand, drag_scrolls } = *geometry;
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
-        drag: if middle_gesture {
+        drag: if middle_gesture || !drag_scrolls {
             egui::scroll_area::DragScroll::Never
         } else if hand {
             egui::scroll_area::DragScroll::Always
@@ -2786,11 +2802,16 @@ fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect
     })
 }
 
+/// Whether one finger scrolls the view with `tool`: Select and Hand do; the others draw or mark.
+fn drag_scrolls(tool: QuickTool) -> bool {
+    matches!(tool, QuickTool::Select | QuickTool::Hand)
+}
+
 /// Pinch / ctrl+scroll zoom, anchored on the pointer or the current page.
-fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rect: Rect, enabled: bool) {
+fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, fingers: Option<Pos2>, navigation_rect: Rect, enabled: bool) {
     if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && enabled && ui.rect_contains_pointer(navigation_rect) {
         let z = view.zoom * zoom_delta;
-        match zoom_anchor(ui) {
+        match fingers.or_else(|| zoom_anchor(ui)) {
             Some(p) => view.zoom_at(z, p),
             None => view.set_zoom(z),
         }
@@ -2926,6 +2947,7 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+    crate::touch::toolbar(ui, app);
     let t = Tokens::get(ui.ctx());
     let can_paste_key = egui::Id::unique("can-paste-image");
     let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
@@ -3007,13 +3029,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.fit_zoom(info);
     anchor_zoom_change(view, avail.width(), old_zoom);
 
-    // Pinch / ctrl+scroll zoom, anchored on the current page.
-    let zoom_delta = crate::motion::zoom_delta(ui.ctx());
+    // Pinch / ctrl+scroll zoom, anchored on the current page. Two fingers on a touch screen zoom
+    // about where they were.
+    let zoom_delta = app.touch_input.zoom_delta(ui.ctx());
     // Exclude the previous frame's scrollbar tracks from gesture activation.
     let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
     let navigation_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open && ui.is_enabled() && ui.input(|i| i.focused);
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
-    pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
+    pinch_zoom(ui, view, zoom_delta, app.touch_input.center, navigation_rect, navigation_enabled);
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
@@ -3023,8 +3046,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // current two-page spread (with the cover rule). These indices drive paging, which pages are
     // drawn, and the content height (#752). Empty for a document with no pages.
     let row = shown_row(view, &rects);
-    let middle_gesture = view.auto_scroll.blocks_input();
-    reset_interrupted_wheel(ui, view, zoom_delta != 1.0 || key_scroll != 0.0 || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO);
+    // Two fingers navigate: like a wheel gesture, they keep the pages' tools from the press.
+    let middle_gesture = view.auto_scroll.blocks_input() || app.touch_input.blocked;
+    let drag_scrolls = drag_scrolls(app.quick_tool);
+    let touch_delta = app.touch_input.pan_over(avail, unobstructed);
+    reset_interrupted_wheel(
+        ui,
+        view,
+        zoom_delta != 1.0 || key_scroll != 0.0 || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO || touch_delta != Vec2::ZERO,
+    );
     // Not scrolling: when the whole page or spread fits, the wheel would do nothing, so it turns
     // pages instead; zoomed in far enough to pan, it pans, and at the edge it turns the page on
     // (#1924, `single_page_wheel_edge`). Touch drags are untouched: with
@@ -3057,7 +3087,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut scroll = page_scroll_area(
         ui,
         view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
+        &ScrollGeometry {
+            rects: &rects,
+            y_shift,
+            content_w,
+            content_h,
+            avail,
+            middle_gesture,
+            hand: app.quick_tool == QuickTool::Hand,
+            drag_scrolls,
+        },
     );
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
@@ -3116,7 +3155,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
-    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    scroll =
+        refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand, drag_scrolls });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
         added: &added,
@@ -3184,6 +3224,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         },
         today,
         can_paste_image,
+        touch_delta,
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), app.show_page_edge_shadows, |ui, viewport| {

@@ -163,6 +163,40 @@ fn edges_are_primary_finite_in_order_and_capped() {
     assert_eq!(first_press(&[Edge::Release(q), Edge::Press(p), Edge::Press(q)]), Some(p));
 }
 
+#[test]
+fn samples_are_the_moves_of_the_held_press_finite_in_order_and_capped() {
+    let (p, q, r, s) = (pos2(1.0, 2.0), pos2(3.0, 4.0), pos2(5.0, 6.0), pos2(7.0, 8.0));
+    // Moves before the frame's last press belong to an earlier stroke or a hover; moves after
+    // the release are the hover that follows it.
+    let events = vec![
+        Event::PointerMoved(p),
+        button(p, PointerButton::Primary, true),
+        Event::PointerMoved(q),
+        Event::PointerMoved(pos2(f32::NAN, 0.0)),
+        Event::PointerMoved(r),
+        button(r, PointerButton::Primary, false),
+        Event::PointerMoved(s),
+    ];
+    assert_eq!(samples(&events), [q, r]);
+    // A frame in the middle of a stroke has no press: all its moves count.
+    assert_eq!(samples(&[Event::PointerMoved(q), Event::PointerMoved(r)]), [q, r]);
+    let many: Vec<Event> = (0..5000).map(|i| Event::PointerMoved(pos2(i as f32, 0.0))).collect();
+    assert_eq!(samples(&many).len(), MAX_SAMPLES);
+}
+
+#[test]
+fn a_held_press_reports_every_move_of_its_frame_and_others_report_none() {
+    let ctx = Context::default();
+    let (p, q, r) = (pos2(40.0, 40.0), pos2(50.0, 45.0), pos2(60.0, 50.0));
+    frame(&ctx, vec![Event::PointerMoved(p)], false);
+    frame(&ctx, vec![button(p, PointerButton::Primary, true)], false);
+    let held = frame(&ctx, vec![Event::PointerMoved(q), Event::PointerMoved(r)], false);
+    assert_eq!((held.samples.as_slice(), held.pos), ([q, r].as_slice(), Some(r)));
+    frame(&ctx, vec![button(r, PointerButton::Primary, false)], false);
+    let hover = frame(&ctx, vec![Event::PointerMoved(q), Event::PointerMoved(p)], false);
+    assert!(hover.samples.is_empty(), "a hover is no stroke: {hover:?}");
+}
+
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
 const PAGE_MODULES: [&str; 37] = [
     "canvas.rs",
@@ -631,8 +665,11 @@ fn takes_the_router(line: &str) -> bool {
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 
 /// The one function that ignores a press until the button is up: (file, function, why).
-const PRESS_IGNORERS: [(&str, &str, &str); 1] =
-    [("canvas/page_input.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
+const PRESS_IGNORERS: [(&str, &str, &str); 1] = [(
+    "canvas.rs",
+    "cancel_press",
+    "Escape (`cancel_on_escape`) and a second finger (`observe_touch`) abandon the gesture the press drives, whichever tool's",
+)];
 
 /// Page modules act on a press only when the router says it is theirs. The hits at the press
 /// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
@@ -708,8 +745,8 @@ fn page_modules_act_on_a_press_only_through_the_router() {
     problems.extend(misuses(
         &PRESS_IGNORES,
         &PRESS_IGNORERS,
-        "ignores the press the pages hold. Escape cancels a press, in `cancel_on_escape`: drop a gesture with \
-         `DocView::cancel_pointer_gestures` instead.",
+        "ignores the press the pages hold. Escape and a second finger cancel a press, through `DocView::cancel_press`: \
+         drop a gesture with `DocView::cancel_pointer_gestures` instead.",
         "no longer ignores a press: remove it from PRESS_IGNORERS.",
     ));
     // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
@@ -782,4 +819,18 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
         "fn a() {}\n\n#[cfg(any())]\nuse crate::camera_ui::hit as corner_under;\nuse crate::x::{\n    hit as x_hit,\n    picture_hit as under,\n};\n";
     let aliases: Vec<(String, String)> = [("hit", "corner_under"), ("picture_hit", "under")].map(|(a, b)| (a.to_owned(), b.to_owned())).to_vec();
     assert_eq!(aliased_hit_tests(source), aliases);
+}
+
+#[test]
+fn a_release_the_pages_held_is_theirs_though_egui_never_saw_a_drag() {
+    let ctx = Context::default();
+    let (a, b, c) = (pos2(40.0, 40.0), pos2(80.0, 50.0), pos2(160.0, 20.0));
+    frame(&ctx, vec![Event::PointerMoved(a)], false);
+    frame(&ctx, vec![button(a, PointerButton::Primary, true)], false);
+    // A pen moves and lifts in one frame, then hovers on: egui decides no drag and no click.
+    let up = frame(&ctx, vec![Event::PointerMoved(b), button(b, PointerButton::Primary, false), Event::PointerMoved(c)], false);
+    assert_eq!((up.edges.as_slice(), up.samples.as_slice()), ([Edge::Release(b)].as_slice(), [b].as_slice()));
+    assert!(!up.primary_down);
+    let after = frame(&ctx, vec![Event::PointerMoved(a)], false);
+    assert!(after.edges.is_empty() && after.origin.is_none(), "the press is over: {after:?}");
 }

@@ -101,6 +101,7 @@ impl PdfCraftApp {
             "reading_colors": self.reading_colors,
             // Null follows the system's text scaling.
             "ui_scale": self.ui_scale,
+            "touch_mode": self.touch_mode,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "fill_text_size": self.fill_text_size,
             "fill_text_border": self.fill_text_default.width,
@@ -354,6 +355,7 @@ impl PdfCraftApp {
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
+        self.touch_mode = v["touch_mode"].as_str().and_then(|value| touch::TouchMode::parse(value).ok()).unwrap_or_default();
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
             let _ = self.session.set_date_format(f);

@@ -112,3 +112,8 @@ pub fn skip_without_catalogs(name: &str) -> bool {
     }
     skip
 }
+
+/// English, and `code` too when the build embeds the craft-i18n catalogs that translate it.
+pub fn english_and(code: &'static str) -> Vec<&'static str> {
+    if pdfcraft_ui_egui::i18n::catalogs_embedded() { vec!["en", code] } else { vec!["en"] }
+}
