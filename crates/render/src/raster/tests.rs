@@ -9161,7 +9161,9 @@ fn renderer_and_model_pages(file: Vec<u8>) -> ((usize, (u32, u32)), i64) {
 /// `startxref` names instead and showed one page where the model has two. It now rebuilds too.
 #[test]
 fn an_update_cut_off_before_its_trailer_shows_its_pages_as_the_model_reads_them() {
-    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 5000, false));
+    let file = with_update(&one_page_file(), 5000, false);
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
     assert_eq!(model, 2, "the model reads the update");
     assert_eq!(count, 2, "the renderer shows the update's page tree");
     assert_eq!(size, (300, 150), "and its new first page");
@@ -9186,14 +9188,18 @@ fn trailing_data_without_objects_reads_as_before() {
     junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name, 4294967296 0 obj</p>");
     junk.extend(std::iter::repeat_n(b' ', 5000));
     junk.extend_from_slice(b"</html>\n");
-    let doc = pdfcraft_cos::Document::open(Arc::new(junk.clone())).unwrap();
+    assert_eq!(model_first_media_box(&junk), [0.0, 0.0, 999.0, 999.0], "the model's rebuilt page");
+    let ((count, size), model) = renderer_and_model_pages(junk);
+    assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
+/// The /MediaBox of the first page in the document model's page tree (its first /Kids entry).
+fn model_first_media_box(file: &[u8]) -> Vec<f64> {
+    let doc = pdfcraft_cos::Document::open(Arc::new(file.to_vec())).unwrap();
     let catalog = doc.get(doc.root().unwrap());
     let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
     let kid = doc.resolve(pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().first().unwrap());
-    let media = kid.as_dict().unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>();
-    assert_eq!(media, [0.0, 0.0, 999.0, 999.0], "the model's rebuilt page");
-    let ((count, size), model) = renderer_and_model_pages(junk);
-    assert_eq!((count, size, model), (1, (200, 100), 1));
+    kid.as_dict().unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().filter_map(|x| x.as_f64()).collect()
 }
 
 /// A cut-off update on `one_page_file` whose object headers are written `N G obj{after}<<` in place
@@ -9211,10 +9217,12 @@ fn cut_off_update_with_headers(after: &str) -> Vec<u8> {
 
 /// A cut-off update whose object headers run straight into their dictionaries (`4 0 obj<<`) is
 /// still found: a delimiter ends the keyword (ISO 32000-2 §7.2.3, Table 2), and the renderer
-/// shows the update's new first page.
+/// shows the update's new first page, as the model does.
 #[test]
 fn a_cut_off_update_with_obj_followed_by_a_delimiter_is_rebuilt() {
-    let ((count, size), model) = renderer_and_model_pages(cut_off_update_with_headers(""));
+    let file = cut_off_update_with_headers("");
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
     assert_eq!((count, size, model), (2, (300, 150), 2));
 }
 
@@ -9222,7 +9230,9 @@ fn a_cut_off_update_with_obj_followed_by_a_delimiter_is_rebuilt() {
 /// that starts a comment (ISO 32000-2 §7.2.3 Table 2, §7.2.4), so it ends the keyword too.
 #[test]
 fn a_cut_off_update_with_obj_followed_by_a_comment_is_rebuilt() {
-    let ((count, size), model) = renderer_and_model_pages(cut_off_update_with_headers("%comment\n"));
+    let file = cut_off_update_with_headers("%comment\n");
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
     assert_eq!((count, size, model), (2, (300, 150), 2));
 }
 
