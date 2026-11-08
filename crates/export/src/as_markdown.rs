@@ -167,5 +167,12 @@ mod tests {
     fn empty_styled_run_does_not_affect_neighbor_emphasis() {
         assert_eq!(paragraph(&[("x", true, false), ("", false, true)]), "**x**");
         assert_eq!(paragraph(&[("foo", false, false), (".", true, false), ("", true, true), ("bar", false, false)]), "foo<strong>.</strong>bar");
+        // Empty/control runs between differently styled runs still look ahead to the next non-empty run.
+        assert_eq!(paragraph(&[("bold", true, false), ("", false, false), ("italic", false, true)]), "<strong>bold</strong>*italic*");
+        assert_eq!(paragraph(&[("bold", true, false), ("\u{1}", false, false), (" italic", false, true)]), "**bold** *italic*");
+        // Leading empty/control runs do not affect the opening delimiter.
+        assert_eq!(paragraph(&[("", false, true), ("\u{1}", true, false), ("lead", true, false)]), "**lead**");
+        // All-empty/control paragraphs produce empty output.
+        assert_eq!(paragraph(&[("", true, false), ("\u{1}", false, true), ("\u{7f}", false, false)]), "");
     }
 }
