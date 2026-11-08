@@ -3923,6 +3923,29 @@ fn screen_and_field_primary_actions_are_removed() {
     assert!(!saved.windows(14).any(|w| w == b"SCRIPT_PAYLOAD"), "the script is still in the file");
 }
 
+/// A field written in place in `/Fields` has no object to update: its `/A` is cleared where it
+/// sits, so the script leaves the file, and it counts like an indirect field.
+#[test]
+fn removing_actions_clears_a_direct_field_action() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [<< /FT /Tx /T (a) /A 5 0 R >>] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /S /JavaScript /JS (SCRIPT_PAYLOAD) >>".to_vec(),
+    ]);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::LinksActionsScripts], 1, "the direct field's action");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let cat = doc.get(ObjRef::new(1, 0)).as_dict().unwrap().clone();
+    let fields = doc.resolve(cat.get(b"AcroForm").unwrap()).as_dict().unwrap().get(b"Fields").unwrap().clone();
+    let field = doc.resolve(doc.resolve(&fields).as_array().unwrap().first().unwrap()).as_dict().unwrap().clone();
+    assert!(!field.contains(b"A"), "the direct field keeps its action: {field:?}");
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(14).any(|w| w == b"SCRIPT_PAYLOAD"), "the script is still in the file");
+}
+
 /// A direct annotation dictionary in `/Annots` holds its own action: removal clears it there, not
 /// only from annotations that are indirect objects.
 #[test]

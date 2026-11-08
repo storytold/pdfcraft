@@ -323,22 +323,72 @@ fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
 /// The form-field dictionaries under `/AcroForm /Fields` (through `/Kids`), each once. A field's
 /// own `/A` acts when its widgets are used, so action removal must reach it as well as the
 /// widgets the pages list.
-fn field_dicts(doc: &Document) -> Vec<ObjRef> {
+fn field_dicts(doc: &Document) -> Vec<(Option<ObjRef>, Dict)> {
     let Some((_, cat)) = catalog(doc) else { return Vec::new() };
-    let refs = |o: Option<&Object>| -> Vec<ObjRef> {
-        o.map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+    let entries = |o: Option<&Object>| -> Vec<(Option<ObjRef>, Dict)> {
+        o.map(|f| doc.resolve(f))
+            .and_then(|f| f.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| Some((e.as_ref(), doc.resolve(&e).as_dict().cloned()?)))
+            .collect()
     };
-    let mut todo = refs(sub(doc, &cat, b"AcroForm").as_ref().and_then(|af| af.get(b"Fields")));
+    let mut todo = entries(sub(doc, &cat, b"AcroForm").as_ref().and_then(|af| af.get(b"Fields")));
     let mut seen = std::collections::HashSet::new();
     let mut fields = Vec::new();
-    while let Some(r) = todo.pop() {
-        if !seen.insert(r) {
+    while let Some((r, d)) = todo.pop() {
+        if r.is_some_and(|r| !seen.insert(r)) {
             continue;
         }
-        fields.push(r);
-        todo.extend(refs(doc.get(r).as_dict().and_then(|d| d.get(b"Kids"))));
+        todo.extend(entries(d.get(b"Kids")));
+        fields.push((r, d));
     }
     fields
+}
+
+/// Removes `/A` from every field dictionary, direct ones included: the spec lets a field be
+/// written in place in `/Fields` or `/Kids`, and such a field has no object to update, so the
+/// array that holds it is rewritten instead. Bounded like the rest of the walk for a malformed
+/// nest.
+fn strip_field_actions(doc: &mut Document, cat: &mut Dict) -> Result<(), RedactError> {
+    let acro_ref = cat.get(b"AcroForm").and_then(Object::as_ref);
+    let Some(mut acro) = cat.get(b"AcroForm").and_then(|o| doc.resolve(o).as_dict().cloned()) else { return Ok(()) };
+    if let Some(fields_obj) = acro.get(b"Fields").cloned() {
+        let fields_ref = fields_obj.as_ref();
+        let mut fields = (*doc.resolve(&fields_obj)).clone();
+        strip_field_array(doc, &mut fields, 0)?;
+        match fields_ref {
+            Some(r) => doc.set(r, fields),
+            None => acro.set(b"Fields".to_vec(), fields),
+        }
+    }
+    match acro_ref {
+        Some(r) => doc.set(r, Object::Dict(acro)),
+        None => {
+            cat.set(b"AcroForm".to_vec(), Object::Dict(acro));
+        }
+    }
+    Ok(())
+}
+
+fn strip_field_array(doc: &mut Document, array: &mut Object, depth: usize) -> Result<(), RedactError> {
+    if depth > MAX_DIRECT_DEPTH {
+        return Ok(());
+    }
+    let Object::Array(items) = array else { return Ok(()) };
+    for item in items.iter_mut() {
+        let Some(mut field) = doc.resolve(item).as_dict().cloned() else { continue };
+        field.remove(b"A");
+        if let Some(mut kids) = field.get(b"Kids").cloned() {
+            strip_field_array(doc, &mut kids, depth + 1)?;
+            field.set(b"Kids".to_vec(), kids);
+        }
+        match item.as_ref() {
+            Some(r) => doc.set(r, Object::Dict(field)),
+            None => *item = Object::Dict(field),
+        }
+    }
+    Ok(())
 }
 
 /// Whether an annotation or field dictionary holds a primary action (`/A`) that only action
@@ -532,7 +582,7 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         // fields no page lists (a listed widget is counted with the annotations above)
                         + field_dicts(doc)
                             .into_iter()
-                            .filter(|r| !listed.contains(r) && doc.get(*r).as_dict().is_some_and(primary_action_only))
+                            .filter(|(r, d)| r.is_none_or(|r| !listed.contains(&r)) && primary_action_only(d))
                             .count()
                         + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                 }
@@ -668,13 +718,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                 if cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()) {
                     cat.remove(b"OpenAction");
                 }
-                for r in field_dicts(doc) {
-                    if doc.get(r).as_dict().is_some_and(|d| d.contains(b"A")) {
-                        doc.update_dict(r, |d| {
-                            d.remove(b"A");
-                        })?;
-                    }
-                }
+                strip_field_actions(doc, &mut cat)?;
                 if let Some(n) = names.as_mut() {
                     n.remove(b"JavaScript");
                 }
