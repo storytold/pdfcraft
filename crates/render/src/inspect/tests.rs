@@ -805,9 +805,9 @@ impl Structure for CountingReads<'_> {
     }
 }
 
-/// A font (or any dictionary whose `/Type` isn't `/Annot`) a page lists in `/Annots` isn't an
-/// annotation (ISO 32000-2 §12.5.2, Table 166) and isn't listed as a comment; the real ones around
-/// it keep their place in the array.
+/// A font (or any dictionary whose `/Type` is present and isn't `/Annot`) a page lists in `/Annots`
+/// isn't an annotation (ISO 32000-2 §12.5.2, Table 166) and isn't listed as a comment; the real ones
+/// around it keep their place in the array, and an entry without `/Type` is still read as one.
 #[test]
 fn dictionaries_of_another_type_in_annots_are_not_annotations() {
     let pdf = b"%PDF-1.7
