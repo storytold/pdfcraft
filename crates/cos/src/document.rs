@@ -24,11 +24,11 @@ pub(crate) use objects::Held;
 pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
-pub(crate) use state::ObjectReader;
 use state::{ObjStm, Slot, Unreadable};
+pub(crate) use state::{ObjectReader, held_bytes};
 pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
-use state::{SECTION_READS, held_bytes, objstm_member};
+use state::{SECTION_READS, objstm_member};
 use xref::XrefIndex;
 pub use xref::{Revision, XrefEntry};
 
