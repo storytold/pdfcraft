@@ -8974,7 +8974,10 @@ fn arrange_front_image_in_single_shared_unit_is_refused() {
 #[test]
 fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
     let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
-    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "an image before following paint in one shared unit can be brought to front");
+    assert!(
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(),
+        "an image before following paint in one shared unit can be brought to front"
+    );
     let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
     assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
     let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do Q q 50 50 10 10 re f Q Q");
