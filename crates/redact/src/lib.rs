@@ -290,7 +290,7 @@ pub(crate) fn page_streams_within(
         match &*doc.resolve(o) {
             // Strict: a tolerant decode keeps what precedes corruption and drops the rest, which
             // still draws in viewers that read further; anything not read can't be cleaned.
-            Object::Stream(s) => data.push(budget.decode_strict(s).map_err(|_| RedactError::Unreadable(index + 1))?),
+            Object::Stream(s) => data.push(budget.decode_strict(doc, s).map_err(|_| RedactError::Unreadable(index + 1))?),
             Object::Null => data.push(Vec::new()),
             _ => return Err(RedactError::Unreadable(index + 1)),
         }
@@ -827,7 +827,12 @@ fn redact_page_content(
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
                 .iter()
-                .map(|o| match &*doc.resolve(o) {
+                .zip(&list)
+                .zip(&data)
+                .map(|((now, was), read)| match &*doc.resolve(now) {
+                    // Left as it was: what was read above, with its parameters by reference.
+                    _ if now == was => read.clone(),
+                    // Written above by `Stream::flate`, which leaves no `/DecodeParms`.
                     Object::Stream(s) => s.decoded().unwrap_or_default(),
                     _ => Vec::new(),
                 })
