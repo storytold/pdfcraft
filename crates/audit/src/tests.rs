@@ -883,7 +883,8 @@ fn sc_scn_fills_inherited_form_resources_and_translucent_squares_are_handled() {
     b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
     b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n");
     b.add(FONT);
-    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 200 725] /IC [0 0 0] /ca 0.5 /AP << >> >>");
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 200 725] /IC [0 0 0] /ca 0.5 /AP << /N 7 0 R >> >>");
+    b.add_stream_with(b"0 g\n0 0 105 40 re f\n", "/Type /XObject /Subtype /Form /BBox [0 0 105 40]");
     let findings = audit_redactions(&open(b.build())).expect("audit must run");
     assert_eq!(findings.len(), 1, "{findings:?}");
 }

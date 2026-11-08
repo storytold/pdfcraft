@@ -184,27 +184,27 @@ impl<'a> Walker<'a> {
                     }
                 }
                 b"g" => {
-                    gs.cs = ColorSpace::Base(BaseSpace::Gray);
                     if let Some(v) = op.num(0).filter(|v| v.is_finite()) {
                         let v = v.clamp(0.0, 1.0);
+                        gs.cs = ColorSpace::Base(BaseSpace::Gray);
                         gs.fill = [v, v, v];
                     }
                 }
                 b"rg" => {
-                    gs.cs = ColorSpace::Base(BaseSpace::Rgb);
                     if let Some([r, g, b]) = op.nums::<3>()
                         && [r, g, b].iter().all(|v| v.is_finite())
                     {
+                        gs.cs = ColorSpace::Base(BaseSpace::Rgb);
                         gs.fill = [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)];
                     }
                 }
                 b"k" => {
-                    gs.cs = ColorSpace::Base(BaseSpace::Cmyk);
                     if let Some([c, m, y, k]) = op.nums::<4>()
                         && [c, m, y, k].iter().all(|v| v.is_finite())
                     {
                         // Naive CMYK -> RGB; good enough to tell black from white.
                         let (c, m, y, k) = (c.clamp(0.0, 1.0), m.clamp(0.0, 1.0), y.clamp(0.0, 1.0), k.clamp(0.0, 1.0));
+                        gs.cs = ColorSpace::Base(BaseSpace::Cmyk);
                         gs.fill = [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)];
                     }
                 }
@@ -319,24 +319,27 @@ impl<'a> Walker<'a> {
 
     /// Resolves a colour-space operand list (`cs`) against the page/form `/ColorSpace` resource dictionary.
     fn resolve_color_space(&mut self, operands: &[Object], resources: &Dict) -> Result<ColorSpace, AuditError> {
-        let cs_dict = resources.get(b"ColorSpace").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned());
+        if let [Object::Name(name)] = operands
+            && let Some(b) = base_space(name)
+        {
+            return Ok(ColorSpace::Base(b));
+        }
+        let cs_obj = resources.get(b"ColorSpace").map(|o| self.doc.resolve(o));
+        let cs_dict = cs_obj.as_deref().and_then(Object::as_dict);
         match operands {
             [Object::Name(name)] => {
-                if let Some(b) = base_space(name) {
-                    return Ok(ColorSpace::Base(b));
-                }
-                let Some(entry) = cs_dict.as_ref().and_then(|d| d.get(name)) else {
+                let Some(entry) = cs_dict.and_then(|d| d.get(name)) else {
                     return Ok(ColorSpace::Unsupported);
                 };
                 let resolved = self.doc.resolve(entry);
                 match &*resolved {
                     Object::Name(n) => Ok(base_space(n).map_or(ColorSpace::Unsupported, ColorSpace::Base)),
-                    Object::Array(arr) => self.resolve_cs_array(arr, cs_dict.as_ref()),
+                    Object::Array(arr) => self.resolve_cs_array(arr, cs_dict),
                     _ => Ok(ColorSpace::Unsupported),
                 }
             }
-            [Object::Array(arr)] => self.resolve_cs_array(arr, cs_dict.as_ref()),
-            arr if arr.len() == 4 => self.resolve_cs_array(arr, cs_dict.as_ref()),
+            [Object::Array(arr)] => self.resolve_cs_array(arr, cs_dict),
+            arr if arr.len() == 4 => self.resolve_cs_array(arr, cs_dict),
             _ => Ok(ColorSpace::Unsupported),
         }
     }
@@ -352,7 +355,7 @@ impl<'a> Walker<'a> {
         if arr.len() == 1 {
             return Ok(base_space(kind).map_or(ColorSpace::Unsupported, ColorSpace::Base));
         }
-        if !matches!(kind, b"Indexed" | b"I") || arr.len() != 4 {
+        if kind != b"Indexed" || arr.len() != 4 {
             return Ok(ColorSpace::Unsupported);
         }
         let base_obj = self.doc.resolve(&arr[1]);
@@ -384,12 +387,12 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Maps a device colour-space name (or its inline-image abbreviation) to [`BaseSpace`].
+/// Maps a device colour-space name to [`BaseSpace`].
 fn base_space(name: &[u8]) -> Option<BaseSpace> {
     match name {
-        b"DeviceGray" | b"G" => Some(BaseSpace::Gray),
-        b"DeviceRGB" | b"RGB" => Some(BaseSpace::Rgb),
-        b"DeviceCMYK" | b"CMYK" => Some(BaseSpace::Cmyk),
+        b"DeviceGray" => Some(BaseSpace::Gray),
+        b"DeviceRGB" => Some(BaseSpace::Rgb),
+        b"DeviceCMYK" => Some(BaseSpace::Cmyk),
         _ => None,
     }
 }
