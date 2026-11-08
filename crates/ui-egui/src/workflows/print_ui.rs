@@ -148,7 +148,11 @@ impl PdfCraftApp {
         let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
-        let keep = std::mem::take(&mut self.print_draft);
+        let mut keep = std::mem::take(&mut self.print_draft);
+        // A selected area belongs to the print it was dragged for.
+        if keep.handling == Handling::Area {
+            keep.handling = Handling::Size;
+        }
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
         let printer = if picked { keep.printer.clone() } else { default };
@@ -174,6 +178,28 @@ impl PdfCraftApp {
             ..keep
         };
         self.dialog = Some(crate::Dialog::Print);
+    }
+
+    /// Print ▸ Pages to Print ▸ Area…: open Print for `page` with only `view_rect` (page view points,
+    /// top-left origin) on the sheet, fitted like a label.
+    pub(crate) fn open_print_area(&mut self, page: usize, view_rect: [f32; 4]) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let count = doc.info.pages.len();
+        let Some(h) = doc.info.pages.get(page).map(|p| f64::from(p.height)) else { return };
+        self.quick_tool = crate::QuickTool::Select;
+        self.views[i].current = page;
+        self.open_print();
+        // View space runs down from the top; display space runs up.
+        let rect = [f64::from(view_rect[0]), h - f64::from(view_rect[3]), f64::from(view_rect[2]), h - f64::from(view_rect[1])];
+        let d = &mut self.print_draft;
+        d.which = Which::Current;
+        d.current_page = page;
+        // Through set_handling, so leaving Label still gives its paper back.
+        d.set_handling(Handling::Area);
+        d.crops = (0..count).map(|p| (p == page).then_some(print::Crop { rect, text_up: false })).collect();
+        d.crop_pages = Some(vec![page]);
+        d.sheet = 0;
     }
 
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as
@@ -687,6 +713,38 @@ mod tests {
         assert!(cut.settings(4, &[]).is_ok(), "the printer's default doesn't block cut and stack");
         cut.duplex = Some(spool::Duplex::ShortEdge);
         assert!(cut.settings(4, &[]).is_err());
+    }
+
+    /// Area prints the page it was dragged on whatever Odd or Even says, and the subset is still
+    /// there for the other handlings; going to Area from Label gives Label's paper back.
+    #[test]
+    fn an_area_prints_its_page_and_leaves_label_paper() {
+        let mut draft = PrintDraft { which: Which::Current, current_page: 0, subset: Subset::Even, ..PrintDraft::default() };
+        assert!(draft.settings(5, &[]).is_err());
+        draft.set_handling(Handling::Area);
+        assert_eq!(draft.settings(5, &[]).unwrap().pages, vec![0]);
+        assert_eq!(draft.subset, Subset::Even);
+        draft.set_handling(Handling::Size);
+        assert!(draft.settings(5, &[]).is_err());
+
+        let paper = draft.paper;
+        draft.set_handling(Handling::Label);
+        assert_eq!(draft.paper, print::LABEL_PAPER);
+        draft.set_handling(Handling::Area);
+        assert_eq!(draft.paper, paper);
+
+        // Leaving Area drops the dragged rectangle, so Label reads its own printed areas.
+        draft.crops = vec![Some(print::Crop { rect: [0.0, 0.0, 10.0, 10.0], text_up: false })];
+        draft.crop_pages = Some(vec![0]);
+        draft.set_handling(Handling::Label);
+        assert!(draft.crops.is_empty() && draft.crop_pages.is_none());
+
+        // Area and Label each keep their own Turn upside down.
+        draft.subset = Subset::All;
+        draft.area_flip = true;
+        assert!(matches!(draft.settings(5, &[]).unwrap().layout, Layout::Label { flip: false }));
+        draft.set_handling(Handling::Area);
+        assert!(matches!(draft.settings(5, &[]).unwrap().layout, Layout::Label { flip: true }));
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports

@@ -17,6 +17,8 @@ pub enum Handling {
     Booklet,
     /// Shipping label: cut to the printed area, turned upright, one per sheet.
     Label,
+    /// Print ▸ Pages to Print ▸ Area…: the dragged rectangle (in `crops`), fitted to the sheet.
+    Area,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +75,8 @@ pub struct PrintDraft {
     pub driver_error: Option<String>,
     /// Label: turn a further 180°.
     pub label_flip: bool,
+    /// Area: turn a further 180°, kept apart from Label's so one doesn't turn the other.
+    pub area_flip: bool,
     /// Label: each page's printed area and text direction, read when Label is chosen
     /// ([`PdfCraftApp::read_label_crops`]); empty until then.
     pub crops: Vec<Option<print::Crop>>,
@@ -83,6 +87,8 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// Area… was chosen: the dialog closes so a rectangle can be dragged on the page.
+    pub pick_area: bool,
 }
 
 impl Default for PrintDraft {
@@ -127,10 +133,12 @@ impl Default for PrintDraft {
             show_driver_options: false,
             driver_error: None,
             label_flip: false,
+            area_flip: false,
             crops: Vec::new(),
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            pick_area: false,
         }
     }
 }
@@ -140,6 +148,11 @@ impl PrintDraft {
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {
         let leaving_label = self.handling == Handling::Label && handling != Handling::Label;
+        // An area crop is not a label crop: Label reads its own printed areas again.
+        if self.handling == Handling::Area && handling != Handling::Area {
+            self.crops.clear();
+            self.crop_pages = None;
+        }
         self.handling = handling;
         self.sheet = 0;
         if handling == Handling::Label {
@@ -167,10 +180,12 @@ impl PrintDraft {
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
         // page labels first.
+        // An area prints the page it was dragged on, even with Odd or Even pages kept for later.
+        let subset = if self.handling == Handling::Area { Subset::All } else { self.subset };
         let pages = match self.which {
-            Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
-            Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
-            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
+            Which::Selected => print::select_listed(count, &self.selected, subset, self.reverse),
+            Which::Current => print::select_listed(count, &[self.current_page], subset, self.reverse),
+            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.
@@ -189,6 +204,7 @@ impl PrintDraft {
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
+            Handling::Area => Layout::Label { flip: self.area_flip },
         };
         Ok(print::Settings {
             pages,
