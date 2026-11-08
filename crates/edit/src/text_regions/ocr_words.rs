@@ -104,28 +104,36 @@ fn key(line: &TextLine) -> (&str, [i64; 4]) {
 }
 
 /// How far right a rewrite of the runs `indices` drew (`None` when it drew nothing), or an error
-/// when it moved or lost any other invisible word: one positioned after the end of the text before
-/// it, say, depends on the words that went.
+/// when it moved or lost any other text on the page: text positioned after the end of the text
+/// before it, say, depends on the words that went.
 fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Result<Option<f64>, EditError> {
     let mut unmatched: HashMap<_, usize> = HashMap::new();
     for line in before {
         let count = unmatched.entry(key(line)).or_default();
         *count = count.saturating_add(1);
     }
-    let mut right = None;
+    let mut drawn = Vec::new();
     for line in after {
         match unmatched.get_mut(&key(line)).filter(|count| **count > 0) {
             Some(count) => *count -= 1,
-            None => right = Some(right.map_or(line.rect[2], |r: f64| r.max(line.rect[2]))),
+            None => drawn.push(line),
         }
     }
-    let moved = before.iter().enumerate().any(|(index, line)| {
-        line.origin.state.render_mode == 3 && !indices.contains(&index) && unmatched.get(&key(line)).is_some_and(|count| *count > 0)
-    });
+    // Visible text beside what was drawn reads as one line with it. It is still where it was.
+    let joined = |line: &TextLine| {
+        let [x0, y0, x1, y1] = line.rect;
+        drawn.iter().any(|d| {
+            d.text.contains(line.text.trim()) && d.rect[0] <= x0 + 0.01 && d.rect[1] <= y0 + 0.01 && d.rect[2] >= x1 - 0.01 && d.rect[3] >= y1 - 0.01
+        })
+    };
+    let moved = before
+        .iter()
+        .enumerate()
+        .any(|(index, line)| !indices.contains(&index) && unmatched.get(&key(line)).is_some_and(|c| *c > 0) && !joined(line));
     if moved {
-        return Err(EditError::Invalid("rewriting these words alone would move the words around them".into()));
+        return Err(EditError::Invalid("rewriting these words alone would move the text around them".into()));
     }
-    Ok(right)
+    Ok(drawn.iter().map(|line| line.rect[2]).reduce(f64::max))
 }
 
 /// Rewrite each change of `plan` in `doc`, last first: a rewrite goes where its words were or at
@@ -148,7 +156,15 @@ fn apply(
         let indices = members.get(change.runs.clone()).ok_or_else(|| EditError::Invalid("the phrase has no such words".into()))?;
         let before = word_lines(doc, page)?;
         let part = stretch(phrase, &before, indices)?;
-        style.scale = change.squeeze.map(|squeeze| squeeze * 100.0);
+        // Relative to the scale the words have, which a layer may have narrowed already.
+        let own_scale = indices.first().and_then(|i| before.get(*i)).map_or(1.0, |line| line.origin.state.scale);
+        style.scale = change.squeeze.map(|squeeze| squeeze * own_scale * 100.0);
+        // The words on either side stay, with all their ink.
+        let edge = |run: Option<usize>| run.and_then(|run| members.get(run)).and_then(|i| before.get(*i)).map(|line| line.rect);
+        style.cover_between = Some([
+            edge(change.runs.start.checked_sub(1)).map_or(f64::NEG_INFINITY, |rect| rect[2]),
+            edge(Some(change.runs.end)).map_or(f64::INFINITY, |rect| rect[0]),
+        ]);
         let edit = rewrite_styled_block(doc, page, &part, &before, Some(&change.text), &style, max_glyphs)?;
         substituted = substituted.or(edit.substituted);
         let right = drawn_right(&before, indices, &word_lines(doc, page)?)?;
@@ -219,9 +235,13 @@ pub(crate) fn rewrite_changed_words(
     let runs: Vec<Vec<&str>> = members.iter().filter_map(|i| lines.get(*i)).map(|line| line.text.split_whitespace().collect()).collect();
     let old: Vec<&str> = runs.iter().flatten().copied().collect();
     let new: Vec<&str> = draft.split_whitespace().collect();
-    // Words the layer doesn't show apart (a run per letter, say) can't be kept apart. With one
-    // word, or none changed, there is nothing to keep or nothing to do.
-    if old.len() < 2 || old == new || !phrase.editor_text.split_whitespace().eq(old.iter().copied()) {
+    // Words the layer doesn't show apart (a run per letter, say) can't be kept apart, and spacing
+    // other than one space between words is the draft's to keep, which only the whole rewrite can.
+    if !phrase.editor_text.split_whitespace().eq(old.iter().copied()) || draft.trim() != new.join(" ") {
+        return None;
+    }
+    // A single word that changes has nothing to keep. With the same words, the plan is empty.
+    if old.len() < 2 && old != new {
         return None;
     }
     let kept_as = kept_words(&old, &new)?;

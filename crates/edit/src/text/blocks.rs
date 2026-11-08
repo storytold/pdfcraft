@@ -44,6 +44,12 @@ impl TextBlock {
         (self.invisible && self.size.is_finite() && self.size > 0.0).then_some(self.size)
     }
 
+    /// Whether `draft` says what the paragraph says, give or take space around it. Spacing inside
+    /// it has to match: a typed second space is a change.
+    pub fn same_words(&self, draft: &str) -> bool {
+        draft.trim() == self.editor_text.trim()
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -456,6 +462,9 @@ pub struct BlockStyle {
     /// the words the draft changes, and leave the rest as the scan shows them (#3313). The session
     /// sets this; a caller that sets it should also give `cover`.
     pub changed_words_only: bool,
+    /// How far across [`BlockStyle::cover`] may reach, whatever its padding: the edges of the words
+    /// on either side that stay (user space).
+    pub cover_between: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

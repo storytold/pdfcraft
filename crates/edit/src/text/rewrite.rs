@@ -999,6 +999,14 @@ pub(crate) fn rewrite_block_from(
 /// rewritten invisible paragraph, drawn in the space whose CTM is `ctm`. Nothing for visible text.
 /// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it; one
 /// painted over where it was is drawn on top of the page instead ([`crate::draw_on_top`]).
+/// What covering the word in `rect` paints: scanned ink reaches a little past the recognised box,
+/// but not past `between`, the words on either side that stay. It always covers the word itself.
+pub(crate) fn cover_box(rect: [f64; 4], between: Option<[f64; 2]>) -> [f64; 4] {
+    let pad = ((rect[3] - rect[1]).abs() * 0.1).clamp(0.5, 2.0);
+    let [left, right] = between.unwrap_or([f64::NEG_INFINITY, f64::INFINITY]);
+    [(rect[0] - pad).max(left.min(rect[0])), rect[1] - pad, (rect[2] + pad).min(right.max(rect[2])), rect[3] + pad]
+}
+
 pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockStyle, ctm: [f64; 6]) -> Result<Vec<Op>, EditError> {
     if !block.invisible {
         return Ok(Vec::new());
@@ -1012,11 +1020,8 @@ pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockSty
         let back = Matrix(ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it can't be covered in".into()))?;
         ops.push(Op::new("q", vec![]));
         ops.push(Op::new("rg", colour.map(n).to_vec()));
-        for rect in block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect) {
-            // Scanned ink reaches a little past the recognised box.
-            let pad = ((rect[3] - rect[1]).abs() * 0.1).clamp(0.5, 2.0);
-            let corners =
-                [[rect[0] - pad, rect[1] - pad], [rect[2] + pad, rect[1] - pad], [rect[2] + pad, rect[3] + pad], [rect[0] - pad, rect[3] + pad]];
+        for rect in block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| cover_box(l.rect, style.cover_between)) {
+            let corners = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]];
             for (i, [x, y]) in corners.into_iter().enumerate() {
                 let (x, y) = back.apply(x, y);
                 if !(x.is_finite() && y.is_finite()) {

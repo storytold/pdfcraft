@@ -70,6 +70,10 @@ impl Session {
                     style.color = style.color.or(Some(ink));
                     // A text edit alone leaves the words it doesn't change as the scan shows them.
                     style.changed_words_only = plain;
+                    // Nothing to redraw: leave undo history and the dirty flag alone.
+                    if plain && b.same_words(&text) {
+                        return Ok(None);
+                    }
                 }
                 Edit::EditTextBlock { page, block, text, style }
             }

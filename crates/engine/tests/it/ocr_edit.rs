@@ -446,6 +446,78 @@ fn a_kept_ocr_word_can_be_edited_after_a_save() {
     assert_eq!(scan_and_drawn(&s, id), (vec!["Example".to_owned()], vec!["Jon".to_owned(), "Smyth".to_owned()]));
 }
 
+/// A draft with the same words, a space typed after the last of them, changes nothing: not the
+/// page, and not the undo history. It used to redraw the whole line.
+#[test]
+fn a_draft_with_the_same_words_changes_nothing() {
+    let (mut s, id) = uneven_phrase();
+    let (bytes, generation) = (s.get(id).unwrap().bytes.clone(), s.get(id).unwrap().edit_generation());
+    for draft in ["John Smith Example ", " John Smith Example"] {
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: draft.into(), style: Default::default() }).unwrap();
+        assert_eq!(s.get(id).unwrap().bytes, bytes, "{draft:?} wrote nothing");
+        assert_eq!(s.get(id).unwrap().edit_generation(), generation, "{draft:?} is no undo step");
+        assert_eq!(scan_and_drawn(&s, id).1, Vec::<String>::new(), "{draft:?} drew nothing");
+    }
+}
+
+/// Visible text positioned after the end of an OCR word depends on that word. An edit may not
+/// leave the word gone and the visible text somewhere else while calling the rest kept.
+#[test]
+fn visible_text_that_follows_an_ocr_word_stops_it_being_kept_alone() {
+    let bytes = under_scan("BT /F1 10 Tf 3 Tr 20 44 Td (John) Tj ( ) Tj (Smith) Tj 0 Tr /F1 14 Tf ( Label) Tj ET");
+    let mut s = Session::new();
+    let id = s.open("label.pdf", None, bytes, None).unwrap();
+    let label = |s: &Session| s.get(id).unwrap().text_lines(0).iter().find(|l| l.text.contains("Label")).map(|l| l.rect[0]);
+    assert_eq!(scan_and_drawn(&s, id).0, ["John Smith"]);
+    let before = label(&s).unwrap();
+    edit_block(&mut s, id, 0, "John");
+    let (scan, _) = scan_and_drawn(&s, id);
+    assert!(scan.is_empty(), "John can't stay alone when Label would move with it: {scan:?}, Label at {:?} from {before}", label(&s));
+}
+
+/// A large word right before a small one, as OCR's sizes can make them: the large word's cover,
+/// padded in proportion to its height, stops at the small word, or that word would lose ink while
+/// staying in the text.
+#[test]
+fn a_cover_stops_at_the_word_beside_it() {
+    let (mut s, id) = scanned_with(vec![scanned_word("John", 42.0, 66.0, 42.0, 30.0), scanned_word("Smith", 67.2, 98.0, 42.0, 8.0)]);
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0].text, "John Smith");
+    assert!(paper_between(&s, id, 67, 70) < 0.02, "Smith's start is ink to begin with");
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "Smith".into(), style: Default::default() }).unwrap();
+    assert_eq!(scan_and_drawn(&s, id), (vec!["Smith".to_owned()], Vec::new()), "only John goes");
+    assert!(paper_between(&s, id, 44, 64) > 0.98, "John is covered");
+    // John's padding would reach to x = 68, over this column of Smith's ink.
+    let smith = paper_between(&s, id, 67, 68);
+    assert!(smith < 0.02, "Smith keeps its ink: {smith}");
+}
+
+/// Spacing the word plan can't hold goes to the rewrite that can: it isn't quietly dropped.
+#[test]
+fn spacing_inside_a_draft_is_kept_by_redrawing_the_phrase() {
+    let (mut s, id) = uneven_phrase();
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John  Smyth Example".into(), style: Default::default() }).unwrap();
+    let (scan, drawn) = scan_and_drawn(&s, id);
+    assert!(scan.is_empty(), "{scan:?}");
+    assert!(drawn.join(" ").contains("John  Smyth"), "the typed spaces are there: {drawn:?}");
+}
+
+/// A layer whose words are already narrowed (50 Tz): squeezing a replacement narrows it further,
+/// rather than setting a scale wider than the one it had and running it into the next word.
+#[test]
+fn a_squeeze_is_relative_to_the_words_own_scale() {
+    let bytes = under_scan("BT /F1 12 Tf 3 Tr 50 Tz 1 0 0 1 20 44 Tm (John) Tj 1 0 0 1 36 44 Tm (Smith) Tj 1 0 0 1 56 44 Tm (Jones) Tj ET");
+    let mut s = Session::new();
+    let id = s.open("narrow.pdf", None, bytes, None).unwrap();
+    assert_eq!(scan_and_drawn(&s, id).0, ["John Smith Jones"]);
+    edit_block(&mut s, id, 0, "John Smithy Jones");
+    let (scan, drawn) = scan_and_drawn(&s, id);
+    assert_eq!(drawn, ["Smithy"], "Jones isn't taken over; the scan has {scan:?}");
+    let lines = s.get(id).unwrap().text_lines(0);
+    let smithy = lines.iter().find(|l| l.text == "Smithy").unwrap();
+    let jones = lines.iter().find(|l| l.text == "Jones").unwrap();
+    assert!(smithy.rect[2] <= jones.rect[0], "{:?} runs into {:?}", smithy.rect, jones.rect);
+}
+
 /// Visible text set with a horizontally stretched text matrix (3 × 1), as some generators write.
 fn stretched_visible() -> std::sync::Arc<Vec<u8>> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream};
