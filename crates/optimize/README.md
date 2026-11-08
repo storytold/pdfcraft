@@ -22,16 +22,22 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   printed this way went from 4.3 MB to 231 KB (Standard) and 161 KB (Mobile). Not merged yet:
   side-by-side tiles, rotated strips, masks. Content arrays use the shared space boundary
   policy, so trailing comments, split operands and graphics state keep their meaning after merging.
+  A page whose content doesn't decode, or is damaged partway, is left as it is: written again from
+  what decoded, it would lose the rest.
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
   through form XObjects, up to 12 deep; the smallest over all uses).
   Page-local `/UserUnit` scaling is included, so large-format pages are measured in physical inches.
   If a use can't be
-  measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a
+  measured (forms nested deeper or drawn too many times, or content that doesn't decode or is
+  damaged partway, which may draw an image larger past the damage), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
-  stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
-  An image is replaced only if the result is smaller. Left alone by these colour and grey
-  settings: CMYK and other colour spaces, image masks, decode arrays, more than 8 bits, JPEG 2000,
-  JBIG2 and CCITT (black-and-white images, CCITT among them, are below). A JPEG is read with
+  stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
+  stencil `/Mask` has its own resolution, so the picture changes under it and it stays as it is.
+  An image is replaced only if the result is smaller. Images over 80 million pixels are left
+  alone by the image steps, here and below, whatever their settings (memory); Clean Up may still
+  Flate an unfiltered or LZW one. Left alone by these colour and grey
+  settings: CMYK and other colour spaces, image masks, colour-key masks, decode arrays, more than 8 bits, JPEG 2000,
+  JBIG2 and CCITT (black-and-white images, CCITT and JBIG2 among them, are below). A JPEG is read with
   its colour transform (an Adobe marker's, else `/ColorTransform`, ISO 32000-2 §7.4.8), so one
   stored untransformed keeps its colours; one whose marker and `/ColorTransform` disagree is left
   alone, since readers differ on which wins. Samples are read with `/DecodeParms` given by
@@ -40,7 +46,7 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 - **Monochrome images** (`Settings::mono`, `MonoSettings::REDUCE` by default: to 300 ppi above
   450 ppi, CCITT Group 4). Black-and-white images are a 1-bit image with one colour component
   (grey, indexed, a separation) or an image mask, stored with no filter, with general-purpose ones
-  or with CCITT fax after any of those (decoded by `Document::decoded_image_within`, no further
+  or with CCITT fax or JBIG2 after any of those (decoded by `Document::decoded_image_within`, no further
   than its rows can need; byte-aligned Group 3 with end-of-line codes but none before the first
   row, not as T.4 sends them, is read as PdfCraft draws it, which at `/K 0` may be other rows than
   were coded, and an image stored again keeps them). Packed to one bit first, unless a colour-key `/Mask` is in the image's
@@ -59,40 +65,69 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   downsampling it to JPEG.
   - **Downsampling:** one whose effective resolution is above `above_ppi` is averaged down to
     `target_ppi`: each new pixel takes the sample covering more of its area, and the dark one on a
-    tie, so a dark line half a new pixel wide stays: black in grey and the painted part of an image
-    mask (a 0, or a 1 with an inverting decode array), full ink in a separation (a 1, or a 0), and
-    entry 0 of an indexed image, whatever colour its palette gives it (the palette isn't read yet).
-    Not one with a soft mask, whose own size would have to follow; not a halftone or a dither,
-    most of whose new pixels would cover both black and white, so that taking the sample covering
-    more would turn its tones solid (a 50% screen black, a 25% one white); and not one wider than
-    a fax row (`pdfcraft_filters::MAX_CCITT_COLUMNS`), as the averaging keeps a counter for each
-    column. On a 600 ppi text page, Group 4 at 300 ppi is half the size.
+    tie, so a dark line half a new pixel wide stays: black in grey, the painted part of an image
+    mask (a 0, or a 1 with an inverting decode array), and the darker of an indexed image's two
+    palette entries. Only images whose dark sample is known so are averaged: `DeviceGray` (grey and
+    RGB packed to one bit among them), image masks, and indexed images over `DeviceGray` or
+    `DeviceRGB`, whose palette is read (Rec. 601 luma for RGB; a table of at most 4 KiB), with no
+    decode array or one of two different numbers, and not drawn or listed where `/DefaultGray` or
+    `/DefaultRGB` is or may be in force (an indexed image referred to from beyond the page and form
+    resources read, as an annotation's appearance, may be). Not one with a colour key, which can
+    hide the dark sample a tie would go to. Not a separation or a DeviceN, whose tint transform isn't read, calibrated or ICC
+    grey, or an indexed image over another base or whose two entries look alike. Not one with a soft mask, whose own size would have to
+    follow; not a halftone or a dither, most of whose new pixels would cover both black and white,
+    so that taking the sample covering more would turn its tones solid (a 50% screen black, a 25%
+    one white), nor one with a square of four new pixels that each would, as a small screened
+    picture on a white page has: ragged scanned text has such squares along its strokes too, and
+    is then left at its resolution. And not one wider than a fax row
+    (`pdfcraft_filters::MAX_CCITT_COLUMNS`), as the averaging keeps a counter for each column. On a
+    600 ppi page of text that is averaged, Group 4 at 300 ppi is about half the size.
   - **Compression:** CCITT Group 4 (`pdfcraft_filters::encode_g4`), or 1-bit Flate when that is
     smaller, which only a resampled image or one packed from more bits may be: a 1-bit image that
-    is only stored again becomes Group 4 or stays. Group 4 alone is only decoded to be resampled;
+    is only stored again becomes Group 4 or stays. Group 4 alone is only decoded to be resampled, and so is JBIG2 alone when Group 4 is asked for;
     Group 3, or Group 4 inside another filter such as `ASCII85Decode`, is stored again as Group 4
     alone when that is smaller. Damaged Group 3 with end-of-line codes is stored as the decoder
     recovers it, a bad row picked up again at the next code, as it reports no damage there; without
-    them, damage stops the decoding and the image is left alone. With Retain, a resampled image
-    keeps its kind of compression (CCITT, or Flate) and nothing else changes; an image of more bits
-    is then left to the grey or colour settings. Every change is kept only when it is smaller as
-    stored.
+    them, damage stops the decoding and the image is left alone. JBIG2 inside another filter, or
+    alone when JBIG2 is asked for, is stored again as the compression asks when that is smaller (as JBIG2 symbols where
+    its own coding is a generic region, say); a symbol-coded scan, averaged, loses its exact
+    repeats and often comes out larger, and then stays as it is. A JBIG2 image stored again refers to no
+    `/JBIG2Globals` of its own. With JBIG2 asked for, the images stored as JBIG2, up to 16 at a
+    time, then share one symbol dictionary in a new `/JBIG2Globals` stream, holding the marks found
+    in more than one of them: those that come out smaller that way, when together they save more
+    than it takes. Only images that redaction can store again without it share one: image masks
+    and DeviceGray images named directly, of at most 64 Mi pixels (redaction's limit,
+    `pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS`); others are coded alone.
+    Redacting one of them stores the others of its group again without it, so the group keeps that
+    to 15 images, and each image's decode reads the dictionary of 16 at most. A
+    JBIG2 image whose page isn't its size (PdfCraft's
+    renderer draws the whole page into the image) is left alone. With Retain, a resampled image
+    keeps its kind of compression (CCITT, JBIG2, or Flate) and nothing else changes; an image of
+    more bits is then left to the grey or colour settings. Every change is kept only when it is
+    smaller as stored.
   - Apart from the downsampling it is lossless: the samples keep their meaning, so the colour
     space, decode array and `/Mask` stay, but for packed RGB, which becomes grey with one decode
     pair. Group 4 wins on scans, whose ragged edges defeat Flate; on clean computer-drawn 1-bit
     art Flate can be smaller. Not yet: inline images, an image's own `/SMask` or `/Mask`
-    image (only images drawn on a page are visited), and Group 4 for rows wider than 32,767
-    samples.
+    image (only images drawn on a page are visited), Group 4 for rows wider than 32,767
+    samples, and JBIG2 past 65,535 samples on a side, where the decoder stops (its 2^28 in all
+    is past the 80 million pixels above).
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
-    smaller. No lossy symbol substitution is used. Export reads embedded images and bounded
-    shared globals.
+    smaller, a dictionary shared by up to 16 images when that is smaller still. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
+    images, with bounded shared globals. All of a run's images share one allowance of decoding
+    (`pdfcraft_cos::ImageBudget`), filters, decoders and pixels alike, JPEG samples and merged
+    pictures too: about
+    1,000 scanned pages' worth, plus more for each byte of the file, enough to decode a stream
+    about 8 times at Flate's best. Images past it stay as they are, and `Report::images_refused`
+    counts those the image step read. Streams it only stores with Flate (below) aren't counted.
 - **Discard objects:** thumbnails, alternate images, document tags, print settings.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes; streams with `/DecodeParms`, images and object streams keep their ASCII layer. LZW-compressed
   streams, content and images alike, are decoded and stored with Flate instead (Acrobat's "In
-  streams that use LZW encoding, use Flate instead"): a predictor carries over to Flate without
+  streams that use LZW encoding, use Flate instead"), from the run's allowance, past which they
+  stay LZW: a predictor carries over to Flate without
   `EarlyChange`, filters applied before the LZW one go with it and those after it keep their
   bytes. A stream whose LZW data doesn't decode cleanly is left as it is. Not yet: inline images.
 

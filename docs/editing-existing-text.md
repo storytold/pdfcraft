@@ -96,10 +96,17 @@ invisible text, such as another OCR tool's layer, makes the rewritten paragraph 
 painted cover in the sampled paper colour. Edit text also groups invisible text differently: its lines never
 merge into multi-line paragraphs, and words split at gaps of 0.6 em or more.
 
-Only text drawn directly in the page's content streams can be edited. Text drawn inside a
-Form XObject (`/Fm1 Do`), as pages placed by LaTeX `pdfpages`, n-up and imposition tools
-are, is extracted, searched and rendered but not listed for editing: the form is offered as
-one artwork item that can be moved, not retyped (#2964).
+Edit text lists the text drawn directly in the page's content streams. Text drawn inside a
+Form XObject (`/Fm1 Do`), as pages placed by LaTeX `pdfpages`, n-up and imposition tools,
+HTML-to-PDF converters and stamps are, is extracted, searched and rendered, but while the form
+is grouped it is one artwork item that moves as a whole (#2964). **Ungroup** (the artwork's
+right-click menu; `image_edit` action `ungroup`) draws that placement's content in place on
+the page with its resources merged, and its text then lists as paragraphs that can be retyped;
+undo brings the form back. Ungrouping never changes the pixels: a knockout group, a
+transparency group that blends inside, is drawn translucent or blends in another colour space
+than the page's, and a form whose `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` the page
+doesn't share (ISO 32000-2 §8.6.5.6) are refused rather than changed (see
+[Editing images](editing-images.md)).
 
 Explicit marked paragraph/heading scopes prevent unrelated tagged regions from merging.
 Compatible geometry groups untagged content, including runs split across content streams
