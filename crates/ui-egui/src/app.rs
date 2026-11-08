@@ -457,6 +457,10 @@ impl eframe::App for PdfCraftApp {
     /// the quit guard, shortcuts, and the background jobs' results.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
+        // The Recent colours row read back from settings goes where the colour pickers keep it.
+        if let Some(colours) = self.comment_prefs.saved_recent_colours.take() {
+            comments::set_recent_custom_colours(ctx, &colours);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
         self.dialog_epoch();

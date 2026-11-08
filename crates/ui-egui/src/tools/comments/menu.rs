@@ -207,7 +207,8 @@ fn recent_custom_id() -> egui::Id {
     egui::Id::unique("pdfcraft-recent-custom-colours")
 }
 
-/// Custom colours picked with "Other colour…" this session, newest first (#1193).
+/// Custom colours picked with "Other colour…", newest first (#1193), kept across restarts with
+/// the settings (#6577).
 pub fn recent_custom_colours(ctx: &egui::Context) -> Vec<Rgb> {
     ctx.data(|d| d.get_temp::<Vec<Rgb>>(recent_custom_id())).unwrap_or_default()
 }
@@ -215,16 +216,34 @@ pub fn recent_custom_colours(ctx: &egui::Context) -> Vec<Rgb> {
 /// Put `c` first in the recent custom colours (once, at most [`RECENT_CUSTOM`]). Colours that are
 /// already swatches are not repeated there.
 pub fn remember_custom_colour(ctx: &egui::Context, c: Rgb) {
+    ctx.data_mut(|d| push_recent(d.get_temp_mut_or_default::<Vec<Rgb>>(recent_custom_id()), c));
+}
+
+/// Put `c` first in `recent`, under [`remember_custom_colour`]'s rules.
+fn push_recent(recent: &mut Vec<Rgb>, c: Rgb) {
     if !c.iter().all(|v| v.is_finite()) || SWATCHES.iter().any(|(_, s)| same_colour(s, &c)) {
         return;
     }
     let c = c.map(|v| v.clamp(0.0, 1.0));
-    ctx.data_mut(|d| {
-        let recent = d.get_temp_mut_or_default::<Vec<Rgb>>(recent_custom_id());
-        recent.retain(|r| !same_colour(r, &c));
-        recent.insert(0, c);
-        recent.truncate(RECENT_CUSTOM);
-    });
+    recent.retain(|r| !same_colour(r, &c));
+    recent.insert(0, c);
+    recent.truncate(RECENT_CUSTOM);
+}
+
+/// `colours` (newest first, as saved settings give them back) held to the rules a colour picked
+/// this session follows: finite, clamped, no swatches, no repeats, at most [`RECENT_CUSTOM`]
+/// (#6577).
+pub(crate) fn tidy_recent_colours(colours: &[Rgb]) -> Vec<Rgb> {
+    let mut recent = Vec::new();
+    for c in colours.iter().rev() {
+        push_recent(&mut recent, *c);
+    }
+    recent
+}
+
+/// Replace the recent custom colours with `colours`, newest first (#6577).
+pub(crate) fn set_recent_custom_colours(ctx: &egui::Context, colours: &[Rgb]) {
+    ctx.data_mut(|d| d.insert_temp(recent_custom_id(), tidy_recent_colours(colours)));
 }
 
 pub(super) fn same_colour(a: &Rgb, b: &Rgb) -> bool {

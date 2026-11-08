@@ -16,6 +16,10 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
+/// How many saved Recent colours entries are read at most; only the first five usable ones are
+/// kept (#6577).
+const MAX_SAVED_RECENT_COLOURS: usize = 64;
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
 /// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
 /// number) is refused whole, so the caller keeps its default.
@@ -127,6 +131,8 @@ impl PdfCraftApp {
                     "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
+            // The colour pickers' Recent colours row, newest first (#6577).
+            "recent_colours": self.recent_colours_to_save(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -371,6 +377,23 @@ impl PdfCraftApp {
         }
         if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
             self.comment_prefs.pinned = pinned;
+        }
+        // The Recent colours row (#6577). Settings are untrusted: a list is read up to a bound,
+        // an entry that is not three finite numbers is dropped, and the rest are held to the
+        // rules a colour picked this session follows. The next frame puts them in place.
+        if let Some(list) = v["recent_colours"].as_array() {
+            let colours: Vec<pdfcraft_engine::Rgb> = list.iter().take(MAX_SAVED_RECENT_COLOURS).filter_map(rgb_triple).collect();
+            self.comment_prefs.saved_recent_colours = Some(crate::comments::tidy_recent_colours(&colours));
+        }
+    }
+
+    /// The Recent colours row as settings store it: the list read back while no frame has put
+    /// it in place yet, else what the pickers hold now.
+    fn recent_colours_to_save(&self) -> Vec<pdfcraft_engine::Rgb> {
+        match (&self.comment_prefs.saved_recent_colours, &self.ctx) {
+            (Some(saved), _) => saved.clone(),
+            (None, Some(ctx)) => crate::comments::recent_custom_colours(ctx),
+            (None, None) => Vec::new(),
         }
     }
 

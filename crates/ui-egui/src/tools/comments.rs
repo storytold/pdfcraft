@@ -39,7 +39,10 @@ pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 use input::hover_tip;
 pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input, tips_shown};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
+pub(crate) use menu::{
+    MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls, set_recent_custom_colours,
+    tidy_recent_colours,
+};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
 pub(crate) use paint::paint_page;
@@ -315,6 +318,9 @@ pub struct CommentPrefs {
     pub group_tool: [CommentTool; 3],
     /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
     pub hide_empty_highlight_hover: bool,
+    /// The Recent colours row read back from settings (#6577), newest first, until the next
+    /// frame puts it in egui's memory, where the colour pickers keep it.
+    pub(crate) saved_recent_colours: Option<Vec<Rgb>>,
 }
 
 impl Default for CommentPrefs {
@@ -325,6 +331,7 @@ impl Default for CommentPrefs {
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
+            saved_recent_colours: None,
         }
     }
 }

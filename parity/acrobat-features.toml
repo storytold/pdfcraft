@@ -3998,8 +3998,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.note"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::restyle_and_resize_redraw_the_appearance", "crates/ui-egui/tests/it/comments.rs::the_opacity_set_for_a_tool_goes_into_its_new_comments", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_comment", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_arrow"]
-notes = "quick-bar colour swatches immediately recolour a selected comment made with the active tool, and set the tool default; fill colour (rectangle, oval, polygon, cloud), opacity (10–100 %) and line thickness per tool; colour from the context menu"
+evidence = ["crates/annot/src/tests.rs::restyle_and_resize_redraw_the_appearance", "crates/ui-egui/tests/it/comments.rs::the_opacity_set_for_a_tool_goes_into_its_new_comments", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_comment", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_arrow", "crates/ui-egui/tests/it/recent_colours.rs::recent_colours_survive_a_restart", "crates/ui-egui/tests/it/recent_colours.rs::saved_recent_colours_are_untrusted"]
+notes = "quick-bar colour swatches immediately recolour a selected comment made with the active tool, and set the tool default; fill colour (rectangle, oval, polygon, cloud), opacity (10–100 %) and line thickness per tool; colour from the context menu. The Recent colours row (the last five custom colours) survives a restart (#6577). Missing: a saved palette of favourite colours with explicit add and remove"
 
 [[feature]]
 id = "comment.lock-comment"
