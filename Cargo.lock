@@ -1243,7 +1243,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+source = "git+https://github.com/storytold/craft-libs?rev=7ee35a9fbd47af572d55fd63dbf0333d1f00da17#7ee35a9fbd47af572d55fd63dbf0333d1f00da17"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -1335,7 +1335,7 @@ dependencies = [
 [[package]]
 name = "craft-winprint-gdi"
 version = "0.1.0"
-source = "git+https://github.com/storytold/winprint.rs?rev=417ac3c4d14d3da5485a99c7d5ce8f05664ec312#417ac3c4d14d3da5485a99c7d5ce8f05664ec312"
+source = "git+https://github.com/storytold/winprint.rs?rev=64e7afd4d1483512385012c340ecaaaf0f3beb7f#64e7afd4d1483512385012c340ecaaaf0f3beb7f"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -3134,6 +3134,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "icu_segmenter"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82d07aafccd67af15d02512a6adf5896fbc5ed00f2e99b471d2efa14016db3db"
+dependencies = [
+ "icu_collections",
+ "icu_locale_fallback",
+ "icu_provider",
+ "icu_segmenter_data",
+ "potential_utf",
+ "smallvec",
+ "utf8_iter",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_segmenter_data"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae293c039020f9ec10710af98d29ce6aa2051486638b49c9a6409f3b4a9e98ad"
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4277,6 +4299,7 @@ dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-geom",
  "pdfcraft-model",
  "thiserror 2.0.21",
 ]
@@ -4399,6 +4422,7 @@ name = "pdfcraft-edit"
 version = "0.18.1"
 dependencies = [
  "hayro-syntax",
+ "icu_segmenter",
  "kurbo 0.13.1",
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -4539,8 +4563,20 @@ dependencies = [
  "pdfcraft-fonts",
  "png 0.18.1",
  "rten",
+ "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-ocr-worker"
+version = "0.18.1"
+dependencies = [
+ "js-sys",
+ "pdfcraft-ocr",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -4637,6 +4673,7 @@ dependencies = [
  "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-forms",
+ "pdfcraft-geom",
  "pdfcraft-model",
  "pdfcraft-render",
  "pdfcraft-testkit",
@@ -4660,6 +4697,7 @@ dependencies = [
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-geom",
  "serde",
  "skrifa 0.44.0",
  "thiserror 2.0.21",
@@ -8249,7 +8287,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=5f80b9baf6b58937c401656634e42d33f00ddf49#5f80b9baf6b58937c401656634e42d33f00ddf49"
+source = "git+https://github.com/storytold/winprint.rs?rev=51934db382f225454cf152a8657eb03789be63c4#51934db382f225454cf152a8657eb03789be63c4"
 dependencies = [
  "flate2",
  "fmt-derive",
