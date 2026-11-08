@@ -2617,7 +2617,8 @@ fn a_stencil_masks_decode_array_can_hold_references() {
     for decode in ["[7 0 R 0]", "[1 7 0 R]", "[8 0 R 0]", "[1 8 0 R]", "[7 0 R 8 0 R]", "[1]", "[1 /Name]", "[/Name 0]"] {
         assert_eq!(export(decode), identity, "{decode}");
     }
-    // Equal ends aren't the two ways round either, and a number too long to hold reads as infinite.
+    // Equal ends aren't the two ways round either, and a number past f64's range has no value: it
+    // reads as null in its slot (#6477), an end that isn't a number.
     assert_eq!(export("[1 1]"), identity);
     assert_eq!(export(&format!("[{} 0]", "9".repeat(400))), identity);
 }

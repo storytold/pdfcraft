@@ -4207,3 +4207,80 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+/// #6477, the gate for both number parsers: pdfcraft-cos (the model, and so the page geometry
+/// redaction works in) and hayro-syntax (the renderer) read a number token with no finite value
+/// the same way, as absent or invalid at its slot, never clamped: word forms, integer overflow and
+/// real overflow, in `/UserUnit`, in a box and among content operands.
+#[test]
+fn model_and_renderer_agree_on_numbers_with_no_finite_value() {
+    let page = |entries: &str, content: &str| -> Vec<u8> {
+        Pdf::new()
+            .objs([
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                format!("<< /Type /Page /Parent 2 0 R {entries} /Contents 4 0 R /Resources << >> >>").into_bytes(),
+                stream("", content.as_bytes()),
+            ])
+            .build()
+    };
+    // Each side's crop box and displayed size, in points.
+    let model = |bytes: &[u8]| {
+        let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
+        let pages = pdfcraft_model::pages(&doc);
+        let p = pages.first().expect("the model sees the page");
+        let (w, h) = p.display_size(&doc);
+        (p.crop(&doc).map(|v| v as f32), (w as f32, h as f32))
+    };
+    let render = |bytes: &[u8]| {
+        let info = pdfcraft_render::inspect(Arc::new(bytes.to_vec()), None).unwrap();
+        let p = info.pages.first().expect("the renderer sees the page");
+        (p.crop, (p.width, p.height))
+    };
+    let paints = |bytes: &[u8]| {
+        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes.to_vec()), pdfcraft_render::RenderConfig::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        out.rgba.chunks_exact(4).any(|p| p[..3] != [255, 255, 255])
+    };
+    // Rectangles the model's content reader finds (redaction reads content through it).
+    let rects = |bytes: &[u8]| {
+        let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
+        pdfcraft_content::parse(content(&doc, 0).as_bytes()).ops.iter().filter(|op| op.is("re")).filter_map(|op| op.nums::<4>()).count()
+    };
+
+    let box_300 = "/MediaBox [0 0 300 200]";
+    let plain = ([0.0, 0.0, 300.0, 200.0], (300.0, 200.0));
+    assert_eq!(model(&page(box_300, "")), plain);
+    assert_eq!(render(&page(box_300, "")), plain);
+    assert!(paints(&page(box_300, "0 g 10 10 80 50 re f")), "the harness sees a painted rectangle");
+    assert_eq!(rects(&page(box_300, "0 g 10 10 80 50 re f")), 1);
+
+    let huge = format!("1{}", "0".repeat(400));
+    for t in ["+inf", "-inf", "+nan", "-nan", "+Infinity", "1e400", "1.0e400", huge.as_str()] {
+        // `/UserUnit` reads as 1. It was clamped to 75,000 from infinity in the model, and from
+        // `f64::MAX` (or lost with an unreadable page dictionary) in the renderer.
+        let unit = page(&format!("{box_300} /UserUnit {t}"), "");
+        assert_eq!(model(&unit), plain, "model, /UserUnit {t}");
+        assert_eq!(render(&unit), plain, "renderer, /UserUnit {t}");
+
+        // A crop box holding it is not a box: both fall back to the media box.
+        let crop = page(&format!("{box_300} /CropBox [0 0 {t} 150]"), "");
+        assert_eq!(model(&crop), plain, "model, /CropBox [0 0 {t} 150]");
+        assert_eq!(render(&crop), plain, "renderer, /CropBox [0 0 {t} 150]");
+
+        // A media box holding it is invalid on each side, exactly as one that isn't an array is.
+        // The two readers' fallbacks for a page's own invalid media box differ (the model takes
+        // 612 × 792 and ignores an inherited box; the renderer takes an inherited box, then A4).
+        // That is reader policy, not parsing, and this change leaves it alone.
+        let media = page(&format!("/MediaBox [0 0 {t} 792]"), "");
+        let not_a_box = page("/MediaBox /NotABox", "");
+        assert_eq!(model(&media), model(&not_a_box), "model, /MediaBox [0 0 {t} 792]");
+        assert_eq!(render(&media), render(&not_a_box), "renderer, /MediaBox [0 0 {t} 792]");
+
+        // A content operand: neither side has a rectangle, to draw or to redact.
+        let quad = page(box_300, &format!("0 g 10 10 {t} 50 re f"));
+        assert!(!paints(&quad), "the renderer paints `10 10 {t} 50 re`");
+        assert_eq!(rects(&quad), 0, "the model reads `10 10 {t} 50 re` as a rectangle");
+    }
+}

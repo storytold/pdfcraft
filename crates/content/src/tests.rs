@@ -566,3 +566,23 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
     assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
 }
+
+/// #6477: an operand with no finite value is null in its place, as the renderer's tokenizer reads
+/// it (hayro-syntax patch 36), and stays null when the stream is written back. It was a NaN or
+/// infinite real, which `write_real` wrote as `0`: `1 +nan 3 4 re`, which draws nothing, came back
+/// from a save as `1 0 3 4 re`, a rectangle the renderer reads.
+#[test]
+fn an_operand_with_no_finite_value_is_null_and_written_back_as_null() {
+    let huge = format!("1{}", "0".repeat(400));
+    for t in ["+nan", "-nan", "+inf", "-Infinity", "1e400", "1.0e400", huge.as_str()] {
+        let src = format!("1 {t} 3 4 re");
+        let parsed = parse(src.as_bytes());
+        assert_eq!(parsed.ops.len(), 1, "{t}: {:?}", parsed.ops);
+        let op = &parsed.ops[0];
+        assert!(op.is("re"), "{t}");
+        assert_eq!(op.operands, vec![Object::Int(1), Object::Null, Object::Int(3), Object::Int(4)], "{t}");
+        assert_eq!(parsed.skipped, 0, "{t}: nothing was skipped");
+        let written = String::from_utf8(serialize_ops(&parsed.ops)).unwrap_or_default();
+        assert_eq!(written.trim_end(), "1 null 3 4 re", "{t}");
+    }
+}

@@ -129,6 +129,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     // One extra sign is absorbed and the value is negative if either sign was a minus, which is
     // what the COS lexer does since #3299 (`--280` and `+-280` are both -280). A third sign is
     // left to the digit loop's trailing-minus arm, as before.
+    let token_start = r.offset();
     let mut negative = false;
     let mut signs = 0;
     while signs < 2
@@ -179,6 +180,17 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     }
 
     if !has_digits {
+        // PdfCraft patch (36): `-inf`, `-nan`, `+Infinity` are one token with no finite value, not
+        // a sign (read as 0) followed by a stray `inf` (#6477). `Number::skip` already refused
+        // them; `Object` reads them as null (`skip_non_finite`).
+        if !has_dot && r.peek_byte().is_some_and(is_regular_character) {
+            let word_start = r.offset();
+            r.forward_while(is_regular_character);
+            if r.range(token_start..r.offset()).is_some_and(has_no_finite_value) {
+                return None;
+            }
+            r.jump(word_start);
+        }
         if negative || has_dot {
             // Treat numbers like just `-`, `+` or `-.` as zero.
             return Some(Number(InternalNumber::Integer(0)));
@@ -192,8 +204,19 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
         return None;
     }
 
-    // A value whose integer part overflowed `u64` is a real, scaled by the digits dropped and
-    // kept finite.
+    // PdfCraft patch (36): a token with no finite value is absent at its slot, never clamped
+    // (#6477). It used to saturate to `f64::MAX`, where pdfcraft-cos read infinity, so the page
+    // size and the redaction geometry built from it disagreed. Only a value whose integer part
+    // overflowed `u64` can be that large; whether it is decides from the token itself, exactly
+    // as pdfcraft-cos's correctly rounded conversion does, not from the approximation below.
+    if extra_int_digits > 0 && r.range(token_start..r.offset()).is_some_and(has_no_finite_value) {
+        return None;
+    }
+
+    // A value whose integer part overflowed `u64` is a real, scaled by the digits dropped. Tokens
+    // with no finite value were refused above. What still overflows here saturates, as before:
+    // a finite value just under `f64::MAX` that this approximation overshoots, or a damaged token
+    // the rule doesn't cover (digits with a trailing minus), which pdfcraft-cos refuses anyway.
     let scaled = |value: f64| -> f64 {
         let value = if extra_int_digits > 0 { value * powi_f64(10.0, extra_int_digits) } else { value };
         if value.is_finite() { value } else { f64::MAX }
@@ -354,6 +377,73 @@ pub(crate) fn is_digit(byte: u8) -> bool {
 
 pub(crate) fn is_digit_or_minus(byte: u8) -> bool {
     is_digit(byte) || byte == b'-'
+}
+
+/// PdfCraft patch (36): whether `token`, a whole token, is a number with no finite value: a word
+/// form (`inf`, `infinity` or `nan` in any case) or a decimal number past the range of `f64`
+/// (`1` followed by 400 zeros, `1e400`), after any leading signs (#6477).
+///
+/// Such a token is absent at its slot, never clamped. pdfcraft-cos applies the same rule
+/// (`crates/cos/src/parser.rs`, `has_no_finite_value`), so the renderer and the editing crates
+/// agree on page sizes and boxes. Keep the two definitions identical.
+pub(crate) fn has_no_finite_value(token: &[u8]) -> bool {
+    let mut body = token;
+    while let Some((b'+' | b'-', rest)) = body.split_first() {
+        body = rest;
+    }
+    const WORDS: [&[u8]; 3] = [b"inf", b"infinity", b"nan"];
+    if WORDS.iter().any(|w| body.eq_ignore_ascii_case(w)) {
+        return true;
+    }
+    if body.is_empty() || decimal_len(body) != body.len() {
+        return false;
+    }
+    // `decimal_len` admits ASCII only, which is UTF-8.
+    core::str::from_utf8(body)
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .is_some_and(|v| !v.is_finite())
+}
+
+/// PdfCraft patch (36): length of the longest prefix of `s` that is digits with at most one `.`
+/// and then an exponent with digits; zero when the prefix has no digit. The same grammar as
+/// pdfcraft-cos's `real_prefix_len`, without its sign.
+fn decimal_len(s: &[u8]) -> usize {
+    let digits = |from: usize| s.get(from..).map_or(0, |r| r.iter().take_while(|b| b.is_ascii_digit()).count());
+    let int = digits(0);
+    let mut at = int;
+    let mut frac = 0;
+    if s.get(at) == Some(&b'.') {
+        frac = digits(at + 1);
+        at += 1 + frac;
+    }
+    if int + frac == 0 {
+        return 0;
+    }
+    if matches!(s.get(at), Some(b'e' | b'E')) {
+        let sign = usize::from(matches!(s.get(at + 1), Some(b'+' | b'-')));
+        let exp = digits(at + 1 + sign);
+        if exp > 0 {
+            at += 1 + sign + exp;
+        }
+    }
+    at
+}
+
+/// PdfCraft patch (36): step over a token with no finite value ([`has_no_finite_value`]),
+/// leaving the reader where it was otherwise. An object reads it as null, so the dictionary or
+/// array holding it survives with that one slot absent, where a direct `1e400`, `-inf` or `+nan`
+/// used to make its whole dictionary unreadable (#6477). Scanning with the reader, not the
+/// bytes, keeps the end-of-window flag of streamed content (`Reader::looked_past_end`) honest.
+pub(crate) fn skip_non_finite(r: &mut Reader<'_>) -> Option<()> {
+    let start = r.offset();
+    r.forward_while(is_regular_character);
+    if r.range(start..r.offset()).is_some_and(has_no_finite_value) {
+        Some(())
+    } else {
+        r.jump(start);
+        None
+    }
 }
 
 #[cfg(test)]
@@ -626,9 +716,112 @@ mod tests {
             .read_without_context::<f64>()
             .unwrap();
         assert!((num5 / -1.2345678901234568e20 - 1.0).abs() < 1e-12, "got {num5}");
-        // Hundreds of digits stay finite.
+        // Hundreds of digits that still fit in `f64` keep their value.
+        let large = format!("1{}", "0".repeat(300));
+        let num6 = Reader::new(large.as_bytes()).read_without_context::<f64>().unwrap();
+        assert!((num6 / 1e300 - 1.0).abs() < 1e-12, "got {num6}");
+        // Past `f64` there is no value: absent, never clamped to `f64::MAX` (patch 36, #6477).
         let huge = "9".repeat(400);
-        let num6 = Reader::new(huge.as_bytes()).read_without_context::<f64>().unwrap();
-        assert!(num6.is_finite() && num6 > 1e300, "got {num6}");
+        assert_eq!(Reader::new(huge.as_bytes()).read_without_context::<f64>(), None);
+    }
+}
+
+/// PdfCraft patch (36): a number token with no finite value is absent at its slot, never
+/// clamped, and pdfcraft-cos reads it the same way (#6477).
+#[cfg(test)]
+mod pdfcraft_non_finite_tests {
+    use super::has_no_finite_value;
+    use crate::content::UntypedIter;
+    use crate::object::{Array, Dict, FromBytes, MaybeRef, Number, Object, Rect};
+    use crate::reader::{Reader, ReaderExt};
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    /// One of each class: word forms, integer overflow, real overflow.
+    fn tokens() -> Vec<String> {
+        let mut t: Vec<String> = ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-INF", "--nan", "1e400", "-1e400", "1.0e400", ".5E+400"]
+            .iter()
+            .map(|s| (*s).into())
+            .collect();
+        t.push(format!("1{}", "0".repeat(400)));
+        t.push(format!("-{}", "9".repeat(400)));
+        t.push(format!("{}.5", "9".repeat(400)));
+        t
+    }
+
+    #[test]
+    fn the_recogniser_takes_only_tokens_with_no_finite_value() {
+        for t in tokens() {
+            assert!(has_no_finite_value(t.as_bytes()), "{t}");
+        }
+        let finite = format!("1{}", "0".repeat(300));
+        for t in ["0", "-1.5", "1e5", "1e308", "+", "-", ".", "", "infx", "nan5", "1e400x", "1.2.3", "-inf-", finite.as_str()] {
+            assert!(!has_no_finite_value(t.as_bytes()), "{t}");
+        }
+    }
+
+    #[test]
+    fn a_number_with_no_finite_value_is_not_read_as_a_number() {
+        for t in tokens() {
+            let mut r = Reader::new(t.as_bytes());
+            assert_eq!(r.read_without_context::<Number>(), None, "{t}");
+            assert_eq!(r.offset(), 0, "{t}: a failed read leaves the reader where it was");
+            assert_eq!(Reader::new(t.as_bytes()).read_without_context::<f32>(), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn an_object_reads_it_as_null_and_skipping_covers_the_whole_token() {
+        for t in tokens() {
+            let mut r = Reader::new(t.as_bytes());
+            let o = r.read_without_context::<Object<'_>>();
+            assert!(matches!(o, Some(Object::Null(_))), "{t}: {o:?}");
+            assert!(r.at_end(), "{t}: the whole token was read");
+            let mut r = Reader::new(t.as_bytes());
+            assert!(r.skip::<Object<'_>>(false).is_some(), "{t}: not skipped");
+            assert!(r.at_end(), "{t}: only part of the token was skipped");
+        }
+    }
+
+    #[test]
+    fn the_dictionary_holding_it_keeps_its_other_entries() {
+        for t in tokens() {
+            let src = format!("<< /UserUnit {t} /Rotate 90 >>");
+            let d = Dict::from_bytes(src.as_bytes()).unwrap_or_else(|| panic!("{t}: the dictionary is readable"));
+            assert_eq!(d.get::<f64>(b"UserUnit"), None, "{t}: absent at its slot");
+            assert!(matches!(d.get::<Object<'_>>(b"UserUnit"), Some(Object::Null(_))), "{t}");
+            assert_eq!(d.get::<i32>(b"Rotate"), Some(90), "{t}");
+            // Listing the entries reads each one again; it must not meet a token it can't read.
+            assert_eq!(d.entries().count(), 2, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_box_holding_it_is_not_a_box_and_the_array_reads_null_there() {
+        for t in tokens() {
+            let src = format!("[0 0 {t} 792]");
+            assert!(Reader::new(src.as_bytes()).read_without_context::<Rect>().is_none(), "{t}");
+            let a = Array::from_bytes(src.as_bytes()).unwrap_or_else(|| panic!("{t}: the array is readable"));
+            let items: Vec<_> = a.raw_iter().collect();
+            assert_eq!(items.len(), 4, "{t}");
+            assert!(matches!(items[2], MaybeRef::NotRef(Object::Null(_))), "{t}: {:?}", items[2]);
+            assert!(matches!(items[3], MaybeRef::NotRef(Object::Number(_))), "{t}");
+        }
+    }
+
+    #[test]
+    fn a_content_operand_with_no_finite_value_is_null_in_its_place() {
+        // `-nan` used to be 0 and then an operator `nan`; `+nan` an operator that cleared the
+        // operands before it. pdfcraft-content reads null in that place, as here.
+        for t in tokens() {
+            let src = format!("1 {t} 3 4 re");
+            let mut iter = UntypedIter::new(src.as_bytes());
+            let instruction = iter.next().unwrap_or_else(|| panic!("{t}: an instruction"));
+            assert_eq!(instruction.operator.as_ref(), b"re", "{t}");
+            let operands: Vec<_> = instruction.operands().collect();
+            assert_eq!(operands.len(), 4, "{t}: {operands:?}");
+            assert!(matches!(operands[1], Object::Null(_)), "{t}: {operands:?}");
+        }
     }
 }
