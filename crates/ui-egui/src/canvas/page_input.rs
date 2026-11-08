@@ -76,13 +76,6 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
-    if tool != QuickTool::EditText {
-        view.prepared_text_pages.clear();
-    } else if can_modify && view.pending_edit.is_none() && view.line_editor.is_none() && view.prepared_text_pages.insert(i) && doc.can_prepare_text(i)
-    {
-        view.pending_edit = Some(pdfcraft_engine::Edit::PrepareText { page: i });
-        ui.ctx().request_repaint();
-    }
     let field_tool = match tool {
         QuickTool::Field(f) => Some(f),
         _ => None,
@@ -226,7 +219,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let adding = (tool == QuickTool::AddText).then_some(added.as_slice());
         let pcx = crate::edit_text_ui::ParagraphCx { press, gate, hover: hovered.as_ref(), adding };
         let text_used = crate::edit_text_ui::page_input(cx, &lines, pcx, view);
-        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, info, press, gate };
+        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, doc, info, press, gate };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         text_used || image_used
     };

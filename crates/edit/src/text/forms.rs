@@ -22,6 +22,9 @@ pub struct Preparation {
 /// grouped and is reported in [`Preparation::refused`].
 const MAX_LEVELS: usize = 8;
 
+/// What preparing one page may decode, and add to its content, in all.
+const MAX_PREPARED_BYTES: usize = 16 << 20;
+
 /// What one pass of [`prepare`] inlined, as positions in the next pass's parse of the page.
 struct Inlined {
     /// How many operators that parse has; with any other count the positions are wrong.
@@ -39,9 +42,9 @@ struct Inlined {
 pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError> {
     let mut next = doc.clone();
     let mut result = Preparation::default();
-    let mut bytes_left = 16usize << 20;
+    let mut bytes_left = MAX_PREPARED_BYTES;
     let mut visits = 0usize;
-    let mut decode = pdfcraft_cos::DecodeBudget::new(16 << 20, 0);
+    let mut decode = pdfcraft_cos::DecodeBudget::new(MAX_PREPARED_BYTES, 0);
     // Forms found to be artwork, or refused for a reason in the form itself (`Refusal::intrinsic`):
     // a placement of one that an expanded group adds is left as it is without being read or
     // counted, so logos drawn inside many text groups don't use up the limit. A form refused only
@@ -197,6 +200,26 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
         *doc = next;
     }
     Ok(result)
+}
+
+/// Whether grouped artwork `image` on `page` (its index in `page_images`) shows text that
+/// [`prepare`] would make editable, read as its first pass reads it, without changing anything:
+/// a logo or a refused group is `false`. A group refused only because its resources need renaming
+/// is `true`, as another group's names can still let [`prepare`] open it.
+pub fn grouped_text_at(doc: &Document, page: usize, image: usize) -> Result<bool, EditError> {
+    let Some(img) = crate::page_images(doc, page)?.into_iter().nth(image).filter(|i| i.is_form) else { return Ok(false) };
+    let p = page_dict(doc, page)?;
+    let parsed = joined(&strict_streams(doc, &p.dict)?).parse();
+    if parsed.skipped > 0 {
+        return Ok(false);
+    }
+    let resources = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let space = ungroup::page_blend_space(doc, &p.dict);
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_PREPARED_BYTES, 0);
+    Ok(match ungroup::ungroup_ops(doc, &resources, &parsed.ops, img.op, space.as_ref(), Matrix(img.matrix), &mut budget) {
+        Ok(u) => u.shows_text == Some(true),
+        Err(r) => r.renaming,
+    })
 }
 
 /// A font is copied into this page: repairing the map must never alter a shared form/font.

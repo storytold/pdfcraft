@@ -260,18 +260,13 @@ impl Document {
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
     }
 
-    /// Whether this page has grouped source text that can be prepared without changing its appearance.
-    /// Used once when entering the existing-text tool, before queuing an undoable preparation.
-    pub fn can_prepare_text(&self, page: usize) -> bool {
-        self.text_preparation(page).is_ok_and(|p| p.expanded > 0)
-    }
-
-    /// Preview preparation, including skipped groups and character-map repairs, without editing.
-    pub fn text_preparation(&self, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, String> {
-        let editor = self.editor.as_ref().ok_or("the document is not editable")?;
-        crate::guard(|| pdfcraft_edit::text::forms::prepare(&mut editor.cos.clone(), page))
-            .map_err(|e| format!("grouped text could not be prepared safely ({e})"))?
-            .map_err(|e| e.to_string())
+    /// Edit text: whether grouped artwork `index` on `page` (0-based, as [`Self::page_images`]
+    /// lists them) shows text that [`Edit::PrepareText`](crate::Edit::PrepareText) would make
+    /// editable. Reads the page without changing it; `false` for a logo, a group that can't be
+    /// opened or a page that can't be read.
+    pub fn grouped_text_at(&self, page: usize, index: usize) -> bool {
+        let Some(editor) = self.editor.as_ref() else { return false };
+        crate::guard(|| pdfcraft_edit::text::forms::grouped_text_at(&editor.cos, page, index)).is_ok_and(|r| r.is_ok_and(|yes| yes))
     }
 
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).

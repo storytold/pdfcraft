@@ -217,8 +217,8 @@ the listing's 32 MiB preview budget can leave it out too; `text_edit` still acce
 
 ### Preparing grouped text
 
-`text_prepare {doc, page}` makes supported grouped Form text editable on one page, as entering
-Edit text in the GUI does. It keeps the group's original glyph operators and shared source
+`text_prepare {doc, page}` makes supported grouped Form text editable on one page, as one click
+on grouped text in the GUI's Edit text does. It keeps the group's original glyph operators and shared source
 objects, records preparation and map repairs in the repair log, and is one undoable step. List
 `text_paragraphs` afterwards; its indices belong to the prepared page. Besides the document
 summary it returns what this edit did:

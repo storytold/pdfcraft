@@ -12816,6 +12816,34 @@ fn grouped_image_artwork_is_not_prepared() {
     assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "inner"));
 }
 
+/// A click on grouped artwork prepares its page only when that artwork has text preparation
+/// would open: a text group does, a logo, a refused group and a picture don't, and asking reads
+/// the page without changing it.
+#[test]
+fn grouped_text_at_says_which_artwork_preparation_would_open() {
+    let forms = [
+        ("Body".to_string(), "BT /F1 14 Tf 40 500 Td (body) Tj ET".to_string()),
+        ("Logo".to_string(), "q 10 0 0 10 0 0 cm /Im Do Q".to_string()),
+        ("Knock".to_string(), "BT /F1 14 Tf 40 400 Td (kept) Tj ET".to_string()),
+    ];
+    let mut doc = page_with_forms("/Body Do /Logo Do /Knock Do q 10 0 0 10 0 0 cm /Im Do Q", &forms);
+    let r = pdfcraft_cos::ObjRef::new(9, 0);
+    let Object::Stream(mut s) = doc.get(r).as_ref().clone() else { panic!("fixture") };
+    s.dict.set(
+        b"Group".to_vec(),
+        Object::Dict(build(&["<< /S /Transparency /K true >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone()),
+    );
+    doc.set(r, Object::Stream(s));
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let images = images::page_images(&doc, 0).unwrap();
+    let at = |name: &str| images.iter().position(|i| i.name == name).unwrap();
+    let says = |name: &str| text::forms::grouped_text_at(&doc, 0, at(name)).unwrap();
+    assert!(says("Body"));
+    assert!(!says("Logo") && !says("Knock") && !says("Im"));
+    assert!(!text::forms::grouped_text_at(&doc, 0, images.len()).unwrap(), "no such picture");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+}
+
 /// Artwork and groups refused for what they are (knockout groups, content that restores more
 /// graphics states than it saves) are read once, not again on every pass: 10 logo forms and 30 such groups beside a text
 /// group are 41 reads, within the 64-placement limit, where reading either again on the second

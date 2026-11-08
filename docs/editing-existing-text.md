@@ -1,20 +1,28 @@
 # Editing existing text and source subsets
 
-Entering **Edit text and images** prepares supported grouped Form XObjects on the visible
-page in an undoable **Prepare grouped text** step. The group's original operators, clip,
-placement and resources become page content; shared forms on other pages stay unchanged.
-Headless callers use `text_prepare`, then list `text_paragraphs` and call `text_edit`.
+In **Edit text and images**, text drawn inside a Form XObject (grouped artwork) is edited
+with one click: clicking its text prepares that page in an undoable **Prepare grouped text**
+step and opens the paragraph clicked for typing. Nothing is prepared while pages are only
+shown or scrolled. A drag still moves the selected group as a whole; a click on grouped
+artwork that preparation wouldn't open (a logo, a refused group) selects it as before, and
+changes nothing. To select a text group for moving, right-click it. While a paragraph is open
+or another edit is waiting, the click selects the group instead, as before; the next click
+prepares it. The group's original operators, clip, placement and resources become page
+content; shared forms on other pages stay unchanged. Ungroup (the artwork's right-click menu)
+draws one placement in place with the same code. Headless callers use `text_prepare`, then
+list `text_paragraphs` and call `text_edit`.
 This edits existing glyph operators; it adds neither a cover rectangle nor an Add Text box.
-Preparation refuses knockout/blended groups, groups that blend in a colour space the page
-group does not also name (including DeviceRGB on a page that names none), tagged forms,
-recursive forms, unfinished paths and unreadable content. Forms that draw only images or
-vector artwork are left grouped. Decoding is capped at 16 MiB, 64 placements and eight
-expansion levels per page; text grouped deeper is reported. Unsupported groups remain intact:
-`text_prepare` lists each with its reason, and the app records them in the repair log when it
-prepares other groups on the page. When no group on a page can be prepared, the app says
-nothing; the text stays grouped. A narrowly fingerprinted legacy THSarabunPSK exporter map
-can also be repaired in copied page fonts, only when every glyph the subset kept advances as
-its assumed Thai character does; the repair log records both preparation and map recovery.
+Preparation refuses knockout/blended groups, groups that blend in a colour space other than
+the page group's (DeviceRGB on a page that names none), forms whose default
+colour spaces differ from the page's, tagged forms, forms drawn inside text objects or
+unfinished paths, groups whose nested content can't be checked and unreadable content. Forms
+that draw only images or vector artwork are left grouped. Decoding is capped at 16 MiB, 64
+placements and eight expansion levels per page; text grouped deeper is reported. Unsupported
+groups remain intact: `text_prepare` lists each with its reason, and the repair log records
+them when the page is prepared. A narrowly fingerprinted legacy THSarabunPSK exporter map can
+also be repaired in copied page fonts, only when every glyph the subset kept advances as its
+assumed Thai character does; `text_prepare` repairs it also for text that was never grouped,
+and the repair log records both preparation and map recovery.
 
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
