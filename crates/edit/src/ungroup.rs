@@ -420,25 +420,43 @@ pub(crate) fn resource_operand(op: &Op) -> Result<Option<(&'static [u8], usize)>
 }
 
 /// Whether `op` draws a Form XObject (`Do`), Type 3 font (`Tf`) or tiling pattern (`scn`/`SCN`) from
-/// `resources` that has no `/Resources` of its own, and so inherits the ones it is drawn with.
+/// `resources` that has no `/Resources` of its own, and so inherits the ones it is drawn with. A
+/// form or pattern whose content names no resource inherits nothing (a filled shape, say); a
+/// Type 3 font's glyphs are not read, and always count.
 fn inherits_resources(doc: &Document, resources: &Dict, op: &Op) -> bool {
     let Ok(Some((cat @ (b"XObject" | b"Font" | b"Pattern"), i))) = resource_operand(op) else { return false };
     let Some(Object::Name(name)) = op.operands.get(i) else { return false };
     let Some(entry) = resources.get(cat).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.get(name).cloned())) else {
         return false;
     };
-    let dict = match &*doc.resolve(&entry) {
-        Object::Stream(s) => s.dict.clone(),
-        Object::Dict(d) => d.clone(),
+    let entry = doc.resolve(&entry);
+    let (dict, stream) = match &*entry {
+        Object::Stream(s) => (&s.dict, Some(s)),
+        Object::Dict(d) => (d, None),
         _ => return false,
     };
     let drawn = match cat {
-        b"XObject" => is_name(doc, &dict, b"Subtype", b"Form"),
-        b"Font" => is_name(doc, &dict, b"Subtype", b"Type3"),
+        b"XObject" => is_name(doc, dict, b"Subtype", b"Form"),
+        b"Font" => is_name(doc, dict, b"Subtype", b"Type3"),
         // A shading pattern has no content of its own.
-        _ => int_of(doc, &dict, b"PatternType") == Some(1),
+        _ => int_of(doc, dict, b"PatternType") == Some(1),
     };
-    drawn && dict.get(b"Resources").is_none()
+    drawn && dict.get(b"Resources").is_none() && (cat == b"Font" || stream.is_none_or(names_resources))
+}
+
+/// Whether content stream `s` names a resource (or can't be read to tell): device colour spaces
+/// are not resources; an inline image counts, as its colour space may be one.
+fn names_resources(s: &pdfcraft_cos::Stream) -> bool {
+    let Ok(data) = s.decoded_strict_within(MAX_FORM_BYTES) else { return true };
+    let parsed = parse(&data);
+    parsed.skipped > 0
+        || parsed.ops.iter().any(|op| match resource_operand(op) {
+            Ok(None) => op.inline.is_some(),
+            Ok(Some((b"ColorSpace", i))) => {
+                !matches!(op.operands.get(i), Some(Object::Name(n)) if [&b"DeviceGray"[..], b"DeviceRGB", b"DeviceCMYK", b"Pattern"].contains(&n.as_slice()))
+            }
+            _ => true,
+        })
 }
 
 /// Whether `ops` (drawn with `resources`) blend with something other than Normal: a `gs` they

@@ -149,6 +149,33 @@ fn a_paste_onto_its_own_page_moves_by_the_offset_and_draws_the_same() {
     assert_eq!(editable_objects(&doc, 0).unwrap().iter().filter(|o| o.target.kind == ObjectKind::Image).count(), 2);
 }
 
+/// Artwork without resources of its own takes the names of the page drawing it. Pasted onto a
+/// page whose names differ, artwork that names nothing still draws the same; artwork that names
+/// a font would find another one, so the paste is refused.
+#[test]
+fn artwork_inheriting_resources_pastes_only_when_it_names_none() {
+    for (art, pastes) in [("0 0 1 rg 0 0 60 30 re f", true), ("BT /F1 9 Tf (n) Tj ET", false)] {
+        let mut doc = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> /XObject << /Art 8 0 R >> >> >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 9 0 R >> >> >>".into(),
+            stream("BT /F1 12 Tf 20 250 Td (Title) Tj ET q 1 0 0 1 20 100 cm /Art Do Q"),
+            stream(""),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 60 30] /Length {} >>\nstream\n{art}\nendstream", art.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        ]);
+        let all: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect();
+        let copied = copy_objects(&doc, 0, &all).unwrap();
+        let pasted = paste_objects(&mut doc, 1, &copied, [0.0, 0.0]);
+        assert_eq!(pasted.is_ok(), pastes, "{art}: {pasted:?}");
+        if let Err(EditError::Invalid(why)) = pasted {
+            assert!(why.starts_with("the copied objects can't be pasted here") && why.contains("uses its resources"), "{why}");
+        }
+    }
+}
+
 #[test]
 fn added_content_is_copied_with_everything_its_stream_paints() {
     let mut doc = two_pages(SOURCE, "");
