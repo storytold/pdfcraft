@@ -4,6 +4,7 @@ mod cid_cff_unusable_font_dict;
 mod cid_fallback_query;
 mod euro_width;
 mod fill_stroke_knockout;
+mod identity_named_face;
 mod indexed_lookup;
 mod inline_image_ei;
 mod jbig2_invariants;

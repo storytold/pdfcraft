@@ -9,6 +9,12 @@
 //! for exports, printing and OCR). It is read at runtime and never embedded or shipped
 //! (AGENTS.md §1.4), Noto CJK and Source Han are left out on purpose (§1.1), and
 //! `PDFCRAFT_SYSTEM_FONTS=0` turns it off, as for the interface font.
+//!
+//! A CID font of the Identity collection (`/Identity-H`, `Adobe-Identity`) has no regional
+//! collection to pick a face by: its CIDs are the glyph ids of the font it names, so only that
+//! very font draws it. On Windows such a font named after an installed face (`SimSun`, as Word
+//! writes Chinese it doesn't embed) is drawn with that face, and only when the face carries the
+//! name (#6168); any other Identity font still gets no installed face.
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -88,13 +94,8 @@ impl ChineseFamily {
     /// is 方正书宋, `FZXBSK--GBK1-0` 方正小标宋, `FZHTK--GBK1-0` 方正黑体, `FZKTK--GBK1-0` 方正楷体,
     /// `FZFSK--GBK1-0` 方正仿宋).
     fn of(name: &str) -> Self {
-        // PDF subset names prepend six uppercase ASCII letters and '+'. Match the actual
-        // PostScript name so Founder prefixes work for subsets too.
-        let name = match name.split_once('+') {
-            Some((tag, family)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => family,
-            _ => name,
-        };
-        let name = name.to_ascii_lowercase();
+        // Match the actual PostScript name so Founder prefixes work for subsets too.
+        let name = without_subset_tag(name).to_ascii_lowercase();
         let has = |hints: &[&str]| hints.iter().any(|hint| name.contains(hint));
         let starts = |prefixes: &[&str]| prefixes.iter().any(|p| name.starts_with(p));
         if has(&["fangsong", "simfang", "仿宋"]) || starts(&["fzfs"]) {
@@ -111,13 +112,101 @@ impl ChineseFamily {
     }
 }
 
+/// `name` without the six uppercase ASCII letters and `+` a PDF subset name starts with.
+fn without_subset_tag(name: &str) -> &str {
+    match name.split_once('+') {
+        Some((tag, family)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => family,
+        _ => name,
+    }
+}
+
+/// Installed Windows faces an Identity CID font may name, by the name a PDF gives them and the
+/// file in the Fonts folder that holds them. The file is only where to look: the face drawn is
+/// the one in it that carries the name ([`named_face_in`]).
+const WINDOWS_NAMED_FACES: &[(&str, &str)] = &[
+    ("SimSun", "simsun.ttc"),
+    ("NSimSun", "simsun.ttc"),
+    ("SimHei", "simhei.ttf"),
+    ("KaiTi", "simkai.ttf"),
+    ("FangSong", "simfang.ttf"),
+    ("MingLiU", "mingliu.ttc"),
+    ("PMingLiU", "mingliu.ttc"),
+    ("MingLiU_HKSCS", "mingliu.ttc"),
+    ("DFKai-SB", "kaiu.ttf"),
+    ("MicrosoftYaHei", "msyh.ttc"),
+    ("MicrosoftYaHei-Bold", "msyhbd.ttc"),
+    ("MicrosoftJhengHei", "msjh.ttc"),
+    ("MicrosoftJhengHeiRegular", "msjh.ttc"),
+    ("MicrosoftJhengHeiBold", "msjhbd.ttc"),
+    ("MS-Mincho", "msmincho.ttc"),
+    ("MS-PMincho", "msmincho.ttc"),
+    ("MS-Gothic", "msgothic.ttc"),
+    ("MS-PGothic", "msgothic.ttc"),
+    ("MS-UIGothic", "msgothic.ttc"),
+    ("MalgunGothic", "malgun.ttf"),
+    ("Gulim", "gulim.ttc"),
+    ("Batang", "batang.ttc"),
+];
+
+/// How a font name is compared with a face's names: without a subset tag or a `,Bold`-style
+/// suffix (a style the viewer simulates on the same glyphs), ASCII letters and digits only, in
+/// lower case, so `MS-Mincho` is the face named `MS Mincho`. `None` when nothing is left (a name
+/// in another script), which then matches no face.
+fn face_key(name: &str) -> Option<String> {
+    let name = without_subset_tag(name);
+    let name = name.split_once(',').map_or(name, |(base, _)| base);
+    let key: String = name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
+    (!key.is_empty()).then_some(key)
+}
+
+/// The face, in `dir`, that the Identity CID font named `name` was made with, as `(bytes, face
+/// index)`: the file `table` gives for the name, and in it the face whose PostScript or family
+/// name is that name. `None` for a name the table doesn't list, a missing or unusable file, or a
+/// file without a face of that name: the font's CIDs are that face's glyph ids, so another
+/// face (another region, weight or version under another name) would draw unrelated glyphs.
+fn named_face_in(name: &str, dir: &Path, table: &[(&str, &str)]) -> Option<(Arc<Vec<u8>>, u32)> {
+    let key = face_key(name)?;
+    let (_, file) = table.iter().find(|(listed, _)| face_key(listed).as_deref() == Some(key.as_str()))?;
+    let bytes = file_bytes(&dir.join(file))?;
+    let index = (0..MAX_FACES).find(|&index| {
+        let Ok(font) = skrifa::FontRef::from_index(&bytes, index) else { return false };
+        [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME]
+            .into_iter()
+            .flat_map(|id| font.localized_strings(id))
+            .any(|n| face_key(&n.chars().collect::<String>()).as_deref() == Some(key.as_str()))
+    })?;
+    Some((bytes, index))
+}
+
 /// The installed face to draw a CID font of `query`'s collection with, as `(data, face index)`.
-/// `None` when it is turned off, the collection isn't one of the four, or nothing fits.
+/// `None` when it is turned off, the collection isn't one of the four, or nothing fits; for the
+/// Identity collection, when the font doesn't name an installed Windows face ([`named_face_in`]).
 pub(crate) fn fallback(query: &FallbackFontQuery) -> Option<(FontData, u32)> {
     if cfg!(target_arch = "wasm32") || std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
         return None;
     }
-    let script = Script::of(&query.character_collection.as_ref()?.family)?;
+    let collection = &query.character_collection.as_ref()?.family;
+    if *collection == CidFamily::AdobeIdentity {
+        if !cfg!(windows) {
+            return None;
+        }
+        let name = query.post_script_name.as_deref()?;
+        let key = face_key(name)?;
+        // Keyed by a name the table lists, so the cache holds at most one entry per listed face.
+        if !WINDOWS_NAMED_FACES.iter().any(|(listed, _)| face_key(listed).as_deref() == Some(key.as_str())) {
+            return None;
+        }
+        type Named = HashMap<String, Option<(Arc<Vec<u8>>, u32)>>;
+        static NAMED: Mutex<Option<Named>> = Mutex::new(None);
+        let mut named = NAMED.lock().unwrap_or_else(PoisonError::into_inner);
+        let found = named.get_or_insert_with(HashMap::new).entry(key).or_insert_with(|| {
+            named_face_in(name, &windows_fonts(), WINDOWS_NAMED_FACES).inspect(|(_, index)| {
+                log::info!("installed face for the Identity CID font {name}: face {index}");
+            })
+        });
+        return found.as_ref().map(|(bytes, index)| (Arc::clone(bytes) as FontData, *index));
+    }
+    let script = Script::of(collection)?;
     let bold = query.is_bold || query.font_weight >= 600;
     let family = ChineseFamily::of(query.post_script_name.as_deref().unwrap_or_default());
     /// A face file and the index of the chosen face in it, or `None` when nothing fits.
@@ -415,6 +504,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A font name is compared without its subset tag, its `,Bold`-style suffix, punctuation or
+    /// case; a name with nothing comparable left matches nothing.
+    #[test]
+    fn identity_font_names_are_compared_by_their_letters_and_digits() {
+        for name in ["SimSun", "ABCDEF+SimSun", "SimSun,Bold", "ABCDEF+SIMSUN,BoldItalic"] {
+            assert_eq!(face_key(name).as_deref(), Some("simsun"), "{name}");
+        }
+        assert_eq!(face_key("MS-Mincho"), face_key("MS Mincho"));
+        assert_ne!(face_key("NSimSun"), face_key("SimSun"));
+        assert_ne!(face_key("MS-PMincho"), face_key("MS-Mincho"));
+        // Not a subset tag: five letters, or lower case.
+        assert_eq!(face_key("ABCDE+SimSun").as_deref(), Some("abcdesimsun"));
+        assert_eq!(face_key("abcdef+SimSun").as_deref(), Some("abcdefsimsun"));
+        for name in ["", "\u{5B8B}\u{4F53}", "ABCDEF+", ",Bold", "+-_"] {
+            assert_eq!(face_key(name), None, "{name:?}");
+        }
+    }
+
+    /// The face an Identity font names is drawn only when the file holds a face carrying that
+    /// PostScript or family name: its CIDs are that face's glyph ids, so the same file under
+    /// another name, a name the table doesn't list, or a missing file draws nothing (#6168).
+    #[test]
+    fn an_identity_font_is_drawn_only_with_the_installed_face_it_names() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-named-face-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+        let table = [("Inter-Regular", "inter.ttf"), ("Inter", "inter.ttf"), ("SimSun", "inter.ttf"), ("Inter-Bold", "absent.ttf")];
+        for name in ["Inter-Regular", "ABCDEF+Inter-Regular", "Inter-Regular,Bold", "Inter"] {
+            let (bytes, index) = named_face_in(name, &dir, &table).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!((bytes.len(), index), (include_bytes!("../../../assets/fonts/Inter-Regular.ttf").len(), 0), "{name}");
+        }
+        // The file is there, but holds no face named SimSun.
+        assert!(named_face_in("SimSun", &dir, &table).is_none());
+        assert!(named_face_in("Inter-Bold", &dir, &table).is_none(), "a missing file");
+        assert!(named_face_in("Helvetica", &dir, &table).is_none(), "a name the table doesn't list");
+        assert!(named_face_in("\u{5B8B}\u{4F53}", &dir, &table).is_none(), "nothing comparable in the name");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The listed Windows faces are files of the Fonts folder (plain names, TrueType), each name
+    /// comparable and listed once, and none of the families the asset policy bars.
+    #[test]
+    fn the_named_windows_faces_are_plain_font_files() {
+        let mut keys = std::collections::HashSet::new();
+        for (name, file) in WINDOWS_NAMED_FACES {
+            assert!(keys.insert(face_key(name).expect("comparable")), "{name} listed twice");
+            let path = Path::new(file);
+            assert!(path.components().count() == 1 && path.extension().is_some_and(|e| e == "ttf" || e == "ttc"), "{file}");
+            let lower = file.to_lowercase();
+            assert!(!["noto", "sourcehan", "adobe", "kozuka"].iter().any(|b| lower.contains(b)), "{file}");
+        }
+    }
+
+    /// Identity fonts are looked up by name only on Windows, where the faces have fixed files;
+    /// elsewhere they keep the standard substitute.
+    #[cfg(not(windows))]
+    #[test]
+    fn identity_fonts_get_no_installed_face_off_windows() {
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        let query = FallbackFontQuery {
+            post_script_name: Some("SimSun".into()),
+            character_collection: Some(CharacterCollection { family: CidFamily::AdobeIdentity, supplement: 0 }),
+            ..FallbackFontQuery::default()
+        };
+        assert!(fallback(&query).is_none());
+    }
+
+    /// On Windows a non-embedded Identity font named SimSun is drawn with the installed SimSun
+    /// face itself (#6168), and one naming no installed face gets none.
+    #[cfg(windows)]
+    #[test]
+    fn windows_draws_an_identity_font_with_the_face_it_names() {
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        let query = |name: &str| FallbackFontQuery {
+            post_script_name: Some(name.into()),
+            character_collection: Some(CharacterCollection { family: CidFamily::AdobeIdentity, supplement: 0 }),
+            ..FallbackFontQuery::default()
+        };
+        assert!(fallback(&query("ABCDEF+NotAnInstalledFace")).is_none());
+        if !windows_fonts().join("simsun.ttc").is_file() {
+            eprintln!("SimSun is not installed here: skipped");
+            return;
+        }
+        let (bytes, index) = fallback(&query("ABCDEF+SimSun")).expect("installed SimSun");
+        let font = skrifa::FontRef::from_index(bytes.as_ref().as_ref(), index).unwrap();
+        let names: Vec<String> = font.localized_strings(StringId::POSTSCRIPT_NAME).map(|n| n.chars().collect()).collect();
+        assert!(names.iter().any(|n| n == "SimSun"), "{names:?}");
     }
 
     /// The four regional Adobe collections select their corresponding scripts; Identity
