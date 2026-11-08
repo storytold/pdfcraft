@@ -102,6 +102,7 @@ fn candidates_walk_from_specific_to_general() {
     assert_eq!(candidates("nb_NO.UTF-8"), ["nb-no", "nb"]);
     assert_eq!(candidates("no_NO.UTF-8"), ["no-no", "no", "nb"]);
     assert_eq!(candidates("nn-NO"), ["nn-no", "nn", "nb"]);
+    assert_eq!(candidates("iw_IL.UTF-8"), ["iw-il", "iw", "he"]);
 }
 
 /// The locale variables, the first detection step: `LC_ALL` over `LC_MESSAGES` over `LANG`, an
@@ -1258,7 +1259,7 @@ fn arabic_is_registered_and_persists() {
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["ar", "ckb", "fa", "he"], "Hebrew joins the right-to-left text languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1305,6 +1306,70 @@ fn arabic_plurals_follow_the_six_cldr_forms() {
     assert_eq!([3, 10, 103, 110, 1003].map(&form), [3; 5]);
     assert_eq!([11, 99, 111, 199, 1011].map(&form), [4; 5]);
     assert_eq!([100, 101, 102, 200, 1000, u64::MAX - 13].map(&form), [5; 6]);
+}
+
+fn hebrew() -> Lang {
+    Lang::from_code("he").expect("he registered")
+}
+
+#[test]
+fn hebrew_is_registered_and_persists_without_mirroring_stock_controls() {
+    needs_catalogs!();
+    let he = hebrew();
+    assert_eq!(he.name(), "עברית");
+    assert!(he.rtl(), "Hebrew text uses right-to-left paragraph direction");
+    assert!(!he.mirrors_chrome(), "Hebrew keeps the stock button and control layout");
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    assert_eq!(first_supported("he-IL"), Some(he));
+    assert_eq!(tr(he, "Save"), "שמירה");
+    assert_eq!(tr(he, "Cancel"), "ביטול");
+    assert_eq!(tr(he, "File"), "קובץ");
+
+    let previous = current();
+    set_current(he);
+    assert_eq!(crate::bidi::ui_direction(), egui::epaint::text::TextDirection::RightToLeft);
+    set_current(previous);
+
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "HE").unwrap();
+    assert_eq!(app.language, "he");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "he");
+    assert!(restored.set_option("language", "xx").is_err());
+    assert_eq!(restored.language, "he");
+}
+
+#[test]
+fn hebrew_face_covers_common_niqqud_marks() {
+    let faces: Vec<String> = pdfcraft_fonts::ui_hebrew_fonts().iter().map(|f| f.name()).collect();
+    if faces.is_empty() {
+        assert!(
+            std::env::var("CRAFT_FONTS_REQUIRED").as_deref() != Ok("1"),
+            "CRAFT_FONTS_REQUIRED is set but no Hebrew craft-fonts face is embedded"
+        );
+        eprintln!("skipping Hebrew glyph checks: build with CRAFT_FONTS_DIR and a Hebrew face to run them");
+        return;
+    }
+
+    // Sheva, dagesh, tsere, qamats, holam and shin dot.
+    let sample = "שָׁלוֹם עוֹלָם בְּרֵאשִׁית";
+    let mut hebrew_only = crate::theme::font_definitions();
+    for family in hebrew_only.families.values_mut() {
+        family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || faces.contains(name));
+    }
+
+    use egui::epaint::text::{Fonts, TextOptions};
+    for (build, defs) in [("all faces", crate::theme::font_definitions()), ("Hebrew face only", hebrew_only)] {
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+            let missing: std::collections::BTreeSet<char> = sample.chars().filter(|c| !c.is_whitespace() && !fonts.has_glyphs(&id, &c.to_string())).collect();
+            assert!(missing.is_empty(), "{build}: {id:?} lacks Hebrew letters or niqqud marks {missing:?}");
+        }
+    }
 }
 
 fn persian() -> Lang {
