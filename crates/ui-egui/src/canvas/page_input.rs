@@ -220,7 +220,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let adding = (tool == QuickTool::AddText).then_some(added.as_slice());
         let pcx = crate::edit_text_ui::ParagraphCx { press, gate, hover: hovered.as_ref(), adding };
         let text_used = crate::edit_text_ui::page_input(cx, &lines, pcx, view);
-        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, info, doc, press, gate };
+        let image_cx = crate::edit_text_ui::ImageCx { ui, resp, xf: &xf, ptr, page: i, doc, info, press, gate };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         text_used || image_used
     };
