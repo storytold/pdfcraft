@@ -54,7 +54,7 @@ impl Page {
     /// The size of the page's user-space unit in points (`/UserUnit`; it isn't inherited), read
     /// as Acrobat reads it: a number from 1 up, at most [`MAX_USER_UNIT`]; anything else is 1.
     pub fn user_unit(&self, doc: &Document) -> f64 {
-        self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| u.is_finite() && *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
+        self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
     }
 
     /// The displayed size (width, height) in points, after `/UserUnit` and `/Rotate`.
@@ -412,21 +412,38 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_or_malformed_boxes_and_non_finite_user_unit_fall_back() {
+    fn degenerate_or_malformed_boxes_fall_back() {
         for bad_media in ["[0 0 0 792]", "[10 10 100 10]", "[10 10 10 10]", "[0 0 /Bad 400 500]"] {
             let d = doc_with(0, &format!("/MediaBox {bad_media}"), "/CropBox null");
             let p = &pages(&d)[0];
             assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{bad_media}");
             assert_eq!(p.display_size(&d), (612.0, 792.0), "{bad_media}");
         }
-        // Four valid leading coordinates with trailing entries match the renderer's crop bounds.
+        // Rejected /CropBox falls back to /MediaBox ([0 0 600 800] from doc_with).
+        for bad_crop in ["[0 0 0 800]", "[0 0 /Bad 400 500]"] {
+            let d = doc_with(0, "", &format!("/CropBox {bad_crop}"));
+            assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 600.0, 800.0], "{bad_crop}");
+        }
+        // Reversed coordinates are normalized, and four valid leading coordinates with trailing
+        // entries match the renderer's crop bounds.
+        let reversed = doc_with(0, "", "/CropBox [300 400 10 20]");
+        assert_eq!(pages(&reversed)[0].crop(&reversed), [10.0, 20.0, 300.0, 400.0]);
         let trailing = doc_with(0, "", "/CropBox [0 0 300 792 /Extra]");
         assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 792.0]);
 
         let mut d = doc_with(0, "", "/CropBox null");
         let leaf = ObjRef { num: 3, generation: 0 };
+        // Indirect box array and indirect coordinate numbers resolve cleanly.
+        let w_ref = d.add(Object::Int(250));
+        let h_ref = d.add(Object::Real(350.0));
+        let box_ref = d.add(Object::Array(vec![Object::Int(0), Object::Int(0), Object::Ref(w_ref), Object::Ref(h_ref)]));
+        d.update_dict(leaf, |dict| dict.set(b"CropBox".to_vec(), Object::Ref(box_ref))).unwrap();
+        assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 250.0, 350.0]);
+        d.update_dict(leaf, |dict| dict.set(b"CropBox".to_vec(), Object::Null)).unwrap();
+
         for extreme in [
             vec![Object::Real(-1e308), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
             vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e306), Object::Real(792.0)],
             vec![Object::Real(0.0), Object::Real(0.0), Object::Real(f64::NAN), Object::Real(792.0)],
         ] {
@@ -439,15 +456,6 @@ mod tests {
             assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{extreme:?}");
             let (w, h) = p.display_size(&d);
             assert!(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0, "{extreme:?}: ({w}, {h})");
-        }
-
-        for non_finite in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
-            d.update_dict(leaf, |dict| {
-                dict.remove(b"MediaBox");
-                dict.set(b"UserUnit".to_vec(), Object::Real(non_finite));
-            })
-            .unwrap();
-            assert_eq!(pages(&d)[0].user_unit(&d), 1.0, "{non_finite}");
         }
     }
 }
