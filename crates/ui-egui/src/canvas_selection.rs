@@ -82,7 +82,15 @@ impl SelectableElement {
     /// Check if a screen position hits this element's screen rectangle (with optional padding).
     pub fn contains_screen_pos(&self, pos: Pos2, xf: &PageXform, info: &DocInfo, padding: f32) -> bool {
         let r = self.screen_rect(xf, info).expand(padding);
-        r.contains(pos)
+        if !r.contains(pos) {
+            return false;
+        }
+        if let Some(ref line) = self.line {
+            let stroke_radius = ((line.thickness as f32) / 2.0).max(1.0);
+            hit_test_line(pos, line, xf, info, padding + stroke_radius)
+        } else {
+            true
+        }
     }
 }
 
@@ -260,8 +268,14 @@ impl SelectionState {
     /// Select or toggle an element with optional additive selection.
     pub fn select_element(&mut self, element: SelectableElement, additive: bool) {
         if additive {
-            if let Some(pos) = self.multi_selected.iter().position(|e| e.page == element.page && e.kind == element.kind && e.index == element.index) {
+            if self.selected.as_ref().is_some_and(|s| s.page == element.page && s.kind == element.kind && s.index == element.index) {
+                self.selected = self.multi_selected.pop();
+            } else if let Some(pos) =
+                self.multi_selected.iter().position(|e| e.page == element.page && e.kind == element.kind && e.index == element.index)
+            {
                 self.multi_selected.remove(pos);
+            } else if self.selected.is_none() {
+                self.selected = Some(element);
             } else {
                 self.multi_selected.push(element);
             }
@@ -339,83 +353,60 @@ impl SelectionLayoutEngine {
                 return None;
             }
             if sel.kind == SelectableKind::VectorLine {
-                if let Some(line) = &mut sel.line {
-                    paint_line_highlight(painter, line, LineHighlightState::Selected, xf, info);
-                    paint_line_endpoint_handles(painter, line, xf, info, 7.0);
-
-                    for (handle_idx, (handle, h_rect)) in line_endpoint_handles(line, xf, info, 7.0).into_iter().enumerate() {
-                        let handle_id = ui.scope_id().with(("line_handle", sel.index, handle_idx));
-                        let resp = ui.interact(h_rect.expand(4.0), handle_id, egui::Sense::drag());
-                        if resp.hovered() || resp.dragged() {
-                            ui.ctx().set_cursor_icon(handle.cursor_icon());
-                        }
-                        if resp.dragged()
-                            && let Some(curr_pos) = ui.input(|i| i.pointer.interact_pos())
-                        {
-                            let user_pt = screen_to_user_point(xf, info, page, curr_pos);
-                            match handle {
-                                SelectionHandle::LineStart => line.start = user_pt,
-                                SelectionHandle::LineEnd => line.end = user_pt,
-                                _ => {}
-                            }
-                        }
-                        if resp.drag_stopped() {
-                            let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index };
-                            return Some(Edit::UpdateLineEndpoints { page, target, new_start: line.start, new_end: line.end });
-                        }
-                    }
-                }
-                return None;
+                return handle_vector_line_overlay(ui, painter, page, xf, info, sel);
             }
             let unpadded_rect = sel.screen_rect(xf, info);
             let rect = unpadded_rect.expand(2.0);
             let handle_size = 7.0;
             let mut handle_dragged = None;
             let mut drag_stopped = false;
+            let has_resize_handles = matches!(sel.kind, SelectableKind::TextBlock | SelectableKind::Image);
 
-            for (handle_idx, (handle, h_rect)) in SelectionHandle::handle_rects(rect, handle_size).into_iter().enumerate() {
-                let handle_id = ui.scope_id().with(("handle", sel.index, handle_idx));
-                let resp = ui.interact(h_rect.expand(2.5), handle_id, egui::Sense::drag());
+            if has_resize_handles {
+                for (handle_idx, (handle, h_rect)) in SelectionHandle::handle_rects(rect, handle_size).into_iter().enumerate() {
+                    let handle_id = ui.scope_id().with(("handle", sel.index, handle_idx));
+                    let resp = ui.interact(h_rect.expand(2.5), handle_id, egui::Sense::drag());
 
-                if resp.hovered() || resp.dragged() {
-                    ui.ctx().set_cursor_icon(handle.cursor_icon());
-                }
+                    if resp.hovered() || resp.dragged() {
+                        ui.ctx().set_cursor_icon(handle.cursor_icon());
+                    }
 
-                if resp.drag_started() {
-                    state.drag_start = ui.input(|i| i.pointer.interact_pos());
-                    state.drag_start_rect = Some(sel.user_rect);
-                    state.drag_lock_axis = None;
-                }
-
-                if resp.dragged() {
-                    let mut delta = resp.drag_delta();
-                    if ui.input(|i| i.modifiers.shift) {
-                        let lock = state.drag_lock_axis.get_or_insert_with(|| {
-                            if let (Some(start), Some(curr)) = (state.drag_start, ui.input(|i| i.pointer.interact_pos())) {
-                                let total = curr - start;
-                                if total.x.abs() > 2.0 || total.y.abs() > 2.0 {
-                                    return total.x.abs() >= total.y.abs();
-                                }
-                            }
-                            delta.x.abs() >= delta.y.abs()
-                        });
-                        if *lock {
-                            delta.y = 0.0;
-                        } else {
-                            delta.x = 0.0;
-                        }
-                    } else {
+                    if resp.drag_started() {
+                        state.drag_start = ui.input(|i| i.pointer.interact_pos());
+                        state.drag_start_rect = Some(sel.user_rect);
                         state.drag_lock_axis = None;
                     }
-                    if delta != egui::Vec2::ZERO {
-                        handle_dragged = Some((handle, delta));
-                    }
-                }
 
-                if resp.drag_stopped() {
-                    drag_stopped = true;
-                    state.drag_start = None;
-                    state.drag_lock_axis = None;
+                    if resp.dragged() {
+                        let mut delta = resp.drag_delta();
+                        if ui.input(|i| i.modifiers.shift) {
+                            let lock = state.drag_lock_axis.get_or_insert_with(|| {
+                                if let (Some(start), Some(curr)) = (state.drag_start, ui.input(|i| i.pointer.interact_pos())) {
+                                    let total = curr - start;
+                                    if total.x.abs() > 2.0 || total.y.abs() > 2.0 {
+                                        return total.x.abs() >= total.y.abs();
+                                    }
+                                }
+                                delta.x.abs() >= delta.y.abs()
+                            });
+                            if *lock {
+                                delta.y = 0.0;
+                            } else {
+                                delta.x = 0.0;
+                            }
+                        } else {
+                            state.drag_lock_axis = None;
+                        }
+                        if delta != egui::Vec2::ZERO {
+                            handle_dragged = Some((handle, delta));
+                        }
+                    }
+
+                    if resp.drag_stopped() {
+                        drag_stopped = true;
+                        state.drag_start = None;
+                        state.drag_lock_axis = None;
+                    }
                 }
             }
 
@@ -447,8 +438,10 @@ impl SelectionLayoutEngine {
             painter.rect_filled(active_rect, CornerRadius::same(2), ACCENT_BLUE.gamma_multiply(0.04));
 
             // Handles (corners and edge midpoints)
-            for (_, h_rect) in SelectionHandle::handle_rects(active_rect, handle_size) {
-                painter.rect(h_rect, CornerRadius::same(1), Color32::WHITE, Stroke::new(1.0, ACCENT_BLUE), egui::StrokeKind::Middle);
+            if has_resize_handles {
+                for (_, h_rect) in SelectionHandle::handle_rects(active_rect, handle_size) {
+                    painter.rect(h_rect, CornerRadius::same(1), Color32::WHITE, Stroke::new(1.0, ACCENT_BLUE), egui::StrokeKind::Middle);
+                }
             }
 
             if drag_stopped {
@@ -497,6 +490,43 @@ impl SelectionLayoutEngine {
 
         pending_edit
     }
+}
+
+fn handle_vector_line_overlay(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    page: usize,
+    xf: &PageXform,
+    info: &DocInfo,
+    sel: &mut SelectableElement,
+) -> Option<Edit> {
+    let line = sel.line.as_mut()?;
+    paint_line_highlight(painter, line, LineHighlightState::Selected, xf, info);
+    paint_line_endpoint_handles(painter, line, xf, info, 7.0);
+
+    for (handle_idx, (handle, h_rect)) in line_endpoint_handles(line, xf, info, 7.0).into_iter().enumerate() {
+        let handle_id = ui.scope_id().with(("line_handle", sel.index, handle_idx));
+        let resp = ui.interact(h_rect.expand(4.0), handle_id, egui::Sense::drag());
+        if resp.hovered() || resp.dragged() {
+            ui.ctx().set_cursor_icon(handle.cursor_icon());
+        }
+        if resp.dragged()
+            && let Some(curr_pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let user_pt = screen_to_user_point(xf, info, page, curr_pos);
+            match handle {
+                SelectionHandle::LineStart => line.start = user_pt,
+                SelectionHandle::LineEnd => line.end = user_pt,
+                _ => {}
+            }
+            sel.user_rect = line.bbox();
+        }
+        if resp.drag_stopped() {
+            let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index };
+            return Some(Edit::UpdateLineEndpoints { page, target, new_start: line.start, new_end: line.end });
+        }
+    }
+    None
 }
 
 /// Action determined by the zoom-aware navigation engine.
@@ -645,133 +675,119 @@ impl FloatingContextMenu {
     ///
     /// Shows a pill toolbar with Cut, Copy, Paste, Format Painter, Edit Text, Bold, Italic, Strikethrough, Symbols, and Delete icon buttons.
     pub fn show(ui: &mut egui::Ui, viewport: Rect, view: &DocView, info: &DocInfo, can_modify: bool, can_copy: bool) -> Option<FloatingMenuAction> {
-        if view.line_editor.is_some() {
-            return None;
-        }
+        let (screen_rect, is_vector_line, is_text, is_image, is_line_editor, area_id) = if let Some(ed) = &view.line_editor {
+            (ed.rect, false, true, false, true, ("floating-editor-menu", view.id.0, ed.page, ed.block))
+        } else {
+            let sel = view.canvas_selection.selected.as_ref()?;
+            let xf = view.page_xform(sel.page)?;
+            let is_vl = sel.kind == SelectableKind::VectorLine;
+            let is_txt = matches!(sel.kind, SelectableKind::TextLine | SelectableKind::TextBlock);
+            let is_img = matches!(sel.kind, SelectableKind::Image);
+            (sel.screen_rect(&xf, info), is_vl, is_txt, is_img, false, ("floating-selection-menu", view.id.0, sel.page, sel.index))
+        };
 
-        let sel = view.canvas_selection.selected.as_ref()?;
-        let xf = view.page_xform(sel.page)?;
-        let screen_rect = sel.screen_rect(&xf, info);
-
-        if sel.kind == SelectableKind::VectorLine {
-            let menu_width = 330.0;
+        if is_vector_line {
+            if !can_modify {
+                return None;
+            }
+            let menu_width = 280.0;
             let menu_height = 36.0;
             let anchor = Self::compute_anchor(screen_rect, viewport, menu_width, menu_height)?;
             let t = crate::theme::Tokens::get(ui.ctx());
             let mut action = None;
 
-            egui::Area::new(egui::Id::unique(("floating-line-menu", view.id.0, sel.page, sel.index)))
-                .order(egui::Order::Foreground)
-                .fixed_pos(anchor)
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::NONE
-                        .fill(t.card)
-                        .stroke(Stroke::new(1.0, t.border))
-                        .corner_radius(CornerRadius::same(8))
-                        .shadow(egui::Shadow {
-                            offset: [0, 4],
-                            blur: 14,
-                            spread: 0,
-                            color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }),
-                        })
-                        .inner_margin(egui::Margin::symmetric(6, 4))
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            ui.horizontal(|ui| {
-                                // 1. Color Swatch & Quick Palette
-                                let cur_color = view.line_properties.color;
-                                let color_32 =
-                                    Color32::from_rgb((cur_color[0] * 255.0) as u8, (cur_color[1] * 255.0) as u8, (cur_color[2] * 255.0) as u8);
-                                let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
-                                ui.painter().rect_filled(rect, 4.0, color_32);
-                                ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-                                egui::Popup::menu(&resp).show(|ui| {
-                                    ui.label("Line Color:");
-                                    let palette = [
-                                        ([0.0, 0.0, 0.0], "Black"),
-                                        ([0.85, 0.15, 0.15], "Red"),
-                                        ([0.08, 0.45, 0.90], "Blue"),
-                                        ([0.10, 0.65, 0.25], "Green"),
-                                        ([0.95, 0.55, 0.10], "Orange"),
-                                        ([0.50, 0.50, 0.50], "Gray"),
-                                    ];
-                                    ui.horizontal(|ui| {
-                                        for (rgb, name) in palette {
-                                            let col = Color32::from_rgb((rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8);
-                                            let (cr, cresp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
-                                            ui.painter().rect_filled(cr, 3.0, col);
-                                            ui.painter().rect_stroke(
-                                                cr,
-                                                CornerRadius::same(3),
-                                                Stroke::new(1.0, t.border),
-                                                egui::StrokeKind::Outside,
-                                            );
-                                            if cresp.on_hover_text(name).clicked() {
-                                                action = Some(FloatingMenuAction::SetStrokeColor(rgb));
-                                                ui.close();
-                                            }
-                                        }
-                                    });
-                                });
-
-                                ui.separator();
-
-                                // 2. Stroke Width (Thickness)
-                                let cur_w = view.line_properties.width;
-                                if crate::icons::button(ui, "minus", 20.0, false, "Thinner").clicked() {
-                                    action = Some(FloatingMenuAction::SetStrokeWidth((cur_w - 0.5).max(0.5)));
-                                }
-                                ui.label(format!("{:.1}pt", cur_w));
-                                if crate::icons::button(ui, "plus", 20.0, false, "Thicker").clicked() {
-                                    action = Some(FloatingMenuAction::SetStrokeWidth((cur_w + 0.5).min(20.0)));
-                                }
-
-                                ui.separator();
-
-                                // 3. Dash Type (Solid, Dotted, Dashed)
-                                let dash_names = ["Solid ──", "Dotted ··", "Dashed --", "DashDot -·-"];
-                                let cur_dash = dash_names.get(view.line_properties.dash_idx).copied().unwrap_or(dash_names[0]);
-                                craft_ui::ComboBox::from_id_salt("floating_line_dash").selected_text(cur_dash).width(72.0).show_ui(ui, |ui| {
-                                    for (idx, name) in dash_names.iter().enumerate() {
-                                        if ui.selectable_label(view.line_properties.dash_idx == idx, *name).clicked() {
-                                            action = Some(FloatingMenuAction::SetDash(idx));
+            egui::Area::new(egui::Id::unique(area_id)).order(egui::Order::Foreground).fixed_pos(anchor).show(ui.ctx(), |ui| {
+                egui::Frame::NONE
+                    .fill(t.card)
+                    .stroke(Stroke::new(1.0, t.border))
+                    .corner_radius(CornerRadius::same(8))
+                    .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }) })
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.horizontal(|ui| {
+                            // 1. Color Swatch & Quick Palette
+                            let cur_color = view.line_properties.color;
+                            let color_32 =
+                                Color32::from_rgb((cur_color[0] * 255.0) as u8, (cur_color[1] * 255.0) as u8, (cur_color[2] * 255.0) as u8);
+                            let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
+                            ui.painter().rect_filled(rect, 4.0, color_32);
+                            ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                            egui::Popup::menu(&resp).show(|ui| {
+                                ui.label("Line Color:");
+                                let palette = [
+                                    ([0.0, 0.0, 0.0], "Black"),
+                                    ([0.85, 0.15, 0.15], "Red"),
+                                    ([0.08, 0.45, 0.90], "Blue"),
+                                    ([0.10, 0.65, 0.25], "Green"),
+                                    ([0.95, 0.55, 0.10], "Orange"),
+                                    ([0.50, 0.50, 0.50], "Gray"),
+                                ];
+                                ui.horizontal(|ui| {
+                                    for (rgb, name) in palette {
+                                        let col = Color32::from_rgb((rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8);
+                                        let (cr, cresp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
+                                        ui.painter().rect_filled(cr, 3.0, col);
+                                        ui.painter().rect_stroke(cr, CornerRadius::same(3), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                                        if cresp.on_hover_text(name).clicked() {
+                                            action = Some(FloatingMenuAction::SetStrokeColor(rgb));
+                                            ui.close();
                                         }
                                     }
                                 });
+                            });
 
-                                ui.separator();
+                            ui.separator();
 
-                                // 4. Excel Grid Toggle
-                                let extend = view.extend_perpendicular_lines;
-                                let grid_tip = if extend {
-                                    "Connected Grid Mode: ON (drag extends perpendicular lines)"
-                                } else {
-                                    "Connected Grid Mode: OFF (click to extend perpendicular lines)"
-                                };
-                                if crate::icons::button(ui, "grid-3x3", 24.0, extend, grid_tip).clicked() {
-                                    action = Some(FloatingMenuAction::ToggleGridMode);
-                                }
+                            // 2. Stroke Width (Thickness)
+                            let cur_w = view.line_properties.width;
+                            if crate::icons::button(ui, "minus", 20.0, false, "Thinner").clicked() {
+                                action = Some(FloatingMenuAction::SetStrokeWidth((cur_w - 0.5).max(0.5)));
+                            }
+                            ui.label(format!("{:.1}pt", cur_w));
+                            if crate::icons::button(ui, "plus", 20.0, false, "Thicker").clicked() {
+                                action = Some(FloatingMenuAction::SetStrokeWidth((cur_w + 0.5).min(20.0)));
+                            }
 
-                                // 5. Duplicate (Ctrl+D)
-                                if crate::icons::button(ui, "copy-plus", 24.0, false, "Duplicate (Ctrl+D)").clicked() {
-                                    action = Some(FloatingMenuAction::Duplicate);
-                                }
+                            ui.separator();
 
-                                // 6. Delete
-                                if crate::icons::button(ui, "trash-2", 24.0, false, tl!("Delete")).clicked() {
-                                    action = Some(FloatingMenuAction::Delete);
+                            // 3. Dash Type (Solid, Dotted, Dashed)
+                            let dash_names = ["Solid ──", "Dotted ··", "Dashed --", "DashDot -·-"];
+                            let cur_dash = dash_names.get(view.line_properties.dash_idx).copied().unwrap_or(dash_names[0]);
+                            craft_ui::ComboBox::from_id_salt("floating_line_dash").selected_text(cur_dash).width(72.0).show_ui(ui, |ui| {
+                                for (idx, name) in dash_names.iter().enumerate() {
+                                    if ui.selectable_label(view.line_properties.dash_idx == idx, *name).clicked() {
+                                        action = Some(FloatingMenuAction::SetDash(idx));
+                                    }
                                 }
                             });
+
+                            ui.separator();
+
+                            // 4. Excel Grid Toggle
+                            let extend = view.extend_perpendicular_lines;
+                            let grid_tip = if extend {
+                                "Connected Grid Mode: ON (drag extends perpendicular lines)"
+                            } else {
+                                "Connected Grid Mode: OFF (click to extend perpendicular lines)"
+                            };
+                            if crate::icons::button(ui, "grid-3x3", 24.0, extend, grid_tip).clicked() {
+                                action = Some(FloatingMenuAction::ToggleGridMode);
+                            }
+
+                            // 5. Delete
+                            if crate::icons::button(ui, "trash-2", 24.0, false, tl!("Delete")).clicked() {
+                                action = Some(FloatingMenuAction::Delete);
+                            }
                         });
-                });
+                    });
+            });
 
             return action;
         }
 
-        let is_text = matches!(sel.kind, SelectableKind::TextLine | SelectableKind::TextBlock);
-        let is_image = matches!(sel.kind, SelectableKind::Image);
         let menu_width = if is_text {
-            330.0
+            if is_line_editor { 160.0 } else { 330.0 }
         } else if is_image {
             190.0
         } else {
@@ -784,29 +800,34 @@ impl FloatingContextMenu {
         let t = crate::theme::Tokens::get(ui.ctx());
         let mut action = None;
 
-        egui::Area::new(egui::Id::unique(("floating-selection-menu", view.id.0, sel.page, sel.index)))
-            .order(egui::Order::Foreground)
-            .fixed_pos(anchor)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::NONE
-                    .fill(t.card)
-                    .stroke(Stroke::new(1.0, t.border))
-                    .corner_radius(CornerRadius::same(8))
-                    .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }) })
-                    .inner_margin(egui::Margin::symmetric(6, 4))
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        let shortcut = |key: &'static str| crate::commands::shortcut_label(ui.ctx(), pdfcraft_engine::commands::Shortcut::cmd(key));
-                        let cut_tip = format!("Cut ({})", shortcut("X"));
-                        let copy_tip = format!("Copy ({})", shortcut("C"));
-                        let paste_tip = format!("Paste ({})", shortcut("V"));
-                        ui.horizontal(|ui| {
+        egui::Area::new(egui::Id::unique(area_id)).order(egui::Order::Foreground).fixed_pos(anchor).show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(t.card)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(8))
+                .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }) })
+                .inner_margin(egui::Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let shortcut = |key: &'static str| crate::commands::shortcut_label(ui.ctx(), pdfcraft_engine::commands::Shortcut::cmd(key));
+                    let cut_tip = format!("Cut ({})", shortcut("X"));
+                    let copy_tip = format!("Copy ({})", shortcut("C"));
+                    let paste_tip = format!("Paste ({})", shortcut("V"));
+                    ui.horizontal(|ui| {
+                        if !is_line_editor {
                             // Cut (Ctrl+X)
-                            if can_modify && can_copy && sel.text.is_some() && crate::icons::button(ui, "scissors", 26.0, false, &cut_tip).clicked() {
+                            if can_modify
+                                && can_copy
+                                && view.canvas_selection.selected.as_ref().and_then(|s| s.text.as_ref()).is_some()
+                                && crate::icons::button(ui, "scissors", 26.0, false, &cut_tip).clicked()
+                            {
                                 action = Some(FloatingMenuAction::Cut);
                             }
                             // Copy (Ctrl+C)
-                            if can_copy && sel.text.is_some() && crate::icons::button(ui, "copy", 26.0, false, &copy_tip).clicked() {
+                            if can_copy
+                                && view.canvas_selection.selected.as_ref().and_then(|s| s.text.as_ref()).is_some()
+                                && crate::icons::button(ui, "copy", 26.0, false, &copy_tip).clicked()
+                            {
                                 action = Some(FloatingMenuAction::Copy);
                             }
                             // Paste (Ctrl+V)
@@ -827,22 +848,26 @@ impl FloatingContextMenu {
                             if is_text && can_modify && crate::icons::button(ui, "text-cursor-input", 26.0, false, tl!("Edit text")).clicked() {
                                 action = Some(FloatingMenuAction::EditText);
                             }
+                        }
 
-                            // Quick Text Styles
-                            if is_text && can_modify {
+                        // Quick Text Styles
+                        if is_text && can_modify {
+                            if !is_line_editor {
                                 ui.separator();
-                                if crate::icons::button(ui, "bold", 26.0, false, tl!("Bold")).clicked() {
-                                    action = Some(FloatingMenuAction::ToggleBold);
-                                }
-                                if crate::icons::button(ui, "italic", 26.0, false, tl!("Italic")).clicked() {
-                                    action = Some(FloatingMenuAction::ToggleItalic);
-                                }
-                                if crate::icons::button(ui, "strikethrough", 26.0, false, tl!("Strikethrough")).clicked() {
-                                    action = Some(FloatingMenuAction::ToggleStrikethrough);
-                                }
-                                if crate::icons::button(ui, "sparkles", 26.0, view.canvas_selection.symbol_palette_open, "Insert symbol").clicked() {
-                                    action = Some(FloatingMenuAction::OpenSymbolPalette);
-                                }
+                            }
+                            if crate::icons::button(ui, "bold", 26.0, false, tl!("Bold")).clicked() {
+                                action = Some(FloatingMenuAction::ToggleBold);
+                            }
+                            if crate::icons::button(ui, "italic", 26.0, false, tl!("Italic")).clicked() {
+                                action = Some(FloatingMenuAction::ToggleItalic);
+                            }
+                            if crate::icons::button(ui, "strikethrough", 26.0, false, tl!("Strikethrough")).clicked() {
+                                action = Some(FloatingMenuAction::ToggleStrikethrough);
+                            }
+                            if crate::icons::button(ui, "sparkles", 26.0, view.canvas_selection.symbol_palette_open, "Insert symbol").clicked() {
+                                action = Some(FloatingMenuAction::OpenSymbolPalette);
+                            }
+                            if !is_line_editor {
                                 let reflow_on = view.reflow_paragraphs;
                                 let reflow_tip = if reflow_on {
                                     "Paragraph Reflow: ON (editing shifts paragraphs below) - click to toggle"
@@ -853,30 +878,33 @@ impl FloatingContextMenu {
                                     action = Some(FloatingMenuAction::ToggleReflow);
                                 }
                             }
+                        }
 
-                            // Recognize Text & Duplicate for images
-                            if is_image && can_modify {
+                        // Recognize Text & Duplicate for images
+                        if is_image && can_modify {
+                            if let Some(sel) = view.canvas_selection.selected.as_ref() {
                                 let w = (sel.user_rect[2] - sel.user_rect[0]).abs();
                                 let h = (sel.user_rect[3] - sel.user_rect[1]).abs();
                                 ui.label(format!("{:.0}×{:.0}pt", w, h));
-                                if crate::icons::button(ui, "copy-plus", 26.0, false, "Duplicate (Ctrl+D)").clicked() {
-                                    action = Some(FloatingMenuAction::Duplicate);
-                                }
-                                if crate::icons::button(ui, "scan-text", 26.0, false, "Recognize text (OCR)").clicked() {
-                                    action = Some(FloatingMenuAction::RecognizeOcr);
-                                }
                             }
+                            if crate::icons::button(ui, "copy-plus", 26.0, false, "Duplicate (Ctrl+D)").clicked() {
+                                action = Some(FloatingMenuAction::Duplicate);
+                            }
+                            if crate::icons::button(ui, "scan-text", 26.0, false, "Recognize text (OCR)").clicked() {
+                                action = Some(FloatingMenuAction::RecognizeOcr);
+                            }
+                        }
 
-                            // Separator before Delete
-                            if can_modify {
-                                ui.separator();
-                                if crate::icons::button(ui, "trash-2", 26.0, false, "Delete (Del)").clicked() {
-                                    action = Some(FloatingMenuAction::Delete);
-                                }
+                        // Separator before Delete
+                        if can_modify && !is_line_editor {
+                            ui.separator();
+                            if crate::icons::button(ui, "trash-2", 26.0, false, "Delete (Del)").clicked() {
+                                action = Some(FloatingMenuAction::Delete);
                             }
-                        });
+                        }
                     });
-            });
+                });
+        });
 
         action
     }
@@ -909,13 +937,17 @@ pub fn hit_test_line(pos: Pos2, line: &LineSegment, xf: &PageXform, info: &DocIn
     let e = project_user_point(xf, info, line.page, line.end);
     let vx = e.x - s.x;
     let vy = e.y - s.y;
-    let len_sq = vx * vx + vy * vy;
-    let t = if len_sq <= f32::EPSILON { 0.0 } else { (((pos.x - s.x) * vx + (pos.y - s.y) * vy) / len_sq).clamp(0.0, 1.0) };
+    let len = vx.hypot(vy);
+    if len <= f32::EPSILON || !len.is_finite() {
+        return (pos.x - s.x).hypot(pos.y - s.y) <= tolerance;
+    }
+    let ux = vx / len;
+    let uy = vy / len;
+    let proj = (pos.x - s.x) * ux + (pos.y - s.y) * uy;
+    let t = (proj / len).clamp(0.0, 1.0);
     let px = s.x + t * vx;
     let py = s.y + t * vy;
-    let dx = pos.x - px;
-    let dy = pos.y - py;
-    (dx * dx + dy * dy).sqrt() <= tolerance
+    (pos.x - px).hypot(pos.y - py) <= tolerance
 }
 
 /// Paint a highlight over a line segment. Does nothing if the segment is
@@ -1002,15 +1034,28 @@ pub fn compute_connected_perpendicular_line_updates(
     new_end: [f64; 2],
 ) -> Vec<LineUpdate> {
     let mut updates = Vec::new();
-    let dx = ((new_start[0] - orig_start[0]) + (new_end[0] - orig_end[0])) * 0.5;
-    let dy = ((new_start[1] - orig_start[1]) + (new_end[1] - orig_end[1])) * 0.5;
+    let vx = orig_end[0] - orig_start[0];
+    let vy = orig_end[1] - orig_start[1];
+    let len_sq = vx * vx + vy * vy;
 
-    if dx.abs() < 1e-5 && dy.abs() < 1e-5 {
+    let displacement_at = |contact: [f64; 2]| -> (f64, f64) {
+        let t = if len_sq > 1e-6 { (((contact[0] - orig_start[0]) * vx + (contact[1] - orig_start[1]) * vy) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
+        let dx = (new_start[0] - orig_start[0]) * (1.0 - t) + (new_end[0] - orig_end[0]) * t;
+        let dy = (new_start[1] - orig_start[1]) * (1.0 - t) + (new_end[1] - orig_end[1]) * t;
+        (dx, dy)
+    };
+
+    let total_delta = (new_start[0] - orig_start[0]).abs()
+        + (new_start[1] - orig_start[1]).abs()
+        + (new_end[0] - orig_end[0]).abs()
+        + (new_end[1] - orig_end[1]).abs();
+
+    if total_delta < 1e-5 {
         return updates;
     }
 
-    let orig_dx = (orig_end[0] - orig_start[0]).abs();
-    let orig_dy = (orig_end[1] - orig_start[1]).abs();
+    let orig_dx = vx.abs();
+    let orig_dy = vy.abs();
     let tol = 4.0;
 
     let is_horizontal = orig_dx >= orig_dy;
@@ -1036,10 +1081,12 @@ pub fn compute_connected_perpendicular_line_updates(
                 let mut updated_end = line.end;
 
                 if (line.start[1] - y_ref).abs() <= tol && line.start[0] >= x_min && line.start[0] <= x_max {
+                    let (_, dy) = displacement_at(line.start);
                     updated_start[1] += dy;
                     modified = true;
                 }
                 if (line.end[1] - y_ref).abs() <= tol && line.end[0] >= x_min && line.end[0] <= x_max {
+                    let (_, dy) = displacement_at(line.end);
                     updated_end[1] += dy;
                     modified = true;
                 }
@@ -1068,10 +1115,12 @@ pub fn compute_connected_perpendicular_line_updates(
                 let mut updated_end = line.end;
 
                 if (line.start[0] - x_ref).abs() <= tol && line.start[1] >= y_min && line.start[1] <= y_max {
+                    let (dx, _) = displacement_at(line.start);
                     updated_start[0] += dx;
                     modified = true;
                 }
                 if (line.end[0] - x_ref).abs() <= tol && line.end[1] >= y_min && line.end[1] <= y_max {
+                    let (dx, _) = displacement_at(line.end);
                     updated_end[0] += dx;
                     modified = true;
                 }

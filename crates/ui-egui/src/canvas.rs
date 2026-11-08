@@ -1635,11 +1635,6 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
             paint_page_tiles(ui, view, frame, slot, (pw_pt, ph_pt, max_side), active_drag_suppress);
         }
     }
-    if frame.env.reading_bg.mode != PageBackground::Default && frame.env.reading_bg.tint_strength > 0.0 {
-        let [cr, cg, cb, _] = frame.env.reading_bg.color.to_array();
-        let a = ((255.0 * frame.env.reading_bg.tint_strength).clamp(0.0, 255.0)) as u8;
-        painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(cr, cg, cb, a));
-    }
 }
 
 /// Paints the tiles of a page too big to draw whole: the tiles of earlier zooms first, stretched,
@@ -1772,6 +1767,11 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
     if editing_content {
         view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
+    }
+    if frame.env.reading_bg.mode != PageBackground::Default && frame.env.reading_bg.tint_strength > 0.0 {
+        let [cr, cg, cb, _] = frame.env.reading_bg.color.to_array();
+        let a = ((255.0 * frame.env.reading_bg.tint_strength).clamp(0.0, 255.0)) as u8;
+        painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(cr, cg, cb, a));
     }
     if view.show_page_gaps {
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
@@ -3091,16 +3091,35 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 }
 
 fn handle_symbol_palette(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo) {
-    let anchor = view
-        .canvas_selection
-        .selected
-        .as_ref()
-        .and_then(|sel| view.page_xform(sel.page).map(|xf| sel.screen_rect(&xf, info)))
-        .map(|r| r.left_bottom())
-        .unwrap_or_else(|| ui.max_rect().center());
+    let anchor = if let Some(ed) = &view.line_editor {
+        ed.rect.left_bottom()
+    } else {
+        view.canvas_selection
+            .selected
+            .as_ref()
+            .and_then(|sel| view.page_xform(sel.page).map(|xf| sel.screen_rect(&xf, info)))
+            .map(|r| r.left_bottom())
+            .unwrap_or_else(|| ui.max_rect().center())
+    };
     if let Some(sym) = crate::symbol_palette::SymbolPalette::show(ui, anchor) {
         if let Some(ed) = &mut view.line_editor {
-            ed.text.push_str(sym);
+            let (start, end) = if let Some(ref range) = ed.selection {
+                (range.start.min(ed.text.len()), range.end.min(ed.text.len()))
+            } else {
+                (ed.text.len(), ed.text.len())
+            };
+            let (min_idx, max_idx) = (start.min(end), start.max(end));
+            let min_idx =
+                if ed.text.is_char_boundary(min_idx) { min_idx } else { (0..=min_idx).rev().find(|&i| ed.text.is_char_boundary(i)).unwrap_or(0) };
+            let max_idx = if ed.text.is_char_boundary(max_idx) {
+                max_idx
+            } else {
+                (max_idx..=ed.text.len()).find(|&i| ed.text.is_char_boundary(i)).unwrap_or(ed.text.len())
+            };
+            ed.text.replace_range(min_idx..max_idx, sym);
+            let new_pos = min_idx + sym.len();
+            ed.selection = Some(new_pos..new_pos);
+            ed.focus = true;
         } else if let Some(sel) = &view.canvas_selection.selected {
             let new_text = format!("{}{}", sel.text.as_deref().unwrap_or(""), sym);
             if sel.kind == crate::canvas_selection::SelectableKind::TextBlock {

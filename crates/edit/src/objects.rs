@@ -313,6 +313,65 @@ pub fn update_line_endpoints(doc: &mut Document, page: usize, target: ObjectTarg
     let pieces = Pieces::join(&streams.iter().map(|(_, bytes)| bytes.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
 
+    if let Some((re_idx, edge_idx)) = target_line.re_info {
+        let re_op = ops.get(re_idx).ok_or_else(|| EditError::Invalid("rectangle operator missing".into()))?;
+        let [rx, ry, rw, rh] = re_op.nums::<4>().ok_or_else(|| EditError::Invalid("invalid rectangle operands".into()))?;
+
+        let mut new_x = rx;
+        let mut new_y = ry;
+        let mut new_w = rw;
+        let mut new_h = rh;
+
+        match edge_idx {
+            0 => {
+                // Bottom edge: (rx, ry) -> (rx + rw, ry)
+                new_y = (local_start_y + local_end_y) / 2.0;
+                new_h = (ry + rh) - new_y;
+                new_x = local_start_x.min(local_end_x);
+                new_w = (local_end_x - local_start_x).abs();
+            }
+            1 => {
+                // Right edge: (rx + rw, ry) -> (rx + rw, ry + rh)
+                new_w = ((local_start_x + local_end_x) / 2.0) - rx;
+                new_y = local_start_y.min(local_end_y);
+                new_h = (local_end_y - local_start_y).abs();
+            }
+            2 => {
+                // Top edge: (rx + rw, ry + rh) -> (rx, ry + rh)
+                new_h = ((local_start_y + local_end_y) / 2.0) - ry;
+                new_x = local_start_x.min(local_end_x);
+                new_w = (local_start_x - local_end_x).abs();
+            }
+            3 => {
+                // Left edge: (rx, ry + rh) -> (rx, ry)
+                new_x = (local_start_x + local_end_x) / 2.0;
+                new_w = (rx + rw) - new_x;
+                new_y = local_start_y.min(local_end_y);
+                new_h = (local_start_y - local_end_y).abs();
+            }
+            _ => {}
+        }
+
+        let (final_x, final_w) = if new_w < 0.0 { (new_x + new_w, -new_w) } else { (new_x, new_w) };
+        let (final_y, final_h) = if new_h < 0.0 { (new_y + new_h, -new_h) } else { (new_y, new_h) };
+        if final_w.abs() < 1e-4 && final_h.abs() < 1e-4 {
+            return Err(EditError::Invalid("rectangle dimensions collapsed to zero".into()));
+        }
+
+        let mut re_bytes = pdfcraft_content::serialize_ops(&[Op::new(
+            "re",
+            vec![pdfcraft_content::num(final_x), pdfcraft_content::num(final_y), pdfcraft_content::num(final_w), pdfcraft_content::num(final_h)],
+        )]);
+        if re_bytes.last() == Some(&b'\n') {
+            re_bytes.pop();
+        }
+        let edits = vec![(re_op.span.clone(), re_bytes)];
+        let data = pieces.splice(edits);
+        let contents = crate::text::rewritten_contents(doc, &streams, data);
+        doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+        return Ok(());
+    }
+
     let m_op = ops.get(target_line.m_op_idx).ok_or_else(|| EditError::Invalid("line moveto operator missing".into()))?;
     let first_l_idx = *target_line.l_op_indices.first().ok_or_else(|| EditError::Invalid("line segment missing lineto operator".into()))?;
     let last_l_idx = *target_line.l_op_indices.last().ok_or_else(|| EditError::Invalid("line lineto operator missing".into()))?;
@@ -635,20 +694,26 @@ impl LineSegment {
     pub fn length(&self) -> f64 {
         let dx = self.end[0] - self.start[0];
         let dy = self.end[1] - self.start[1];
-        (dx * dx + dy * dy).sqrt()
+        dx.hypot(dy)
     }
 
     /// Squared distance from a user-space point to this segment.
     pub fn distance_sq_to(&self, p: [f64; 2]) -> f64 {
         let vx = self.end[0] - self.start[0];
         let vy = self.end[1] - self.start[1];
-        let len_sq = vx * vx + vy * vy;
-        let t = if len_sq <= f64::EPSILON { 0.0 } else { (((p[0] - self.start[0]) * vx + (p[1] - self.start[1]) * vy) / len_sq).clamp(0.0, 1.0) };
+        let len = vx.hypot(vy);
+        if len <= f64::EPSILON || !len.is_finite() {
+            let d = (p[0] - self.start[0]).hypot(p[1] - self.start[1]);
+            return d * d;
+        }
+        let ux = vx / len;
+        let uy = vy / len;
+        let proj = (p[0] - self.start[0]) * ux + (p[1] - self.start[1]) * uy;
+        let t = (proj / len).clamp(0.0, 1.0);
         let px = self.start[0] + t * vx;
         let py = self.start[1] + t * vy;
-        let dx = p[0] - px;
-        let dy = p[1] - py;
-        dx * dx + dy * dy
+        let dist = (p[0] - px).hypot(p[1] - py);
+        dist * dist
     }
 }
 
@@ -665,6 +730,7 @@ struct ParsedLine {
     m_op_idx: usize,
     l_op_indices: Vec<usize>,
     stroke_op_idx: usize,
+    re_info: Option<(usize, usize)>,
 }
 
 fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, EditError> {
@@ -692,6 +758,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
         matrix: Matrix,
         m_op_idx: usize,
         l_op_idx: usize,
+        re_info: Option<(usize, usize)>,
     }
 
     let mut current_point: Option<([f64; 2], [f64; 2])> = None;
@@ -787,6 +854,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                                 matrix: state.matrix,
                                 m_op_idx: current_m_idx,
                                 l_op_idx: idx,
+                                re_info: None,
                             });
                         }
                     }
@@ -814,6 +882,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                             matrix: state.matrix,
                             m_op_idx: current_m_idx,
                             l_op_idx: idx,
+                            re_info: None,
                         });
                     }
                     current_point = Some((start_local, start_user));
@@ -829,6 +898,50 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                 if let Some(pts) = op.nums::<4>() {
                     let (ux, uy) = state.matrix.apply(pts[2], pts[3]);
                     current_point = Some(([pts[2], pts[3]], [ux, uy]));
+                }
+            }
+            b"re" => {
+                if let Some([x, y, w, h]) = op.nums::<4>() {
+                    let p0 = [x, y];
+                    let p1 = [x + w, y];
+                    let p2 = [x + w, y + h];
+                    let p3 = [x, y + h];
+                    let u0 = state.matrix.apply(p0[0], p0[1]);
+                    let u1 = state.matrix.apply(p1[0], p1[1]);
+                    let u2 = state.matrix.apply(p2[0], p2[1]);
+                    let u3 = state.matrix.apply(p3[0], p3[1]);
+
+                    let [a, b, c, d, _, _] = state.matrix.0;
+                    let scale = ((a * a + b * b).sqrt() + (c * c + d * d).sqrt()) / 2.0;
+                    let thickness = if scale > 1e-6 { (state.width * scale).max(0.1) } else { state.width.max(0.1) };
+
+                    let corners = [[u0.0, u0.1], [u1.0, u1.1], [u2.0, u2.1], [u3.0, u3.1]];
+                    for i in 0..4 {
+                        let start_user = corners[i];
+                        let end_user = corners[(i + 1) % 4];
+                        let dx = end_user[0] - start_user[0];
+                        let dy = end_user[1] - start_user[1];
+                        if dx.hypot(dy) > 1e-4 {
+                            total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
+                            if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                                return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
+                            }
+                            pending_segs.push(PendingSeg {
+                                start_user,
+                                end_user,
+                                thickness,
+                                color: state.color,
+                                dash: state.dash.clone(),
+                                matrix: state.matrix,
+                                m_op_idx: idx,
+                                l_op_idx: idx,
+                                re_info: Some((idx, i)),
+                            });
+                        }
+                    }
+                    current_point = Some((p0, [u0.0, u0.1]));
+                    subpath_start = Some((p0, [u0.0, u0.1]));
+                    current_m_idx = idx;
                 }
             }
             b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*" => {
@@ -854,6 +967,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                             matrix: state.matrix,
                             m_op_idx: current_m_idx,
                             l_op_idx: idx,
+                            re_info: None,
                         });
                     }
                 }
@@ -868,6 +982,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                         m_op_idx: seg.m_op_idx,
                         l_op_indices: vec![seg.l_op_idx],
                         stroke_op_idx: idx,
+                        re_info: seg.re_info,
                     });
                 }
                 current_point = None;
@@ -892,7 +1007,9 @@ fn merge_collinear_parsed(raw: Vec<ParsedLine>) -> Vec<ParsedLine> {
             let ls = last.start;
             let le = last.end;
             let lw = last.thickness;
-            if (lw - item.thickness).abs() < MERGE_DIST_EPS
+            if last.re_info.is_none()
+                && item.re_info.is_none()
+                && (lw - item.thickness).abs() < MERGE_DIST_EPS
                 && endpoints_merge(le, item.start)
                 && collinear(ls, le, item.end)
                 && last.matrix == item.matrix
@@ -1183,5 +1300,40 @@ mod line_tests {
         // Ensure document contents were not corrupted
         let lines_after = editable_lines(&doc, 0).unwrap();
         assert_eq!(lines_after.len(), 4);
+    }
+
+    #[test]
+    fn test_stroked_rectangle_edges_and_endpoint_edit() {
+        let mut doc = Document::new_empty();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let stream_bytes = b"10 20 100 50 re S\n".to_vec();
+        let stream = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), stream_bytes))));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Array(vec![stream]));
+        let page = doc.add(page);
+        doc.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+
+        let lines = editable_lines(&doc, 0).unwrap();
+        assert_eq!(lines.len(), 4, "stroked rectangle must produce 4 editable line edges");
+
+        // Edge 1 is the right vertical edge: start [110.0, 20.0], end [110.0, 70.0]
+        assert_eq!(lines[1].start, [110.0, 20.0]);
+        assert_eq!(lines[1].end, [110.0, 70.0]);
+
+        // Move right edge to x = 130.0
+        let target1 = ObjectTarget { kind: ObjectKind::VectorLine, index: 1 };
+        update_line_endpoints(&mut doc, 0, target1, [130.0, 20.0], [130.0, 70.0]).unwrap();
+
+        let lines_after = editable_lines(&doc, 0).unwrap();
+        assert_eq!(lines_after.len(), 4);
+        assert_eq!(lines_after[1].start, [130.0, 20.0]);
+        assert_eq!(lines_after[1].end, [130.0, 70.0]);
     }
 }

@@ -254,8 +254,16 @@ impl PdfCraftApp {
                     }
                     // A paragraph that couldn't be applied opens again with its typing, instead of
                     // the box the click moved to.
-                    if let Edit::EditTextBlock { page, block, .. } = &edit
-                        && let Some(mut ed) = view.applied_editor.take().filter(|ed| (ed.page, ed.block) == (*page, *block))
+                    let text_target = match &edit {
+                        Edit::EditTextBlock { page, block, .. } => Some((*page, *block)),
+                        Edit::Batch { edits, .. } => edits.iter().find_map(|e| match e {
+                            Edit::EditTextBlock { page, block, .. } => Some((*page, *block)),
+                            _ => None,
+                        }),
+                        _ => None,
+                    };
+                    if let Some((page, block)) = text_target
+                        && let Some(mut ed) = view.applied_editor.take().filter(|ed| (ed.page, ed.block) == (page, block))
                     {
                         ed.focus = true;
                         view.line_editor = Some(ed);

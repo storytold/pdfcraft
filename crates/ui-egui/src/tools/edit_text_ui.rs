@@ -829,11 +829,15 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             if open.page == page && open.block == hit {
                 return true;
             }
-            if let Some(old) = view.line_editor.take() {
+            if let Some(mut old) = view.line_editor.take() {
                 let style = old.style();
                 if old.text != old.original || style != pdfcraft_engine::BlockStyle::default() {
+                    if let Some(p) = cx.info.pages.get(old.page) {
+                        old.rotation = p.rotation as i32;
+                    }
                     view.applied_editor = Some(old.clone());
-                    view.pending_edit = Some(Edit::EditTextBlock { page: old.page, block: old.block, text: old.text, style });
+                    let blocks = view.edit_lines.get(&old.page).map(|(_, b)| b.as_slice());
+                    view.pending_edit = finished_edit_with_reflow(old, view.reflow_paragraphs, blocks);
                 }
             }
             // The clicked box opens next frame, from the document with that edit applied.
@@ -1139,10 +1143,11 @@ pub(crate) fn finished_edit_with_reflow(ed: LineEditor, reflow: bool, page_block
                 }
             }
             if !targets.is_empty() {
-                return Some(Edit::Batch {
-                    label: "Edit text and reflow paragraphs".into(),
-                    edits: vec![edit, Edit::MoveObjects { page: ed.page, objects: targets, offset }],
-                });
+                let mut edits = vec![edit];
+                for chunk in targets.chunks(1000) {
+                    edits.push(Edit::MoveObjects { page: ed.page, objects: chunk.to_vec(), offset });
+                }
+                return Some(Edit::Batch { label: "Edit text and reflow paragraphs".into(), edits });
             }
         }
     }
