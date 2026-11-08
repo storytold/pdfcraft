@@ -221,6 +221,9 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
         let data = form.decoded()?;
         let mut used = UsedInGlyphs::default();
         crate::interp::resource_ops(doc, &res, std::slice::from_ref(&data))?.iter().for_each(|op| record_used(op, &mut used));
+        // `rg`, `g` and `k` draw through these entries when the Form keeps them as its defaults,
+        // and nothing cites them with `cs`/`CS`: pruning them would change the Form's colours.
+        used.colorspaces.extend([b"DefaultRGB".to_vec(), b"DefaultGray".to_vec(), b"DefaultCMYK".to_vec()]);
         if prune_type3_font_resources(doc, &mut res, &used) {
             doc.update_dict(form_ref, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
         }
