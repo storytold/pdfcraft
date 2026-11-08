@@ -78,7 +78,7 @@ pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError
 /// copied and scanned once, not once per page that names it.
 pub(crate) fn with_distinct_annots(doc: &Document, pages: Vec<ObjRef>) -> Vec<ObjRef> {
     let mut seen = std::collections::HashSet::new();
-    pages.into_iter().filter(|p| doc.get(*p).as_dict().and_then(|d| d.reference(b"Annots")).is_none_or(|r| seen.insert(r))).collect()
+    pages.into_iter().filter(|p| doc.get(*p).as_dict().and_then(|d| d.reference(b"Annots")).is_none_or(|r| seen.insert(r.num))).collect()
 }
 
 /// The entries of a page's `/Annots` (references or inline dictionaries).
