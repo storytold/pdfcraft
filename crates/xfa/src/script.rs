@@ -396,11 +396,25 @@ impl Walker<'_> {
                         }
                         children.push(self.field(f, &som, fsibs.at(fi), Some(selected.as_deref().unwrap_or(""))));
                     }
+                    // The group's value is copied into every instance of a repeated subform, so it
+                    // spends the same allowance as the scripts; the selection itself stays as it is
+                    // for the child fields below.
+                    let value = selected.clone().unwrap_or_default();
+                    let value = match self.script_bytes.checked_add(value.len()).filter(|n| *n <= MAX_EVENT_SCRIPT_BYTES) {
+                        Some(n) => {
+                            self.script_bytes = n;
+                            value
+                        }
+                        None => {
+                            self.truncated = true;
+                            String::new()
+                        }
+                    };
                     out.push(FormNode {
                         name: g.common.name.clone().unwrap_or_else(|| "group".into()),
                         som: som.clone(),
                         kind: Some(NodeKind::ExclGroup),
-                        value: selected.unwrap_or_default(),
+                        value,
                         presence: self.presence(Some("group"), &som, g.common.presence),
                         access: "open".into(),
                         occur_min: 1,
