@@ -1379,6 +1379,7 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
     }
     match font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref() {
         Some(Object::Stream(s)) => {
+            // Reads resolves indirect parameters too, matching the redaction proof's text.
             if let Some(data) = reads.decode(s, MAX_CMAP_BYTES) {
                 parse_to_unicode(&data, &mut out);
             }

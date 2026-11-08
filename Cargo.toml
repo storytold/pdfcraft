@@ -63,12 +63,18 @@ pdfcraft-engine = { path = "crates/engine", version = "0.18.1" }
 pdfcraft-platform = { path = "crates/platform", version = "0.18.1" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.18.1" }
 pdfcraft-automation = { path = "crates/automation", version = "0.18.1", default-features = false }
+pdfcraft-prc = { path = "crates/prc", version = "0.18.1" }
+pdfcraft-prc-render = { path = "crates/prc-render", version = "0.18.1" }
 
 # pdf
 hayro = "0.7.1"
 hayro-syntax = "0.7.2"
 lopdf = "0.45"
-flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+# zlib-rs: miniz_oxide took about 1.7 µs for every fixed-Huffman block, empty or not
+# (`pdfcraft_filters::FLATE_READ_WORK`). Other dependencies still build flate2's default
+# miniz_oxide backend; flate2 prefers zlib-rs when both are built, as the Windows build already did
+# through craft-update. `flate::tests::a_copy_from_before_the_start_is_damage` shows which runs.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 weezl = "0.2"
 # CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
 fax = "0.2.7"
