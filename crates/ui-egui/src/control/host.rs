@@ -174,7 +174,14 @@ impl Host for crate::PdfCraftApp {
     }
 
     fn set(&mut self, key: &str, value: &str) -> Reply {
-        self.set_option(key, value).map(|()| json!({ "set": key, "value": value }))
+        let was_read = self.mode == crate::Mode::Read;
+        self.set_option(key, value)?;
+        // Entering Read mode from here puts the tool down to the default tool, as the Read mode
+        // command does (#6235). Only here: the `--mode` option at launch keeps an explicit `--tool`.
+        if key == "mode" && self.mode == crate::Mode::Read && !was_read {
+            self.enter_mode(crate::Mode::Read);
+        }
+        Ok(json!({ "set": key, "value": value }))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

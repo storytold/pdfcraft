@@ -1510,6 +1510,26 @@ fn control_sets_and_reports_the_default_tool() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_tool"], "hand");
 }
 
+/// `ui.set mode=read` enters Read mode as the Read mode command does: the tool in use goes down
+/// to the default tool (#6235). A tool picked in Read mode afterwards stays, also for a document
+/// opened then.
+#[test]
+fn control_mode_read_puts_the_tool_down_to_the_default_tool() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "default-tool", "value": "hand"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "edit"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "quick", "value": "select"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "select");
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "hand");
+    ok(&mut h, &c, "ui.set", json!({"key": "quick", "value": "select"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "select", "already in Read mode: nothing to enter");
+    h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!((state["mode"].as_str(), state["quick_tool"].as_str()), (Some("Read"), Some("select")));
+}
+
 #[test]
 fn control_default_workspace_and_session_override() {
     let (mut h, c) = harness();
