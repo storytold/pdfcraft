@@ -93,7 +93,7 @@ mod worker {
             return Err("the page size is not a positive whole number".into());
         };
         let px = bytes(pixels, MAX_PIXEL_BYTES)?;
-        if px.len() as u64 != u64::from(w) * u64::from(h) * 4 {
+        if u64::from(w).checked_mul(u64::from(h)).and_then(|n| n.checked_mul(4)) != Some(px.len() as u64) {
             return Err("the pixels don't match the page size".into());
         }
         ocr.recognize(&px, w, h).map(|lines| pdfcraft_ocr::lines_to_json(&lines)).map_err(|e| e.to_string())
