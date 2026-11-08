@@ -13112,6 +13112,47 @@ fn editing_legacy_thai_shapes_a_run_across_subsets_of_the_same_face() {
     assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
 }
 
+/// Every resource name of one THSarabunPSK font object shares its program, decoded once. Distinct
+/// subsets of the face are read within one budget for the edit: past it the edit is refused with
+/// the reason, and the document is unchanged.
+#[test]
+fn legacy_thai_subsets_are_read_within_one_budget_per_edit() {
+    // Padding after the tables: the program reads the same, at 12 MiB.
+    let mut large = legacy_thai_program();
+    large.resize(12 << 20, 0);
+    let fixture = |extra: &dyn Fn(&mut Document) -> Object| {
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &large, LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let names: Vec<_> = (0..8).map(|i| (format!("T{i}").into_bytes(), extra(&mut doc))).collect();
+        doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+            let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+            let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+            for (name, font) in names {
+                fonts.set(name, font);
+            }
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            page.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        doc
+    };
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    // Eight more names of F1's object: 108 MiB if each name decoded its own copy.
+    let mut aliases = fixture(&|_| Object::Ref(pdfcraft_cos::ObjRef::new(5, 0)));
+    text::rewrite_block(&mut aliases, 0, 0, Some("กขค"), &style).expect("the aliases share one program");
+    assert_eq!(text::text_lines(&reopen(&aliases), 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "กขค");
+    // Eight more font objects over the program: each is read, and together they are too many.
+    let mut distinct = fixture(&|doc| {
+        let font = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_ref().clone();
+        Object::Ref(doc.add(font))
+    });
+    let before = pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap();
+    let error = text::rewrite_block(&mut distinct, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB") && error.contains("choose a replacement font"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
 /// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is
 /// shaped with its own layout like any source font, not by the legacy shaper (which would ask
 /// for Windows PUA alternates such a face doesn't need).

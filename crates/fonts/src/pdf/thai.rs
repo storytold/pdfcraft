@@ -293,7 +293,10 @@ impl LegacyThaiFont {
     /// another family, a font with no Thai, and a program without Thai mark positioning whose
     /// Thai glyphs are not in the legacy order: the nominal and alternate marks this shaper
     /// assumes can't be trusted there, so it is shaped as an ordinary source font.
-    pub fn from_pdf(doc: &Document, font: &Dict, space: f64) -> Result<Option<Self>, String> {
+    ///
+    /// Its streams are decoded against `budget`, which the caller shares between every font it
+    /// reads: what they keep is the programs decoded and the editor cmaps added to them.
+    pub fn from_pdf(doc: &Document, font: &Dict, space: f64, budget: &mut DecodeBudget) -> Result<Option<Self>, String> {
         let m = Metrics::from_dict(doc, font);
         if !m.base_font.rsplit('+').next().unwrap_or(&m.base_font).starts_with("THSarabunPSK") {
             return Ok(None);
@@ -301,10 +304,9 @@ impl LegacyThaiFont {
         if !space.is_finite() || space < 0.0 {
             return Err("the source space width is invalid".into());
         }
-        let bytes = super::embedded_sfnt(doc, font).ok_or("the source Thai font has no readable glyph program")?;
+        let bytes = super::embedded_sfnt_within(doc, font, budget).ok_or("the source Thai font has no readable glyph program")?;
         let positioned = crate::source_shaping::has_thai_layout(&bytes);
-        let (unicode, codes) = composite_glyph_maps(doc, font, &bytes, &m, &mut DecodeBudget::new(1 << 17, 0))
-            .ok_or("the Thai source glyph codes cannot be recovered safely")?;
+        let (unicode, codes) = composite_glyph_maps(doc, font, &bytes, &m, budget).ok_or("the Thai source glyph codes cannot be recovered safely")?;
         // A subset keeps only the glyphs its document used, so no particular letter or alternate
         // is required here: [`Self::shape`] refuses a text whose glyphs, or required alternates
         // ([`require_pua`]), the subset lacks. Without its own positioning, every Thai glyph it
@@ -579,7 +581,8 @@ mod tests {
         let metrics = Metrics::from_dict(&doc, &font);
         let (map, _) = composite_glyph_maps(&doc, &font, &stripped, &metrics, &mut DecodeBudget::new(1 << 20, 0)).unwrap();
         assert_eq!(map.get(&0x0e01), Some(&214), "the CIDToGIDMap is read with its predictor");
-        let shaped = LegacyThaiFont::from_pdf(&doc, &font, 0.25).unwrap().expect("a legacy subset").shape("ก่").unwrap();
+        let shaped =
+            LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut DecodeBudget::new(1 << 26, 0)).unwrap().expect("a legacy subset").shape("ก่").unwrap();
         assert_eq!(shaped.shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [214, 352]);
     }
 
@@ -592,7 +595,8 @@ mod tests {
         let latin = skrifa::FontRef::new(&program).unwrap().charmap().map('A').unwrap();
         let mut doc = Document::new_empty();
         let font = thai_font(&mut doc, &program, INTACT);
-        let shaped = LegacyThaiFont::from_pdf(&doc, &font, 0.25).unwrap().expect("a legacy subset").shape("ก่").unwrap();
+        let shaped =
+            LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut DecodeBudget::new(1 << 26, 0)).unwrap().expect("a legacy subset").shape("ก่").unwrap();
         assert_eq!(shaped.shaped.glyphs.iter().map(|g| g.id.to_u32()).collect::<Vec<_>>(), [214, 352]);
         let editor = crate::pdf::embedded_sfnt(&doc, &font).unwrap();
         assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('A'), Some(latin), "the program's own mappings stay");
@@ -608,7 +612,7 @@ mod tests {
         let mode = |program: &[u8], unicode: &[u8]| {
             let mut doc = Document::new_empty();
             let font = thai_font(&mut doc, program, unicode);
-            LegacyThaiFont::from_pdf(&doc, &font, 0.25).unwrap().map(|f| f.positioned)
+            LegacyThaiFont::from_pdf(&doc, &font, 0.25, &mut DecodeBudget::new(1 << 26, 0)).unwrap().map(|f| f.positioned)
         };
         let stripped = without_tables(&thai_ordered_program(), &[b"cmap", b"GSUB", b"GPOS"]);
         assert_eq!(mode(&stripped, unicode), Some(false), "a legacy positional subset");

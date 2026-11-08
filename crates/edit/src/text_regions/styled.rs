@@ -105,11 +105,18 @@ impl FontResolver<'_> {
 }
 
 struct LegacyFace {
-    glyphs: Option<pdfcraft_fonts::pdf::LegacyThaiFont>,
+    /// Shared by every resource name of one font object: its program is decoded and kept once.
+    glyphs: Option<std::rc::Rc<pdfcraft_fonts::pdf::LegacyThaiFont>>,
     metrics: Metrics,
     /// Weight and slant ([`FontStyle::of`]).
     style: FontStyle,
+    /// The font object the resource names, when it is given by reference.
+    object: Option<pdfcraft_cos::ObjRef>,
 }
+
+/// What one edit may decode, and so keep, of the font programs of its THSarabunPSK subsets
+/// (each at most 16 MiB): a page may name many of them.
+const MAX_THAI_PROGRAMS: usize = 64 << 20;
 
 struct PreparedCharacters {
     values: Vec<StyledChar>,
@@ -155,6 +162,7 @@ impl CharacterPreparation<'_> {
         let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let thai_choice = builtin_thai_choice(fonts);
         let mut thai = ThaiShaping::default();
+        let mut thai_programs = pdfcraft_cos::DecodeBudget::new(MAX_THAI_PROGRAMS, 0);
         let mut chars = Vec::new();
         let mut substituted = None;
         let mut fallback = FallbackBuilder::new(max_glyphs);
@@ -197,7 +205,7 @@ impl CharacterPreparation<'_> {
                     }),
                 };
                 match chosen {
-                    Some(chosen) => legacy_thai_font(resolver.doc, resolver.fonts, &chosen, span, &mut thai.legacy)?,
+                    Some(chosen) => legacy_thai_font(resolver.doc, resolver.fonts, &chosen, span, &mut thai.legacy, &mut thai_programs)?,
                     None => None,
                 }
             } else {
@@ -823,13 +831,15 @@ fn apply_range_styles<'a>(
 }
 
 /// Select one existing subset of the exact source face for a Thai span. Never replace its
-/// family/weight to make an edit succeed; missing glyphs need an explicit font choice.
+/// family/weight to make an edit succeed; missing glyphs need an explicit font choice. The
+/// subsets' programs are read within `budget`, shared by the edit's spans.
 fn legacy_thai_font(
     doc: &Document,
     fonts: &Dict,
     source: &TextLine,
     span: &str,
     cache: &mut HashMap<String, LegacyFace>,
+    budget: &mut pdfcraft_cos::DecodeBudget,
 ) -> Result<Option<ThaiSpan>, EditError> {
     if !source.base_font.rsplit('+').next().unwrap_or(&source.base_font).starts_with("THSarabunPSK")
         || !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
@@ -843,13 +853,33 @@ fn legacy_thai_font(
         (pdfcraft_fonts::embedding::face_key(&Metrics::from_dict(doc, &font).base_font) == family).then(|| String::from_utf8_lossy(name).into_owned())
     }));
     for name in candidates.into_iter().take(128) {
-        if let std::collections::hash_map::Entry::Vacant(entry) = cache.entry(name) {
-            let Some(font) = fonts.get(entry.key().as_bytes()).and_then(|f| doc.dict(f)) else { continue };
-            let metrics = Metrics::from_dict(doc, &font);
-            let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, source_space(doc, fonts, &metrics)).ok().flatten();
-            let style = FontStyle::of(doc, &font, &metrics);
-            entry.insert(LegacyFace { glyphs, metrics, style });
+        if cache.contains_key(&name) {
+            continue;
         }
+        let Some(resource) = fonts.get(name.as_bytes()) else { continue };
+        let Some(font) = doc.dict(resource) else { continue };
+        let object = resource.as_ref();
+        let face = match object.and_then(|o| cache.values().find(|face| face.object == Some(o))) {
+            Some(alias) => LegacyFace { glyphs: alias.glyphs.clone(), metrics: alias.metrics.clone(), style: alias.style, object },
+            None => {
+                let metrics = Metrics::from_dict(doc, &font);
+                let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, source_space(doc, fonts, &metrics), budget)
+                    .ok()
+                    .flatten()
+                    .map(std::rc::Rc::new);
+                let style = FontStyle::of(doc, &font, &metrics);
+                LegacyFace { glyphs, metrics, style, object }
+            }
+        };
+        cache.insert(name, face);
+    }
+    // A subset left unread would count as unusable, silently changing which subset draws the text.
+    if budget.remaining() == 0 {
+        return Err(EditError::Invalid(format!(
+            "the page's {} subsets need more than {} MiB of font programs for one edit; choose a replacement font for this text",
+            source.base_font.rsplit('+').next().unwrap_or(&source.base_font),
+            MAX_THAI_PROGRAMS >> 20
+        )));
     }
     // A face none of whose subsets can be shaped in place (no Thai, or neither positioned nor in
     // the legacy glyph order) is shaped like any other source font (`shape_source`).
