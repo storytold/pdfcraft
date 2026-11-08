@@ -156,13 +156,13 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     let Some(program) = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned()) else { return Vec::new() };
     let program = doc.resolve(&program);
     let Object::Stream(stream) = program.as_ref() else { return Vec::new() };
-    let Ok(bytes) = stream.decoded_within(16 << 20) else { return Vec::new() };
+    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(16 << 20) else { return Vec::new() };
     let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
     let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
         None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
         Some(Object::Stream(map)) => {
-            let Ok(map) = map.decoded_within(1 << 17) else { return Vec::new() };
+            let Ok(map) = doc.with_direct_parms(map).decoded_within(1 << 17) else { return Vec::new() };
             bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
@@ -189,7 +189,7 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(bytes) = stream.decoded_within(16 << 20) else { continue };
+        let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(16 << 20) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
         if upem == 0.0 {
@@ -691,7 +691,7 @@ impl Metrics {
             m.codes = Codes::Two;
             if let Some(e) = font.get(b"Encoding").map(|e| doc.resolve(e))
                 && let Object::Stream(s) = &*e
-                && let Ok(data) = s.decoded_within(MAX_CMAP_BYTES)
+                && let Ok(data) = doc.with_direct_parms(s).decoded_within(MAX_CMAP_BYTES)
             {
                 let (spaces, cids) = parse_cmap(&data);
                 if !spaces.is_empty() {
@@ -1298,7 +1298,10 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
     }
     match font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref() {
         Some(Object::Stream(s)) => {
-            if let Ok(data) = s.decoded_within(MAX_CMAP_BYTES) {
+            // With `/DecodeParms` given by reference, as every stream of the font is read here,
+            // and as the redaction proof reads the map: the two must get the same text, or a copy
+            // redaction rightly left counts as a survivor.
+            if let Ok(data) = doc.with_direct_parms(s).decoded_within(MAX_CMAP_BYTES) {
                 parse_to_unicode(&data, &mut out);
             }
         }
