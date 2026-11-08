@@ -553,7 +553,7 @@ mod tests {
     }
 
     pub(super) fn page(blocks: Vec<Block>) -> Page {
-        Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None }
+        Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), rules: Vec::new(), background: None }
     }
 
     #[test]

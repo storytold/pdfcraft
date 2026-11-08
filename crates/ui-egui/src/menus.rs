@@ -476,6 +476,10 @@ impl PdfCraftApp {
         let enabled_id = |id: &str| commands::command(id).is_some_and(|s| self.command_enabled(s));
         let index = param_index(command);
         let text = ctx.text_edit_focused() && matches!(command.id.as_str(), "edit.undo" | "edit.redo" | "edit.copy" | CUT | PASTE | SELECT_ALL);
+        // Objects selected together in Edit a PDF are what Copy and Cut take, and Paste brings
+        // back objects copied there.
+        let edit_objects = self.quick_tool == crate::QuickTool::EditText && !organize;
+        let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
         let enabled = text
             || match command.id.as_str() {
                 NO_RECENT => false,
@@ -488,6 +492,10 @@ impl PdfCraftApp {
                 "edit.copy" if view.is_some_and(|v| v.picked_image.is_some()) => {
                     self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_copying())
                 }
+                "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.objects.count() > 0) => {
+                    doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
+                }
+                PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
                 CUT => organize && enabled_id("page.cut"),
                 PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
                 SELECT_ALL | DELETE => has_doc,

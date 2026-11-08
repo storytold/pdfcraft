@@ -206,6 +206,20 @@ pub struct OfficeExport {
 /// `Err(false)`: it can't be encoded).
 type PreparedImage = Result<(&'static str, Arc<[u8]>), bool>;
 
+/// Displayed points per user-space unit on `info`'s page (`/UserUnit`), 1 when the page has no
+/// usable size.
+pub(crate) fn display_unit(info: &pdfcraft_render::PageInfo) -> f64 {
+    let crop_width = f64::from(info.crop[2] - info.crop[0]);
+    let display_width = f64::from(if info.rotation.is_multiple_of(180) { info.width } else { info.height });
+    if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 }
+}
+
+/// Bold and italic as a font's name says them (`Arial-BoldItalicMT`).
+pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
+    let f = base_font.to_ascii_lowercase();
+    (f.contains("bold") || f.contains("black") || f.contains("heavy"), f.contains("italic") || f.contains("oblique"))
+}
+
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
     /// form XObjects draw.
@@ -247,9 +261,7 @@ impl crate::Document {
                     let b = info.user_to_view(r[2] as f32, r[3] as f32);
                     [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
                 };
-                let crop_width = f64::from(info.crop[2] - info.crop[0]);
-                let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
-                let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
+                let unit = display_unit(info);
                 let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
                 let forms_unread = reading.truncated;
                 let blocks = reading
@@ -257,7 +269,7 @@ impl crate::Document {
                     .into_iter()
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
-                        let f = b.base_font.to_ascii_lowercase();
+                        let (bold, italic) = weight_and_slant(&b.base_font);
                         // `text` is trimmed; the editor text keeps the source's own spaces.
                         let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                         pdfcraft_export::Block {
@@ -265,8 +277,8 @@ impl crate::Document {
                             text: b.text,
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
-                            bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                            italic: f.contains("italic") || f.contains("oblique"),
+                            bold,
+                            italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
                         }
@@ -301,7 +313,9 @@ impl crate::Document {
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background }
+                // The ruled lines tell a drawn table from text that merely lines up (#5149).
+                let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
             })
             .collect();
         (pages, truncated)
@@ -319,11 +333,13 @@ impl crate::Document {
         let (pages, truncated_pages) =
             self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
+        // Word and HTML name the document's language (`/Lang`), so spelling is checked in it.
+        let language = self.initial_view().language;
         let bytes = match format {
-            OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Docx => pdfcraft_export::docx_with_language(&pages, &title, language.as_deref()),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
-            OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
-            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),
+            OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
