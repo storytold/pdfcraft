@@ -274,6 +274,13 @@ pub(crate) struct Incoming {
     pub open_doc: Option<pdfcraft_engine::DocId>,
 }
 
+impl Incoming {
+    /// A file known only by its name and bytes.
+    pub(crate) fn new(name: String, bytes: Vec<u8>) -> Self {
+        Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }
+    }
+}
+
 /// One notice for every file `combine_paths` could not read, from `(name, error)` pairs: the
 /// names joined, and the errors (each once) joined. `None` when nothing failed.
 pub(super) fn unreadable_notice(failed: &[(String, String)]) -> Option<(String, String)> {

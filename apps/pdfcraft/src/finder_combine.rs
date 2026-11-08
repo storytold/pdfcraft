@@ -396,12 +396,13 @@ mod tests {
     }
 
     /// The Quick Action is offered for exactly what Combine files reads: PDFs and every
-    /// extension Create converts, each under one type.
+    /// extension Create converts, each under one type. PCX is the exception: macOS defines no
+    /// type for it, so a Quick Action cannot be offered for those files.
     #[test]
     fn the_quick_action_offers_exactly_the_files_combine_reads() {
         let mut offered: Vec<&str> = FILE_TYPES.iter().flat_map(|(_, exts)| exts.iter().copied()).collect();
         offered.sort_unstable();
-        let mut reads: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE.iter().copied()).collect();
+        let mut reads: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE.iter().copied()).filter(|ext| *ext != "pcx").collect();
         reads.sort_unstable();
         assert_eq!(offered, reads);
         let info = info_plist();
