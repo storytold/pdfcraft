@@ -149,7 +149,8 @@ const WINDOWS_NAMED_FACES: &[(&str, &str)] = &[
 ];
 
 /// How a font name is compared with a face's names: without a subset tag or a `,Bold`-style
-/// suffix (a style the viewer simulates on the same glyphs), ASCII letters and digits only, in
+/// suffix (a style applied to the named face's own glyphs: `SimSun,Bold` still numbers its
+/// glyphs as SimSun, which has no bold face), ASCII letters and digits only, in
 /// lower case, so `MS-Mincho` is the face named `MS Mincho`. `None` when nothing is left (a name
 /// in another script), which then matches no face.
 fn face_key(name: &str) -> Option<String> {
@@ -585,6 +586,10 @@ mod tests {
             ..FallbackFontQuery::default()
         };
         assert!(fallback(&query("ABCDEF+NotAnInstalledFace")).is_none());
+        if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+            assert!(fallback(&query("ABCDEF+SimSun")).is_none(), "installed faces are turned off");
+            return;
+        }
         if !windows_fonts().join("simsun.ttc").is_file() {
             eprintln!("SimSun is not installed here: skipped");
             return;
