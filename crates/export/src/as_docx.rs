@@ -119,7 +119,7 @@ pub(crate) const MAX_MEDIA: usize = 1000;
 const MAX_MEDIA_BYTES: usize = 512 << 20;
 
 /// Whether `im` can still be embedded: it has data, and the package stays within its limits.
-fn room_for(media: &[(String, &Image)], im: &Image) -> bool {
+pub(crate) fn room_for(media: &[(String, &Image)], im: &Image) -> bool {
     !im.bytes.is_empty()
         && media.len() < MAX_MEDIA
         && media.iter().map(|(_, m)| m.bytes.len()).fold(im.bytes.len(), usize::saturating_add) <= MAX_MEDIA_BYTES
