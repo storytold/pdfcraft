@@ -39,6 +39,7 @@ mod chrome;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
+pub mod ask_agent;
 mod commands;
 pub mod control;
 mod menus;
@@ -650,6 +651,12 @@ pub struct PdfCraftApp {
     pub page_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<control::Control>,
+    pub(crate) ask_agent: ask_agent::AskAgent,
+    /// Runs an automation tool on this window's documents, for the control channel's
+    /// `tool.call` (the desktop app sets it; this crate doesn't depend on the tool table).
+    pub tool_runner: Option<control::ToolRunner>,
+    /// App-owned mutation resolver, sharing the runner's connection context.
+    pub tool_resolver: Option<control::ToolResolver>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into

@@ -165,15 +165,31 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                 let _ = writeln!(write, "{e}").and_then(|_| write.flush());
                 continue;
             };
+            static NEXT_CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            use std::sync::atomic::Ordering::Relaxed;
+            let mut connection = NEXT_CONNECTION.load(Relaxed);
+            let allocated = loop {
+                let Some(next) = connection.checked_add(1) else { break false };
+                match NEXT_CONNECTION.compare_exchange_weak(connection, next, Relaxed, Relaxed) {
+                    Ok(_) => break true,
+                    Err(current) => connection = current,
+                }
+            };
+            if !allocated {
+                continue;
+            }
             let client = client.clone();
             let expected = expected.clone();
             let lingering = lingering.clone();
+            let owner = connection;
             let _ = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
                 // Held until `auth` succeeds; given back however this thread ends.
                 let mut slot = Some(slot);
                 let Ok(read) = stream.try_clone() else { return };
                 let mut write = stream;
                 let mut authed = false;
+                let mut ask_connection = false;
+                let mut claimed_request = None;
                 let mut reader = BufReader::new(Reading { stream: read, until: Some(std::time::Instant::now() + limits.auth_deadline) });
                 let mut buf = Vec::new();
                 loop {
@@ -229,11 +245,23 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                                     (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
                                 }
                             } else {
-                                let rx = client.send(method, params);
-                                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-                                    Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
-                                    Ok(Err(e)) => (rpc_error(id, -32000, &e), false),
-                                    Err(_) => (rpc_error(id, -32002, "the app did not answer within 30 s"), false),
+                                // Ask Agent's two methods are answered here; anything else goes to the window.
+                                let alive = || agent_peer_alive(&write).unwrap_or(false);
+                                if method == "agent.listen" {
+                                    let Some(mut r) = client.agent_hub.handle(owner, method, &params, alive, |_| None) else { break };
+                                    // A timeout/empty listen releases the socket's old tag too.
+                                    if r.get("result").is_some() {
+                                        (ask_connection, claimed_request) = (true, r["result"]["id"].as_u64());
+                                    }
+                                    client.ctx.request_repaint();
+                                    r["jsonrpc"] = json!("2.0");
+                                    r["id"] = id;
+                                    (r, false)
+                                } else {
+                                    match relay_for_connection(&client, owner, claimed_request, ask_connection, method, params) {
+                                        Ok(v) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
+                                        Err(e) => (rpc_error(id, -32000, &e), false),
+                                    }
                                 }
                             }
                         }
@@ -248,6 +276,8 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                         break;
                     }
                 }
+                client.agent_hub.disconnect(owner);
+                client.ctx.request_repaint();
             });
         }
     })?;
@@ -294,7 +324,44 @@ fn read_line_limited(reader: &mut impl std::io::BufRead, buf: &mut Vec<u8>, max:
 
 #[cfg(not(target_arch = "wasm32"))]
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+    let error_code = message
+        .split_once(':')
+        .map(|(c, _)| c)
+        .filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_'))
+        .unwrap_or(if code == -32001 { "UNAUTHORIZED" } else { "INVALID_PARAMS" });
+    json!({ "jsonrpc": "2.0", "id": id, "ok":false, "errorCode":error_code, "error": { "code": code, "message": message, "data":{"errorCode":error_code} } })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn agent_peer_alive(stream: &std::net::TcpStream) -> Result<bool, String> {
+    stream.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let mut byte = [0];
+    let result = match stream.peek(&mut byte) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+    };
+    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_for_connection(client: &ControlClient, owner: u64, claim: Option<u64>, ask: bool, method: &str, mut params: Value) -> super::Reply {
+    if method == "tool.call" {
+        let p = params.as_object_mut().ok_or("INVALID_PARAMS: tool.call parameters must be an object")?;
+        if p.contains_key("__agentOwner") || p.contains_key("__askConnection") {
+            return Err("INVALID_PARAMS: reserved native context".into());
+        }
+        if let Some(id) = p.get("requestId")
+            && (id.as_u64() != claim || claim.is_none())
+        {
+            return Err("NOT_OWNER: native request tag does not match this socket's claim".into());
+        }
+    }
+    client
+        .send_with_context(owner, claim, ask, method, params)
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or_else(|_| Err("NO_UI: the app did not answer within 30 s; open the connected window".into()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

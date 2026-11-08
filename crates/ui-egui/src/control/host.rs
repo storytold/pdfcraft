@@ -55,6 +55,10 @@ impl Host for crate::PdfCraftApp {
         self.request_quit(ctx)
     }
 
+    fn ask_agent(&mut self, p: &Value) -> Reply {
+        self.ask_agent_command(p)
+    }
+
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -72,6 +76,7 @@ impl Host for crate::PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         json!({
+            "askAgent": self.ask_agent_inspect(),
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
             "pending_opens": pending_opens,
@@ -189,5 +194,52 @@ impl Host for crate::PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn open(&mut self, _path: &str) -> Reply {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
+    }
+
+    fn private_dialog(&self) -> bool {
+        self.password_prompt.is_some()
+            || matches!(
+                self.dialog,
+                Some(
+                    crate::Dialog::Sign
+                        | crate::Dialog::Signature
+                        | crate::Dialog::Protect
+                        | crate::Dialog::Preferences
+                        | crate::Dialog::CertificateViewer
+                )
+            )
+            || matches!(
+                self.quick_tool,
+                crate::QuickTool::Fill(crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials)
+                    | crate::QuickTool::SignArea { .. }
+            )
+            || ((self.signature.is_some() || self.initials.is_some())
+                && (self.mode == crate::Mode::Sign
+                    || (self.left_open && self.left == crate::LeftPanel::Tool("fill_sign"))
+                    || self.ctx.as_ref().is_some_and(egui::Popup::is_any_open)))
+    }
+
+    fn tool(&mut self, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        self.ask_agent_tool(0, None, name, args, root)
+    }
+
+    fn connected_tool(&mut self, connection: u64, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        self.ask_agent_tool(connection, None, name, args, root)
+    }
+
+    fn agent_tool(&mut self, owner: u64, request: Option<u64>, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        self.ask_agent_tool(owner, request, name, args, root)
+    }
+
+    fn agent_holds(&self, connection: u64) -> bool {
+        self.ask_agent
+            .open
+            .as_ref()
+            .and_then(|open| self.ask_agent.hub.snapshot(open.id))
+            .is_some_and(|snapshot| snapshot.status == crate::ask_agent::Status::Working { conn: connection })
+    }
+
+    fn agent_reply(&mut self, connection: u64, params: &Value) -> Reply {
+        self.ask_agent_reply(connection, params)
     }
 }
