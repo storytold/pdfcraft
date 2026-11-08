@@ -1115,6 +1115,12 @@ pub(crate) fn image_context_menu(
         }
     });
 
+    // Grouped Form artwork: draw its content in place, so its text and pictures edit one by
+    // one (#2964, #3005).
+    if img.is_form && item(ui, true, tl!("Ungroup")) {
+        view.image_selection = None;
+        view.pending_edit = edit(E::Ungroup);
+    }
     if item(ui, raster, tl!("Replace image")) {
         *action = Some(ImageAction::Replace(page, hit));
     }
