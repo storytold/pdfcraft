@@ -119,11 +119,16 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
+    // The GPOS mark-positioning exemption only covers Thai marks; any other
+    // gated script (Arabic, Syriac, Lao, Khmer, ...) still needs GSUB.
+    let has_non_thai_gated = text
+        .chars()
+        .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff));
     if text
         .chars()
         .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0700..=0x074f | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e | 0x0e80..=0x0fff | 0x1780..=0x17ff))
         && face.gsub().is_err()
-        && !(gpos_has_mark_positioning(bytes) && crate::embedding::covers(bytes, text))
+        && !(!has_non_thai_gated && gpos_has_mark_positioning(bytes) && crate::embedding::covers(bytes, text))
     {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
