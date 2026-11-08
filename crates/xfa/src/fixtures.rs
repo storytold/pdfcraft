@@ -711,6 +711,79 @@ pub fn signed_shell() -> Vec<u8> {
     assemble(objs)
 }
 
+/// A dynamic form as a viewer saves it with its pages drawn: no `/NeedsRendering`, a page with
+/// the form's picture, and only its signature box `sign` among the AcroForm's fields (the text
+/// field `name` lives in the template), signed when `signed`. Its configuration packet says
+/// `<dynamicRender>{render}</dynamicRender>` (none when `render` is empty).
+pub fn saved_with_pages_shell(render: &str, signed: bool) -> Vec<u8> {
+    assemble(saved_with_pages_objects(render, signed))
+}
+
+/// [`saved_with_pages_shell`]`("required", false)` whose signature box sits under `depth` nested
+/// fields of its own (none of them a signature, none with a value).
+pub fn deep_saved_with_pages_shell(depth: usize) -> Vec<u8> {
+    let mut objs = saved_with_pages_objects("required", false);
+    // Object 6, the box, becomes the outermost of the nested fields, each the parent of the next;
+    // the box goes last, under the innermost, and the page lists it under its new number.
+    let first = objs.len() + 1;
+    let depth = depth.max(1);
+    let widget = first + depth - 1;
+    let parent_of = |n: usize| if n == first { 6 } else { n - 1 };
+    let field = |name: usize, kid: usize, parent: Option<usize>| {
+        let parent = parent.map(|p| format!(" /Parent {p} 0 R")).unwrap_or_default();
+        format!("<< /T (n{name}) /Kids [{kid} 0 R]{parent} >>").into_bytes()
+    };
+    let kid_of_six = if depth == 1 { widget } else { first };
+    let Some(sig) = objs.get_mut(5).map(|o| std::mem::replace(o, field(0, kid_of_six, None))) else { return assemble(objs) };
+    for d in 1..depth {
+        let n = first + d - 1;
+        objs.push(field(d, n + 1, Some(parent_of(n))));
+    }
+    let innermost = if depth == 1 { 6 } else { widget - 1 };
+    let sig = String::from_utf8_lossy(&sig).replacen("/T (form[0].sign[0])", &format!("/T (sign[0]) /Parent {innermost} 0 R"), 1);
+    objs.push(sig.into_bytes());
+    if let Some(page) = objs.get_mut(2) {
+        *page = String::from_utf8_lossy(page).replacen("/Annots [6 0 R]", &format!("/Annots [{widget} 0 R]"), 1).into_bytes();
+    }
+    assemble(objs)
+}
+
+/// The objects of [`saved_with_pages_shell`], in order (the signature box is object 6).
+fn saved_with_pages_objects(render: &str, signed: bool) -> Vec<Vec<u8>> {
+    let config = if render.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<config xmlns="http://www.xfa.org/schema/xci/3.1/"><present><pdf><version>1.7</version></pdf></present><acrobat><acrobat7><dynamicRender>{render}</dynamicRender></acrobat7></acrobat></config>"#
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+{config}
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="name" w="3in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    );
+    let value = if signed { " /V 7 0 R" } else { "" };
+    let picture = "BT /F1 12 Tf 72 700 Td (Name: ______) Tj ET";
+    vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /SigFlags 3 >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [6 0 R] >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{picture}\nendstream", picture.len()).into_bytes(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        format!("<< /T (form[0].sign[0]) /FT /Sig{value} /Type /Annot /Subtype /Widget /Rect [72 500 288 572] /P 3 0 R >>").into_bytes(),
+        b"<< /Type /Sig /Name (A Signer) >>".to_vec(),
+    ]
+}
+
 /// A check box `kind` whose change script, once it is checked, opens the protected check box
 /// `leave` and shows the invisible field `details`, then fails on an object the form doesn't
 /// have (as scripts written for an earlier version of a form do).

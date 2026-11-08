@@ -130,9 +130,16 @@ pub struct Report {
 }
 
 /// Is this a dynamic XFA form still showing its placeholder pages (one PdfCraft has not laid
-/// out yet)?
+/// out yet)? That is a form that asks to be laid out (`/NeedsRendering`), one with no fields of
+/// its own, or one a viewer saved with its pages drawn whose configuration says it must be
+/// rendered dynamically (`<dynamicRender>required</dynamicRender>`): its fields live in the
+/// template. A signature on such a form covers the pages as saved, so a signed one is left as it
+/// is: laying it out would change what was signed.
 pub fn is_dynamic(doc: &Document) -> bool {
-    existing_layout(doc).is_none() && matches!(read_packets(doc), Ok(Some(p)) if p.needs_rendering || !p.has_fields)
+    existing_layout(doc).is_none()
+        && matches!(read_packets(doc), Ok(Some(p)) if p.needs_rendering
+            || !p.has_fields
+            || (packets::requires_dynamic_render(&p.xdp) && !packets::has_signature(doc)))
 }
 
 /// Lay a template packet (or whole XDP, whose datasets then fill the fields) out.

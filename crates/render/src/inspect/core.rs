@@ -161,6 +161,9 @@ impl<'a> Inspector<'a> {
         me
     }
 
+    /// Fill `info` from the document: its pages, metadata, encryption, outline, fields, XFA kind
+    /// (dynamic when it must be laid out from its template, else static), layers, fonts,
+    /// attachments and open action.
     pub(super) fn fill(&self, info: &mut DocInfo) {
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
@@ -243,8 +246,24 @@ impl<'a> Inspector<'a> {
             // A form with no fields is taken to be laid out from its template, unless its
             // configuration says it is a static form (#3180): Designer writes
             // `<dynamicRender>forbidden</dynamicRender>` for one, whose pages are the form.
-            let static_form = self.xfa_dynamic_render(xfa).as_deref() == Some("forbidden");
-            info.xfa = Some(if needs_rendering || (info.fields.is_empty() && !static_form) { Xfa::Dynamic } else { Xfa::Static });
+            let render = self.xfa_dynamic_render(xfa);
+            let static_form = render.as_deref() == Some("forbidden");
+            // A form a viewer saved with its pages drawn, whose configuration says it must be
+            // rendered dynamically, is laid out from its template too: its fields live there.
+            // Not once it is signed: the signature covers the pages as saved (the xfa crate's
+            // `is_dynamic` keeps the same rule).
+            let signed = self.signed_form(catalog);
+            let required = render.as_deref() == Some("required") && !signed;
+            // Whether the AcroForm lists any field, as the xfa crate's `has_fields` reads it, so
+            // both call the same forms dynamic: fields nested too deep to read through count.
+            let listed = catalog
+                .get(b"AcroForm")
+                .ok()
+                .and_then(|o| self.dict(o))
+                .and_then(|f| f.get(b"Fields").ok())
+                .and_then(|f| self.resolve(f).as_array().ok())
+                .is_some_and(|a| !a.is_empty());
+            info.xfa = Some(if needs_rendering || required || (!listed && !static_form) { Xfa::Dynamic } else { Xfa::Static });
         }
         self.layers(catalog, &mut info.layers);
         info.layer_groups = self.layer_groups(catalog);
@@ -267,6 +286,40 @@ impl<'a> Inspector<'a> {
             info.has_javascript = true;
         }
         info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
+    }
+
+    /// Whether the form holds a signature field with a value, read as the xfa crate's
+    /// `has_signature` reads it so that both say the same of a form: down the field tree from the
+    /// AcroForm's `/Fields`, the field type inherited from the parent, and a tree deeper than 32
+    /// fields or larger than 10,000 taken as signed. A form too big to read through is then left
+    /// as saved rather than laid out again over a signature.
+    pub(super) fn signed_form(&self, catalog: &'a Dictionary) -> bool {
+        let Some(acro) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)) else { return false };
+        let Some(fields) = acro.get(b"Fields").ok().and_then(|f| self.resolve(f).as_array().ok()) else { return false };
+        // (field, signature type inherited, depth)
+        let mut todo: Vec<(&Object, bool, usize)> = fields.iter().map(|f| (f, false, 0)).collect();
+        let mut seen = HashSet::new();
+        let mut budget = 10_000usize;
+        while let Some((f, sig_above, depth)) = todo.pop() {
+            if budget == 0 || depth > 32 {
+                return true;
+            }
+            if let Some(id) = self.resolved_id(f)
+                && !seen.insert(id)
+            {
+                continue;
+            }
+            budget -= 1;
+            let Some(d) = self.dict(f) else { continue };
+            let sig = d.get(b"FT").ok().and_then(|t| self.resolve(t).as_name().ok()).map_or(sig_above, |t| t == b"Sig");
+            if sig && d.get(b"V").ok().is_some_and(|v| !matches!(self.resolve(v), Object::Null)) {
+                return true;
+            }
+            if let Some(kids) = d.get(b"Kids").ok().and_then(|k| self.resolve(k).as_array().ok()) {
+                todo.extend(kids.iter().map(|k| (k, sig, depth + 1)));
+            }
+        }
+        false
     }
 
     pub(super) fn resolve(&self, o: &'a Object) -> &'a Object {
