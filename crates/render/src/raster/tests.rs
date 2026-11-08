@@ -562,6 +562,26 @@ fn function_limits_calculator_work_counts_unselected_branches() {
     assert!(function_limits_calculator_eval(&format!("{{ true {{ {branch} }} {{ {branch} 0 }} ifelse }}")).is_none());
 }
 #[test]
+fn number_with_a_sign_run_reads_as_one_array_element() {
+    // #6601 review: `Number::skip` accepts a token of three signs, 400 nines and a trailing
+    // minus as one number, but `Number::read` stopped after two signs, returned 0 and left
+    // the rest to be read as a second number, shifting every later array element.
+    use hayro_syntax::object::{Array, FromBytes, MaybeRef, Object};
+    let token = format!("---{}-", "9".repeat(400));
+    let src = format!("[{token} 7]");
+    let a = Array::from_bytes(src.as_bytes()).unwrap();
+    let items: Vec<_> = a.raw_iter().collect();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(matches!(items[0], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == -f64::MAX), "{:?}", items[0]);
+    assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{:?}", items[1]);
+    // A finite sign run too: one element, not 0 followed by the number.
+    let a = Array::from_bytes("[---280 7]".as_bytes()).unwrap();
+    let items: Vec<_> = a.raw_iter().collect();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(matches!(items[0], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == -280.0), "{:?}", items[0]);
+    assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{:?}", items[1]);
+}
+#[test]
 fn function_limits_public_construction_work_and_depth() {
     use hayro::hayro_interpret::Function;
     use hayro_syntax::object::{FromBytes, Object};

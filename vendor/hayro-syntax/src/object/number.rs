@@ -126,18 +126,17 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     // `0 0 1 0 -280 10` hid everything drawn under it (#3565). `Number::skip` above already
     // consumes the whole token, so read and skip disagreed about where the number ended.
     //
-    // One extra sign is absorbed and the value is negative if either sign was a minus, which is
-    // what the COS lexer does since #3299 (`--280` and `+-280` are both -280). A third sign is
-    // left to the digit loop's trailing-minus arm, as before.
+    // Every leading sign is absorbed and the value is negative if any sign was a minus, which
+    // is what the COS lexer does since #3299 (`--280` and `+-280` are both -280). Absorbing
+    // only two left a third sign to stop the digit loop before any digit: `---` followed by
+    // 400 nines and a trailing minus read as 0 plus a second number, where `Number::skip`
+    // accepts the whole token as one, so an array holding it gained an element and every
+    // later element shifted (#6601 review).
     let token_start = r.offset();
     let mut negative = false;
-    let mut signs = 0;
-    while signs < 2
-        && let Some(b @ (b'-' | b'+')) = r.peek_byte()
-    {
+    while let Some(b @ (b'-' | b'+')) = r.peek_byte() {
         r.forward();
         negative |= b == b'-';
-        signs += 1;
     }
 
     // PdfCraft patch: high-precision float mantissa overflow (jsPDF double-precision coordinates).
@@ -474,6 +473,36 @@ mod tests {
             assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
             assert!(r.at_end(), "{src}: only part of the number was skipped");
         }
+    }
+
+    /// PdfCraft patch: a run of signs is one number, however long the run. Read used to absorb
+    /// only two signs, so a third stopped the digit loop before any digit and the token read as
+    /// 0 plus a second number, where `Number::skip` accepts the whole token as one (#6601
+    /// review).
+    #[test]
+    fn a_sign_run_is_one_number() {
+        use alloc::format;
+        for (src, want) in [("---280", -280), ("----280", -280), ("-+-280", -280), ("+++280", 280)] {
+            let mut r = Reader::new(src.as_bytes());
+            assert_eq!(r.read_without_context::<i32>().unwrap(), want, "{src}");
+            assert!(r.at_end(), "{src}: the whole number was read, leaving nothing for a second one");
+            let mut r = Reader::new(src.as_bytes());
+            assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
+            assert!(r.at_end(), "{src}: only part of the number was skipped");
+        }
+        assert_eq!(Reader::new("---280.5".as_bytes()).read_without_context::<f64>().unwrap(), -280.5);
+        // The token from the #6601 review: three signs, 400 nines and a trailing minus. Skip
+        // accepts it as one number; read must consume the same extent (saturating, as a token
+        // of digits with a trailing minus did before), not split it in two.
+        let huge = format!("---{}-", "9".repeat(400));
+        let mut r = Reader::new(huge.as_bytes());
+        assert_eq!(r.read_without_context::<f64>().unwrap(), -f64::MAX);
+        assert!(r.at_end(), "the whole token was read");
+        let mut r = Reader::new(huge.as_bytes());
+        assert!(r.skip::<Number>(false).is_some(), "the token is skipped");
+        assert!(r.at_end(), "the whole token was skipped");
+        // A word form after a sign run is one token with no finite value, not 0 plus a stray.
+        assert_eq!(Reader::new("---nan".as_bytes()).read_without_context::<Number>(), None);
     }
 
     #[test]
