@@ -44,11 +44,11 @@ fn ok_closes_the_dialog_in_a_short_window_and_the_settings_still_scroll() {
     // between the title and the OK row, and OK did not move.
     let ok_before = h.get_by_label("OK").rect();
     let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
-    let far = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
+    let far = h.get_by_label_contains("Enable PDF JavaScript (Acrobat-compatible)").rect();
     assert!(far.min.y >= ok_before.min.y, "JavaScript setting starts out of sight: {far:?} vs OK {ok_before:?}");
-    h.get_by_label_contains("Enable Acrobat JavaScript").scroll_to_me();
+    h.get_by_label_contains("Enable PDF JavaScript (Acrobat-compatible)").scroll_to_me();
     h.run_steps(4);
-    let far = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
+    let far = h.get_by_label_contains("Enable PDF JavaScript (Acrobat-compatible)").rect();
     assert!(far.min.y >= title.max.y && far.max.y <= ok_before.min.y, "JavaScript setting scrolled in between the title and OK: {far:?}");
     assert_eq!(h.get_by_label("OK").rect(), ok_before, "OK stays put while the settings scroll");
     assert!(h.state().dialog.is_some());
@@ -98,7 +98,7 @@ fn a_very_tall_window_does_not_leave_a_blank_gap_above_ok() {
     let mut h = harness(2600.0);
     h.run_steps(6);
     let ok = h.get_by_label("OK").rect();
-    let last = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
+    let last = h.get_by_label_contains("Enable PDF JavaScript (Acrobat-compatible)").rect();
     assert!(on_screen(ok, 2600.0) && on_screen(last, 2600.0), "{last:?} {ok:?}");
     assert!(ok.min.y - last.max.y < 120.0, "a gap of {} pt between the last setting and OK", ok.min.y - last.max.y);
 }

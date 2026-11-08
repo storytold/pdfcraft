@@ -170,9 +170,9 @@ fn document_scripts_and_preferences() {
     h.state_mut().dialog = Some(Dialog::Preferences);
     h.run_steps(2);
     // Below the fold in a 900-point window: the preferences scroll to it.
-    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
+    h.get_by_label("Enable PDF JavaScript (Acrobat-compatible)").scroll_to_me();
     h.run_steps(4);
-    h.get_by_label("Enable Acrobat JavaScript").click();
+    h.get_by_label("Enable PDF JavaScript (Acrobat-compatible)").click();
     h.run_steps(2);
     assert!(!h.state().session.javascript());
     let saved = h.state().persist();

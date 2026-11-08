@@ -802,7 +802,7 @@ fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx:
 /// Content for Card 6: JavaScript
 fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
     let mut on = app.session.javascript();
-    if ctx.checkbox(ui, &mut on, tl!("Enable Acrobat JavaScript"), t).changed() {
+    if ctx.checkbox(ui, &mut on, tl!("Enable PDF JavaScript (Acrobat-compatible)"), t).changed() {
         app.session.set_javascript(on);
     }
     ctx.label_secondary(
