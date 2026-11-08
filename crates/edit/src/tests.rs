@@ -10123,6 +10123,42 @@ fn a_space_a_subset_cannot_show_is_as_wide_as_the_lines_own_word_gaps() {
     assert!(gaps.iter().all(|g| (g + 500.0).abs() < 15.0), "{gaps:?}");
 }
 
+/// A style that picks another subset has no line of its own in it, so its spaces take the gap of
+/// the paragraph's lines.
+#[test]
+fn a_style_that_picks_another_subset_takes_the_paragraphs_word_gap() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td [(ab) -500 (ba)] TJ ET");
+    let style = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: 0..8,
+            family: None,
+            resource: Some("F3".into()),
+            size: None,
+            color: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut doc, 0, 0, Some("ab ba ab"), &style).unwrap();
+    let content = page_content_bytes(&reopen(&doc), 0);
+    assert!(String::from_utf8_lossy(&content).contains("/F3 "), "the range is set in the subset it picked");
+    let gaps = tj_gaps(&content);
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|g| (g + 500.0).abs() < 15.0), "{gaps:?}");
+}
+
+/// Two boxes that `/ActualText` reads as one word have a gap that is not a space: the guess stays.
+#[test]
+fn a_gap_inside_a_word_is_not_measured_as_a_space() {
+    let mut doc = text_page("/Span << /ActualText (ab) >> BDC BT /F2 12 Tf 72 700 Td (a) Tj 10.2 0 Td (b) Tj ET EMC");
+    let line = &text::text_lines(&doc, 0).unwrap()[0];
+    assert_eq!((line.text.as_str(), line.ink.len()), ("ab", 2), "the fixture reads as one word in two boxes");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba").unwrap().substituted, None);
+    assert_eq!(tj_gaps(&page_content_bytes(&reopen(&doc), 0)), [-330.0]);
+}
+
 /// A single word has no gap to measure, so the guess stays.
 #[test]
 fn a_space_a_subset_cannot_show_is_a_guess_when_the_line_has_one_word() {

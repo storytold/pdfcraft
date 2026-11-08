@@ -644,7 +644,9 @@ pub(crate) fn line_word_gap<'a>(lines: impl IntoIterator<Item = &'a TextLine>) -
     for line in lines {
         // Text space → user space: the font size, the text-to-user scale and the horizontal scale.
         let em = line.size * line.origin.k * line.origin.state.scale;
-        if !line.upright() || !em.is_finite() || em <= 0.0 {
+        // Each gap must be a space of the text: a word that spans positioned runs (or an `/ActualText` that
+        // joins them) has more boxes than the text has words, and the gap inside it is not a space.
+        if !line.upright() || !em.is_finite() || em <= 0.0 || line.ink.len() != line.text.split_whitespace().count() {
             continue;
         }
         let tracking = line.origin.state.char_spacing / line.size;

@@ -903,7 +903,11 @@ pub(crate) fn rewrite_styled_block(
     // up front would scan the page once per font for a short edit on a page of many fonts.
     let spaces: std::cell::RefCell<HashMap<String, f64>> = std::cell::RefCell::new(HashMap::new());
     // How wide the paragraph's own word gaps are in a font, for when the font has no space to measure.
-    let gap_of = |name: &str| line_word_gap(block.lines.iter().filter_map(|i| lines.get(*i)).filter(|l| l.font == name));
+    let gap_of = |name: &str| {
+        let own = line_word_gap(block.lines.iter().filter_map(|i| lines.get(*i)).filter(|l| l.font == name));
+        // A font the paragraph did not use (a style picked another subset) sets the paragraph's own gap.
+        own.or_else(|| line_word_gap(block.lines.iter().filter_map(|i| lines.get(*i))))
+    };
     let space_of = |name: &str, m: &Metrics| {
         if let Some(w) = spaces.borrow().get(name) {
             return *w;
