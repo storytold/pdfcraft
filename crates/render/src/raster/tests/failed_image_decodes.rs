@@ -129,10 +129,11 @@ fn a_picture_that_does_not_decode_is_decoded_once_however_often_it_is_drawn() {
 }
 
 /// A JPEG 2000 picture decodes at a reduced resolution for the size it is drawn at, so its
-/// failure is kept for that size: drawn at two sizes, it is decoded once at each.
+/// failure is kept for that size: drawn at two sizes, it is decoded once at each, also when it
+/// comes back to the first size after the second.
 #[test]
 fn a_picture_that_does_not_decode_is_decoded_once_at_each_size() {
-    let out = draw_five_times_at("J", [20, 20, 20, 10, 10]);
+    let out = draw_five_times_at("J", [20, 20, 10, 10, 20]);
     assert_eq!(out.decodes, 3, "once at each of its two sizes, and the picture after it");
     assert_eq!(out.failures, 5, "every draw reports the failure");
 }
@@ -196,9 +197,10 @@ fn a_picture_left_out_for_the_pages_allowance_draws_on_the_next_page() {
         b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n".to_vec();
     pdf.extend(page(3, 5));
     pdf.extend(page(4, 6));
-    // The first page spends its allowance on A and has nothing left for B; the second draws B.
+    // The first page spends its allowance on A and has nothing left for B; the second draws A,
+    // decoded already, and then B.
     pdf.extend(content(5, "q 20 0 0 40 0 0 cm /A Do Q q 20 0 0 40 20 0 cm /B Do Q"));
-    pdf.extend(content(6, "q 20 0 0 40 20 0 cm /B Do Q"));
+    pdf.extend(content(6, "q 20 0 0 40 0 0 cm /A Do Q q 20 0 0 40 20 0 cm /B Do Q"));
     pdf.extend(image(7, 1));
     pdf.extend(image(8, 2));
     pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
@@ -232,6 +234,6 @@ fn a_picture_left_out_for_the_pages_allowance_draws_on_the_next_page() {
     let Ok([first, second]) = <[Drawn; 2]>::try_from(pages(one, 2)) else { panic!("two pages") };
     assert_eq!((black(&first, 10), black(&first, 30)), (true, false), "the first page had enough for A alone");
     assert!(first.1.contains(&RenderWarning::ContentTruncated), "{:?}", first.1);
-    assert!(black(&second, 30), "B, left out of the first page, draws on the second");
+    assert!(black(&second, 10) && black(&second, 30), "A, and B left out of the first page, draw on the second");
     assert!(second.1.is_empty(), "{:?}", second.1);
 }
