@@ -13023,6 +13023,30 @@ fn grouped_legacy_thai_map_repair_follows_every_block_of_the_damaged_map() {
     assert!(lines.iter().any(|l| l.text == "ฮา"), "{:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
 }
 
+/// The damaged THSarabunPSK map of text that was never grouped is repaired by preparation too,
+/// recorded in the repair log; with nothing to prepare or repair, preparation changes nothing.
+#[test]
+fn legacy_thai_map_repair_needs_no_grouped_text() {
+    let damaged = b"begincmap 1 begincodespacerange <0000> <ffff> endcodespacerange \
+        1 beginbfrange <00ff><01ff><0032> endbfrange 17 beginbfrange \
+        <00d9><00d9><0e04> <00e2><00e2><0e0d> <00fa><00fa><0e25> <0100><0100><0e2b> <0102><0102><0e2d> \
+        <0164><0164><0e4c> <0166><0166><0e31> <0168><0168><0e47> \
+        <00d6><00d6><000f> <00f0><00f0><0029> <00f8><00f8><0023> <0105><0105><003e> <0107><0107><0040> \
+        <0109><0109><003e> <0111><0111><004e> <0160><0160><004e> <0161><0161><004f> endbfrange endcmap";
+    // ฮา: codes 259 and 263, drawn by the page itself.
+    let mut doc = page_with_forms("BT /F1 14 Tf 40 500 Td <01030107> Tj ET", &[]);
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &legacy_thai_program(), damaged);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    let result = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!((result.expanded, result.repaired_fonts), (0, 1));
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "ฮา"));
+    assert!(doc.repair_log().iter().any(|l| l.contains("THSarabunPSK")), "{:?}", doc.repair_log());
+    // Repaired once: the map no longer has the damage, and nothing else is to be done.
+    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().repaired_fonts, 0);
+    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+}
+
 /// A Thai run whose glyphs a subsetter split across two subsets of the face is kept in that
 /// face: each cluster comes from a subset that has it. A cluster no subset has is refused with
 /// the reason, and the document is unchanged.

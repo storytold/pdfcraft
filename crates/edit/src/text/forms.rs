@@ -33,7 +33,8 @@ struct Inlined {
     waiting: Vec<(usize, String)>,
 }
 
-/// Prepare grouped source text atomically, within eight levels and 64 placements per page.
+/// Prepare grouped source text atomically, within eight levels and 64 placements per page, and
+/// repair the page fonts' damaged legacy Thai maps (`repair_thai_fonts`), grouped or not.
 /// Shared forms and other pages are untouched. Preparation is a distinct undoable engine edit.
 pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError> {
     let mut next = doc.clone();
@@ -179,16 +180,20 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
     }
     result.refused.sort();
     result.refused.dedup();
-    if result.expanded > 0 {
+    // The page's own damaged maps are repaired too, those of text that was never grouped
+    // included: its text reads wrong all the same.
+    result.repaired_fonts = repair_thai_fonts(&mut next, page)?;
+    if result.expanded > 0 || result.repaired_fonts > 0 {
         for reason in &result.refused {
             next.note_repair(format!("Grouped text left intact: {reason}"));
         }
-        result.repaired_fonts = repair_thai_fonts(&mut next, page)?;
-        next.note_repair(format!(
-            "Prepared {} grouped text placement(s) on page {} for direct source-text editing",
-            result.expanded,
-            page.saturating_add(1)
-        ));
+        if result.expanded > 0 {
+            next.note_repair(format!(
+                "Prepared {} grouped text placement(s) on page {} for direct source-text editing",
+                result.expanded,
+                page.saturating_add(1)
+            ));
+        }
         *doc = next;
     }
     Ok(result)

@@ -229,8 +229,9 @@ summary it returns what this edit did:
 | `repaired_fonts` | integer | Page fonts whose damaged legacy THSarabunPSK Thai map was repaired on a page-owned copy. |
 | `refused_groups` | array of strings | One `name: reason` per group left as it was: unsafe compositing, tags, malformed content, or text grouped more than eight levels deep. |
 
-It fails, changing nothing, when no group on the page can be prepared (the error gives the first
-reason) or the page is out of range.
+The page's own fonts with that damaged map are repaired too, whether their text was grouped or
+not. It fails, changing nothing, when the page has nothing to prepare or repair (the error gives
+the first reason a group was left as it was) or the page is out of range.
 
 ### Superscript and subscript normalization
 
