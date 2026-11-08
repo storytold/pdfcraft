@@ -4939,6 +4939,102 @@ fn ungroup_refuses_a_group_blending_in_another_colour_space() {
     ungroup(None, Some("DeviceCMYK")).unwrap();
 }
 
+/// A gamma-3 calibrated RGB space: as `/DefaultRGB` it draws DeviceRGB red darker than red.
+fn dark_cal_rgb() -> Object {
+    let mut d = Dict::new();
+    d.set(b"WhitePoint".to_vec(), Object::Array([1, 1, 1].map(Object::Int).to_vec()));
+    d.set(b"Gamma".to_vec(), Object::Array([3, 3, 3].map(Object::Int).to_vec()));
+    Object::Array(vec![Object::name("CalRGB"), Object::Dict(d)])
+}
+
+/// Ungroup fixture page 1's form `Art` (red square) whose `/ColorSpace` resources are `form`,
+/// on a page whose `/ColorSpace` resources are `page` (none when `None`). `build` may add objects
+/// first. Returns the result and the document.
+fn ungroup_with_spaces(build: impl FnOnce(&mut Document) -> (Dict, Option<Dict>)) -> (Result<(), EditError>, Document) {
+    let mut doc = fixture();
+    let (form, page) = build(&mut doc);
+    let mut res = Dict::new();
+    res.set(b"ColorSpace".to_vec(), Object::Dict(form));
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 50].map(Object::Int).to_vec()));
+    dict.set(b"Resources".to_vec(), Object::Dict(res));
+    let artwork = doc.add(Object::Stream(Stream::flate(dict, b"1 0 0 rg 0 0 10 10 re f")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Art".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+        if let Some(page) = page {
+            d.set(b"ColorSpace".to_vec(), Object::Dict(page));
+        }
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q /Art Do Q")));
+    let mut doc = reopen(&doc);
+    let r = images::change_image(&mut doc, 0, 0, &images::ImageChange::Ungroup).map(|_| ());
+    (r, doc)
+}
+
+fn spaces(entries: &[(&str, Object)]) -> Dict {
+    let mut d = Dict::new();
+    for (k, v) in entries {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    d
+}
+
+/// A form's `/DefaultRGB` (likewise `/DefaultGray`, `/DefaultCMYK`) remaps the device colours it
+/// paints (ISO 32000-2 §8.6.5.6), looked up in the current resource dictionary (§7.8.3). Inline,
+/// that is the page's: renamed into it, the form's entry would no longer remap anything and its
+/// red would draw in another colour, so Ungroup refuses unless the page has the same entry.
+#[test]
+fn ungroup_refuses_a_form_with_its_own_default_colour_space() {
+    let refused = |r: Result<(), EditError>, key: &str| match r {
+        Err(EditError::Invalid(m)) => assert!(m.contains(key) && m.contains("device colours"), "{m}"),
+        other => panic!("expected a refusal naming {key}, got {other:?}"),
+    };
+    refused(ungroup_with_spaces(|_| (spaces(&[("DefaultRGB", dark_cal_rgb())]), None)).0, "/DefaultRGB");
+    // The page has one too, but another.
+    let r = ungroup_with_spaces(|_| (spaces(&[("DefaultRGB", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", Object::name("DeviceRGB"))])))).0;
+    refused(r, "/DefaultRGB");
+    refused(ungroup_with_spaces(|_| (spaces(&[("DefaultGray", Object::name("CalGray"))]), None)).0, "/DefaultGray");
+    // Only an entry of the same name counts: the page's DefaultRGB doesn't stand for a DefaultCMYK.
+    let r = ungroup_with_spaces(|_| (spaces(&[("DefaultCMYK", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())])))).0;
+    refused(r, "/DefaultCMYK");
+}
+
+/// When the page's resources have the same default colour space (the same object, or an equal
+/// value), it remaps the form's colours inline just as the form's did, so Ungroup goes ahead and
+/// adds no renamed copy of it that nothing would use.
+#[test]
+fn ungroup_allows_a_form_whose_default_colour_space_matches_the_page() {
+    let check = |doc: &Document, page_entry: &Object| {
+        let page = pdfcraft_model::pages(doc).into_iter().next().unwrap();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let cs = doc.resolve(res.get(b"ColorSpace").unwrap()).as_dict().cloned().unwrap();
+        assert_eq!(cs.get(b"DefaultRGB"), Some(page_entry), "the page's DefaultRGB is kept");
+        assert_eq!(cs.len(), 1, "no renamed copy: {:?}", cs.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>());
+        assert!(images::page_images(doc, 0).unwrap().is_empty(), "ungrouped");
+    };
+    // Equal values written out twice.
+    let (r, doc) = ungroup_with_spaces(|_| (spaces(&[("DefaultRGB", dark_cal_rgb())]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())]))));
+    r.unwrap();
+    check(&doc, &dark_cal_rgb());
+    // The same object, and an indirect value equal to a direct one.
+    let mut shared = None;
+    let (r, doc) = ungroup_with_spaces(|doc| {
+        let cs = Object::Ref(doc.add(dark_cal_rgb()));
+        shared = Some(cs.clone());
+        (spaces(&[("DefaultRGB", cs.clone())]), Some(spaces(&[("DefaultRGB", cs)])))
+    });
+    r.unwrap();
+    check(&doc, shared.as_ref().unwrap());
+    let (r, doc) =
+        ungroup_with_spaces(|doc| (spaces(&[("DefaultRGB", Object::Ref(doc.add(dark_cal_rgb())))]), Some(spaces(&[("DefaultRGB", dark_cal_rgb())]))));
+    r.unwrap();
+    check(&doc, &dark_cal_rgb());
+}
+
 #[test]
 fn paragraphs_take_new_formatting() {
     let mut doc = text_page("BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj ET");

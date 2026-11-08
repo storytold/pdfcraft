@@ -11,9 +11,11 @@
 //! a blend mode other than Normal inside, or a group drawn translucent, blended or under a soft
 //! mask, or a group with a blending colour space (`/CS`) other than the page's: its contents
 //! composite in that space and are then converted (ISO 32000-2 §11.6.6), inline they would
-//! composite in the page's. Those are refused rather than changed, as is tagged form content (its structure link
-//! would be lost) and content whose marked content or text objects don't balance (inlined, they
-//! would change the scope of the page's own). A form in a layer (`/OC`) keeps its membership as `/OC … BDC … EMC`.
+//! composite in the page's. Those are refused rather than changed, as is a form whose
+//! `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` the page doesn't share (it remaps the form's
+//! device colours, §8.6.5.6, and inline the page's resources apply), tagged form content (its
+//! structure link would be lost) and content whose marked content or text objects don't balance
+//! (inlined, they would change the scope of the page's own). A form in a layer (`/OC`) keeps its membership as `/OC … BDC … EMC`.
 //!
 //! A pattern's matrix maps pattern space to the default space of the content stream that uses it
 //! (ISO 32000-2 §8.7.2): inside the form that is the form's space at the `Do`, on the page it is
@@ -33,6 +35,10 @@ const MAX_FORM_BYTES: usize = 64 << 20;
 
 /// Resource categories a content stream refers to by name (ISO 32000-2 §7.8.3, Table 34).
 const CATEGORIES: [&[u8]; 7] = [b"Font", b"XObject", b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"Properties"];
+
+/// The `/ColorSpace` entries that remap device colours painted with the resources they are in
+/// (ISO 32000-2 §8.6.5.6).
+const DEFAULT_SPACES: [&[u8]; 3] = [b"DefaultGray", b"DefaultRGB", b"DefaultCMYK"];
 
 /// The most distinct patterns one ungrouped form may select; each becomes a new object.
 const MAX_MOVED_PATTERNS: usize = 256;
@@ -118,6 +124,15 @@ pub(crate) fn ungroup_ops(
         }
     }
 
+    // A form's default colour space remaps its device colours (ISO 32000-2 §8.6.5.6); inline,
+    // the page's resources are the current ones (§7.8.3).
+    if own.is_some()
+        && let Some(key) = unshared_default_space(doc, &form_res, resources)
+    {
+        let key = String::from_utf8_lossy(key);
+        return Err(refuse(&format!("it remaps its device colours with a /{key} the page doesn't share")));
+    }
+
     // Merge the form's resources into a copy of the page's, renaming what clashes.
     let mut merged = resources.clone();
     let mut renames: Vec<(&[u8], Renames)> = Vec::new();
@@ -128,7 +143,9 @@ pub(crate) fn ungroup_ops(
             let mut map = Renames::new();
             let mut n = 0u32;
             for (key, value) in theirs.iter() {
-                if mine.get(key) == Some(value) {
+                // A default colour space checked above is the page's, which applies inline;
+                // renamed, it would be an entry nothing uses.
+                if mine.get(key) == Some(value) || (cat == b"ColorSpace" && DEFAULT_SPACES.contains(&&key[..])) {
                     continue;
                 }
                 let fresh = loop {
@@ -313,6 +330,16 @@ pub(crate) fn ungroup_ops(
         out.push(Op::new("EMC", Vec::new()));
     }
     Ok((out, merged, patterns))
+}
+
+/// The first of `/DefaultGray`, `/DefaultRGB` and `/DefaultCMYK` in the form's `/ColorSpace`
+/// resources that the page's don't have with an equal value (the same object, or the same value
+/// resolved). A default colour space remaps the device colours painted with the resource
+/// dictionary it is in (ISO 32000-2 §8.6.5.6, §7.8.3), so inline only the page's would apply.
+fn unshared_default_space(doc: &Document, form: &Dict, page: &Dict) -> Option<&'static [u8]> {
+    let spaces = |res: &Dict| res.get(b"ColorSpace").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+    let (theirs, mine) = (spaces(form), spaces(page));
+    DEFAULT_SPACES.into_iter().find(|key| theirs.get(key).is_some_and(|v| !mine.get(key).is_some_and(|p| *doc.resolve(p) == *doc.resolve(v))))
 }
 
 /// A copy of pattern `entry` whose `/Matrix` maps its space to the page's default space instead
