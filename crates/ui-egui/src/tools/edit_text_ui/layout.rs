@@ -68,7 +68,9 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
 
 /// One TextEdit lays out all source runs; its caret and selection span the whole region.
 pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::Document, page: usize) -> BTreeMap<String, String> {
-    let programs = doc.text_editor_fonts(page);
+    // Bundled replacement selectors are menu choices, never source resource names. Installing
+    // an unused choice would make even a standard-font editor wait a frame for its font atlas.
+    let programs: Vec<_> = doc.text_editor_fonts(page).into_iter().filter(|font| !font.choice_only).collect();
     let mut definitions = ctx.fonts(|f| f.definitions().clone());
     // Only the current editor's document fonts live in the atlas. Never accumulate the
     // programs of previously opened files or add them to the interface's default families.

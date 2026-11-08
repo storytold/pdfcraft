@@ -662,6 +662,10 @@ pub struct DocView {
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+    /// Edit text: a click on grouped artwork with text queued [`Edit::PrepareText`] for its page:
+    /// the page and the point clicked (user space), whose paragraph opens once the page is
+    /// prepared, so one click on grouped text starts editing it.
+    pub(crate) grouped_text_click: Option<(usize, [f64; 2])>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The paragraph editor whose edit was just queued. It opens again with its typing if the
     /// edit fails, as a refused form field does.
@@ -1064,6 +1068,7 @@ impl DocView {
             organize_range: Default::default(),
             pending_edit: None,
             edit_lines: HashMap::new(),
+            grouped_text_click: None,
             line_editor: None,
             applied_editor: None,
             pending_text_open: None,
