@@ -371,7 +371,7 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
     }
     // The line's direction, as `reverse_rtl` takes it: right-to-left when it has more right-to-left letters than
     // left-to-right ones. A line's edge has that direction (UAX #9 X10: sos and eos).
-    let count = |b: Bidi| placed.iter().filter(|&&i| glyphs.get(i).is_some_and(|g| bidi_class(&g.text) == b)).count();
+    let count = |b: Bidi| placed.iter().filter(|&&i| glyphs.get(i).is_some_and(|g| !is_nonspacing_mark(&g.text) && bidi_class(&g.text) == b)).count();
     let line_rtl = count(Bidi::R) > count(Bidi::L);
     // Whether the nearest glyph with a strong direction from position `from` on, stepping by `step`, is right-to-left,
     // or the line is when there is none before its edge.
@@ -593,13 +593,17 @@ fn bidi_class(text: &str) -> Bidi {
     }
 }
 
+/// Whether `text` is only nonspacing marks (bidi class NSM). Such a glyph counts toward neither direction of a line:
+/// it has the direction of the letter it sits on.
+fn is_nonspacing_mark(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM)
+}
+
 /// UAX #9 W1: a nonspacing mark takes the class of the letter it rides on ([`Scratch::anchor`]), which placement keeps
 /// right in front of it. A mark that rides on nothing (one after a word gap, or a right-to-left mark, which placement
 /// puts by its own position) keeps its own class.
 fn resolve_marks(glyphs: &[&TextGlyph], anchor: &[usize], items: &mut [(Option<usize>, Bidi)]) {
-    let nsm = |i: usize| {
-        glyphs.get(i).is_some_and(|g| !g.text.is_empty() && g.text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM))
-    };
+    let nsm = |i: usize| glyphs.get(i).is_some_and(|g| is_nonspacing_mark(&g.text));
     for k in 1..items.len() {
         let (prev, base) = match items.get(k - 1) {
             Some(&(Some(prev), base)) => (prev, base),
@@ -633,7 +637,8 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], anchor: &[usize], idx: &mut [us
     let text = |k: usize| texts.get(k).copied().unwrap_or("");
     // The paragraph's direction counts letters as they are, before marks take their letter's class, as
     // `keep_taken_back_blanks` counts them.
-    let count = |b: Bidi| items.iter().filter(|it| it.1 == b).count();
+    let count =
+        |b: Bidi| items.iter().filter(|it| it.1 == b && !it.0.and_then(|i| glyphs.get(i)).is_some_and(|g| is_nonspacing_mark(&g.text))).count();
     let para = if count(Bidi::R) > count(Bidi::L) { Bidi::R } else { Bidi::L };
     resolve_marks(glyphs, anchor, &mut items);
     let n = items.len();

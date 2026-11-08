@@ -2432,3 +2432,28 @@ fn a_hebrew_mark_after_a_latin_letter_stays_with_the_hebrew_word() {
     // The mark follows its letter, the last of "שלום", before the Latin text.
     assert_eq!(text, "שלום\u{5B8}ab");
 }
+
+/// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
+/// three-letter Hebrew word whose letters each carry two points reads in the same order as without
+/// the points.
+#[test]
+fn marks_do_not_decide_a_lines_direction() {
+    let line = |marks: bool| {
+        let mut v: Vec<TextGlyph> =
+            ["a", "b", "c", "d"].iter().zip(0u8..).map(|(c, k)| em_box(c, 6.0 * f32::from(k), 0.0, 6.0 * f32::from(k) + 6.0, 11.0)).collect();
+        let mut x = 27.5;
+        for c in ["ו", "ל", "ש"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            if marks {
+                v.push(em_box("\u{5B8}", x + 1.0, 0.0, x + 1.0, 11.0));
+                v.push(em_box("\u{5B4}", x + 2.0, 0.0, x + 2.0, 11.0));
+            }
+            x += 6.5;
+        }
+        layout(v).plain_text()
+    };
+    // Compared on the letters alone: the points' own word gaps are not what this is about.
+    let letters = |s: String| s.chars().filter(|&c| c != '\u{5B8}' && c != '\u{5B4}' && c != ' ').collect::<String>();
+    assert_eq!(letters(line(true)), letters(line(false)));
+    assert!(letters(line(true)).starts_with("abcd"), "a mostly Latin line reads Latin first");
+}
