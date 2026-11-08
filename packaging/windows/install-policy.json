@@ -106,9 +106,9 @@
     ],
     [
       "-1",
-      "Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}",
-      "AppId",
-      "{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}"
+      "Software\\Classes\\CLSID\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}",
+      "AppID",
+      "[PreviewHostAppId]"
     ],
     [
       "-1",

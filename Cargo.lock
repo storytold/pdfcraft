@@ -6551,7 +6551,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-preview"
-version = "0.16.1"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-render",
  "windows",
@@ -6669,7 +6669,7 @@ version = "0.22.0"
 
 [[package]]
 name = "pdfcraft-thumbnails"
-version = "0.16.1"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-render",
  "windows",
