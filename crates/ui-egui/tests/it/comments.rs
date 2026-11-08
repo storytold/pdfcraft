@@ -3619,13 +3619,22 @@ fn hotbar_vertical_size_and_docking() {
 /// whole bar's width, widening the frame and putting the button 7 pt off centre.
 #[test]
 fn hotbar_settings_button_stays_in_the_tool_column_with_tool_controls() {
+    use pdfcraft_ui_egui::comments::CommentTool;
     for side in ["float", "bottom"] {
         for tool in ["select", "highlight", "note"] {
             let mut h = harness(move |app| {
                 app.set_option("hotbar-side", side).unwrap();
                 app.set_option("quick", tool).unwrap();
             });
+            let (want, name) = match tool {
+                "select" => (QuickTool::Select, "Select"),
+                "highlight" => (QuickTool::Comment(CommentTool::Highlight), "Highlight"),
+                _ => (QuickTool::Comment(CommentTool::Note), "Sticky note"),
+            };
+            assert_eq!(h.state().quick_tool, want, "{name} is the active tool");
             h.run_steps(3);
+            // Only a tool with its own controls draws the divider this is about.
+            assert_eq!(h.query_by_label("Colour").is_some(), tool != "select", "{side} bar, {tool}: its controls");
             let select = h.get_by_label("Select (V)").rect().center();
             let settings = h.get_by_label("Hotbar settings").rect().center();
             let (off, axis) = if side == "float" { (settings.x - select.x, "x") } else { (settings.y - select.y, "y") };
