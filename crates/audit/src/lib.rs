@@ -14,9 +14,8 @@
 //! considered when closed by a fill operator — other filled paths, shadings and patterns are
 //! not; a rectangle drawn with a translucent ExtGState (`/ca < 1`) is not flagged; opaque
 //! filled `/Square` annotations count as covers, but annotation rectangles are compared in
-//! unrotated user space, so pages with `/Rotate` may misalign;
-//! covers inside form XObjects are found, but only text drawn directly in the page content
-//! is checked under them, so text inside a form XObject is not audited.
+//! unrotated user space, so pages with `/Rotate` may misalign.
+//! Covers and text are both followed into form XObjects (#3218).
 //!
 //! The audit fails closed: any content that cannot be read (an undecodable content stream,
 //! malformed annotations, form XObjects nested deeper than 32 or in a cycle) is an error, never
@@ -158,12 +157,12 @@ impl Budget {
         lines: &[TextLine],
         copying: bool,
         cover: &[f64; 4],
-        hides: impl Fn(&TextLine) -> bool,
+        hides: impl Fn(usize, &TextLine) -> bool,
     ) -> Result<Option<String>, AuditError> {
         self.spend(self.page_cost)?;
         if !copying {
             let mut hidden = false;
-            for line in lines.iter().filter(|l| hides(l)) {
+            for (_, line) in lines.iter().enumerate().filter(|(i, l)| hides(*i, l)) {
                 // Trimming walks the line's text (padding and all): it costs its bytes.
                 self.spend(line.text.len() / TEXT_BYTES_PER_COMPARISON)?;
                 if !line.text.trim().is_empty() {
@@ -174,7 +173,7 @@ impl Budget {
             return Ok(hidden.then(String::new));
         }
         let mut covered = String::new();
-        for line in lines.iter().filter(|l| hides(l)) {
+        for line in lines.iter().enumerate().filter(|(i, l)| hides(*i, l)).map(|(_, l)| l) {
             // Copying and trimming the line walks its text once per cover: a long padded
             // line under many covers would otherwise be read far more than its runs suggest.
             self.spend(line.text.len() / TEXT_BYTES_PER_COMPARISON)?;
@@ -215,11 +214,26 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
     for (n, page) in pdfcraft_model::pages(doc).iter().enumerate() {
         // The glyphs themselves: `/ActualText` is the file's own claim about them, and an empty
         // or substitute one must not hide text a cover sits on.
-        let lines = pdfcraft_edit::glyph_text_lines(doc, page).map_err(|e| AuditError::Text(n, e.to_string()))?;
+        // Covers first: a form walk they can't finish (too deep, a cycle) is the clearer error.
+        let rects = cover::filled_rects(doc, &page.dict)?;
+        let text_err = |e: pdfcraft_edit::EditError| AuditError::Text(n, e.to_string());
+        let mut lines = pdfcraft_edit::glyph_text_lines(doc, page).map_err(text_err)?;
+        // Each line's paint position: the page's own text, then the text its form XObjects draw.
+        let mut poses: Vec<Vec<usize>> = lines
+            .iter()
+            .map(|l| {
+                let (stream, op) = l.first_paint_pos();
+                vec![stream, op]
+            })
+            .collect();
+        for (line, pos) in pdfcraft_edit::form_text_lines(doc, n).map_err(text_err)? {
+            lines.push(line);
+            poses.push(pos);
+        }
         budget.start_page(&lines);
         // 1. Opaque filled rectangles over extractable text.
-        for r in cover::filled_rects(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, &r.rect, |line| is_cover(&r, line))? {
+        for r in rects {
+            if let Some(covered) = budget.hidden_text(&lines, copying, &r.rect, |i, line| is_cover(&r, line, &poses[i]))? {
                 let covered_text = budget.report_text(covered, copying)?;
                 out.push(AuditFinding { page: n, kind: FindingKind::CoveredText, rect: r.rect, covered_text });
             }
@@ -229,7 +243,7 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
             let cover = match &annot {
                 AnnotationCover::Redact(rect) | AnnotationCover::Square { rect, .. } => *rect,
             };
-            if let Some(covered) = budget.hidden_text(&lines, copying, &cover, |line| match &annot {
+            if let Some(covered) = budget.hidden_text(&lines, copying, &cover, |_, line| match &annot {
                 AnnotationCover::Redact(rect) => covers(rect, line),
                 AnnotationCover::Square { rect, rgb } => covers(rect, line) && contrast(line.color, *rgb) < COVER_CONTRAST,
             })? {
@@ -246,13 +260,13 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
 }
 
 /// A filled rectangle is a faux-redaction cover for a text line iff it was painted strictly
-/// after the start of the line, overlaps it substantially, and is dark enough against the line's
-/// color to make the text unreadable. Light covers (table shading, highlights) over dark text fail
+/// after the line (`pos`, its paint position), overlaps it substantially, and is dark enough against the
+/// line's color to make the text unreadable. Light covers (table shading, highlights) over dark text fail
 /// the contrast check and are not flagged. A line can join runs painted before and after the
 /// cover; the later ones are drawn on it in the same low-contrast color, so they are unreadable
 /// too.
-fn is_cover(rect: &cover::FilledRect, line: &TextLine) -> bool {
-    rect.pos > line.first_paint_pos() && covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST
+fn is_cover(rect: &cover::FilledRect, line: &TextLine, pos: &[usize]) -> bool {
+    rect.pos.as_slice() > pos && covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST
 }
 
 /// Does `cover` hide a substantial part of what `line` draws? Three ways, any is enough:

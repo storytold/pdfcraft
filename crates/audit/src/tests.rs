@@ -774,10 +774,10 @@ fn withheld_covered_text_is_not_assembled() {
     let lines = pdfcraft_edit::text_lines(&doc, 0).expect("text");
     let mut budget = crate::Budget { limits: crate::Limits::DEFAULT, comparisons: 0, page_cost: 0, covered_text: 0 };
     budget.start_page(&lines);
-    let withheld = budget.hidden_text(&lines, false, &PAGE, |_| true).expect("within the budget");
+    let withheld = budget.hidden_text(&lines, false, &PAGE, |_, _| true).expect("within the budget");
     assert_eq!(withheld.map(|t| t.capacity()), Some(0), "a finding, with no text built for it");
-    assert_eq!(budget.hidden_text(&lines, false, &PAGE, |_| false).expect("within the budget"), None);
-    let copied = budget.hidden_text(&lines, true, &PAGE, |_| true).expect("within the budget");
+    assert_eq!(budget.hidden_text(&lines, false, &PAGE, |_, _| false).expect("within the budget"), None);
+    let copied = budget.hidden_text(&lines, true, &PAGE, |_, _| true).expect("within the budget");
     assert_eq!(copied.as_deref(), Some("SECRET DATA 123"));
 }
 
@@ -874,4 +874,74 @@ fn every_finding_record_counts_against_the_output_bound() {
     assert_eq!(crate::audit(&doc, exact).expect("within the budget").len(), 3);
     let short = crate::Limits { covered_text: 3 * one - 1, ..exact };
     assert!(matches!(crate::audit(&doc, short), Err(crate::AuditError::TooMuchOutput)));
+}
+
+/// Text drawn inside a form XObject is audited like page text (#3218): under a box on the page,
+/// under a box in the same form, two forms deep, and under an unapplied `/Redact` mark. Pages 1
+/// and 5 are the controls with the text in the page content.
+#[test]
+fn text_inside_form_xobjects_is_audited() {
+    const TEXT: &str = "BT /F1 14 Tf 0 10 Td (SECRET 123) Tj ET";
+    const BOX: &str = "0 0 0 rg -2 5 120 25 re f";
+    let pages = [
+        (format!("q 1 0 0 1 72 600 cm {TEXT} {BOX} Q"), false),
+        (format!("q 1 0 0 1 72 600 cm /FmT Do {BOX} Q"), false),
+        ("q 1 0 0 1 72 600 cm /FmTB Do Q".to_string(), false),
+        (format!("q 1 0 0 1 72 600 cm /FmO Do {BOX} Q"), false),
+        (format!("q 1 0 0 1 72 600 cm {TEXT} Q"), true),
+        ("q 1 0 0 1 72 600 cm /FmT Do Q".to_string(), true),
+    ];
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 8 + 2 * i)).collect();
+    b.add(&format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()));
+    b.add(FONT); // 3
+    let form = "/Type /XObject /Subtype /Form /BBox [0 0 300 60]";
+    b.add_stream_with(TEXT.as_bytes(), &format!("{form} /Resources << /Font << /F1 3 0 R >> >>")); // 4: FmT
+    b.add_stream_with(format!("{TEXT} {BOX}").as_bytes(), &format!("{form} /Resources << /Font << /F1 3 0 R >> >>")); // 5: FmTB
+    b.add_stream_with(b"/FmT Do", &format!("{form} /Resources << /XObject << /FmT 4 0 R >> >>")); // 6: FmO
+    b.add("<< /Type /Annot /Subtype /Redact /Rect [70 605 160 630] /QuadPoints [70 630 160 630 70 605 160 605] >>"); // 7
+    for (i, (content, mark)) in pages.iter().enumerate() {
+        let annots = if *mark { " /Annots [7 0 R]" } else { "" };
+        b.add(&format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {} 0 R{annots} /Resources << /Font << /F1 3 0 R >> /XObject << /FmT 4 0 R /FmTB 5 0 R /FmO 6 0 R >> >> >>",
+            9 + 2 * i
+        ));
+        b.add_stream(content.as_bytes());
+    }
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    let got: Vec<(usize, FindingKind, &str)> = findings.iter().map(|f| (f.page, f.kind.clone(), f.covered_text.as_str())).collect();
+    let covered = FindingKind::CoveredText;
+    let mark = FindingKind::UnappliedMark;
+    assert_eq!(
+        got,
+        vec![
+            (0, covered.clone(), "SECRET 123"),
+            (1, covered.clone(), "SECRET 123"),
+            (2, covered.clone(), "SECRET 123"),
+            (3, covered, "SECRET 123"),
+            (4, mark.clone(), "SECRET 123"),
+            (5, mark, "SECRET 123"),
+        ]
+    );
+}
+
+/// A box painted before the form that draws the text lies under it (a background), on the page
+/// or earlier in the same form: not a cover.
+#[test]
+fn box_before_form_text_is_not_a_cover() {
+    for (page, form) in [
+        ("0 g 70 600 120 30 re f /Fm Do", "BT /F1 14 Tf 72 610 Td (SECRET 123) Tj ET"),
+        ("/Fm Do", "0 g 70 600 120 30 re f BT /F1 14 Tf 72 610 Td (SECRET 123) Tj ET"),
+    ] {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R >> >> >>");
+        b.add_stream(page.as_bytes());
+        b.add_stream_with(form.as_bytes(), "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >>");
+        b.add(FONT);
+        let findings = audit_redactions(&open(b.build())).expect("audit must run");
+        assert!(findings.is_empty(), "{page} / {form}: {findings:?}");
+    }
 }
