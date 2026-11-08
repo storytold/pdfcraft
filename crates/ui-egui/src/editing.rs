@@ -219,12 +219,7 @@ impl PdfCraftApp {
                         view.forms.unbaked.extend(unbaked);
                     }
                 } else if let Some(page) = one_page {
-                    // Comment and content edits change one page: keep every other raster. Opening,
-                    // closing or moving a pop-up changes none: the window is drawn over the page, and
-                    // a /Popup annotation paints nothing in the raster (ISO 32000-2 §12.5.6.14).
-                    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
-                        view.page_changed(page);
-                    }
+                    one_page_changed(view, &edit, page);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
@@ -943,6 +938,15 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::DeleteContent { page, .. }
         | Edit::ReplaceImage { page, .. } => Some(*page),
         _ => None,
+    }
+}
+
+/// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
+/// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
+/// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+fn one_page_changed(view: &mut crate::DocView, edit: &Edit, page: usize) {
+    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+        view.page_changed(page);
     }
 }
 
