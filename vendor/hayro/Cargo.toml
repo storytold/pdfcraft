@@ -44,6 +44,11 @@ path = "src/lib.rs"
 name = "render"
 path = "examples/render.rs"
 
+[dependencies.rxing]
+version = "=0.9.3"
+default-features = false
+features = ["oned", "qrcode", "multi_barcode_readers", "encoding_rs"]
+
 [dependencies.bytemuck]
 version = "1"
 features = ["bytemuck_derive"]
