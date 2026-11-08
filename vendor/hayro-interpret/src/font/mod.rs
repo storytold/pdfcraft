@@ -94,6 +94,12 @@ impl Glyph<'_> {
     ///
     /// **For Type3 Fonts:**
     /// 1. `ToUnicode` cmap
+    /// 2. PdfCraft patch: the `/Encoding` glyph name → Unicode (an Annex D.2 alias code reads as
+    ///    the ordinary character)
+    /// 3. PdfCraft patch: a printable ASCII code (32–126) as itself
+    /// 4. PdfCraft patch (100): above 126, a name that only numbers its glyph (`C174`) as the
+    ///    code's Latin-1 character, when the number is that code and every numbered name in the
+    ///    font names its own code
     ///
     /// Returns `None` if the Unicode value could not be determined.
     ///
@@ -146,7 +152,9 @@ impl OutlineGlyph {
         }
     }
 
-    /// Returns the Unicode code point for this glyph, if available.
+    /// Returns the Unicode code point for this glyph, if available: the `ToUnicode` cmap, then
+    /// the `/Encoding` glyph name, a printable ASCII code, and a numbered glyph name at its own
+    /// code (PdfCraft patches).
     ///
     /// See [`Glyph::as_unicode`] for details on the fallback chain used.
     pub fn as_unicode(&self) -> Option<BfString> {
