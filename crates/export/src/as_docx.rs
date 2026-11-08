@@ -31,15 +31,20 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> 
     format!("<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>", esc(text))
 }
 
-/// One Word table: explicit absent borders (alignment alone cannot prove PDF rules), a grid sized
-/// from the detected column edges, `gridSpan` for spanning cells, empty cells for holes.
+/// One Word table: single borders when the page's rules draw its grid, explicit absent borders
+/// otherwise (alignment alone cannot prove PDF rules), a grid sized from the detected column
+/// edges, `gridSpan` for spanning cells, empty cells for holes.
 pub(crate) fn docx_table(t: &Table) -> String {
     let mut edges = t.cols.clone();
     edges.push(t.rect[2]);
     let widths: Vec<i64> = edges.windows(2).map(|w| ((w[1] - w[0]).max(20.0) * 20.0).round().clamp(60.0, 31680.0) as i64).collect();
     let mut s = String::from("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>");
     for edge in ["top", "left", "bottom", "right", "insideH", "insideV"] {
-        s.push_str(&format!("<w:{edge} w:val=\"nil\"/>"));
+        if t.ruled {
+            s.push_str(&format!("<w:{edge} w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"));
+        } else {
+            s.push_str(&format!("<w:{edge} w:val=\"nil\"/>"));
+        }
     }
     s.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
     for w in &widths {

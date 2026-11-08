@@ -43,6 +43,9 @@ pub struct Page {
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.
     pub background: Option<[f64; 3]>,
+    /// The ruled lines the page draws (horizontal and vertical strokes, thin filled bars), each
+    /// as its box [x0, y0, x1, y1] on the displayed page in points (y up).
+    pub rules: Vec<[f64; 4]>,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -65,6 +68,9 @@ pub struct Table {
     pub rect: [f64; 4],
     pub cols: Vec<f64>,
     pub rows: Vec<Vec<Cell>>,
+    /// Whether the page's ruled lines separate every pair of neighbouring cells, so the writers
+    /// can draw the table's borders.
+    pub ruled: bool,
 }
 
 /// What goes into the output, in order.
@@ -248,10 +254,72 @@ fn is_cell_like(b: &Block) -> bool {
     (b.rect[3] - b.rect[1]) <= b.size * 5.0 && !b.text.trim().is_empty()
 }
 
+/// A rule at most this thick (points) is a line, not a filled area.
+const RULE_THICK: f64 = 3.0;
+
+/// Rule comparisons one page may spend deciding whether its tables are ruled; past it a table
+/// counts as unruled, so a hostile page of many rules and cells stays quick.
+const RULE_BUDGET: usize = 4_000_000;
+
+/// Whether `rules` separate every pair of neighbouring cells of a table whose rows are `rows`
+/// (block indices, top to bottom) and whose columns start at `edges` and end at `right`: between
+/// two columns a vertical rule beside each row (unless a cell of that row spans across), and
+/// between two rows a horizontal rule under each column. Every check spends `budget`.
+fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64], right: f64, budget: &mut usize) -> bool {
+    let vertical: Vec<&[f64; 4]> = rules.iter().filter(|r| r[2] - r[0] <= RULE_THICK && r[3] - r[1] > RULE_THICK).collect();
+    let horizontal: Vec<&[f64; 4]> = rules.iter().filter(|r| r[3] - r[1] <= RULE_THICK && r[2] - r[0] > RULE_THICK).collect();
+    let mut find = |set: &[&[f64; 4]], hit: &dyn Fn(&[f64; 4]) -> bool| -> bool {
+        set.iter().any(|r| {
+            *budget = budget.saturating_sub(1);
+            *budget > 0 && hit(r)
+        })
+    };
+    // Each row's vertical span.
+    let spans: Vec<[f64; 2]> = rows
+        .iter()
+        .map(|row| {
+            let bs = || row.iter().filter_map(|&i| blocks.get(i));
+            [bs().map(|b| b.rect[1]).fold(f64::INFINITY, f64::min), bs().map(|b| b.rect[3]).fold(f64::NEG_INFINITY, f64::max)]
+        })
+        .collect();
+    for (row, span) in rows.iter().zip(&spans) {
+        let mid = (span[0] + span[1]) / 2.0;
+        for pair in edges.windows(2) {
+            let (lo, hi) = (pair[0], pair[1]);
+            let cells = || row.iter().filter_map(|&i| blocks.get(i));
+            if cells().any(|b| b.rect[0] < hi - COL_TOL && b.rect[2] > hi + COL_TOL) {
+                continue;
+            }
+            let clear = |x: f64| !cells().any(|b| b.rect[0] + COL_TOL < x && x < b.rect[2] - COL_TOL);
+            if !find(&vertical, &|r| {
+                let x = (r[0] + r[2]) / 2.0;
+                lo + COL_TOL < x && x <= hi + COL_TOL && r[1] <= mid && mid <= r[3] && clear(x)
+            }) {
+                return false;
+            }
+        }
+    }
+    let mids: Vec<f64> = edges.iter().zip(edges.iter().skip(1).chain(std::iter::once(&right))).map(|(a, b)| (a + b) / 2.0).collect();
+    for pair in spans.windows(2) {
+        let (below_top, above_bottom) = (pair[1][1], pair[0][0]);
+        for &x in &mids {
+            if !find(&horizontal, &|r| {
+                let y = (r[1] + r[3]) / 2.0;
+                below_top - COL_TOL <= y && y <= above_bottom + COL_TOL && r[0] <= x && x <= r[2]
+            }) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Detect tables in a page's blocks from their text layout: columns are left edges shared by
-/// several short blocks, rows are blocks whose vertical spans overlap. Returns the tables and,
+/// several short blocks, rows are blocks whose vertical spans overlap. Two columns of two rows
+/// are a table only when `rules` (the page's ruled lines) draw its grid. Returns the tables and,
 /// per block, whether a table consumed it (so `items` can drop it from the paragraph flow).
-pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
+pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<bool>) {
+    let mut budget = RULE_BUDGET;
     let mut consumed = vec![false; blocks.len()];
     // Candidate columns: cluster the left edges of cell-like blocks.
     let mut xs: Vec<(f64, usize)> = blocks.iter().enumerate().filter(|(_, b)| is_cell_like(b)).map(|(i, b)| (b.rect[0], i)).collect();
@@ -313,7 +381,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     }
     // Runs of consecutive rows that have two or more distinct columns are tables.
     let mut out = Vec::new();
-    let flush = |run: &mut Vec<Vec<(usize, usize)>>, out: &mut Vec<Table>, consumed: &mut Vec<bool>| {
+    let flush = |run: &mut Vec<Vec<(usize, usize)>>, out: &mut Vec<Table>, consumed: &mut Vec<bool>, budget: &mut usize| {
         if run.len() < 2 {
             run.clear();
             return;
@@ -325,12 +393,16 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         edges.sort_by(f64::total_cmp);
         edges.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         let ncols = edges.len();
-        let ok = (ncols >= 3 || (ncols == 2 && run.len() >= 3)) && ncols <= MAX_COLS;
+        let right = used.iter().map(|&i| blocks[i].rect[2]).fold(f64::MIN, f64::max) + COL_TOL;
+        let is_ruled = (2..=MAX_COLS).contains(&ncols) && !rules.is_empty() && {
+            let row_blocks: Vec<Vec<usize>> = run.iter().map(|row| row.iter().map(|(_, i)| *i).collect()).collect();
+            ruled(blocks, rules, &row_blocks, &edges, right, budget)
+        };
+        let ok = (ncols >= 3 || (ncols == 2 && (run.len() >= 3 || is_ruled))) && ncols <= MAX_COLS;
         if !ok {
             run.clear();
             return;
         }
-        let right = used.iter().map(|&i| blocks[i].rect[2]).fold(f64::MIN, f64::max) + COL_TOL;
         let mut rows_out = Vec::new();
         let mut slots: Vec<Option<(Cell, Vec<usize>)>> = vec![None; ncols];
         for row in run.drain(..) {
@@ -385,7 +457,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
             right,
             used.iter().map(|&i| blocks[i].rect[3]).fold(f64::MIN, f64::max),
         ];
-        out.push(Table { rect, cols: edges, rows: rows_out });
+        out.push(Table { rect, cols: edges, rows: rows_out, ruled: is_ruled });
     };
     // Runs of consecutive multi-column rows are tables. Rows on either side of a run that
     // hold a single cell wide enough to span two columns (a header band, a totals row) join
@@ -436,7 +508,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         if end < rows.len() && rows[end].len() == 1 && spans_run(&run_edges(&rows[start..end]), rows[end][0].1) {
             pieces.push(rows[end].clone());
         }
-        flush(&mut pieces, &mut out, &mut consumed);
+        flush(&mut pieces, &mut out, &mut consumed, &mut budget);
     }
     (out, consumed)
 }
@@ -448,7 +520,7 @@ pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
         if i > 0 {
             out.push(Item::PageBreak);
         }
-        let (tables, consumed) = tables(&p.blocks);
+        let (tables, consumed) = tables(&p.blocks, &p.rules);
         // Blocks and images by their top edge, top to bottom.
         // A paragraph sits where its first run does: its other runs follow along the same line.
         let mut parts: Vec<(f64, f64, Item)> = paragraphs(&p.blocks, &consumed)
