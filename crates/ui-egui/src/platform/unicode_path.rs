@@ -15,10 +15,12 @@
 //! entry, tries its NFC and NFD forms. Both directions are covered — NFD delivered with NFC
 //! stored, the reverse, and any mix along the chain, so per-component resolution is required
 //! where one form for the whole path would not do. A path that exists as delivered is returned
-//! untouched, keeping the exact bytes the caller got. Where a later component matches in no
-//! form, the walk goes back and tries the next form of the one before. It makes at most three
-//! times as many lookups as the path has components, after the one for the path as delivered;
-//! past that, the path counts as not found.
+//! untouched, keeping the exact bytes the caller got. One that ends in a separator, or in a `.`
+//! after one, is not walked: only a folder satisfies such a path, and the walk rebuilds the path
+//! from its components, which drop that ending, so it could return a file of that name instead.
+//! Where a later component matches in no form, the walk goes back and tries the next form of the
+//! one before. It makes at most three times as many lookups as the path has components, after
+//! the one for the path as delivered; past that, the path counts as not found.
 
 use std::path::{Path, PathBuf};
 
@@ -26,8 +28,9 @@ use unicode_normalization::UnicodeNormalization;
 
 /// The existing file or directory `delivered` names, with each component tried in its NFC and
 /// NFD forms where the delivered form matches nothing, or leads to no match further down (see
-/// the module docs). `None` when no variant of the path is found: the caller keeps the
-/// delivered path, so the error it reports names what the operating system actually sent.
+/// the module docs). `None` when no variant of the path is found, or the path is one the walk
+/// leaves alone: the caller keeps the delivered path, so the error it reports names what the
+/// operating system actually sent.
 pub(crate) fn resolve(delivered: &str) -> Option<String> {
     resolve_with(delivered, Path::exists)
 }
@@ -45,7 +48,11 @@ fn resolve_with(delivered: &str, exists: impl Fn(&Path) -> bool) -> Option<Strin
     // the function total without an `expect`.
     let names = path.components().map(|c| c.as_os_str().to_str()).collect::<Option<Vec<_>>>()?;
     // Only the empty path has no components, and it names nothing to open.
-    if names.is_empty() {
+    let last = names.last()?;
+    // `components` drops a separator or `.` at the end, so where the path does not end in its
+    // last name, the path rebuilt from `names` can be a file where only a folder will do:
+    // `doc.pdf/` fails where `doc.pdf` is a file, and the walk would return that file.
+    if !delivered.ends_with(last) {
         return None;
     }
     // Three lookups for each component, shared by the whole walk: the most a walk keeping the
@@ -133,9 +140,9 @@ mod tests {
     /// Whether the filesystem under `dir` tells the forms apart: a lookup in one form misses a
     /// name stored in the other. The APFS and HFS+ volumes macOS 13.3 makes, case-sensitive or
     /// not, fold the forms instead, and there a delivered name opens the file as it arrives; the
-    /// tests on the real filesystem then demand only that the file opens, and on a volume that
-    /// tells the forms apart, the resolution itself. The walk is checked on every volume by the
-    /// tests on [`Volume`].
+    /// real-filesystem tests that call it then demand only that the file opens, and on a volume
+    /// that tells the forms apart, the resolution itself. The walk is checked on every volume by
+    /// the tests on [`Volume`].
     fn tells_forms_apart(dir: &std::path::Path) -> bool {
         std::fs::write(dir.join(NFC), b"").unwrap();
         let apart = !dir.join(NFD).exists();
@@ -245,6 +252,29 @@ mod tests {
         assert_eq!(resolve(""), None);
     }
 
+    /// A file with `/`, `//` or `/.` after its name resolves to `None`, in either form of the
+    /// name, on any Unix volume (POSIX gives `ENOTDIR` there; run here on APFS): a regular file
+    /// does not exist under that path, and the file without the ending is not offered instead. A
+    /// folder with `/` after its name exists as delivered and comes back unchanged. Unix only:
+    /// what Windows does with such a path was not checked.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_a_separator_after_its_name_resolves_to_nothing() {
+        let dir = TempDir::new("trailing");
+        std::fs::write(dir.0.join("doc.pdf"), b"pdf").unwrap();
+        std::fs::write(dir.0.join(format!("{NFC}.pdf")), b"pdf").unwrap();
+        std::fs::create_dir(dir.0.join(NFC)).unwrap();
+        let base = dir.0.to_str().unwrap();
+        for name in ["doc.pdf".to_owned(), format!("{NFC}.pdf"), format!("{NFD}.pdf")] {
+            for ending in ["/", "//", "/."] {
+                let delivered = format!("{base}/{name}{ending}");
+                assert_eq!(resolve(&delivered), None, "{delivered:?}");
+            }
+        }
+        let folder = format!("{base}/{NFC}/");
+        assert_eq!(resolve(&folder).as_deref(), Some(folder.as_str()), "a folder that exists as delivered");
+    }
+
     /// On a volume that tells the forms apart, a name delivered in one form is found in the
     /// form it is stored in, both ways round: NFD delivered for an NFC name (the 'odoc' case)
     /// needs the NFC form tried, and the reverse the NFD form. Each form is looked up once.
@@ -285,6 +315,27 @@ mod tests {
         let delivered = format!("{}{MAIN_SEPARATOR_STR}{MAIN_SEPARATOR_STR}doc.pdf", root().join(NFD).display());
         assert_eq!(volume.resolve(Path::new(&delivered)).as_deref(), Some(delivered.as_str()));
         assert_eq!(volume.probes.get(), 1, "one lookup, of the path as delivered");
+    }
+
+    /// A path ending in a separator, or in a `.` after one, is not walked, though the same path
+    /// without that ending is found in the other form: the walk rebuilds the path from its
+    /// components, which drop the ending, and would return a file where only a folder will do.
+    /// One lookup, of the path as delivered. A name that itself ends in a `.` ends in its last
+    /// component and is still walked.
+    #[test]
+    fn a_path_ending_in_a_separator_is_not_walked() {
+        let volume = Volume::holding(&[root().join(NFC)]);
+        assert_eq!(volume.resolve(&root().join(NFD)), Some(root().join(NFC).to_string_lossy().into_owned()));
+        for ending in [MAIN_SEPARATOR_STR.to_owned(), format!("{MAIN_SEPARATOR_STR}.")] {
+            let delivered = format!("{}{ending}", root().join(NFD).display());
+            volume.probes.set(0);
+            assert_eq!(volume.resolve(Path::new(&delivered)), None, "{delivered:?}");
+            assert_eq!(volume.probes.get(), 1, "one lookup, of the path as delivered");
+        }
+        // A name that ends in a `.` ends in its last component, and is walked.
+        let dotted = Volume::holding(&[root().join(format!("{NFC}."))]);
+        let found = dotted.resolve(&root().join(format!("{NFD}.")));
+        assert_eq!(found, Some(root().join(format!("{NFC}.")).to_string_lossy().into_owned()), "a name ending in a `.`");
     }
 
     /// Where both forms of a folder name exist side by side, a file that only the second form
