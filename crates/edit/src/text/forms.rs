@@ -4,13 +4,11 @@
 //! source glyph operators become page content; no cover rectangle or replacement text box is
 //! added. Unsupported compositing and malformed streams stay intact.
 
-mod expand;
-
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, Object};
 
 use super::{ContentStream, Read, content_streams, joined, page_dict, rewritten_contents, splice};
-use crate::EditError;
+use crate::{EditError, ungroup};
 
 /// Result of preparing one page. Refused groups remain in the page, with an actionable reason.
 #[derive(Clone, Debug, Default)]
@@ -31,7 +29,7 @@ struct Inlined {
     /// Where each inlined form's operators are: the placements in them are new.
     ranges: Vec<std::ops::Range<usize>>,
     /// Earlier placements refused only because their resources needed renaming
-    /// ([`expand::Refusal::renaming`]), each with the reason it was given.
+    /// ([`crate::ungroup::Refusal::renaming`]), each with the reason it was given.
     waiting: Vec<(usize, String)>,
 }
 
@@ -74,7 +72,7 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
         };
         let mut still_waiting = Vec::new();
         let resources = p.dict.get(b"Resources").map(|r| next.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-        let space = expand::page_blend_space(&next, &p.dict);
+        let space = ungroup::page_blend_space(&next, &p.dict);
         let images: std::collections::BTreeMap<_, _> =
             crate::page_images(&next, page)?.into_iter().filter(|i| i.is_form).map(|i| (i.op, i)).collect();
         let mut replacements = std::collections::BTreeMap::new();
@@ -104,7 +102,7 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
             if earlier {
                 let Some(w) = waiting.iter().position(|(i, _)| *i == at) else { continue };
                 let (_, reason) = waiting.swap_remove(w);
-                if pass == MAX_LEVELS || !expand::merges_without_renaming(&next, &merged, &name) {
+                if pass == MAX_LEVELS || !ungroup::merges_without_renaming(&next, &merged, &name) {
                     still_waiting.push((at, reason));
                     continue;
                 }
@@ -129,14 +127,22 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
                     return Err(EditError::Invalid("too many grouped text placements on this page (limit 64); the page was left unchanged".into()));
                 }
             }
-            let translucent = expand::translucent_at(&next, &merged, &ops, at);
-            match expand::ungroup_ops(&next, &merged, &name, translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
-                Ok(expand::Ungrouped { ops: inline, resources: mut res, patterns, shows_text }) => {
+            let translucent = ungroup::translucent_at(&next, &merged, &ops, at);
+            match ungroup::ungroup_ops(&next, &merged, &name, translucent, space.as_ref(), Matrix(image.matrix), &mut decode) {
+                Ok(ungroup::Ungrouped { ops: inline, resources: mut res, patterns, shows_text }) => {
                     // Vector and image artwork needs no preparation. Nested text groups are
                     // visited on the next pass, with their inherited placement and clip in force.
-                    if !shows_text {
-                        settled.extend(image.object);
-                        continue;
+                    match shows_text {
+                        Some(true) => {}
+                        Some(false) => {
+                            settled.extend(image.object);
+                            continue;
+                        }
+                        // Whether it has text can't be known: it is left as it is, and said.
+                        None => {
+                            result.refused.push(format!("{}: it draws recursive forms, or nested content that can't be checked", image.name));
+                            continue;
+                        }
                     }
                     if pass == MAX_LEVELS {
                         result.refused.push(format!("{}: its text is grouped more than {MAX_LEVELS} levels deep", image.name));

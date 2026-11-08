@@ -1670,8 +1670,11 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
             let res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
             let translucent = crate::ungroup::translucent_at(doc, &res, &ops, img.op);
             let space = crate::ungroup::page_blend_space(doc, &p.dict);
-            let (inline, mut merged, patterns) =
-                crate::ungroup::ungroup_ops(doc, &res, img.name.as_bytes(), translucent, space.as_ref(), Matrix(img.matrix))?;
+            // One allowance for the form and everything it draws.
+            let mut budget = pdfcraft_cos::DecodeBudget::new(crate::ungroup::MAX_FORM_BYTES, 0);
+            let crate::ungroup::Ungrouped { ops: inline, resources: mut merged, patterns, .. } =
+                crate::ungroup::ungroup_ops(doc, &res, img.name.as_bytes(), translucent, space.as_ref(), Matrix(img.matrix), &mut budget)
+                    .map_err(|r| r.error)?;
             if !patterns.is_empty() {
                 let mut table = merged.get(b"Pattern").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
                 for (name, copy) in patterns {

@@ -11958,6 +11958,27 @@ fn ungroup_reads_each_nested_form_once_and_within_a_ceiling() {
     assert!(matches!(many, Err(EditError::Invalid(ref m)) if m.contains("blend")), "{many:?}");
 }
 
+/// The forms a group draws are read within one allowance shared with the group itself, not 64 MiB
+/// each: 70 forms that each inflate to 1 MiB are past it, so the group can't be checked and is
+/// refused instead of being decoded 70 MiB deep (or, with 1024 of them, 64 GiB).
+#[test]
+fn ungroup_reads_what_a_group_draws_within_one_allowance() {
+    let r = ungroup_art(&(0..70).map(|i| format!("/F{i} Do ")).collect::<String>().into_bytes(), true, |doc| {
+        let mut xo = Dict::new();
+        for i in 0..70 {
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            d.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
+            xo.set(format!("F{i}").into_bytes(), Object::Ref(doc.add(Object::Stream(Stream::flate(d, &vec![b' '; 1 << 20])))));
+        }
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+        res
+    });
+    assert!(matches!(r, Err(EditError::Invalid(ref m)) if m.contains("can't be checked")), "{r:?}");
+}
+
 /// A transparency group that draws a nested form whose content can't be read is refused: what
 /// it blends can't be known, so it isn't guessed.
 #[test]
@@ -12722,39 +12743,32 @@ fn grouped_text_preparation_keeps_unsafe_compositing_paths_and_malformed_forms_i
     }
 }
 
-/// A form whose content gives an operator a surplus operand (`0 /Inner Do`) is left grouped. The
-/// renderer draws the last operand, while the inlined copy's resources are renamed at a fixed
-/// position: the inner artwork would lose its resource and silently vanish.
+/// A form whose content gives an operator a surplus operand (`0 /Inner Do`) is prepared as Ungroup
+/// draws it: the renderer draws the last operand, and that is the one renamed with the inner
+/// artwork's resource, so every drawn name still resolves.
 #[test]
-fn grouped_text_with_surplus_resource_operands_is_left_grouped() {
+fn grouped_text_with_a_surplus_resource_operand_renames_the_operand_drawn() {
     let form = |body: &str| {
         stream("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Inner 7 0 R >> >>", body)
     };
-    let objs = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Body 6 0 R >> >> /Contents 4 0 R >>"
-            .to_string(),
-        stream("", "/Body Do"),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-        form("BT /F1 14 Tf 40 500 Td (body) Tj ET 0 /Inner Do"),
-        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >>", "0 0 10 10 re f"),
-    ];
-    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
-    let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-    let result = text::forms::prepare(&mut doc, 0).unwrap();
-    assert_eq!(result.expanded, 0);
-    assert!(result.refused.iter().any(|r| r.starts_with("Body: ")), "{:?}", result.refused);
-    assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
-    // The same form with well-formed operands is prepared, its inner artwork renamed with it.
-    let objs: Vec<String> =
-        objs.iter().enumerate().map(|(i, o)| if i == 5 { form("BT /F1 14 Tf 40 500 Td (body) Tj ET /Inner Do") } else { o.clone() }).collect();
-    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
-    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 1);
-    let page = &pdfcraft_model::pages(&doc)[0];
-    let xobjects = page.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"XObject").and_then(|x| doc.dict(x))).unwrap();
-    for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.iter().filter(|op| op.is("Do")) {
-        assert!(xobjects.contains(op.last_name().unwrap()), "every drawn name resolves: {op:?}");
+    for body in ["BT /F1 14 Tf 40 500 Td (body) Tj ET 0 /Inner Do", "BT /F1 14 Tf 40 500 Td (body) Tj ET /Inner Do"] {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Body 6 0 R >> >> /Contents 4 0 R >>"
+                .to_string(),
+            stream("", "/Body Do"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            form(body),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >>", "0 0 10 10 re f"),
+        ];
+        let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 1, "{body}");
+        let page = &pdfcraft_model::pages(&doc)[0];
+        let xobjects = page.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"XObject").and_then(|x| doc.dict(x))).unwrap();
+        for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.iter().filter(|op| op.is("Do")) {
+            assert!(xobjects.contains(op.last_name().unwrap()), "every drawn name resolves: {op:?}");
+        }
     }
 }
 
@@ -12795,14 +12809,14 @@ fn grouped_image_artwork_is_not_prepared() {
     assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "inner"));
 }
 
-/// Artwork and groups refused for what they are (knockout groups, content with an operand too
-/// many) are read once, not again on every pass: 10 logo forms and 30 such groups beside a text
+/// Artwork and groups refused for what they are (knockout groups, content that restores more
+/// graphics states than it saves) are read once, not again on every pass: 10 logo forms and 30 such groups beside a text
 /// group are 41 reads, within the 64-placement limit, where reading either again on the second
 /// pass would pass it and prepare nothing.
 #[test]
 fn artwork_and_refused_groups_count_once_against_the_placement_limit() {
     for knockout in [true, false] {
-        let refused_body = if knockout { "BT /F1 14 Tf 40 500 Td (kept) Tj ET" } else { "BT /F1 14 Tf 40 500 Td (kept) Tj ET 0 /Im Do" };
+        let refused_body = if knockout { "BT /F1 14 Tf 40 500 Td (kept) Tj ET" } else { "BT /F1 14 Tf 40 500 Td (kept) Tj ET Q" };
         let mut forms: Vec<(String, String)> = (1..=10).map(|i| (format!("Logo{i}"), "q 10 0 0 10 0 0 cm /Im Do Q".to_string())).collect();
         forms.extend((1..=30).map(|i| (format!("Refused{i}"), refused_body.to_string())));
         forms.push(("Body".into(), "BT /F1 14 Tf 40 300 Td (body) Tj ET".into()));
@@ -12932,26 +12946,27 @@ fn grouped_text_under_a_non_utf8_resource_name_is_prepared() {
     assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "named"));
 }
 
-/// A transparency group that blends in DeviceRGB composites as the page does only on a page
-/// whose own group says DeviceRGB too. On a page that names no blending space the processor
-/// chooses one (often CMYK in print), so inlining could change colours: that group is refused.
+/// Preparation follows Ungroup's rule for a transparency group that blends in DeviceRGB: it
+/// composites as the page does on a page whose own group says DeviceRGB, or that names no
+/// blending space (DeviceRGB on screen), and is prepared there; on a page that blends in CMYK it
+/// is refused.
 #[test]
 fn grouped_text_in_an_rgb_group_needs_a_page_that_blends_in_rgb() {
-    for page_group in [false, true] {
+    for page_space in [None, Some("DeviceRGB"), Some("DeviceCMYK")] {
         let mut doc = page_with_forms("/Body Do", &[("Body".into(), "0 0 0 1 k BT /F1 14 Tf 40 500 Td (body) Tj ET".into())]);
-        let group = || build(&["<< /S /Transparency /CS /DeviceRGB >>"]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+        let group = |cs: &str| build(&[&format!("<< /S /Transparency /CS /{cs} >>")]).get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
         let Object::Stream(mut s) = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).as_ref().clone() else { panic!("fixture") };
-        s.dict.set(b"Group".to_vec(), Object::Dict(group()));
+        s.dict.set(b"Group".to_vec(), Object::Dict(group("DeviceRGB")));
         doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(s));
-        if page_group {
-            doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Group".to_vec(), Object::Dict(group()))).unwrap();
+        if let Some(cs) = page_space {
+            doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Group".to_vec(), Object::Dict(group(cs)))).unwrap();
         }
         let result = text::forms::prepare(&mut doc, 0).unwrap();
-        if page_group {
-            assert_eq!((result.expanded, result.refused.len()), (1, 0), "{:?}", result.refused);
-        } else {
+        if page_space == Some("DeviceCMYK") {
             assert_eq!(result.expanded, 0);
             assert!(result.refused.iter().any(|r| r.contains("colour space of its own")), "{:?}", result.refused);
+        } else {
+            assert_eq!((result.expanded, result.refused.len()), (1, 0), "{page_space:?}: {:?}", result.refused);
         }
     }
 }
