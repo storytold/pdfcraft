@@ -369,7 +369,7 @@ impl Session {
             opts.date = self.signing_date();
         }
         // A typed Password-field value is not signed into the file (#3926), as it isn't saved.
-        let cos = writable(&editor.cos)?;
+        let cos = drawn_for_first_signature(writable(&editor.cos)?);
         Ok(Arc::new(pdfcraft_sign::sign(&cos, id, &opts)?))
     }
 
@@ -387,7 +387,7 @@ impl Session {
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
-        let cos = writable(&editor.cos)?;
+        let cos = drawn_for_first_signature(writable(&editor.cos)?);
         let signed = Arc::new(pdfcraft_sign::sign_with_timestamp(&cos, id, &opts, tsa)?);
         // Checked like a save before anyone writes it (#2166).
         self.check_save(doc, &signed)?;
@@ -428,4 +428,79 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// `cos` with its form fields drawn, when the signature about to be made is the document's first
+/// and the form sets `/NeedAppearances` (#5939). That signature removes the flag, after which
+/// viewers show each field's stored appearance; a filled field whose stored appearance draws no
+/// text (an empty placeholder such as `/Tx BMC EMC`, or a stale look) would go blank. So every
+/// text and choice field is drawn from its value first, as the document is displayed
+/// ([`pdfcraft_forms::with_field_appearances`]), and the signature covers that look.
+///
+/// One exception: where PdfCraft's drawing would show a character as `?` (the field's font can't
+/// hold it) and the field's own appearance draws text, the field keeps its own appearance, which
+/// the program that filled it drew with a font that has the character. A field whose own
+/// appearance draws no text gets PdfCraft's drawing, `?` and all. Later signatures change
+/// nothing here: redrawing would count as a change to the earlier signatures.
+fn drawn_for_first_signature(cos: std::borrow::Cow<'_, pdfcraft_cos::Document>) -> std::borrow::Cow<'_, pdfcraft_cos::Document> {
+    use pdfcraft_forms::FieldKind;
+    if !pdfcraft_forms::need_appearances(&cos) || pdfcraft_sign::has_signatures(&cos) {
+        return cos;
+    }
+    let Some(mut drawn) = pdfcraft_forms::with_field_appearances(&cos) else { return cos };
+    for f in pdfcraft_forms::fields(&cos) {
+        if !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+            continue;
+        }
+        for w in &f.widgets {
+            let own = cos.get(w.obj).as_dict().filter(|d| draws_text(&cos, d)).and_then(|d| d.get(b"AP").cloned());
+            // `.1`: the first character the drawing showed as `?`.
+            if let Some(ap) = own
+                && pdfcraft_forms::appearance::field_appearance_drawn(&cos, &f, w, &f.value, true).1.is_some()
+            {
+                drawn.update_dict(w.obj, |d| d.set(b"AP".to_vec(), ap)).ok();
+            }
+        }
+    }
+    std::borrow::Cow::Owned(drawn)
+}
+
+/// Whether the widget's normal appearance stream (`/AP /N`) shows text, itself or through the
+/// form XObjects it paints (a background-only one doesn't count).
+fn draws_text(cos: &pdfcraft_cos::Document, widget: &pdfcraft_cos::Dict) -> bool {
+    let ap = widget.get(b"AP").map(|ap| cos.resolve(ap));
+    let normal = ap.as_deref().and_then(|ap| ap.as_dict()).and_then(|ap| ap.get(b"N")).map(|n| cos.resolve(n));
+    let Some(pdfcraft_cos::Object::Stream(s)) = normal.as_deref() else { return false };
+    stream_draws_text(cos, s, &mut 16)
+}
+
+/// Whether the form stream `s` shows text, following `Do` into its form XObjects. `budget` caps
+/// the streams opened along the way; running out (deep nesting, a cycle, many XObjects) counts
+/// as text, so the field keeps its own appearance as it would without the look inside.
+fn stream_draws_text(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, budget: &mut u8) -> bool {
+    let Ok(data) = s.decoded() else { return false };
+    let resources = s.dict.get(b"Resources").map(|r| cos.resolve(r));
+    let xobjects = resources.as_deref().and_then(|r| r.as_dict()).and_then(|r| r.get(b"XObject")).map(|x| cos.resolve(x));
+    for op in pdfcraft_content::ops(&data) {
+        match op.op.as_slice() {
+            b"Tj" | b"TJ" | b"'" | b"\"" => return true,
+            b"Do" => {
+                let name = op.operands.first().and_then(|n| n.as_name());
+                let x = name.and_then(|n| xobjects.as_deref().and_then(|x| x.as_dict()).and_then(|x| x.get(n))).map(|x| cos.resolve(x));
+                let Some(pdfcraft_cos::Object::Stream(f)) = x.as_deref() else { continue };
+                if f.dict.name(b"Subtype") != Some(b"Form") {
+                    continue;
+                }
+                if *budget == 0 {
+                    return true;
+                }
+                *budget -= 1;
+                if stream_draws_text(cos, f, budget) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }

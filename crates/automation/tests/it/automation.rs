@@ -4819,6 +4819,34 @@ fn redacting_through_tools() {
 }
 
 #[test]
+fn redacting_with_a_caller_regex_through_tools() {
+    let dir = workdir("redact-regex");
+    std::fs::write(
+        dir.join("ids.txt"),
+        "Ref 1 85 05 78 006 084 36 end\nRef 2 91 12 34 567 890 12 end\nCard 4539 1488 0343 6467 and 4539 1488 0343 6468",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "ids.txt" }))["doc"].as_u64().unwrap();
+    let bad = |a: &mut Automation, args: Value| matches!(a.call("redact_mark", &args), Err(ToolError::InvalidArgs(_)));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "(unclosed" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "a*" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x".repeat(2000) })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x", "pattern": "ssn" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x", "validate": "crc" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "x", "validate": "luhn" })));
+    assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "regex": "Z{3}" })), Err(ToolError::Failed(_))));
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d \d\d \d\d \d\d \d{3} \d{3} \d\d" }));
+    assert_eq!(r["marked"].as_u64(), Some(2));
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d{4}( \d{4}){3}", "validate": "luhn" }));
+    assert_eq!(r["marked"].as_u64(), Some(1), "only the number with a valid checksum");
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("85 05") && !text.contains("91 12") && !text.contains("6467"), "{text}");
+    assert!(text.contains("6468"), "{text}");
+}
+
+#[test]
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
 fn redacting_italian_international_slash_numbers_through_tools() {
     let dir = workdir("redact-italian-international-slash");
@@ -7605,6 +7633,63 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
 }
 
 #[test]
+fn optimizing_to_a_target_size() {
+    // Dropped at the end of the test, also when an assertion fails.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let (w, h) = (2400u32, 1600u32);
+    let px: Vec<u8> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [(x * 255 / w) as u8 ^ ((x * y) & 15) as u8, (y * 255 / h) as u8, ((x + y) & 255) as u8]
+        })
+        .collect();
+    let mut jpeg = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95);
+    enc.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(600));
+    enc.encode(&px, w, h, image::ExtendedColorType::Rgb8).unwrap();
+    std::fs::write(dir.join("photo.jpg"), &jpeg).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
+    // Without a target nothing changes: no target fields.
+    let base = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "base.pdf" }));
+    assert!(base.get("target_reached").is_none(), "{base}");
+    let base_len = base["bytes_after"].as_u64().unwrap();
+    // A target below the default result is met by a stronger step.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "fit.pdf", "target_bytes": base_len - 1 }));
+    assert_eq!(r["target_reached"], true, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < base_len, "{r}");
+    assert!(r["target_settings"]["step"].as_u64().unwrap() >= 1, "{r}");
+    assert_eq!(std::fs::metadata(dir.join("fit.pdf")).unwrap().len(), r["bytes_after"].as_u64().unwrap());
+    // A target already met by the first attempt tries nothing more.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "easy.pdf", "target_bytes": base_len }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(true), Some(1)), "{r}");
+    // An impossible target: bounded attempts, smallest copy written, said plainly.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "tiny.pdf", "target_bytes": 1 }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(false), Some(6)), "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < base_len, "{r}");
+    assert!(std::fs::metadata(dir.join("tiny.pdf")).is_ok());
+    // The open document is untouched by the failed attempts, and bad targets are refused.
+    let again = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "again.pdf" }));
+    assert_eq!(again["bytes_after"].as_u64().unwrap(), base_len);
+    assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "target_bytes": 0 })), Err(ToolError::InvalidArgs(_))));
+    // A caller who asked for lossless images keeps them: retries only tighten the ppi, no JPEG quality.
+    let lossless = json!({ "compression": "zip" });
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "zip.pdf", "color": lossless, "gray": lossless, "target_bytes": 1 }));
+    assert_eq!(r["attempts"].as_u64(), Some(6), "{r}");
+    assert!(r["target_settings"]["max_ppi"].is_number() && r["target_settings"]["max_jpeg_quality"].is_null(), "{r}");
+    // A JPEG caller gets the quality step.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jpg.pdf", "target_bytes": 1 }));
+    assert!(r["target_settings"]["max_jpeg_quality"].is_number(), "{r}");
+    // Settings already at the ladder's floor leave every rung equal to the first run: no retries.
+    let floor = json!({ "ppi": 9, "above_ppi": 9, "compression": "jpeg", "quality": 1 });
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "floor.pdf", "color": floor, "gray": floor, "target_bytes": 1 }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(false), Some(1)), "{r}");
+    // Confinement still applies.
+    assert!(a.call("doc_optimize", &json!({ "doc": doc, "path": "../out.pdf", "target_bytes": 1000 })).is_err());
+}
+
+#[test]
 fn initial_view_through_tools() {
     let dir = workdir("initial-view");
     let mut a = auto(&dir);
@@ -8324,6 +8409,52 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     assert!(xml.contains("margin-left:20.000pt"), "invoice fields retain their left edge");
     let rendered = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
+}
+
+/// #5149: a two-column, two-row table drawn with ruled lines reaches Word as a table with its
+/// rules, not as four paragraphs one under another.
+#[test]
+fn exporting_a_ruled_two_by_two_table_to_word_keeps_the_table() {
+    let dir = workdir("ruled-table-word");
+    let content = "0.5 w 20 270 m 300 270 l S 20 245 m 300 245 l S 20 220 m 300 220 l S \
+20 220 m 20 270 l S 160 220 m 160 270 l S 300 220 m 300 270 l S \
+BT /F1 11 Tf 25 253 Td (Name) Tj 140 0 Td (Value) Tj -140 -25 Td (Alpha) Tj 140 0 Td (One) Tj ET \
+BT /F1 11 Tf 20 150 Td (A paragraph after the table.) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        stream.as_str(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    std::fs::write(dir.join("table.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "table.docx" }));
+    let zip = std::fs::read(dir.join("table.docx")).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    assert_eq!(xml.matches("<w:tbl>").count(), 1, "the ruled grid is a table: {xml}");
+    let table = xml.split_once("<w:tbl>").and_then(|(_, t)| t.split_once("</w:tbl>")).map(|(t, _)| t).unwrap();
+    assert_eq!(table.matches("<w:tr>").count(), 2, "{table}");
+    for word in ["Name", "Value", "Alpha", "One"] {
+        assert_eq!(table.matches(&format!(">{word}</w:t>")).count(), 1, "{word} is a cell: {xml}");
+        assert_eq!(xml.matches(&format!(">{word}</w:t>")).count(), 1, "{word} is written once");
+    }
+    assert!(table.contains("w:val=\"single\""), "the drawn rules become borders: {table}");
+    assert!(!table.contains("A paragraph after the table."));
+    assert_eq!(xml.matches(">A paragraph after the table.</w:t>").count(), 1);
 }
 
 /// #4158: a word set in italic inside a sentence ("Before *Chevron* after.") reaches Word as an
