@@ -1321,8 +1321,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> Scan
                 click = if busy {
                     ScanClick::Stop
                 } else if awaiting_flip {
+                    // Finish: the document keeps every page scanned, and the dialog closes. Close, not None: the
+                    // dialog code keeps a dialog open unless its body asks to close it.
                     app.cancel_reverse_sides();
-                    ScanClick::None
+                    ScanClick::Close
                 } else {
                     ScanClick::Close
                 };
@@ -4158,6 +4160,25 @@ mod tests {
         assert_eq!(app.dialog, None);
         assert_eq!(widths(&app, id), vec![10, 11, 12]);
         assert!(app.scan.last_create_files >= 1);
+    }
+
+    /// Finish on the reverse-sides step, clicked in the dialog: the document keeps its pages and the dialog closes.
+    /// Before, the button finished the scan but the dialog code reopened the Scanner dialog on the same frame.
+    /// Windows only: elsewhere the dialog shows only the "needs Windows" notice, with no Finish to click.
+    #[cfg(windows)]
+    #[test]
+    fn finish_on_the_reverse_sides_step_closes_the_dialog() {
+        use egui_kittest::kittest::Queryable as _;
+        let mut app = crate::PdfCraftApp::new();
+        let id = create_without_reverse_sides(&mut app, &[10, 11, 12]);
+        assert_eq!(app.dialog, Some(crate::Dialog::Scanner), "waiting for the reverse sides");
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
+        h.run_steps(4);
+        h.get_by_label("Finish").click();
+        h.run_steps(4);
+        assert_eq!(h.state().dialog, None, "Finish closes the dialog");
+        assert!(h.state().scan.duplex.is_none());
+        assert_eq!(widths(h.state(), id), vec![10, 11, 12]);
     }
 
     /// A plain Create of `widths` from the feeder, Reverse sides not ticked, the way a live scan delivers it.
