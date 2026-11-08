@@ -29,6 +29,9 @@ fn names_drawn(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u
     let mut drawn = HashSet::new();
     let mut seen = HashSet::new();
     let mut pending = vec![(Pieces::join(content).parse().ops, 0)];
+    // A form that will not decode makes the answer uncertain, but it does not stop the forms
+    // already queued from being read: a name drawn only inside one of those need not be unknown.
+    let mut unknown = false;
     while let Some((ops, depth)) = pending.pop() {
         for n in ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name) {
             if !drawn.insert(n.to_vec()) {
@@ -42,11 +45,11 @@ fn names_drawn(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u
             }
             match s.decoded() {
                 Ok(data) if depth < MAX_DEPTH => pending.push((pdfcraft_content::parse(&data).ops, depth + 1)),
-                _ => return (drawn, true),
+                _ => unknown = true,
             }
         }
     }
-    (drawn, false)
+    (drawn, unknown)
 }
 
 /// Whether any of `drawn` (from [`names_drawn`]) draws `name`: `None` when none is known to and
