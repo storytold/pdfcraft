@@ -633,11 +633,27 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
     }
     units.retain(|u| {
         ops.get(u.clone()).is_some_and(|slice| {
+            let mut render_mode: i64 = 0;
+            let mut mode_stack: Vec<i64> = Vec::new();
             slice.iter().any(|op| {
-                matches!(
-                    op.op.as_slice(),
-                    b"Do" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\""
-                )
+                match op.op.as_slice() {
+                    b"q" if mode_stack.len() < 4096 => mode_stack.push(render_mode),
+                    b"Q" => {
+                        if let Some(prev) = mode_stack.pop() {
+                            render_mode = prev;
+                        }
+                    }
+                    b"Tr" => {
+                        if let Some(m) = op.num(0) {
+                            render_mode = m as i64;
+                        }
+                    }
+                    _ => {}
+                }
+                if matches!(op.op.as_slice(), b"Do" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") {
+                    return true;
+                }
+                matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && text_mode_is_visible(render_mode)
             })
         })
     });
@@ -1195,6 +1211,57 @@ fn build_relocated_unit_ops(
     Ok(unit_ops)
 }
 
+/// Whether a text rendering mode draws glyphs: modes 3 (invisible) and 7 (clip-only) paint nothing.
+fn text_mode_is_visible(mode: i64) -> bool {
+    !matches!(mode, 3 | 7)
+}
+
+/// Visible paint inside `target_unit` around `target`, as `(other, before, after)`. A text show
+/// operator counts only when the `Tr` in effect paints its glyphs; the mode is graphics state,
+/// so it is saved and restored with `q`/`Q` like the rest of the state.
+fn arrange_paint_flags(ops: &[Op], target: usize, target_unit: &std::ops::Range<usize>) -> (bool, bool, bool) {
+    let mut has_other_paint = false;
+    let mut has_paint_before = false;
+    let mut has_paint_after = false;
+    let mut render_mode: i64 = 0;
+    let mut mode_stack: Vec<i64> = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"q" => {
+                if mode_stack.len() < 4096 {
+                    mode_stack.push(render_mode);
+                }
+            }
+            b"Q" => {
+                if let Some(prev) = mode_stack.pop() {
+                    render_mode = prev;
+                }
+            }
+            b"Tr" => {
+                if let Some(mode) = op.num(0) {
+                    render_mode = mode as i64;
+                }
+            }
+            _ => {}
+        }
+        if i < target_unit.start || i >= target_unit.end || i == target {
+            continue;
+        }
+        let is_text = matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"");
+        let is_paint = matches!(op.op.as_slice(), b"Do" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*")
+            || (is_text && text_mode_is_visible(render_mode));
+        if is_paint {
+            has_other_paint = true;
+            if i < target {
+                has_paint_before = true;
+            } else {
+                has_paint_after = true;
+            }
+        }
+    }
+    (has_other_paint, has_paint_before, has_paint_after)
+}
+
 /// Change the stacking order of `img`, drawn on page `p` by its content streams `all`.
 fn arrange_image(
     doc: &mut Document,
@@ -1218,26 +1285,7 @@ fn arrange_image(
     let Some((target_idx, target_unit)) = units.iter().enumerate().find(|(_, u)| u.contains(&target)) else {
         return Err(EditError::Invalid("the image content unit could not be located".into()));
     };
-    let mut has_other_paint = false;
-    let mut has_paint_before = false;
-    let mut has_paint_after = false;
-    for (i, op) in ops.iter().enumerate() {
-        if i >= target_unit.start
-            && i < target_unit.end
-            && i != target
-            && matches!(
-                op.op.as_slice(),
-                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
-            )
-        {
-            has_other_paint = true;
-            if i < target {
-                has_paint_before = true;
-            } else {
-                has_paint_after = true;
-            }
-        }
-    }
+    let (has_other_paint, has_paint_before, has_paint_after) = arrange_paint_flags(&ops, target, target_unit);
 
     let (dest_unit, insert_after) = target_destination_unit(&units, target_idx, target_unit, order, has_paint_before, has_paint_after)?;
     if !balanced_arrange_span(&ops, target_unit.clone()) || !balanced_arrange_span(&ops, dest_unit.clone()) {

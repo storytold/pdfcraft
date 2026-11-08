@@ -8972,6 +8972,14 @@ fn arrange_front_image_in_single_shared_unit_is_refused() {
 }
 
 #[test]
+fn arrange_front_image_with_only_invisible_text_after_it_is_refused() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do BT /F1 12 Tf 3 Tr 72 700 Td (Hidden) Tj ET Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
 fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
     let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
     assert!(
