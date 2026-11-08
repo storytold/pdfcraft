@@ -2190,6 +2190,11 @@ fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
 }
 
+/// The width (`/MediaBox` x1) of each of `pages`, in order.
+fn page_widths(pages: &[Dict]) -> Vec<Option<i64>> {
+    pages.iter().map(|p| p.get(b"MediaBox").and_then(Object::as_array).and_then(|b| b.get(2)).and_then(Object::as_int)).collect()
+}
+
 /// The pages of `doc` in page-tree order, as the dictionaries the document holds.
 fn page_tree_pages(doc: &Document) -> Vec<Dict> {
     let catalog = doc.get(doc.root().expect("root"));
@@ -2216,7 +2221,7 @@ fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
     let saved = crate::write_incremental(&doc, &crate::SaveOptions::default()).expect("saves");
     let reopened = Document::open(Arc::new(saved)).expect("the saved file opens");
     let pages = page_tree_pages(&reopened);
-    assert_eq!(pages.len(), 3);
+    assert_eq!(page_widths(&pages), [Some(200), Some(300), Some(400)], "every page is saved, in order");
     assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page is saved: {pages:?}");
     let catalog = reopened.get(reopened.root().expect("root"));
     assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog is saved");
