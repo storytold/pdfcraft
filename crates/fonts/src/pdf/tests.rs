@@ -898,3 +898,33 @@ fn a_symbolic_truetype_font_in_the_macintosh_order_reads_its_codes_as_mac_roman(
     let named = cmap_only_sfnt_named(Some(&[(0x88, 106), (0x8E, 112)]), &[(0xF088, 106), (0xF08E, 112)], true);
     assert_eq!(read(named, 4, [0x88, 0x8E]), ["", ""], "a font that names its glyphs");
 }
+
+/// The Mac OS Roman reading applies only to a font that names no base encoding and isn't Symbol or
+/// ZapfDingbats (ISO 32000-2 §9.6.5.4, §9.6.6.1): a named `/BaseEncoding` or `/Encoding` keeps its
+/// own reading, a `/Differences` without a base encoding still gets it, and a Symbol font keeps no
+/// implicit mapping.
+#[test]
+fn the_mac_roman_reading_needs_no_base_encoding_and_no_symbolic_builtin() {
+    let read = |entries: Vec<(&str, Object)>| {
+        let mut doc = Document::new_empty();
+        let program = cmap_only_sfnt(Some(&[(0x88, 106), (0x8E, 112)]), &[(0xF088, 106), (0xF08E, 112)]);
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Flags".to_vec(), Object::Int(4));
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let mut all = vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))];
+        all.extend(entries);
+        let f = font(&mut doc, all);
+        let u = unicode_map(&doc, &f, false);
+        [0x88, 0x8E].map(|c| u.text(c).unwrap_or_default().into_owned())
+    };
+    assert_eq!(read(vec![]), ["à", "é"]);
+    assert_eq!(read(vec![("Encoding", Object::name("WinAnsiEncoding"))]), ["ˆ", "Ž"], "a named base encoding");
+    let mut based = Dict::new();
+    based.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    assert_eq!(read(vec![("Encoding", Object::Dict(based))]), ["ˆ", "Ž"], "a /BaseEncoding");
+    let mut diffs = Dict::new();
+    diffs.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x8E), Object::name("ecircumflex")]));
+    assert_eq!(read(vec![("Encoding", Object::Dict(diffs))]), ["à", "ê"], "/Differences without a base encoding");
+    assert_eq!(read(vec![("BaseFont", Object::name("Symbol"))]), ["", ""], "Symbol");
+}
