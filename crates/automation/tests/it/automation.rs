@@ -9445,6 +9445,50 @@ fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
     assert!(page_text(&mut a, reopened)[0].contains("แก้ไข น้ำ"));
 }
 
+/// Thai typed into Fill & Sign text, a text box, a form field, a footer and a watermark (#2354) is
+/// drawn from PdfCraft's Thai face, as Add text draws it: no tool warns of `?`, and after a save
+/// each one's text is found as typed and the page renders. A build without a Thai face refuses
+/// the text in each, saying what to do, rather than writing `?????`.
+#[test]
+fn thai_in_fill_sign_text_comments_fields_and_page_marks_is_drawn_and_found() {
+    let dir = workdir("thai-everywhere");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let thai = "บุญฤทธิ์ น้ำ ปั้น";
+    let field = ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "rect": [20, 120, 220, 142]}))["field"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let calls = [
+        ("fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": thai, "font_size": 14})),
+        ("comment_add", json!({"doc": doc, "page": 1, "type": "textbox", "rect": [20, 160, 200, 190], "contents": thai})),
+        ("form_fill", json!({"doc": doc, "values": {field.as_str(): thai}})),
+        ("doc_header_footer", json!({"doc": doc, "pages": [1], "footer_center": format!("{thai} <<1>>")})),
+        ("doc_watermark", json!({"doc": doc, "pages": [1], "text": thai})),
+    ];
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        for (tool, args) in calls {
+            let err = a.call(tool, &args).unwrap_err().to_string();
+            assert!(err.contains("Thai") && err.contains("CRAFT_FONTS_DIR"), "{tool}: {err}");
+        }
+        assert_eq!(ok(&mut a, "comment_list", json!({"doc": doc}))["comments"].as_array().map(Vec::len), Some(0));
+        return;
+    }
+    for (tool, args) in calls {
+        let r = ok(&mut a, tool, args);
+        assert!(r.get("warnings").is_none(), "{tool}: {r}");
+    }
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "thai-marks.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path": "thai-marks.pdf"}))["doc"].as_u64().unwrap();
+    let found = ok(&mut a, "text_find", json!({"doc": reopened, "query": "บุญฤทธิ์"}));
+    assert_eq!(found["count"], 5, "{found}");
+    let rendered = a.call("page_render", &json!({"doc": reopened, "page": 1, "dpi": 72})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, .. } if !data.is_empty())));
+    // Flattened, every one of them is page text, as typed.
+    ok(&mut a, "doc_flatten", json!({"doc": reopened}));
+    assert_eq!(page_text(&mut a, reopened)[0].matches(thai).count(), 5, "{:?}", page_text(&mut a, reopened));
+}
+
 #[test]
 fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     let dir = workdir("hebrew-content");
@@ -9501,6 +9545,75 @@ fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
     let reopened = ok(&mut a, "doc_open", json!({"path":"moved.pdf"}))["doc"].as_u64().unwrap();
     assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
     assert!(page_text(&mut a, reopened)[0].contains("Added label"));
+}
+
+/// Edit a PDF's ⌘A, ⌘C / ⌘X and ⌘V headlessly: every object of a page copied, pasted into
+/// another document and onto its own page (stepped down and right), and cut as one undo step.
+#[test]
+fn objects_copy_cut_and_paste_through_tools_within_and_across_documents() {
+    let dir = workdir("object-copy-paste");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let other = ok(&mut a, "doc_open", json!({"path":"b.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Added label","rect":[20,20,130,45]}));
+    assert!(matches!(a.call("object_paste", &json!({"doc":doc,"page":1})), Err(ToolError::Failed(_))), "nothing copied yet");
+    let listed = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(listed["count"], 2);
+    let copied = ok(&mut a, "object_copy", json!({"doc":doc,"page":1,"all":true,"generation":listed["generation"]}));
+    assert_eq!(copied["copied"], 2);
+    let text = copied["text"].as_str().unwrap();
+    assert!(text.contains("Added label") && text.contains("Page 1"), "{text}");
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), listed, "a copy changes nothing");
+
+    // Into another document: the same objects, where they were, as its own page text.
+    let before = ok(&mut a, "object_list", json!({"doc":other,"page":2}));
+    assert_eq!(ok(&mut a, "object_paste", json!({"doc":other,"page":2}))["pasted"], 2);
+    let pasted = ok(&mut a, "object_list", json!({"doc":other,"page":2}));
+    assert_eq!(pasted["count"], 3);
+    let rect_of =
+        |list: &Value, text: &str| list["objects"].as_array().unwrap().iter().find(|o| o["text"] == text).map(|o| o["rect"].clone()).unwrap();
+    assert_eq!(rect_of(&pasted, "Page 1"), rect_of(&listed, "Page 1"));
+    // The added text box comes as the page's own text, drawn inside the box it had.
+    let (label, box_) = (rect_of(&pasted, "Added label"), rect_of(&listed, "Added label"));
+    assert!((0..2).all(|i| label[i].as_f64() >= box_[i].as_f64()) && (2..4).all(|i| label[i].as_f64() <= box_[i].as_f64()), "{label} in {box_}");
+    assert!(page_text(&mut a, other)[1].contains("Added label"));
+    ok(&mut a, "doc_save", json!({"doc":other,"path":"pasted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"pasted.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, reopened)[1].contains("Page 1"));
+    ok(&mut a, "edit_undo", json!({"doc":other}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":other,"page":2}))["objects"], before["objects"], "one undo step");
+
+    // Onto its own page: 18 points down and to the right.
+    ok(&mut a, "object_paste", json!({"doc":doc,"page":1}));
+    let both = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(both["count"], 4);
+    let original = rect_of(&listed, "Page 1");
+    let moved =
+        both["objects"].as_array().unwrap().iter().filter(|o| o["text"] == "Page 1").map(|o| o["rect"].clone()).find(|r| *r != original).unwrap();
+    for i in 0..4 {
+        assert!((moved[i].as_f64().unwrap() - original[i].as_f64().unwrap() - 18.0).abs() < 0.02, "{moved} {original}");
+    }
+
+    // Cut: copied, then deleted as one undo step.
+    let cut = ok(&mut a, "object_copy", json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":1}],"cut":true}));
+    assert_eq!(cut["copied"], 1);
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["count"], 3);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], both["objects"]);
+
+    for args in [
+        json!({"doc":doc,"page":1,"all":true,"objects":[{"kind":"text","index":1}]}),
+        json!({"doc":doc,"page":1}),
+        json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":99}]}),
+        json!({"doc":doc,"page":9,"all":true}),
+    ] {
+        assert!(a.call("object_copy", &args).is_err(), "{args}");
+    }
+    assert!(
+        matches!(a.call("object_copy", &json!({"doc":doc,"page":1,"all":true,"generation":listed["generation"]})), Err(ToolError::Failed(_))),
+        "stale"
+    );
+    assert!(a.call("object_paste", &json!({"doc":doc,"page":9})).is_err());
 }
 
 #[test]
@@ -11199,6 +11312,154 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
 
+/// #3005: a table and a small signature drawn inside one transparency-group Form XObject (how
+/// HTML-to-PDF converters write a block with a translucent picture). Edit a PDF sees one piece
+/// of artwork and no text; `image_edit ungroup` draws it in place with the same pixels, its
+/// text becomes paragraphs that `text_edit` changes, and undo brings the form back.
+fn table_in_a_form_pdf() -> Vec<u8> {
+    let table = b"BT /F1 12 Tf 1 0 0 1 20 120 Tm (Revenue) Tj 1 0 0 1 120 120 Tm (153,300.00) Tj 1 0 0 1 20 100 Tm (Costs) Tj 1 0 0 1 120 100 Tm (382,110.00) Tj ET 0.6 G 0.5 w 15 115 m 220 115 l S";
+    // Two pictures with soft masks overlapping each other, the second also over the table's
+    // last cell: a translucent wash, and a picture whose corner pixels are see-through.
+    let inner = [&table[..], b" q 40 0 0 20 30 40 cm /Sig Do Q q 60 0 0 40 50 30 cm /Wash Do Q q 100 0 0 30 110 90 cm /Sig Do Q"].concat();
+    let rgb: Vec<u8> = std::iter::repeat_n([20u8, 60, 220], 16).flatten().collect();
+    let alpha: Vec<u8> = (0..16).map(|i| if i % 3 == 0 { 255 } else { 0 }).collect();
+    let page = b"q /Fm1 Do Q";
+    let stream = |dict: &str, data: &[u8]| [format!("{dict} /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 160] /Contents 4 0 R /Resources << /XObject << /Fm1 5 0 R >> >> >>".to_vec(),
+        stream("<<", page),
+        stream(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 240 160] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /Font << /F1 6 0 R >> /XObject << /Sig 7 0 R /Wash 9 0 R >> >>",
+            &inner,
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+        stream("<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 8 0 R", &rgb),
+        stream("<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8", &alpha),
+        stream(
+            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 10 0 R",
+            &[230, 40, 40].repeat(4),
+        ),
+        stream("<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8", &[128, 96, 160, 64]),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn ungrouping_a_table_drawn_in_a_form_makes_its_text_editable() {
+    let dir = workdir("ungroup");
+    std::fs::write(dir.join("table.pdf"), table_in_a_form_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let paragraphs = |a: &mut Automation| ok(a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"].as_array().unwrap().len();
+    let objects = |a: &mut Automation| ok(a, "object_list", json!({ "doc": doc, "page": 1 }))["objects"].as_array().unwrap().len();
+    assert_eq!((paragraphs(&mut a), objects(&mut a)), (0, 1), "one piece of artwork, no text");
+    let (w, h, before) = a.render_pixels(doc, 1, 2.0).unwrap();
+
+    ok(&mut a, "image_edit", json!({ "doc": doc, "page": 1, "image": 1, "action": "ungroup" }));
+    let (w2, h2, after) = a.render_pixels(doc, 1, 2.0).unwrap();
+    assert_eq!((w, h), (w2, h2));
+    let differing = before.as_ref().as_chunks::<4>().0.iter().zip(after.as_ref().as_chunks::<4>().0).filter(|(p, q)| p != q).count();
+    assert_eq!(differing, 0, "ungrouping draws the same pixels");
+    assert!(paragraphs(&mut a) >= 4, "the table's text is page text now");
+    let images = ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }));
+    let kinds: Vec<_> = images["images"].as_array().unwrap().iter().map(|i| i["kind"].clone()).collect();
+    assert_eq!(kinds, vec![json!("image"); 3], "the pictures are separate pictures now: {images}");
+
+    let list = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    let target =
+        list["paragraphs"].as_array().unwrap().iter().find(|p| p["text"].as_str().is_some_and(|t| t.contains("382,110.00"))).unwrap()["paragraph"]
+            .clone();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": target, "text": "400,000.00" }));
+    let text = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1] }));
+    let s = text.to_string();
+    assert!(s.contains("400,000.00") && !s.contains("382,110.00"), "{s}");
+
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!((paragraphs(&mut a), objects(&mut a)), (0, 1), "undo brings the form back");
+}
+
+/// One 300 × 300 page that draws form `Fm1` with `page_do`; the form (with `matrix`) fills with
+/// pattern `/P1` (`pattern`) in `content`, and a red outline on the page marks where it lands.
+fn pattern_in_a_form_pdf(page_do: &str, matrix: &str, content: &str, pattern: &str) -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Fm1 5 0 R >> >> >>".to_string(),
+        stream_object("<<", &format!("{page_do} 1 0 0 RG 1 w 60 60 180 180 re S")),
+        stream_object(&format!("<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] {matrix} /Resources << /Pattern << /P1 6 0 R >> >>"), content),
+        pattern.to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #3067 review: a pattern's matrix maps pattern space to the default space of the stream that
+/// uses it (ISO 32000-2 §8.7.2), so a pattern filled inside a form moved by its `/Matrix` or by a
+/// `cm` before the `Do` must stay where it was when the form is drawn inline. Each case draws
+/// differently in Acrobat when the placement is lost (tiles out of phase or half size, the
+/// shading outside its box); ungrouped, every one paints the same pixels.
+#[test]
+fn ungrouping_keeps_patterns_where_the_forms_placement_put_them() {
+    let tiling = stream_object(
+        "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << >>",
+        "0 0 0 rg 0 0 10 10 re f 10 10 10 10 re f",
+    );
+    let shading = "<< /Type /Pattern /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [false false] >> >>";
+    let cases = [
+        ("no placement", "q /Fm1 Do Q", "", "/Pattern cs /P1 scn 60 60 180 180 re f", tiling.as_str()),
+        ("form Matrix, half a tile", "q /Fm1 Do Q", "/Matrix [1 0 0 1 10 0]", "/Pattern cs /P1 scn 50 60 180 180 re f", tiling.as_str()),
+        ("cm doubling the form", "q 2 0 0 2 0 0 cm /Fm1 Do Q", "", "/Pattern cs /P1 scn 30 30 90 90 re f", tiling.as_str()),
+        ("shading moved by the form Matrix", "q /Fm1 Do Q", "/Matrix [1 0 0 1 100 100]", "/Pattern cs /P1 scn 0 0 100 100 re f", shading),
+    ];
+    for (what, page_do, matrix, content, pattern) in cases {
+        let dir = workdir("ungroup_patterns");
+        std::fs::write(dir.join("p.pdf"), pattern_in_a_form_pdf(page_do, matrix, content, pattern)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "p.pdf" }))["doc"].as_u64().unwrap();
+        let (w, h, before) = a.render_pixels(doc, 1, 1.0).unwrap();
+        ok(&mut a, "image_edit", json!({ "doc": doc, "page": 1, "image": 1, "action": "ungroup" }));
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+        let saved = ok(&mut a, "doc_open", json!({ "path": "out.pdf" }))["doc"].as_u64().unwrap();
+        let (w2, h2, after) = a.render_pixels(saved, 1, 1.0).unwrap();
+        assert_eq!((w, h), (w2, h2), "{what}");
+        let differing = before.as_ref().as_chunks::<4>().0.iter().zip(after.as_ref().as_chunks::<4>().0).filter(|(p, q)| p != q).count();
+        assert_eq!(differing, 0, "{what}: ungrouping draws the same pixels, saved and reopened");
+    }
+}
+
+/// An indirect stream object: `dict` (without its closing `>>`) and `data`.
+fn stream_object(dict: &str, data: &str) -> String {
+    format!("{dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
+}
+
 /// Reviewing headlessly: corrections keep the boxes, a stale or foreign review is refused, and
 /// applying consumes the handle (the pages already accepted were applied once).
 #[test]
@@ -11744,4 +12005,152 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(a.call("comments_copy", &json!({ "doc": src, "comments": [[9, 9]] })).is_err(), "no such comment");
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
+}
+
+#[test]
+fn explicit_bundled_thai_font_choice_layout_edit_undo_and_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = page_text(&mut a, doc);
+    let fonts = ok(&mut a, "text_fonts", json!({"doc":doc,"page":1}));
+    let choice = fonts["fonts"].as_array().unwrap().iter().find(|f| f["resource"] == "builtin:thai");
+    let args = json!({"doc":doc,"page":1,"paragraph":1,"text":"น้ำ กิ่ กี้ ผู้ใช้","font_resource":"builtin:thai"});
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(choice.is_none());
+        assert!(a.call("text_edit", &args).is_err());
+        assert_eq!(page_text(&mut a, doc), before);
+        return;
+    }
+    assert_eq!(choice.unwrap()["preview_only"], false);
+    ok(&mut a, "text_edit_layout", args.clone());
+    assert_eq!(page_text(&mut a, doc), before);
+    ok(&mut a, "text_edit", args);
+    let edited = page_text(&mut a, doc);
+    assert!(edited[0].contains("น้ำ กิ่ กี้ ผู้ใช้"));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(page_text(&mut a, doc), before);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, reopened), edited);
+    let Err(ToolError::Failed(m)) =
+        a.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"text":"น้ำ 😀","font_resource":"builtin:thai"}))
+    else {
+        panic!("Noto Sans Thai has no emoji")
+    };
+    assert!(m.contains("Noto Sans Thai") && m.contains("U+1F600"), "the error names the font and the character: {m}");
+    assert_eq!(page_text(&mut a, reopened), edited);
+    let image = a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":144})).unwrap();
+    assert!(image.iter().any(|c| matches!(c, Content::Png { .. })));
+}
+
+/// `text_prepare` refuses what it can't act on, changing nothing: a page with no grouped text
+/// (with the reason), and a page the document doesn't have.
+#[test]
+fn text_prepare_refuses_pages_without_grouped_text() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let Err(ToolError::Failed(m)) = a.call("text_prepare", &json!({"doc":doc,"page":1})) else { panic!("nothing to prepare") };
+    assert!(m.contains("no supported grouped text"), "{m}");
+    let Err(ToolError::InvalidArgs(m)) = a.call("text_prepare", &json!({"doc":doc,"page":2})) else { panic!("no page 2") };
+    assert!(m.contains("out of range"), "{m}");
+    assert!(a.call("edit_undo", &json!({"doc":doc})).is_err(), "nothing was recorded to undo");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], false);
+}
+
+#[test]
+fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_glyphs() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut source = Document::open(Arc::new(fixture(2))).unwrap();
+    let old = "ข้อความเดิม น้ำ ผู้ใช้";
+    let new = "ข้อความแก้ไข น้ำ ผู้ใช้";
+    let mut cmap = String::from("begincmap 1 begincodespacerange <00> <ff> endcodespacerange\n");
+    cmap.push_str(&format!("{} beginbfchar\n", old.chars().count()));
+    for (i, ch) in old.chars().enumerate() {
+        cmap.push_str(&format!("<{:02x}> <{:04x}>\n", 65 + i, u32::from(ch)));
+    }
+    cmap.push_str("endbfchar endcmap");
+    let unicode = source.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+LegacyThai"));
+    font.set(b"FirstChar".to_vec(), Object::Int(65));
+    font.set(b"LastChar".to_vec(), Object::Int(65 + old.chars().count() as i64 - 1));
+    font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(300); old.chars().count()]));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+    let font = source.add(Object::Dict(font));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), Object::Ref(font));
+    let mut resources = Dict::new();
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(200), Object::Int(300)]));
+    form.set(b"Resources".to_vec(), Object::Dict(resources));
+    let codes: String = (0..old.chars().count()).map(|i| format!("{:02x}", 65 + i)).collect();
+    let form = source.add(Object::Stream(Stream::flate(form, format!("BT /F1 14 Tf 20 220 Td <{codes}> Tj ET").as_bytes())));
+    for page in [ObjRef::new(4, 0), ObjRef::new(6, 0)] {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Body".to_vec(), Object::Ref(form));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let content = source.add(Object::Stream(Stream::flate(Dict::new(), b"q /Body Do Q")));
+        source
+            .update_dict(page, |d| {
+                d.set(b"Resources".to_vec(), Object::Dict(resources));
+                d.set(b"Contents".to_vec(), Object::Ref(content));
+            })
+            .unwrap();
+    }
+    std::fs::write(dir.join("source.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["count"], 0);
+    let prepared = ok(&mut a, "text_prepare", json!({"doc":id,"page":1}));
+    assert_eq!(
+        [&prepared["prepared_groups"], &prepared["repaired_fonts"], &prepared["refused_groups"]],
+        [&json!(1), &json!(0), &json!([])],
+        "{prepared}"
+    );
+    assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap(), before, "preparing must not change pixels");
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["paragraphs"][0]["text"], old);
+    // The bundled Thai face is an optional build input. Without it, `builtin:thai` is refused and
+    // the grouped edit, undo, redo and save checks run on Latin text in Helvetica instead.
+    let thai = json!({"doc":id,"page":1,"paragraph":1,"text":new,"font_resource":"builtin:thai"});
+    let (new, args) = if pdfcraft_fonts::document_thai_font().is_some() {
+        (new, thai)
+    } else {
+        let Err(ToolError::Failed(m)) = a.call("text_edit", &thai) else { panic!("builtin:thai needs the bundled Thai face") };
+        assert!(m.contains("builtin:thai"), "{m}");
+        let latin = "Edited body";
+        (latin, json!({"doc":id,"page":1,"paragraph":1,"text":latin,"font":"helvetica"}))
+    };
+    ok(&mut a, "text_edit", args);
+    assert_eq!(ok(&mut a, "text_lines", json!({"doc":id,"page":1}))["lines"][0]["text"].as_str().unwrap().trim(), new);
+    assert_eq!(page_text(&mut a, id)[1], old, "a shared form's other page must not change");
+    let after = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    assert_ne!(after, before);
+    ok(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap(), before);
+    ok(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}))["count"], 0);
+    ok(&mut a, "edit_redo", json!({"doc":id}));
+    ok(&mut a, "edit_redo", json!({"doc":id}));
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), after);
+    assert_eq!(page_text(&mut a, reopened), [new, old]);
+    assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }

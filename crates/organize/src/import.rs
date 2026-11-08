@@ -480,6 +480,64 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     Ok(())
 }
 
+/// The objects `value` (of `src`) refers to, directly or through others, each once whatever the
+/// cycles: what [`import_value`] copies. Refused past `max_objects` objects or `max_bytes` bytes
+/// of stream data, with a message that says how much there is.
+pub fn reachable(src: &Document, value: &Object, max_objects: usize, max_bytes: usize) -> Result<Vec<ObjRef>, OrganizeError> {
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    let mut bytes = 0usize;
+    // The values still to look into: owned, or an object of `src`.
+    let mut pending: Vec<std::sync::Arc<Object>> = vec![std::sync::Arc::new(value.clone())];
+    while let Some(next) = pending.pop() {
+        let mut refs = Vec::new();
+        let mut inside: Vec<&Object> = vec![&next];
+        while let Some(o) = inside.pop() {
+            match o {
+                Object::Ref(r) => refs.push(*r),
+                Object::Array(a) => inside.extend(a.iter()),
+                Object::Dict(d) => inside.extend(d.iter().map(|(_, v)| v)),
+                Object::Stream(s) => {
+                    bytes = bytes.saturating_add(s.raw.len());
+                    inside.extend(s.dict.iter().map(|(_, v)| v));
+                }
+                _ => {}
+            }
+        }
+        for r in refs {
+            if seen.insert(r) {
+                found.push(r);
+                pending.push(src.get(r));
+            }
+        }
+        if found.len() > max_objects || bytes > max_bytes {
+            return Err(OrganizeError::Invalid(format!(
+                "it uses more than {max_objects} objects or {} MB of fonts, images and other data; copy fewer objects at a time",
+                max_bytes >> 20
+            )));
+        }
+    }
+    Ok(found)
+}
+
+/// Copy `value` from `src` into `dst` with every object it refers to, each once (cycles end), as
+/// Insert Pages copies a page's resources; what equals an object already in `dst` (the same font
+/// or image) is shared rather than stored twice. Returns `value` as `dst` refers to it. A chain
+/// nested more than 256 levels deep is refused; [`reachable`] bounds the size first.
+pub fn import_value(dst: &mut Document, src: &Document, value: &Object) -> Result<Object, OrganizeError> {
+    let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
+    let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
+    let copied = copier.copy_value(dst, value, None)?;
+    // Held in an array object while duplicates merge (an array is never a resource that merges
+    // itself away), so the references in it follow them.
+    let holder = dst.add(Object::Array(vec![copied]));
+    let created = added_objects(dst, &before);
+    crate::dedupe::dedupe_resources(dst, &created, true);
+    let held = dst.get(holder).as_array().and_then(|a| a.first().cloned()).unwrap_or(Object::Null);
+    dst.free(holder);
+    Ok(held)
+}
+
 /// Page `page` of `src` as a form XObject in `dst` (its content and resources, no annotations),
 /// for backgrounds and watermarks taken from a PDF. The form's `/BBox` is the page's crop box
 /// and its `/Matrix` undoes the page rotation, so it draws upright as displayed. Returns the

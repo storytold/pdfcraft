@@ -189,8 +189,12 @@ use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
+#[cfg(target_arch = "wasm32")]
+use workflows::ocr_route;
 use workflows::ocr_ui;
 use workflows::ocr_verify;
+#[cfg(target_arch = "wasm32")]
+use workflows::ocr_web;
 use workflows::optimize_ui;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
@@ -469,13 +473,13 @@ pub struct PdfCraftApp {
     startup_superseded: bool,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
-    /// Mirrors "some document has unsaved work" each frame, so the web page's `beforeunload` handler can read it (#812).
+    /// Mirrors "some document has unsaved work, or an OCR review is open" each frame, so the web page's `beforeunload` handler can read it (#812).
     pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
-    /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
+    /// Reports unsaved work, or an open OCR review, to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
@@ -526,6 +530,13 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// The web build's files being read in Web Workers (progress in `ocr_batch`).
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_batch: Option<ocr_web::Batch>,
+    /// The web build's files chosen before the text recognition models were downloaded, with
+    /// the settings they were chosen with: read once the models are ready.
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_waiting: Option<ocr_ui::WaitingFiles>,
     /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
@@ -594,6 +605,10 @@ pub struct PdfCraftApp {
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).
     pub comment_clipboard: Option<CommentClip>,
+    /// Objects copied together in Edit a PDF, to paste into this or another document (#5989).
+    pub object_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// What copying them put on the system clipboard (see [`app::ObjectClipMark`]).
+    pub(crate) object_clip_mark: app::ObjectClipMark,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the

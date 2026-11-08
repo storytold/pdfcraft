@@ -23,14 +23,14 @@ mod as_rtf;
 mod clip;
 mod layout;
 
-pub use as_docx::docx;
 pub(crate) use as_docx::hex;
 #[cfg(test)]
 use as_docx::{MAX_MEDIA, docx_table};
+pub use as_docx::{docx, docx_with_language};
 pub(crate) use as_html::esc;
 #[cfg(test)]
 use as_html::{allowed, base64};
-pub use as_html::{html, html_simple};
+pub use as_html::{html, html_simple, html_simple_with_language, html_with_language};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
