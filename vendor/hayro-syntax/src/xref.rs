@@ -632,6 +632,15 @@ impl XRef {
         locked.xref_map = xref_map;
     }
 
+    /// PdfCraft patch: (hayro-syntax (43)) whether objects read through this table are
+    /// decrypted.
+    pub(crate) fn is_encrypted(&self) -> bool {
+        match &self.0 {
+            Inner::Dummy => false,
+            Inner::Some(r) => !matches!(r.decryptor.as_ref(), Decryptor::None),
+        }
+    }
+
     #[inline]
     pub(crate) fn needs_decryption(&self, ctx: &ReaderContext<'_>) -> bool {
         match &self.0 {

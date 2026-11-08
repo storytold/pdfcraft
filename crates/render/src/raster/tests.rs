@@ -9751,3 +9751,53 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
         }
     }
 }
+
+/// Data after `%%EOF` that holds an object header, past the footer window, is read the way the
+/// document model reads it: the model rebuilds the file from object headers and takes the later
+/// definition of the page, and the renderer shows that same page, so the two still agree.
+#[test]
+fn trailing_data_with_an_object_header_reads_as_the_model_reads_it() {
+    let mut f = one_page_file();
+    f.extend_from_slice(
+        b"<html><pre>
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 999 999] >>
+endobj
+</pre>",
+    );
+    f.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = pdfcraft_cos::Document::open(Arc::new(f.clone())).unwrap();
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let model_box = page.as_dict().and_then(|d| d.get(b"MediaBox").cloned());
+    assert_eq!(model_box, Some(pdfcraft_cos::Object::Array([0, 0, 999, 999].map(pdfcraft_cos::Object::Int).to_vec())), "the model");
+    let ((count, size), model) = renderer_and_model_pages(f);
+    assert_eq!((count, size, model), (1, (999, 999), 1), "the renderer, as the model");
+}
+
+/// An encrypted file whose last update was cut off is still refused with a wrong password, and
+/// opened with the right one.
+#[test]
+fn an_encrypted_file_with_a_cut_off_update_still_needs_its_password() {
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let mut doc = Document::open(Arc::new(one_page_file())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let base = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let file = Arc::new(with_update(&base, 5000, false));
+    let open = |password: &str| {
+        let mut r = PageRenderer::new(file.clone(), RenderConfig { password: Some(Arc::from(password)), ..RenderConfig::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        (r.page_count(), page.error.is_none(), (page.width, page.height))
+    };
+    let (_, drawn, _) = open("wrong");
+    assert!(!drawn, "a wrong password opens nothing");
+    let (count, drawn, _) = open("user");
+    assert!(count >= 1 && drawn, "the right one opens it");
+}

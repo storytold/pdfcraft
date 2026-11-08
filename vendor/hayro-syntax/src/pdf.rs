@@ -52,8 +52,17 @@ impl Pdf {
         // winning, as the document model reads such a file. Only when that finds no page is the
         // older table the last `startxref` names read instead (a file cut short in the middle of
         // the update, whose new page tree names pages that are not there).
+        // The table the last `startxref` names is read first either way: a wrong password is
+        // refused through it, and the rebuilt table must be encrypted exactly when it is, so a
+        // rebuild that missed the encryption dictionary is not taken.
+        let root = root_xref(data.clone(), password);
+        if let Err(XRefError::Encryption(e)) = root {
+            return Err(LoadPdfError::Decryption(e));
+        }
+        let root_encrypted = root.as_ref().ok().map(XRef::is_encrypted);
         if cut_off_update_follows(data.as_ref())
             && let Some(xref) = fallback(data.clone(), password)
+                .filter(|x| root_encrypted.is_none_or(|e| e == x.is_encrypted()))
         {
             let xref = Arc::new(xref);
             if let Some(pages) = CachedPages::new(xref.clone())
@@ -67,7 +76,7 @@ impl Pdf {
                 });
             }
         }
-        let xref = match root_xref(data.clone(), password) {
+        let xref = match root {
             Ok(x) => x,
             Err(e) => match e {
                 XRefError::Unknown => {
