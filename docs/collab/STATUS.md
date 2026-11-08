@@ -146,7 +146,7 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` with 30 s leeway;
   `fileId` must equal `hello.doc`; `app` must equal `--app`.
 - `POST /v1/sessions` (`--control`, loopback, JWT required):
-  `{"fileId","jwt","etag"?,"bytes"|"url"}` → `201`/`200` with
+  `{"fileId","jwt","etag"?,"bytes"|"initialBytes"|"url"}` → `201`/`200` with
   `{"fileId","version","epoch","etag","created"}`; `401` bad token, `403`
   token for another file, `400` bad body/etag, `409` the room holds another
   etag, `404` no room and no source, `413` file too large, `502` the source URL
@@ -319,6 +319,10 @@ Ordered by the risk they pose to production.
    next commit or the last-client-leave commit retries it), an endpoint to
    resolve a `conflict` room (the cabinet decides "new session over my version"
    or "save a copy" — the daemon only refuses), and `https` without a proxy.
+   The shared cabinet contract also lets the cabinet number versions and return
+   its own `{version, etag}` from the callback; v1 ignores that body and uses
+   the room's numbering, so a cabinet with its own numbering needs an adapter
+   (RFC §8.2 says so explicitly).
 8. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
