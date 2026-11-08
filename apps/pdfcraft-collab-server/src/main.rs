@@ -247,6 +247,53 @@ mod tests {
     }
 
     #[test]
+    fn a_restart_recovers_the_last_commit() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_collab_proto::{ActorId, ClientInfo, ConflictClass, DocKey, Hello, Op, OpId, OpKind, PageRef, Role, Target};
+        let root = std::env::temp_dir().join(format!("pdfcraft-collab-restart-{}", std::process::id()));
+        let documents = root.join("documents");
+        let data = root.join("data");
+        std::fs::create_dir_all(&documents)?;
+        std::fs::write(documents.join("file-1.pdf"), fixture())?;
+        let args = Args { documents, data, ..Args::default() };
+        let doc = DocKey::new("file-1")?;
+        let hello = Hello {
+            v: 1,
+            app: "pdfcraft".into(),
+            doc: doc.clone(),
+            jwt: "t".into(),
+            client: ClientInfo { name: "test".into(), version: "0".into() },
+        };
+        let editor = ActorId::new("editor")?;
+        {
+            let mut hub = Hub::new(RoomConfig::default());
+            open_rooms(&mut hub, &args)?;
+            let room = hub.room_mut(&doc).ok_or("no room")?;
+            room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+            let op = Op {
+                op_id: OpId::new("a1")?,
+                doc: doc.clone(),
+                base_version: 0,
+                epoch: 0,
+                kind: OpKind::Primitive,
+                class: ConflictClass::Merge,
+                target: Target::Page(PageRef { index: 0, epoch: 0 }),
+                payload: serde_json::json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "kept", "nm": "restart-note"}),
+                preview: None,
+            };
+            room.apply(&editor, &op, 0)?;
+            room.commit(&editor, 1)?;
+        }
+        // A new process: the working copy is the base and still has the comment.
+        let mut hub = Hub::new(RoomConfig::default());
+        open_rooms(&mut hub, &args)?;
+        let room = hub.room(&doc).ok_or("no room after restart")?;
+        let document = room.adapter().document().ok_or("no document")?;
+        assert!(document.info.annotations.iter().any(|a| a.name.as_deref() == Some("restart-note")));
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
     fn health_and_metrics_say_what_they_are() {
         let metrics = pdfcraft_collab_ws::Metrics { rooms: 2, clients: 3, versions: vec![("file-1".into(), 7, 1)] };
         let (status, content_type, body) = render("/health", Ok(metrics.clone()));

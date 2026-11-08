@@ -136,6 +136,11 @@ impl<A: Adapter> Room<A> {
         }
     }
 
+    /// The authoritative adapter, for server-side inspection (tests, commit tools).
+    pub fn adapter(&self) -> &A {
+        &self.adapter
+    }
+
     pub fn version(&self) -> u64 {
         self.version
     }

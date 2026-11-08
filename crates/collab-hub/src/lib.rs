@@ -134,6 +134,10 @@ impl<A: Adapter> Hub<A> {
         self.rooms.get(doc).map(|entry| &entry.room)
     }
 
+    pub fn room_mut(&mut self, doc: &DocKey) -> Option<&mut Room<A>> {
+        self.rooms.get_mut(doc).map(|entry| &mut entry.room)
+    }
+
     pub fn members(&self, doc: &DocKey) -> usize {
         self.rooms.get(doc).map_or(0, |entry| entry.members.len())
     }
