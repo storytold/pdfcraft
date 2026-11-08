@@ -131,20 +131,29 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
+                if let Some(js) = cx.js.as_mut() {
+                    cx.xfa_out.append(std::mem::take(&mut js.output));
+                }
+                let acro = &mut cx.js;
+                let mut on_reset = |doc: &mut pdfcraft_cos::Document| js::recalculate_xfa_reset(doc, acro);
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
                     out: &mut cx.xfa_out,
                     datasets: cx.xfa_datasets,
                     ran_away: false,
+                    reset_touched: false,
                     time_scale: cx.xfa_time_scale,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut on_reset))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
                 if let Err(e) = ran {
+                    if run.reset_touched {
+                        return Err(EditError::Invalid(e));
+                    }
                     cx.xfa_out.errors.push(e);
                 }
             }

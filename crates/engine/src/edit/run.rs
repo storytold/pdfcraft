@@ -617,9 +617,18 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
-            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                reset_touched: false,
+                time_scale: cx.xfa_time_scale,
+            };
+            let acro = &mut cx.js;
+            let mut on_reset = |doc: &mut pdfcraft_cos::Document| js::recalculate_xfa_reset(doc, acro);
+
+            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run, &mut on_reset);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
             ran.map_err(EditError::Invalid)?;

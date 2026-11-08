@@ -322,6 +322,15 @@ impl JsRunner {
     }
 }
 
+/// Recalculate AcroForm actions after an XFA reset, returning output in event order.
+pub(crate) fn recalculate_xfa_reset(doc: &mut pdfcraft_cos::Document, runner: &mut Option<JsRunner>) -> Result<JsOutput, String> {
+    let Some(js) = runner.as_mut() else { return Ok(JsOutput::default()) };
+    pdfcraft_forms::recalculate_with(doc, &mut js.for_reset()).map_err(|e| e.to_string())?;
+    if let Some(reason) = js.take_reset_restore_error() {
+        return Err(format!("form reset could not finish JavaScript recalculation: {reason}"));
+    }
+    Ok(std::mem::take(&mut js.output))
+}
 /// A document-level JavaScript: its name and source.
 pub fn document_scripts(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     pdfcraft_forms::document_scripts_named(cos)

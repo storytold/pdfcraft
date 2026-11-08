@@ -336,6 +336,225 @@ fn invalid_real_calculate_write_rolls_back_the_entire_reset() {
 }
 
 #[test]
+fn reset_formats_a_field_without_calculate_even_when_its_value_is_already_default() {
+    for all in [false, true] {
+        for already_default in [false, true] {
+            let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+            pdfcraft_forms::set_props(&mut doc, "price", &FieldProps { default_value: Some(Some("34".into())), ..Default::default() }).unwrap();
+            if already_default {
+                pdfcraft_forms::set_value(&mut doc, "price", &FieldValue::Text("34".into())).unwrap();
+            }
+            pdfcraft_forms::set_field_script(
+                &mut doc,
+                "price",
+                "format",
+                Some("console.println('price-format'); event.value = String(event.value) + '!';"),
+            )
+            .unwrap();
+            let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+            let (mut session, id) = open(bytes);
+            let before = session.save_bytes(id).unwrap();
+            assert_eq!(normal_appearance_text(before, "price"), if already_default { "34" } else { "42" });
+
+            session.apply(id, Edit::ResetForm { names: if all { None } else { Some(vec!["price".into()]) } }).unwrap();
+            assert_eq!(value(&session, id, "price"), ["34"]);
+            let saved = session.save_bytes(id).unwrap();
+            assert_eq!(normal_appearance_text(saved.clone(), "price"), "34!");
+            let (reopened, reopened_id) = open(saved.as_ref().clone());
+            assert_eq!(value(&reopened, reopened_id, "price"), ["34"]);
+            assert_eq!(normal_appearance_text(reopened.save_bytes(reopened_id).unwrap(), "price"), "34!");
+            assert_eq!(session.take_js_output(id).console.iter().filter(|line| *line == "price-format").count(), 1);
+        }
+    }
+}
+#[test]
+fn xfa_resetdata_recalculates_an_active_acroform_calculate_script() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, r#"xfa.host.resetData("price");"#)
+        .replace(r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#, "");
+    let (mut session, id) = open(pdfcraft_xfa::fixtures::shell(&template));
+    session
+        .apply(
+            id,
+            Edit::SetFieldScript {
+                name: "total".into(),
+                event: "calculate".into(),
+                script: Some("console.println('acro-total'); event.value = Number(getField('price').value) * 2;".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(value(&session, id, "total"), ["10"]);
+    session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["9".into()], vec!["18".into()]));
+    session.take_js_output(id);
+
+    let outcome = session.run_javascript(id, "", Some("hello")).unwrap();
+    assert!(outcome.error.is_none(), "{outcome:?}");
+    assert_eq!(value(&session, id, "price"), ["5"]);
+    assert_eq!(value(&session, id, "total"), ["10"]);
+    assert_eq!(outcome.console.iter().filter(|line| *line == "acro-total").count(), 1);
+}
+#[test]
+fn reset_formats_a_calculated_target_once_whether_calculate_changes_its_default() {
+    for calculated in ["34", "35"] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+        pdfcraft_forms::set_props(&mut doc, "price", &FieldProps { default_value: Some(Some("34".into())), ..Default::default() }).unwrap();
+        pdfcraft_forms::set_field_script(&mut doc, "price", "calculate", Some(&format!("event.value = '{calculated}';"))).unwrap();
+        pdfcraft_forms::set_field_script(
+            &mut doc,
+            "price",
+            "format",
+            Some("console.println('price-format'); event.value = String(event.value) + '!';"),
+        )
+        .unwrap();
+        let (mut session, id) = open(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        session.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
+        assert_eq!(value(&session, id, "price"), [calculated]);
+        assert_eq!(normal_appearance_text(session.save_bytes(id).unwrap(), "price"), format!("{calculated}!"));
+        assert_eq!(session.take_js_output(id).console.iter().filter(|line| *line == "price-format").count(), 1);
+    }
+}
+
+#[test]
+fn reset_without_scripts_does_not_run_a_format_action_on_an_unchanged_value() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
+    pdfcraft_forms::set_props(&mut doc, "price", &FieldProps { default_value: Some(Some("34".into())), ..Default::default() }).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "price", &FieldValue::Text("34".into())).unwrap();
+    pdfcraft_forms::set_field_script(&mut doc, "price", "format", Some("event.value = String(event.value) + '!';")).unwrap();
+    assert_eq!(pdfcraft_forms::reset(&mut doc, Some(&["price".into()])).unwrap(), 0);
+    assert_eq!(pdfcraft_forms::fields(&doc).iter().find(|f| f.name == "price").unwrap().value, ["34"]);
+    assert_eq!(normal_appearance_text(Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()), "price"), "34");
+}
+
+#[test]
+fn xfa_calculation_keeps_precedence_after_acroform_reset_calculation() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, r#"console.println('xfa-click'); xfa.host.resetData('price');"#)
+        .replace(
+            r#"qty.rawValue * price.rawValue</script></calculate>"#,
+            r#"console.println('xfa-calculate'); qty.rawValue * price.rawValue</script></calculate>"#,
+        );
+    let (mut session, id) = open(pdfcraft_xfa::fixtures::shell(&template));
+    session
+        .apply(
+            id,
+            Edit::SetFieldScript {
+                name: "total".into(),
+                event: "calculate".into(),
+                script: Some("console.println('acro-total'); event.value = Number(getField('price').value) * 3;".into()),
+            },
+        )
+        .unwrap();
+    session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert_eq!(value(&session, id, "total"), ["18"], "XFA Calculate wins after an ordinary edit");
+    session.take_js_output(id);
+
+    let outcome = session.run_javascript(id, "", Some("hello")).unwrap();
+    assert!(outcome.error.is_none(), "{outcome:?}");
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["5".into()], vec!["10".into()]));
+    assert_eq!(outcome.console, ["xfa-click", "acro-total", "xfa-calculate"]);
+}
+#[test]
+fn xfa_change_resetdata_recalculates_an_active_acroform_calculate_script() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"<value><integer>5</integer></value></field>"#,
+            r#"<value><integer>5</integer></value><event activity="change"><script contentType="application/x-javascript">xfa.host.resetData('price');</script></event></field>"#,
+        )
+        .replace(
+            r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#,
+            "",
+        );
+    let (mut session, id) = open(pdfcraft_xfa::fixtures::shell(&template));
+    session
+        .apply(
+            id,
+            Edit::SetFieldScript {
+                name: "total".into(),
+                event: "calculate".into(),
+                script: Some("event.value = Number(getField('price').value) * 2;".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(value(&session, id, "total"), ["10"]);
+    session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["5".into()], vec!["10".into()]));
+}
+#[test]
+fn xfa_change_resetdata_acroform_calculate_failure_rolls_back_the_edit() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"<value><integer>5</integer></value></field>"#,
+            r#"<value><integer>5</integer></value><event activity="change"><script contentType="application/x-javascript">xfa.host.resetData('price');</script></event></field>"#,
+        )
+        .replace(
+            r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#,
+            "",
+        );
+    let (mut session, id) = open(pdfcraft_xfa::fixtures::shell(&template));
+    session
+        .apply(id, Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { max_len: Some(Some(1)), ..Default::default() }) })
+        .unwrap();
+    session
+        .apply(
+            id,
+            Edit::SetFieldScript {
+                name: "total".into(),
+                event: "calculate".into(),
+                script: Some(
+                    "if (Number(getField('price').value) === 5 && Number(getField('total').value) === 18) getField('qty').value = '999'; event.value = Number(getField('price').value) * 2;"
+                        .into(),
+                ),
+            },
+        )
+        .unwrap();
+    assert_eq!(value(&session, id, "total"), ["10"]);
+    let before = session.save_bytes(id).unwrap();
+    let doc = session.get(id).unwrap();
+    let state = (doc.dirty, doc.generation, doc.can_undo().map(str::to_owned));
+    let error = session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("9".into()) }).unwrap_err();
+    assert!(error.to_string().contains("qty") && error.to_string().contains('1'), "{error}");
+    assert_eq!(session.save_bytes(id).unwrap().as_ref(), before.as_ref());
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["5".into()], vec!["10".into()]));
+    let doc = session.get(id).unwrap();
+    assert_eq!((doc.dirty, doc.generation, doc.can_undo().map(str::to_owned)), state);
+}
+
+#[test]
+fn xfa_resetdata_acroform_calculate_failure_rolls_back_the_event() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, r#"xfa.host.resetData("price");"#)
+        .replace(r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#, "");
+    let (mut session, id) = open(pdfcraft_xfa::fixtures::shell(&template));
+    session.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    session
+        .apply(id, Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { max_len: Some(Some(1)), ..Default::default() }) })
+        .unwrap();
+    session
+        .apply(
+            id,
+            Edit::SetFieldScript {
+                name: "total".into(),
+                event: "calculate".into(),
+                script: Some(
+                    "if (Number(getField('price').value) === 5) getField('qty').value = '999'; event.value = Number(getField('price').value) * 2;"
+                        .into(),
+                ),
+            },
+        )
+        .unwrap();
+    assert_eq!(value(&session, id, "total"), ["18"]);
+    let before = session.save_bytes(id).unwrap();
+    let doc = session.get(id).unwrap();
+    let state = (doc.dirty, doc.generation, doc.can_undo().map(str::to_owned));
+    let error = session.run_javascript(id, "", Some("hello")).unwrap_err();
+    assert!(error.to_string().contains("qty") && error.to_string().contains('1'), "{error}");
+    assert_eq!(session.save_bytes(id).unwrap().as_ref(), before.as_ref());
+    assert_eq!((value(&session, id, "price"), value(&session, id, "total")), (vec!["9".into()], vec!["18".into()]));
+    let doc = session.get(id).unwrap();
+    assert_eq!((doc.dirty, doc.generation, doc.can_undo().map(str::to_owned)), state);
+}
+#[test]
 fn format_runs_once_and_reset_bootstrap_diagnostics_are_not_repeated() {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(form(false, false))).unwrap();
     pdfcraft_forms::set_document_script(&mut doc, "init", Some("console.println('doc-run'); app.alert('doc-alert'); this.print();")).unwrap();

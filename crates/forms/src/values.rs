@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::appearances::{declares_pdfa, need_appearances};
 use super::read::{acroform, field_flags, fields, page_refs};
 use super::{
@@ -147,6 +149,11 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
 
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
+    recalculate_with_marked(doc, scripts, None)
+}
+
+/// Record fields already redrawn by Calculate, so reset can run Format once on the others.
+fn recalculate_with_marked(doc: &mut Document, scripts: &mut dyn Scripts, mut redrawn: Option<&mut HashSet<ObjRef>>) -> Result<usize, FormError> {
     let mut all = fields(doc);
     if !all.iter().any(calc_order::is_calculated) {
         return Ok(0);
@@ -178,6 +185,9 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
             doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
             redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            if let Some(redrawn) = redrawn.as_mut() {
+                redrawn.insert(obj);
+            }
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
@@ -660,11 +670,15 @@ fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
-    reset_with(doc, names, &mut NoScripts)
+    reset_with_impl(doc, names, &mut NoScripts, false)
 }
 
 /// [`reset`], running custom Calculate (and Format) scripts after restoring the defaults.
 pub fn reset_with(doc: &mut Document, names: Option<&[String]>, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
+    reset_with_impl(doc, names, scripts, true)
+}
+
+fn reset_with_impl(doc: &mut Document, names: Option<&[String]>, scripts: &mut dyn Scripts, format: bool) -> Result<usize, FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
@@ -674,13 +688,20 @@ pub fn reset_with(doc: &mut Document, names: Option<&[String]>, scripts: &mut dy
     {
         return Err(FormError::NoSuchField(missing.clone()));
     }
+    let mut format_targets = HashSet::new();
     let mut changed = 0;
     for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name))) {
         // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
         // the field to nothing would lose the value it should go back to. A value it didn't decode
         // isn't known to be the default, so it is reset.
         let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
-        if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
+        if unread(b"DV", &f.default) {
+            continue;
+        }
+        if format && matches!(f.kind, FieldKind::Text | FieldKind::Combo) && f.actions.scripts.format.is_some() {
+            format_targets.insert(f.obj);
+        }
+        if f.value == f.default && !unread(b"V", &f.value) {
             continue;
         }
         let v = match f.kind {
@@ -696,6 +717,11 @@ pub fn reset_with(doc: &mut Document, names: Option<&[String]>, scripts: &mut dy
         write_value(doc, &tmp, &v, &mut NoScripts)?;
         changed += 1;
     }
-    recalculate_with(doc, scripts)?;
+    let mut redrawn = HashSet::new();
+    recalculate_with_marked(doc, scripts, Some(&mut redrawn))?;
+    for f in fields(doc).iter().filter(|f| format_targets.contains(&f.obj) && !redrawn.contains(&f.obj)) {
+        let value = f.value.first().cloned().unwrap_or_default();
+        redraw(doc, f, std::slice::from_ref(&value), scripts)?;
+    }
     Ok(changed)
 }
