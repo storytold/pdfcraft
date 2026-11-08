@@ -5306,6 +5306,308 @@ fn the_graphics_state_carries_over_between_content_streams() {
     assert!(close(l.rect[0], 100.0) && close(l.size, 10.0), "{l:?}");
 }
 
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A page whose first content stream is damaged after its text, and whose second is whole.
+fn damaged_page() -> (Document, pdfcraft_cos::Stream) {
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+    let damaged = damaged_flate(b"BT /F1 12 Tf 72 700 Td (Damaged) Tj ET\n", b"BT /F1 12 Tf 72 500 Td (After the damage) Tj ET");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged.clone());
+    (doc, damaged)
+}
+
+/// An edit that would rewrite a content stream damaged partway is refused: written from what
+/// decoded, it would lose what follows the damage, which other readers may still read. So is an
+/// edit in a later stream: what the damage hides can change how that stream reads, a string or
+/// comment it leaves open, or the graphics state. An edit in a stream before the damage goes on,
+/// and leaves the damaged one as it is stored.
+#[test]
+fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
+    let (mut doc, damaged) = damaged_page();
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Damaged", "Whole"], "read up to the damage");
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::rewrite_block(&mut doc, 0, 0, Some("Edited"), &text::BlockStyle::default()).unwrap_err();
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::replace_line(&mut doc, 0, 1, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), damaged.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(texts(&doc), ["Edited", "Damaged"]);
+    let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
+    assert_eq!(list.get(1), Some(&Object::Ref(pdfcraft_cos::ObjRef::new(5, 0))));
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, damaged.raw, "stored as it was");
+}
+
+/// A comment the damage leaves open runs on into the next stream, up to its first end of line,
+/// so a string starting there reads as operators: a line of text inside it. That line is in a
+/// stream after the damage, and isn't edited.
+#[test]
+fn text_a_damaged_stream_runs_on_into_is_not_edited() {
+    let mut doc = split_page("", "(note\nBT /F1 12 Tf 72 600 Td (Inside a string) Tj ET\n) pop");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged_flate(b"0 g % a comment", b"\n"));
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Inside a string"], "the comment runs on into the next stream");
+    let listed = pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned();
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned(), listed);
+}
+
+/// A content stream that doesn't decode is never written over. A partial rewrite of the page's
+/// last paragraph closes its marker past the last operator read, in the page's last stream, here
+/// one that doesn't decode: the rewrite is refused, not that stream replaced by the close. An
+/// empty stream there takes the close.
+#[test]
+fn a_content_stream_that_does_not_decode_is_never_written_over() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    let mut doc = split_page(src, "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), pdfcraft_cos::Stream::from_raw(dict, b"0 0 1 rg 0 0 10 10 re f".to_vec()));
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+    let refused = text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap_err();
+    assert!(refused.to_string().contains("can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page(src, "");
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."]);
+}
+
+/// A content stream that doesn't decode at all is no damage to write over: it is kept as stored,
+/// and the page's streams before it are read and edited. A stream of a few MB is read for
+/// selecting objects.
+#[test]
+fn a_content_stream_that_does_not_decode_is_kept_and_edited_before() {
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unknown = pdfcraft_cos::Stream::from_raw(dict, b"BT /F1 12 Tf 72 700 Td (Unread) Tj ET".to_vec());
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), unknown.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), ["Edited"]);
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, unknown.raw, "stored as it was");
+
+    let large = format!("{}0 0 m 10 10 l S", " ".repeat(2 << 20));
+    assert!(editable_objects(&split_page(&large, "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
+/// A content stream that doesn't decode hides its operators as damage does. Here its `/Filter` is
+/// given by reference, which a file may do and which isn't read here, and it holds a `cm` that
+/// moves what the page draws after it. Text and images there aren't edited, as the edit would be
+/// worked out without the `cm`.
+#[test]
+fn content_after_a_stream_that_does_not_decode_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let hidden_move = |doc: &mut Document| {
+        let filter = doc.add(Object::name("FlateDecode"));
+        let mut s = Stream::flate(Dict::new(), b"1 0 0 1 0 -300 cm");
+        s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+        doc.set(ObjRef::new(4, 0), s);
+    };
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (After) Tj ET");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page("", "q 100 0 0 100 200 200 cm /Im1 Do Q");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+}
+
+/// A text object still open at a stream not read whole goes on in it: the text that stream shows
+/// starts where the text before it ends, so editing that text would move it. The edit is refused.
+/// A change before the text object, in the same stream, goes on. The same holds when the hidden
+/// stream is the page's last.
+#[test]
+fn text_a_stream_not_read_whole_goes_on_from_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    // The hidden stream between the text and a stream closing it, or the page's last.
+    for (damaged, last) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("damaged: {damaged}, last: {last}");
+        let shown: &[u8] = if last { b"(World) Tj ET" } else { b"(World) Tj" };
+        let mut doc = split_page("BT /F1 12 Tf 72 700 Td (Before) Tj ET BT /F1 12 Tf 72 600 Td (Hello) Tj", "ET");
+        let hidden = if damaged {
+            damaged_flate(b"", shown)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), shown);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = Object::Ref(doc.add(hidden));
+        let mut listed = vec![Object::Ref(ObjRef::new(4, 0)), hidden];
+        if !last {
+            listed.push(Object::Ref(ObjRef::new(5, 0)));
+        }
+        let listed = Object::Array(listed);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed.clone())).unwrap();
+        let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["Before", "Hello"], "{what}");
+        let refused = text::replace_line(&mut doc, 0, 1, "Hi").unwrap_err();
+        assert!(refused.to_string().contains("goes on in a content stream"), "{what}: {refused}");
+        assert_eq!(contents(&doc), Some(listed), "{what}");
+        text::replace_line(&mut doc, 0, 0, "Earlier").unwrap();
+    }
+}
+
+/// An image's `q cm … Q` that closes past a stream not read whole, one that doesn't decode or one
+/// damaged partway, may hold what that stream draws (here a square, in the image's `cm`), also when
+/// the square's operands end the stream before it and only its keyword is hidden. Moving the image
+/// leaves that `cm` as it is and gives the `Do` a `cm` of its own, so the square stays, with a clip
+/// on the image too, which then stays where it is as one the square may share. A crop goes around
+/// the `Do` alone, and a crop PdfCraft put in that scope isn't removed. A scope that closes in a
+/// damaged stream before its damage holds none of it: its `cm` takes the move.
+#[test]
+fn an_image_whose_scope_closes_past_a_stream_not_read_whole_moves_alone() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let first_stream = |doc: &Document| {
+        let Some(Object::Array(list)) = contents(doc) else { panic!("contents {:?}", contents(doc)) };
+        let Some(Object::Stream(first)) = list.first().map(|f| (*doc.resolve(f)).clone()) else { panic!("no first stream") };
+        String::from_utf8(first.decoded().unwrap()).unwrap()
+    };
+    let later_streams = |doc: &Document| match contents(doc) {
+        Some(Object::Array(list)) => list.get(1..).map(<[Object]>::to_vec),
+        other => panic!("contents {other:?}"),
+    };
+    // The image in `q 100 0 0 100 50 50 cm`, a stream not read whole drawing a square in that
+    // `cm`, then the scope's `Q`. Split, the square's operands come before the hidden keyword.
+    let page = |clip: &str, damaged: bool, split: bool| {
+        let operands = if split && !damaged { " 1.5 0 0.5 0.5" } else { "" };
+        let mut doc = two_stream_image_page(&format!("q 100 0 0 100 50 50 cm {clip}/Im1 Do{operands}"), "Q");
+        let hidden = match (damaged, split) {
+            (true, false) => damaged_flate(b"", b"0 0 1 rg 1.5 0 0.5 0.5 re f"),
+            (true, true) => damaged_flate(b"0 0 1 rg 1.5 0", b" 0.5 0.5 re f"),
+            (false, _) => {
+                let filter = doc.add(Object::name("FlateDecode"));
+                let mut s = Stream::flate(Dict::new(), if split { b"re f".as_slice() } else { b"0 0 1 rg 1.5 0 0.5 0.5 re f" });
+                s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+                s
+            }
+        };
+        let hidden = doc.add(hidden);
+        let listed = vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(ObjRef::new(5, 0))];
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(listed))).unwrap();
+        doc
+    };
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    for damaged in [false, true] {
+        for split in [false, true] {
+            for clip in ["", "0 0 1 1 re W n ", "/PdfCraftImageCrop MP 0 0 1 1 re W n "] {
+                let what = format!("damaged: {damaged}, split: {split}, clip: {clip:?}");
+                let mut doc = page(clip, damaged, split);
+                let later = later_streams(&doc);
+                images::change_image(&mut doc, 0, 0, &shift).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.contains("100 0 0 100 50 50 cm"), "{what}: the scope's cm stays: {first}");
+                assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [60.0, 50.0, 160.0, 150.0]), "{what}: the image moved");
+
+                let mut doc = page(clip, damaged, split);
+                images::change_image(&mut doc, 0, 0, &images::ImageChange::Crop([60.0, 60.0, 140.0, 140.0])).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: cropped, the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.starts_with("q 100 0 0 100 50 50 cm"), "{what}: nothing put at the scope's start: {first}");
+
+                if clip.contains("PdfCraftImageCrop") {
+                    let mut doc = page(clip, damaged, split);
+                    let listed = contents(&doc);
+                    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::RemoveCrop).unwrap_err();
+                    assert!(refused.to_string().contains("may also clip"), "{what}: {refused}");
+                    assert_eq!(contents(&doc), listed, "{what}");
+                }
+            }
+        }
+    }
+
+    let mut doc = two_stream_image_page("q 100 0 0 100 50 50 cm /Im1 Do", "");
+    doc.set(ObjRef::new(5, 0), damaged_flate(b"Q\n", b"0 0 1 rg 1.5 0 0.5 0.5 re f"));
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let first = first_stream(&doc);
+    assert!(first.contains("100 0 0 100 60 50 cm") && !first.contains("50 50 cm"), "closed before the damage: {first}");
+}
+
+/// A content stream whose `/DecodeParms`, or a parameter in them, is given by reference is read
+/// through the reference: its text is listed and edited, not read with the predictor's tag bytes
+/// left in it.
+#[test]
+fn content_with_parameters_given_by_reference_is_read_and_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let content = b"BT /F1 12 Tf 72 700 Td (Predicted) Tj ET";
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    for given in ["parameters", "predictor"] {
+        let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+        let predictor = Object::Int(12);
+        let parms = if given == "parameters" {
+            Object::Ref(doc.add(Object::Dict([(b"Predictor".to_vec(), predictor)].into_iter().collect::<Dict>())))
+        } else {
+            Object::Dict([(b"Predictor".to_vec(), Object::Ref(doc.add(predictor)))].into_iter().collect())
+        };
+        let mut s = Stream::flate(Dict::new(), &rows);
+        s.dict.set(b"DecodeParms".to_vec(), parms);
+        doc.set(ObjRef::new(4, 0), s);
+        assert_eq!(texts(&doc), ["Predicted", "Whole"], "{given} by reference");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        assert_eq!(texts(&reopen(&doc)), ["Edited", "Whole"], "{given} by reference");
+    }
+}
+
+/// Objects are selected only from content read whole: what a damaged stream hides past the
+/// damage could change the graphics state of every later item.
+#[test]
+fn objects_are_not_listed_from_a_content_stream_damaged_partway() {
+    let (doc, _) = damaged_page();
+    let refused = editable_objects(&doc, 0).unwrap_err();
+    assert!(refused.to_string().contains("damaged partway"), "{refused}");
+    assert!(editable_objects(&split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
 fn two_stream_image_page(first: &str, second: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -5354,6 +5656,52 @@ fn arrange_and_crop_image_in_second_content_stream_succeeds() {
     assert!(close(after_crop[0].visible_rect.unwrap(), [210.0, 210.0, 290.0, 290.0]));
     assert_eq!(after_crop[1].name, "Im0");
     assert_eq!(after_crop[1].visible_rect, Some(after_crop[1].rect));
+}
+
+/// What follows the damage in a content stream is unknown, the graphics state the later streams
+/// draw in too: here it hides a `cm` that doubles them. An image after the damage isn't moved, as
+/// the move is worked out without that `cm`, and one before it isn't arranged to after it, beside
+/// an added item there. An image before the damage is moved.
+#[test]
+fn images_after_a_content_stream_damaged_partway_are_not_moved() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let image = "q 100 0 0 100 200 200 cm /Im1 Do Q";
+    let hidden_scale = || damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = two_stream_image_page("", image);
+    doc.set(ObjRef::new(4, 0), hidden_scale());
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page(image, "");
+    let damaged = doc.add(hidden_scale());
+    let mut added = Dict::new();
+    added.set(b"PCAdded".to_vec(), Object::Dict(Dict::new()));
+    let added = doc.add(Object::Stream(Stream::from_raw(added, b"q 0 0 1 rg 0 0 10 10 re f Q".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(damaged), Object::Ref(added)]))
+    })
+    .unwrap();
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    // Arranged within the content before the damage, it goes on.
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(added), Object::Ref(damaged)]))
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap();
+
+    let mut doc = two_stream_image_page(image, "");
+    doc.set(ObjRef::new(5, 0), hidden_scale());
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let moved = images::page_images(&reopen(&doc), 0).unwrap();
+    assert!(close(moved[0].rect, [210.0, 200.0, 310.0, 300.0]), "{:?}", moved[0].rect);
 }
 
 /// One page whose font draws a few Hebrew letters (ToUnicode): A ב, B ד, C י, D ו, E ק, F ש,
