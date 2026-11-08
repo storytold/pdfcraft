@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, write_incremental};
 use pdfcraft_sign::{
-    Certificate, Detail, DigitalId, Modification, Name, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS, der,
-    in_english, kind, pkcs12, signatures,
+    Appearance, Certificate, Detail, DigitalId, Modification, Name, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS,
+    der, in_english, kind, pkcs12, signatures,
 };
 
 fn data(name: &str) -> Vec<u8> {
@@ -3209,5 +3209,163 @@ fn visible_text_never_leaves_its_box() {
             let y: f64 = t[t.len() - 1].parse().unwrap();
             assert!((0.0..=w).contains(&x) && (0.0..=h).contains(&y), "{w}x{h}: text at {x} {y} leaves the box: {content}");
         }
+    }
+}
+
+/// One line of a visible signature: its size, its origin and its text when it is a literal string.
+struct Run {
+    size: f64,
+    x: f64,
+    y: f64,
+    text: Option<String>,
+}
+
+/// The lines of an appearance, from the `/Tag size Tf 1 0 0 1 x y Tm (text) Tj` operators it writes.
+fn runs_of(content: &str) -> Vec<Run> {
+    content
+        .lines()
+        .filter(|l| l.contains(" Tf 1 0 0 1 "))
+        .map(|l| {
+            let (head, tail) = l.split_once(" Tf ").unwrap();
+            let size: f64 = head.rsplit(' ').next().unwrap().parse().unwrap();
+            let t: Vec<&str> = tail.splitn(8, ' ').collect();
+            let (x, y): (f64, f64) = (t[4].parse().unwrap(), t[5].parse().unwrap());
+            let raw = t[7].strip_suffix(" Tj").unwrap();
+            let text = raw.strip_prefix('(').and_then(|r| r.strip_suffix(')')).map(|inner| {
+                let mut out = String::new();
+                let mut chars = inner.chars();
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        out.extend(chars.next());
+                    } else {
+                        out.push(c);
+                    }
+                }
+                out
+            });
+            Run { size, x, y, text }
+        })
+        .collect()
+}
+
+/// Every line is at least 5 pt (the floor) and inside the `w` x `h` box: its top (0.75 of its size)
+/// and its right edge within it, its baseline no more than a descender below the bottom. Widths are
+/// measured only for Helvetica lines, whose text is read back from the literal.
+fn assert_inside(runs: &[Run], w: f64, h: f64, what: &str) {
+    assert!(!runs.is_empty(), "{what}: nothing drawn");
+    for r in runs {
+        let text = r.text.as_deref().unwrap_or("<encoded>");
+        assert!(r.size >= 5.0 - 1e-9, "{what}: {text:?} at {} pt, below the 5 pt floor", r.size);
+        assert!(r.x >= 0.0, "{what}: {text:?} starts left of the box at {}", r.x);
+        assert!(r.y - 0.25 * r.size >= -0.01 && r.y + 0.75 * r.size <= h + 0.01, "{what}: {text:?} at y {} leaves the {h} pt box", r.y);
+        if let Some(t) = &r.text {
+            let right = r.x + pdfcraft_fonts::helvetica_width(t, r.size);
+            assert!(right <= w + 0.01, "{what}: {t:?} ends at {right}, past the {w} pt box");
+        }
+    }
+}
+
+/// `file` signed with a visible appearance in a `w` x `h` box, with `appearance` and `reason`.
+fn signed_in_box(file: &str, w: f64, h: f64, appearance: Appearance, reason: Option<&str>) -> (Vec<u8>, DigitalId) {
+    let id = pkcs12::open(&data(file), "test").unwrap();
+    let rect = Some([20.0, 100.0, 20.0 + w, 100.0 + h]);
+    let date = "D:20261201120000+01'00'".to_string();
+    let options = SignOptions { rect, appearance, reason: reason.map(String::from), date, ..opts() };
+    (pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap(), id)
+}
+
+#[test]
+fn long_names_wrap_in_a_column_of_two_fifths_and_stay_in_the_box() {
+    let (w, h) = (200.0, 50.0);
+    let (signed, _) = signed_in_box("long-name.p12", w, h, Appearance::default(), None);
+    let (content, _) = appearance_of(&signed, "Signature1");
+    let runs = runs_of(&content);
+    assert_inside(&runs, w, h, "long name");
+    // The name's column is the lines at the left padding: none wider than two fifths of the box.
+    let column: Vec<&Run> = runs.iter().filter(|r| r.x < w * 0.4).collect();
+    assert!(column.len() >= 2, "the long name wraps over several lines: {} lines", column.len());
+    for r in &column {
+        let right = r.x + pdfcraft_fonts::helvetica_width(r.text.as_deref().unwrap_or(""), r.size);
+        assert!(right <= w * 0.4 + 0.01, "column line ends at {right}, past two fifths");
+    }
+}
+
+#[test]
+fn a_name_too_wide_for_a_column_is_left_to_the_details() {
+    // 40 pt wide: beside a column the details would keep less than half the box, so the column goes.
+    let (w, h) = (40.0, 50.0);
+    let name = "Maximiliano Alejandro Fernandez de la Vega Montemayor";
+    let (signed, _) = signed_in_box("long-name.p12", w, h, Appearance::default(), None);
+    let (content, _) = appearance_of(&signed, "Signature1");
+    let runs = runs_of(&content);
+    assert_inside(&runs, w, h, "narrow box");
+    // No column: every line starts at the padding, and the details take the full width.
+    let pad = (h * 0.06).clamp(1.0, 6.0);
+    assert!(runs.iter().all(|r| (r.x - pad).abs() < 1e-9), "every line starts at the padding");
+    // The name is in the details, wrapped over lines.
+    let shown: Vec<&str> = runs.iter().filter_map(|r| r.text.as_deref()).collect();
+    assert!(shown.len() >= 3, "the name wraps over several lines");
+    let shown = shown.join(" ");
+    for word in name.split_whitespace() {
+        assert!(shown.contains(word), "{word} is in the details");
+    }
+}
+
+#[test]
+fn tiny_and_large_boxes_keep_text_inside_and_within_their_maximum_sizes() {
+    for (w, h) in [(12.0, 8.0), (25.0, 100.0), (60.0, 15.0), (120.0, 40.0), (400.0, 150.0), (600.0, 300.0)] {
+        let appearance = Appearance { reason: true, location: true, ..Appearance::default() };
+        let (signed, _) = signed_in_box("rsa-aes.p12", w, h, appearance, Some("I approve this document"));
+        let (content, _) = appearance_of(&signed, "Signature1");
+        let runs = runs_of(&content);
+        let what = format!("{w}x{h}");
+        assert_inside(&runs, w, h, &what);
+        // Large boxes stop growing: the name at most 36 pt, the details at most 12 pt.
+        let largest = runs.iter().map(|r| r.size).fold(0.0, f64::max);
+        assert!(largest <= 36.0 + 1e-9, "{what}: {largest} pt is above the 36 pt maximum");
+    }
+}
+
+#[test]
+fn details_that_cannot_fit_stop_at_the_floor_and_end_in_an_ellipsis() {
+    let (w, h) = (150.0, 20.0);
+    let appearance = Appearance { reason: true, location: true, distinguished_name: true, ..Appearance::default() };
+    let reason = "I approve this document after reading every page of the agreement in full, including the annexes and the schedule of payments";
+    let (signed, _) = signed_in_box("rsa-aes.p12", w, h, appearance, Some(reason));
+    let (content, _) = appearance_of(&signed, "Signature1");
+    let runs = runs_of(&content);
+    assert_inside(&runs, w, h, "short box, long details");
+    // The details are the lines right of the name's column.
+    let pad = (h * 0.06).clamp(1.0, 6.0);
+    let details: Vec<&Run> = runs.iter().filter(|r| r.x > pad + 0.01).collect();
+    assert!(!details.is_empty(), "the details are drawn");
+    // Too many lines even at the floor: the details are cut, at exactly 5 pt, and the last line kept says so.
+    assert!(details.iter().all(|r| (r.size - 5.0).abs() < 1e-9), "the cut details are at the 5 pt floor");
+    assert!(details.iter().any(|r| r.text.as_deref().is_some_and(|t| t.ends_with("..."))), "the cut details end in \"...\"");
+}
+
+#[test]
+fn a_name_outside_winansi_is_drawn_in_the_embedded_font_and_stays_inside() {
+    let (w, h) = (200.0, 50.0);
+    let (signed, _) = signed_in_box("unicode-name.p12", w, h, Appearance::default(), None);
+    let (content, _) = appearance_of(&signed, "Signature1");
+    // Not the Helvetica fallback: the name is encoded for the embedded font, not as WinAnsi text.
+    assert!(!content.contains("/Helv "), "the embedded font draws the name");
+    let runs = runs_of(&content);
+    // The glyph codes are not WinAnsi text, so only the box is checked for them.
+    let runs: Vec<Run> = runs.into_iter().map(|r| Run { text: None, ..r }).collect();
+    assert_inside(&runs, w, h, "unicode name");
+}
+
+#[test]
+fn a_wrapped_appearance_still_validates_once_trusted() {
+    for (file, w, h) in [("long-name.p12", 40.0, 50.0), ("unicode-name.p12", 200.0, 50.0)] {
+        let (signed, id) = signed_in_box(file, w, h, Appearance::default(), None);
+        let doc = open(&signed);
+        let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+        let trusted = signatures(&doc, &signed, &TrustStore { certs: vec![anchor] });
+        let s = trusted.iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Valid, "{file}: {:?}", s.details);
+        assert_eq!(s.modification, Modification::None, "{file}: the appearance is part of what is signed");
     }
 }

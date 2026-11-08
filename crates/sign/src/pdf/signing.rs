@@ -568,13 +568,16 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
             (size, words, width)
         });
+        // Beside the name the details keep at least half the box. Narrower, the name's column is left
+        // out: the details show the whole name, and take the full width.
+        let name_column = name_column.filter(|(_, _, width)| w - 4.0 * pad - width >= w * 0.5);
         // The details start a gap after the name's column, so no empty space sits between them.
         let name_w = name_column.as_ref().map_or(0.0, |(_, _, width)| *width);
         let (left_w, right_x) = match (&opts.graphic, a.name) {
             (Some(_), _) if lines.is_empty() => (w, pad),
             (Some(_), _) => (w * 0.5, w * 0.5 + pad),
-            (None, true) => (pad + name_w + 2.0 * pad, pad + name_w + 2.0 * pad),
-            (None, false) => (0.0, pad),
+            (None, true) if name_column.is_some() => (pad + name_w + 2.0 * pad, pad + name_w + 2.0 * pad),
+            (None, _) => (0.0, pad),
         };
         let right_w = (w - right_x - pad).max(1.0);
         if let Some(g) = &opts.graphic {
@@ -636,14 +639,19 @@ const READABLE_PT: f64 = 5.0;
 const COMFORTABLE_NAME_PT: f64 = 8.0;
 
 /// `lines` at `size`, kept inside `max_h` by dropping the lines past what fits. The last line kept
-/// ends in "..." when any were dropped; each line is shortened to `max_w` by [`ellipsize`].
+/// ends in "..." when any were dropped; each line is shortened to `max_w` by [`ellipsize`]. A line
+/// that cannot be shown even so ends the text there, so nothing is drawn past `max_w`.
 fn shorten(lines: &[String], size: f64, max_w: f64, max_h: f64, leading: f64, measure: &impl Fn(&str, f64) -> f64) -> Vec<String> {
     let capacity = ((max_h / (size * leading)).floor() as usize).max(1);
-    if lines.len() <= capacity {
-        return lines.iter().map(|l| ellipsize(l, size, max_w, measure)).collect();
+    let cut = lines.len() > capacity;
+    let mut kept = Vec::new();
+    for (i, line) in lines.iter().take(capacity).enumerate() {
+        let text = if cut && i + 1 == capacity { format!("{line} ...") } else { line.clone() };
+        match ellipsize(&text, size, max_w, measure) {
+            Some(shown) => kept.push(shown),
+            None => break,
+        }
     }
-    let mut kept: Vec<String> = lines[..capacity - 1].iter().map(|l| ellipsize(l, size, max_w, measure)).collect();
-    kept.push(ellipsize(&format!("{} ...", lines[capacity - 1]), size, max_w, measure));
     kept
 }
 
@@ -660,19 +668,20 @@ fn abbreviate_name(name: &str) -> String {
     out.join(" ")
 }
 
-/// `line` if it fits `max_w` at `size`, else its longest prefix that does, followed by "...".
-fn ellipsize(line: &str, size: f64, max_w: f64, measure: &impl Fn(&str, f64) -> f64) -> String {
+/// `line` if it fits `max_w` at `size`, else its longest prefix that does, followed by "...". None
+/// when not even "..." fits.
+fn ellipsize(line: &str, size: f64, max_w: f64, measure: &impl Fn(&str, f64) -> f64) -> Option<String> {
     if measure(line, size) <= max_w {
-        return line.to_string();
+        return Some(line.to_string());
     }
     let chars: Vec<char> = line.chars().collect();
     for n in (0..chars.len()).rev() {
         let cut = format!("{}...", chars[..n].iter().collect::<String>().trim_end());
         if measure(&cut, size) <= max_w {
-            return cut;
+            return Some(cut);
         }
     }
-    "...".to_string()
+    None
 }
 
 pub(crate) fn fmt(v: f64) -> String {
