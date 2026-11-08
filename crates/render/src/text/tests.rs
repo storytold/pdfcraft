@@ -701,11 +701,13 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
 /// route for it), reads as its code's Latin-1 character when the number is that very code, in
 /// decimal (`C70` at 70, `C0071` at 71, `MT72` at 72, `C39` at 39, `C174` at 174) or
 /// hexadecimal (`G49` at 0x49, `GE9` at 0xE9), as pdftotext, PDFium and MuPDF read
-/// it: Windows printer drivers and typesetters name subset glyphs so. A control character
-/// (`C9` at 9) still reads as nothing. Only in a font where every numbered name names its own
-/// code: one more name numbering another code (`/C1` at 233, review on #3239) turns the whole
-/// font back to nothing, and so does a font whose names number something else, where a name
-/// can match its code by coincidence (`/MT40` at 0x40).
+/// it: Windows printer drivers and typesetters name subset glyphs so. Only in a font where every
+/// numbered name names its own code: one more name numbering another code (`/C1` at 233, review
+/// on #3239) turns the whole font back to nothing, and so does a font whose names number
+/// something else, where a name can match its code by coincidence (`/MT40` at 0x40). A subset
+/// that counts its glyphs in order of first use from code 1 (`/Differences [1 /C1 /C2 … /C80]`)
+/// names its own codes too, but `/C65` there is the 65th glyph used, not `A`: a numbered name at
+/// a control code (`C1` at 1, `C9` at 9) gives the counter away and the font reads nothing.
 #[test]
 fn numbered_glyph_names_read_as_their_own_code() {
     use lopdf::{Object, dictionary};
@@ -732,13 +734,25 @@ fn numbered_glyph_names_read_as_their_own_code() {
         name("C39"),
         Object::Integer(174),
         name("C174"),
-        Object::Integer(9),
-        name("C9"),
     ]);
     let one_other = encoding(vec![Object::Integer(70), name("C70"), Object::Integer(233), name("C1")]);
     let numbered_otherwise = encoding(vec![Object::Integer(1), name("C70"), name("C105"), Object::Integer(64), name("MT40")]);
-    let pages = [one_per_line(b"FGHI\xe9'\xae\x09"), one_per_line(b"F\xe9"), one_per_line(b"\x01\x02@")];
-    let pdf = encoded_pages(&[(own, &pages[0][..]), (one_other, &pages[1][..]), (numbered_otherwise, &pages[2][..])]);
+    let counter = encoding(std::iter::once(Object::Integer(1)).chain((1..=80).map(|n| name(&format!("C{n}")))).collect());
+    let own_and_a_control = encoding(vec![Object::Integer(9), name("C9"), Object::Integer(70), name("C70"), name("C0071")]);
+    let pages = [
+        one_per_line(b"FGHI\xe9'\xae"),
+        one_per_line(b"F\xe9"),
+        one_per_line(b"\x01\x02@"),
+        one_per_line(b"\x01\x20\x41\x42\x50"),
+        one_per_line(b"\x09FG"),
+    ];
+    let pdf = encoded_pages(&[
+        (own, &pages[0][..]),
+        (one_other, &pages[1][..]),
+        (numbered_otherwise, &pages[2][..]),
+        (counter, &pages[3][..]),
+        (own_and_a_control, &pages[4][..]),
+    ]);
     let lines = |page| {
         let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
         text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
@@ -746,21 +760,24 @@ fn numbered_glyph_names_read_as_their_own_code() {
     assert_eq!(lines(0), ["F", "G", "H", "I", "\u{e9}", "'", "\u{ae}"]);
     assert!(lines(1).is_empty(), "/C1 at 233 beside /C70 at 70: {:?}", lines(1));
     assert!(lines(2).is_empty(), "/MT40 at 0x40 among names numbering other codes: {:?}", lines(2));
+    assert!(lines(3).is_empty(), "a first-use counter /C1 … /C80 from code 1: {:?}", lines(3));
+    assert!(lines(4).is_empty(), "/C9 at 9 beside /C70 at 70: {:?}", lines(4));
 }
 
 /// `numbered_glyph_names_read_as_their_own_code` in a Type 3 font, which already reads codes
 /// 32-126 by the code: above 126, `C174` at 174, `C176` at 176 and `GE9` at 0xE9 read as the
 /// code's Latin-1 character, unless one numbered name in the font numbers another code
-/// (`/C1` at 233).
+/// (`/C1` at 233) or sits at a control code, as a first-use counter's `/C1` at 1 does.
 #[test]
 fn numbered_type3_glyph_names_read_as_their_own_code() {
     use lopdf::{Document, Object, Stream, dictionary};
     let name = |n: &str| Object::Name(n.as_bytes().to_vec());
     // Each font's /Differences as (code, glyph name) pairs, and the codes its page shows.
     type Names<'a> = &'a [(i64, &'a str)];
-    let fonts: [(Names, &[u8]); 2] = [
+    let fonts: [(Names, &[u8]); 3] = [
         (&[(70, "C70"), (174, "C174"), (176, "C176"), (233, "GE9")], b"F\xae\xb0\xe9"),
         (&[(174, "C174"), (176, "C176"), (233, "C1")], b"\xae\xb0\xe9"),
+        (&[(1, "C1"), (2, "C2"), (174, "C174"), (176, "C176")], b"\xae\xb0"),
     ];
     let mut doc = Document::with_version("1.7");
     let pages_id = doc.new_object_id();
@@ -804,6 +821,7 @@ fn numbered_type3_glyph_names_read_as_their_own_code() {
     };
     assert_eq!(lines(0), ["F", "\u{ae}", "\u{b0}", "\u{e9}"]);
     assert!(lines(1).is_empty(), "/C1 at 233 beside /C174 at 174: {:?}", lines(1));
+    assert!(lines(2).is_empty(), "a counter's /C1 at 1 beside /C174 at 174: {:?}", lines(2));
 }
 
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex

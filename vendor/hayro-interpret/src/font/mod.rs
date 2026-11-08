@@ -762,7 +762,10 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
 /// number something else (`/Differences [1 /C70 /C105 …]`, a glyph's order in the subset)
 /// fails, and so does one where a single name numbers another code: there a name that happens
 /// to match its code (`/MT40` at 0x40, `/C1` at 233 beside `/C70` at 70, review on #3239) is a
-/// coincidence, not evidence.
+/// coincidence, not evidence. A subset that counts its glyphs in order of first use from code 1
+/// (`/Differences [1 /C1 /C2 … /C80]`) names its own codes too, but the counter says nothing
+/// about the characters (`/C65` is the 65th glyph used, not `A`): a numbered name at a C0
+/// control code (below 32), which no text shows, gives such a counter away and fails the font.
 pub(crate) fn numbered_names_name_their_codes<'a>(
     names: impl IntoIterator<Item = (u8, &'a str)>,
 ) -> bool {
@@ -775,7 +778,7 @@ pub(crate) fn numbered_names_name_their_codes<'a>(
         })
         .all(|(code, name)| {
             let mut numbers = glyph_name_numbers(name).peekable();
-            numbers.peek().is_none() || numbers.any(|n| n == u32::from(code))
+            numbers.peek().is_none() || (code >= 0x20 && numbers.any(|n| n == u32::from(code)))
         })
 }
 
