@@ -105,6 +105,8 @@ pub struct Automation {
     next_ocr_review: u64,
     /// What starts `doc_email`'s request; a test puts a stand-in here.
     mail_sender: MailSender,
+    /// What object_copy copied, for object_paste into any open document.
+    objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
 }
 
 impl Default for Automation {
@@ -126,6 +128,7 @@ impl Automation {
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
             mail_sender: email::real_sender,
+            objects_clipboard: None,
         }
     }
 
