@@ -123,6 +123,116 @@ fn a_metadata_preservation_error_keeps_the_pdf_and_unsaved_edit() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(target_os = "macos")]
+fn save_acl(path: &Path) -> Vec<String> {
+    let result = std::process::Command::new("/bin/ls").arg("-le").arg(path).env("LC_ALL", "C").output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    String::from_utf8(result.stdout)
+        .unwrap()
+        .lines()
+        .filter(|line| line.trim_start().split_once(':').is_some_and(|(index, _)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit())))
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn set_save_acl(path: &Path, rule: &str) {
+    let result = std::process::Command::new("/bin/chmod").args(["+a", rule]).arg(path).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn saving_a_pdf_preserves_the_macos_destination_acl() {
+    let dir = workdir("save-acl");
+    let target = dir.join("a.pdf");
+    set_save_acl(&target, "user:nobody deny read");
+    let before = save_acl(&target);
+    assert!(!before.is_empty());
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    for full in [false, true] {
+        ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":90}));
+        let saved = ok(&mut a, "doc_save", json!({"doc":doc,"full":full}));
+        assert_eq!(saved["incremental"], !full);
+        assert_eq!(save_acl(&target), before);
+        assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], false);
+    }
+    let other = dir.join("b.pdf");
+    set_save_acl(&other, "user:nobody deny write");
+    let destination = save_acl(&other);
+    assert_ne!(destination, before);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"b.pdf"}));
+    assert_eq!(save_acl(&other), destination, "Save As keeps the destination policy rather than copying the input policy");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"copy.pdf"}));
+    assert!(save_acl(&dir.join("copy.pdf")).is_empty(), "a fresh path does not copy the input ACL");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_inherited_macos_acl_refusal_retains_unsaved_edits_and_allows_save_as() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = workdir("save-acl-inheritance");
+    let target = dir.join("a.pdf");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let original = std::fs::read(&target).unwrap();
+    let other_original = std::fs::read(dir.join("b.pdf")).unwrap();
+    assert!(save_acl(&target).is_empty());
+    set_save_acl(&dir, "user:nobody allow read,file_inherit");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":90}));
+    for full in [false, true] {
+        let failure = err(&mut a, "doc_save", json!({"doc":doc,"full":full}));
+        assert!(failure.to_string().contains("access rules"), "{failure}");
+        assert!(failure.to_string().contains("Save As"), "{failure}");
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert!(save_acl(&target).is_empty());
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], true);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "refusal leaves no staging files");
+    }
+    let failure = err(&mut a, "doc_save", json!({"doc":doc,"path":"b.pdf"}));
+    assert!(failure.to_string().contains("access rules"), "{failure}");
+    assert_eq!(std::fs::read(dir.join("b.pdf")).unwrap(), other_original);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"copy.pdf"}));
+    assert_ne!(std::fs::read(dir.join("copy.pdf")).unwrap(), original);
+    assert!(save_acl(&dir.join("copy.pdf")).iter().any(|entry| entry.contains("inherited allow read")));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], false);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_delete_denial_refuses_macos_save_without_staging_the_unsaved_edit() {
+    let dir = workdir("save-acl-delete-denial");
+    let target = dir.join("a.pdf");
+    let original = std::fs::read(&target).unwrap();
+    let user = std::process::Command::new("/usr/bin/id").arg("-un").output().unwrap();
+    assert!(user.status.success());
+    set_save_acl(&target, &format!("user:{} deny delete", String::from_utf8(user.stdout).unwrap().trim()));
+    let before = save_acl(&target);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":90}));
+    for full in [false, true] {
+        let failure = err(&mut a, "doc_save", json!({"doc":doc,"full":full}));
+        assert!(failure.to_string().contains("denies deletion"), "{failure}");
+        assert!(failure.to_string().contains("Save As"), "{failure}");
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert_eq!(save_acl(&target), before);
+        assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["document"]["dirty"], true);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no staged PDF data remains");
+    }
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"copy.pdf"}));
+    assert_ne!(std::fs::read(dir.join("copy.pdf")).unwrap(), original);
+    assert!(save_acl(&dir.join("copy.pdf")).is_empty());
+    assert!(std::process::Command::new("/bin/chmod").arg("-N").arg(target).status().unwrap().success());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn protected_fixture(password: &str) -> Vec<u8> {
     use pdfcraft_engine::{Edit, Protection, Session};
     let mut session = Session::new();

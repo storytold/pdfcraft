@@ -1,0 +1,6 @@
+69d68
+< pub type __uint16_t = ::std::os::raw::c_ushort;
+74d72
+< pub type __mode_t = __uint16_t;
+77d74
+< pub type mode_t = __mode_t;
