@@ -763,15 +763,14 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   `origin/main` and `git merge-tree --write-tree origin/main HEAD` exits 0 with
   no conflicted paths. Push and editing the PR text are publication actions for
   the owner.
-- **The live PR body is still stale** (and the draft has to be re-checked
-  against the rebased head). Against `PR-DRAFT.md` it still says "other users'
-  cursors are not drawn", lists only notes/replies/form values/page
-  rotate-move-delete as shared, says deleting a comment or a page cannot be
-  undone, and says the control plane provisions rooms "as a directory today" —
-  all four are wrong in this branch (§6.2, §6.4, §6.5). It also lacks the e2e
-  line about the commit callback running outside the hub lock. Replace the body
-  with `PR-DRAFT.md` (from `## What` on) when the branch is pushed.
-- Remaining limitations to state in that body: no web client/host bridge
+- **The PR body was replaced** on 2026-11-09 with the text in
+  `pdfcraft/PR-DRAFT.md` (from `## What` on). Every claim in it holds at the
+  pushed head `333072e8` as well; the rebase only changes the base, not the
+  features it describes. What it fixes: cursors and their TTL, the typed
+  annotation set, undo of deleted comments and pages from server copies, the
+  control plane, the commit callback running outside the hub lock, and the
+  SIGKILL crash-recovery test.
+- Remaining limitations stated in that body: no web client/host bridge
   (§6.3), no publication queue (a failed cabinet POST is retried only by the
   next commit or the last-client-leave commit), no endpoint to resolve a
   `conflict` room, WSS/TLS behind a reverse proxy, page restore capped at
