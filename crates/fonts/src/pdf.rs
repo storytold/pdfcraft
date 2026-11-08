@@ -307,9 +307,14 @@ const MAX_TYPE3_EXTENT: f64 = 1e6;
 fn type3_glyph_box(doc: &Document, font: &Dict) -> Option<([f64; 4], bool)> {
     let procs = dict(doc, font.get(b"CharProcs"))?;
     let mut names: Vec<&[u8]> = Vec::new();
-    // Whether glyphs past the limit go unread, so the union may be short of the glyphs drawn.
+    // Whether every glyph that can be drawn is read; if not, the union may be short of them.
     let mut complete = true;
     let encoding = dict(doc, font.get(b"Encoding"));
+    // A base encoding reaches glyphs `/Differences` doesn't name, which Type 3 doesn't provide for (its
+    // `/Differences` "shall specify the complete character encoding", Table 110): those boxes go unread.
+    if encoding.as_ref().is_some_and(|e| e.contains(b"BaseEncoding")) {
+        complete = false;
+    }
     let diffs = encoding.as_ref().and_then(|e| e.get(b"Differences")).map(|d| doc.resolve(d));
     for name in diffs.as_deref().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_name) {
         if procs.get(name).is_none() || names.contains(&name) {

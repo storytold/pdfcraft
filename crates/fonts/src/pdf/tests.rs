@@ -449,6 +449,20 @@ fn a_type3_font_bbox_wins_over_descriptor_metrics() {
     assert!((m.ascent - 0.84).abs() < 1e-9 && (m.descent + 0.21).abs() < 1e-9, "{} {}", m.ascent, m.descent);
 }
 
+/// An `/Encoding` with a `/BaseEncoding` reaches glyphs its `/Differences` doesn't name, whose
+/// boxes go unread, so a nonzero `/FontBBox` stands over the boxes of those named.
+#[test]
+fn a_type3_base_encoding_leaves_the_font_bbox_standing() {
+    let mut doc = Document::new_empty();
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, -2, 10, 50], &["1 0 0 0 1 10 d1", "1 0 0 0 1 1000 d1"]);
+    let mut enc = Dict::new();
+    enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0), Object::name("g0")]));
+    f.set(b"Encoding".to_vec(), Object::Dict(enc));
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (50.0, -2.0));
+}
+
 #[test]
 fn simple_fonts_decode_and_encode_through_their_encoding() {
     let mut doc = Document::new_empty();
