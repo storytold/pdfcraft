@@ -122,6 +122,12 @@ fn is_xml_valid_char(c: char) -> bool {
     )
 }
 
+#[derive(Default)]
+struct ExtractionBudget {
+    form_visits: usize,
+    image_bytes: usize,
+}
+
 fn extract_object_content(
     object: &pdfium_render::prelude::PdfPageObject<'_>,
     text_page_opt: Option<&pdfium_render::prelude::PdfPageText<'_>>,
@@ -129,7 +135,8 @@ fn extract_object_content(
     page_glyphs: &mut Vec<RawGlyph>,
     page_images: &mut Vec<PageImage>,
     found_text_object: &mut bool,
-) {
+    budget: &mut ExtractionBudget,
+) -> Result<()> {
     if let Some(text_object) = object.as_text_object() {
         *found_text_object = true;
         if let Some(text_page) = text_page_opt {
@@ -159,26 +166,35 @@ fn extract_object_content(
         let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
 
         if !is_png && !is_jpeg {
-            if let Ok(bitmap) = image_object.get_processed_bitmap(document) {
-                let w = bitmap.width() as u32;
-                let h = bitmap.height() as u32;
-                if w > 0 && h > 0 {
-                    let rgba = bitmap.as_rgba_bytes();
-                    if let Ok(png_data) = encode_png_exact(w, h, &rgba) {
-                        bytes = png_data;
-                    }
-                }
+            let bitmap = image_object.get_processed_bitmap(document).with_context(|| "Failed to process image bitmap from PDF")?;
+            let w = bitmap.width() as u32;
+            let h = bitmap.height() as u32;
+            if w > 0 && h > 0 {
+                let rgba = bitmap.as_rgba_bytes();
+                let png_data = encode_png_exact(w, h, &rgba).map_err(|e| anyhow::anyhow!("Failed to encode image to PNG: {e}"))?;
+                bytes = png_data;
+            } else {
+                bytes.clear();
             }
         }
 
         if !bytes.is_empty() {
+            budget.image_bytes = budget.image_bytes.saturating_add(bytes.len());
+            if budget.image_bytes > 128 * 1024 * 1024 {
+                anyhow::bail!("Exceeded maximum image byte limit (128MB) during extraction");
+            }
             page_images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
         }
     } else if let Some(form_object) = object.as_x_object_form_object() {
+        budget.form_visits = budget.form_visits.saturating_add(1);
+        if budget.form_visits > 1_000 {
+            anyhow::bail!("Exceeded form recursion limit of 1,000 visits");
+        }
         for child in form_object.iter() {
-            extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object);
+            extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object, budget)?;
         }
     }
+    Ok(())
 }
 
 /// Extracts full page data (glyphs + images) grouped by page using an existing `Pdfium` instance.
@@ -205,8 +221,17 @@ pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path:
         // Extract text and image objects on this page
         let text_page_opt = page.text().ok();
 
+        let mut budget = ExtractionBudget::default();
         for object in page_objects.iter() {
-            extract_object_content(&object, text_page_opt.as_ref(), &document, &mut page_glyphs, &mut page_images, &mut found_text_object);
+            extract_object_content(
+                &object,
+                text_page_opt.as_ref(),
+                &document,
+                &mut page_glyphs,
+                &mut page_images,
+                &mut found_text_object,
+                &mut budget,
+            )?;
         }
 
         // Fallback: If no text objects were found on the page, or if text objects

@@ -170,20 +170,20 @@ fn main() {
         }
     };
 
-    // 2. Extract glyphs grouped by page
-    let page_glyphs = match extract::extract_pages_with_pdfium(&pdfium, &input_file) {
+    // 2. Extract page data (glyphs + images) grouped by page
+    let page_data = match extract::extract_pages_full_with_pdfium(&pdfium, &input_file) {
         Ok(pages) => pages,
         Err(err) => {
-            eprintln!("Error extracting glyphs from '{}': {:#}", input_file.display(), err);
+            eprintln!("Error extracting page data from '{}': {:#}", input_file.display(), err);
             process::exit(1);
         }
     };
     let extract_duration = t_init.elapsed();
-    println!("  -> Extracted raw glyphs in {:.2?}", extract_duration);
+    println!("  -> Extracted raw page data in {:.2?}", extract_duration);
 
     // 3. Build document layout
     let t_layout = Instant::now();
-    let layout = layout::build_layout(page_glyphs);
+    let layout = layout::build_layout(page_data);
     let layout_duration = t_layout.elapsed();
     println!("  -> Built typographic layout in {:.2?}", layout_duration);
 

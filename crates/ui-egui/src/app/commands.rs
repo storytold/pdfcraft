@@ -134,8 +134,13 @@ impl PdfCraftApp {
         self.quick_tool = QuickTool::Select;
         if let Some(i) = self.active
             && let Some(view) = self.views.get_mut(i)
-            && let Some(ed) = view.line_editor.take()
+            && let Some(mut ed) = view.line_editor.take()
         {
+            if let Some(doc) = self.session.get(view.id)
+                && let Some(p) = doc.info.pages.get(ed.page)
+            {
+                ed.rotation = p.rotation as i32;
+            }
             let reflow = view.reflow_paragraphs;
             let blocks = view.edit_lines.get(&ed.page).map(|(_, b)| b.as_slice());
             let backup_ed = ed.clone();

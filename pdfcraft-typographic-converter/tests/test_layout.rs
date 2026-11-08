@@ -187,6 +187,28 @@ fn test_hebrew_rtl_logical_ordering() {
 }
 
 #[test]
+fn test_hebrew_multiword_rtl_logical_ordering() {
+    // Two Hebrew words separated by a space: "שלום עולם"
+    // Extracted in logical order from right to left (decreasing x)
+    let glyphs = vec![
+        make_glyph('ש', "David", 12.0, false, false, 120.0, 130.0, 120.0, 500.0),
+        make_glyph('ל', "David", 12.0, false, false, 110.0, 120.0, 110.0, 500.0),
+        make_glyph('ו', "David", 12.0, false, false, 100.0, 110.0, 100.0, 500.0),
+        make_glyph('ם', "David", 12.0, false, false, 90.0, 100.0, 90.0, 500.0),
+        make_glyph(' ', "David", 12.0, false, false, 85.0, 90.0, 85.0, 500.0),
+        make_glyph('ע', "David", 12.0, false, false, 75.0, 85.0, 75.0, 500.0),
+        make_glyph('ו', "David", 12.0, false, false, 65.0, 75.0, 65.0, 500.0),
+        make_glyph('ל', "David", 12.0, false, false, 55.0, 65.0, 55.0, 500.0),
+        make_glyph('ם', "David", 12.0, false, false, 45.0, 55.0, 45.0, 500.0),
+    ];
+
+    let layout = build_layout(vec![(0, 595.0, 842.0, glyphs)]);
+    let line = &layout.pages[0].lines[0];
+    let full_text: String = line.runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(full_text, "שלום עולם");
+}
+
+#[test]
 fn test_baseline_clustering_no_chain_drift() {
     // 5 glyphs each 1.5 pt lower than the previous one:
     // y=500.0, y=498.5, y=497.0, y=495.5, y=494.0.

@@ -404,14 +404,22 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        if let Some(ed) = view.line_editor.take()
-            && let Some(edit) = crate::edit_text_ui::finished_edit(ed.clone())
-            && !self.apply_edit(edit)
-        {
-            if let Some(view) = self.views.get_mut(i) {
-                view.line_editor = Some(ed);
+        if let Some(mut ed) = view.line_editor.take() {
+            if let Some(doc) = self.session.get(id)
+                && let Some(p) = doc.info.pages.get(ed.page)
+            {
+                ed.rotation = p.rotation as i32;
             }
-            return false;
+            let reflow = view.reflow_paragraphs;
+            let blocks = self.session.get(id).map(|d| d.text_blocks(ed.page));
+            if let Some(edit) = crate::edit_text_ui::finished_edit_with_reflow(ed.clone(), reflow, blocks.as_deref())
+                && !self.apply_edit(edit)
+            {
+                if let Some(view) = self.views.get_mut(i) {
+                    view.line_editor = Some(ed);
+                }
+                return false;
+            }
         }
         let added = self.session.get(id).map(|d| d.added().to_vec()).unwrap_or_default();
         let Some(view) = self.views.get_mut(i) else { return true };
@@ -795,7 +803,14 @@ impl PdfCraftApp {
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
         let added = view.content.finish_draft(doc.added());
-        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
+        let reflow = view.reflow_paragraphs;
+        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(|mut ed| {
+            if let Some(p) = doc.info.pages.get(ed.page) {
+                ed.rotation = p.rotation as i32;
+            }
+            let blocks = doc.text_blocks(ed.page);
+            crate::edit_text_ui::finished_edit_with_reflow(ed, reflow, Some(&blocks))
+        });
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
         if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {

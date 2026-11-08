@@ -77,15 +77,21 @@ fn test_glyph_extraction_from_pdf() {
         assert!(!glyph.origin_y.is_nan());
     }
 
-    // Verify bold detection on "BoldText" glyphs
-    let bold_glyphs: Vec<_> = glyphs.iter().filter(|g| "BoldText".contains(g.char_code)).collect();
-    assert!(!bold_glyphs.is_empty());
-    assert!(bold_glyphs.iter().any(|g| g.is_bold), "At least some BoldText glyphs should have is_bold == true");
+    // Verify bold detection on "BoldText" glyphs (at y=700.0)
+    let bold_glyphs: Vec<_> = glyphs.iter().filter(|g| (g.origin_y - 700.0).abs() < 5.0).collect();
+    assert_eq!(bold_glyphs.len(), "BoldText".len());
+    for g in &bold_glyphs {
+        assert!(g.is_bold, "Glyph '{}' in BoldText span must have is_bold == true", g.char_code);
+        assert!(!g.is_italic, "Glyph '{}' in BoldText span must have is_italic == false", g.char_code);
+    }
 
-    // Verify italic detection on "ItalicText" glyphs
-    let italic_glyphs: Vec<_> = glyphs.iter().filter(|g| "ItalicText".contains(g.char_code)).collect();
-    assert!(!italic_glyphs.is_empty());
-    assert!(italic_glyphs.iter().any(|g| g.is_italic), "At least some ItalicText glyphs should have is_italic == true");
+    // Verify italic detection on "ItalicText" glyphs (at y=650.0)
+    let italic_glyphs: Vec<_> = glyphs.iter().filter(|g| (g.origin_y - 650.0).abs() < 5.0).collect();
+    assert_eq!(italic_glyphs.len(), "ItalicText".len());
+    for g in &italic_glyphs {
+        assert!(g.is_italic, "Glyph '{}' in ItalicText span must have is_italic == true", g.char_code);
+        assert!(!g.is_bold, "Glyph '{}' in ItalicText span must have is_bold == false", g.char_code);
+    }
 
     // Verify JSON serialization
     let json = serde_json::to_string_pretty(&glyphs).expect("Failed to serialize to JSON");

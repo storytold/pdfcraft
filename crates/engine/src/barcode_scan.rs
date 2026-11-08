@@ -381,6 +381,8 @@ fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(S
                                 mode = 104; // Switch to B
                             } else if sym == 101 {
                                 mode = 103; // Switch to A
+                            } else {
+                                return None;
                             }
                         }
                         104 => {
@@ -389,8 +391,10 @@ fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(S
                                 text.push((sym as u8).saturating_add(32) as char);
                             } else if sym == 99 {
                                 mode = 105; // Switch to C
-                            } else if sym == 101 {
+                            } else if sym == 100 || sym == 101 {
                                 mode = 103; // Switch to A
+                            } else {
+                                return None;
                             }
                         }
                         103 => {
@@ -401,11 +405,13 @@ fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(S
                                 text.push((sym as u8).saturating_sub(64) as char);
                             } else if sym == 99 {
                                 mode = 105; // Switch to C
-                            } else if sym == 100 {
+                            } else if sym == 100 || sym == 101 {
                                 mode = 104; // Switch to B
+                            } else {
+                                return None;
                             }
                         }
-                        _ => {}
+                        _ => return None,
                     }
                 }
 
@@ -854,44 +860,61 @@ impl Document {
         let crop_min_y = cy0.min(cy1);
         let crop_max_y = cy0.max(cy1);
 
-        // Pass 1: Scan individual embedded image XObjects
+        // Pass 1: Scan individual embedded image XObjects with caching and bounded pixel budget
         let images = self.page_images(page);
+        let mut cached_image_scans: std::collections::HashMap<String, (u32, u32, Vec<ScannedCode>)> = std::collections::HashMap::new();
+        let mut total_scanned_pixels = 0usize;
+        const MAX_EMBEDDED_SCAN_PIXELS: usize = 32_000_000;
+
         for (idx, img) in images.iter().enumerate() {
-            if let Ok((w, h, rgba)) = self.page_image_rgba(page, idx) {
-                if w == 0 || h == 0 {
+            let cache_key = img.object.map(|o| format!("{:?}", o)).unwrap_or_else(|| img.name.clone());
+            let (w, h, img_codes) = if let Some((cw, ch, codes)) = cached_image_scans.get(&cache_key) {
+                (*cw, *ch, codes.clone())
+            } else if total_scanned_pixels < MAX_EMBEDDED_SCAN_PIXELS {
+                if let Ok((w, h, rgba)) = self.page_image_rgba(page, idx) {
+                    if w == 0 || h == 0 {
+                        continue;
+                    }
+                    total_scanned_pixels = total_scanned_pixels.saturating_add((w as usize).saturating_mul(h as usize));
+                    let codes = scan_rgba_buffer(w as usize, h as usize, &rgba, page);
+                    cached_image_scans.insert(cache_key, (w, h, codes.clone()));
+                    (w, h, codes)
+                } else {
                     continue;
                 }
-                let img_codes = scan_rgba_buffer(w as usize, h as usize, &rgba, page);
-                for mut code in img_codes {
-                    code.id = scanned.len();
-                    code.image_index = Some(idx);
+            } else {
+                continue;
+            };
 
-                    let [ma, mb, mc, md, me, mf] = img.matrix;
-                    let apply = |u: f64, v: f64| -> (f64, f64) { (ma * u + mc * v + me, mb * u + md * v + mf) };
-                    let w_f = w as f64;
-                    let h_f = h as f64;
-                    let u0 = (code.rect[0] / w_f).clamp(0.0, 1.0);
-                    let u1 = (code.rect[2] / w_f).clamp(0.0, 1.0);
-                    let v0 = ((h_f - code.rect[3]) / h_f).clamp(0.0, 1.0);
-                    let v1 = ((h_f - code.rect[1]) / h_f).clamp(0.0, 1.0);
+            for mut code in img_codes {
+                code.id = scanned.len();
+                code.image_index = Some(idx);
 
-                    let corners = [apply(u0, v0), apply(u1, v0), apply(u1, v1), apply(u0, v1)];
-                    let sub_min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-                    let sub_min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-                    let sub_max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-                    let sub_max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+                let [ma, mb, mc, md, me, mf] = img.matrix;
+                let apply = |u: f64, v: f64| -> (f64, f64) { (ma * u + mc * v + me, mb * u + md * v + mf) };
+                let w_f = w as f64;
+                let h_f = h as f64;
+                let u0 = (code.rect[0] / w_f).clamp(0.0, 1.0);
+                let u1 = (code.rect[2] / w_f).clamp(0.0, 1.0);
+                let v0 = ((h_f - code.rect[3]) / h_f).clamp(0.0, 1.0);
+                let v1 = ((h_f - code.rect[1]) / h_f).clamp(0.0, 1.0);
 
-                    code.rect = [
-                        sub_min_x.clamp(crop_min_x as f64, crop_max_x as f64),
-                        sub_min_y.clamp(crop_min_y as f64, crop_max_y as f64),
-                        sub_max_x.clamp(crop_min_x as f64, crop_max_x as f64),
-                        sub_max_y.clamp(crop_min_y as f64, crop_max_y as f64),
-                    ];
-                    let w = code.rect[2] - code.rect[0];
-                    let h = code.rect[3] - code.rect[1];
-                    if w > 0.5 && h > 0.5 {
-                        scanned.push(code);
-                    }
+                let corners = [apply(u0, v0), apply(u1, v0), apply(u1, v1), apply(u0, v1)];
+                let sub_min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                let sub_min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                let sub_max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+                let sub_max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+
+                code.rect = [
+                    sub_min_x.clamp(crop_min_x as f64, crop_max_x as f64),
+                    sub_min_y.clamp(crop_min_y as f64, crop_max_y as f64),
+                    sub_max_x.clamp(crop_min_x as f64, crop_max_x as f64),
+                    sub_max_y.clamp(crop_min_y as f64, crop_max_y as f64),
+                ];
+                let w = code.rect[2] - code.rect[0];
+                let h = code.rect[3] - code.rect[1];
+                if w > 0.5 && h > 0.5 {
+                    scanned.push(code);
                 }
             }
         }
@@ -947,9 +970,10 @@ impl Document {
                     // preserve the embedded detection's image_index and let the visible rendered code take precedence
                     let mut matched_image_index = None;
                     scanned.retain(|c| {
+                        let same_symbol = c.text == code.text;
                         let overlap_x = (c.rect[0].max(code.rect[0])) <= (c.rect[2].min(code.rect[2]) + 15.0);
                         let overlap_y = (c.rect[1].max(code.rect[1])) <= (c.rect[3].min(code.rect[3]) + 15.0);
-                        let matches = overlap_x && overlap_y;
+                        let matches = same_symbol && overlap_x && overlap_y;
                         if matches && c.image_index.is_some() {
                             matched_image_index = c.image_index;
                         }
@@ -1037,6 +1061,13 @@ impl Document {
     pub fn generate_replacement_code(kind: CodeKind, text: &str, target_width: u32, target_height: u32) -> Result<Vec<u8>, String> {
         if target_width == 0 || target_height == 0 {
             return Err("Target dimensions must be non-zero".into());
+        }
+        let total_pixels = (target_width as usize)
+            .checked_mul(target_height as usize)
+            .filter(|&p| p <= 16_000_000)
+            .ok_or_else(|| "Target dimensions exceed maximum raster budget of 16 megapixels".to_string())?;
+        if total_pixels.checked_mul(4).is_none() {
+            return Err("Target pixel buffer size overflow".to_string());
         }
 
         use rxing::Writer;

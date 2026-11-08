@@ -173,11 +173,24 @@ pub fn set_line_properties(
     let ops = pieces.parse().ops;
 
     let m_op = ops.get(target_line.m_op_idx).ok_or_else(|| EditError::Invalid("line moveto operator missing".into()))?;
+    let first_l_idx = *target_line.l_op_indices.first().ok_or_else(|| EditError::Invalid("line segment missing lineto operator".into()))?;
     let last_l_idx = *target_line.l_op_indices.last().ok_or_else(|| EditError::Invalid("line lineto operator missing".into()))?;
     let last_l_op = ops.get(last_l_idx).ok_or_else(|| EditError::Invalid("line lineto operator missing".into()))?;
     let stroke_op = ops.get(target_line.stroke_op_idx).ok_or_else(|| EditError::Invalid("line stroke operator missing".into()))?;
 
     // Check if there are preceding path construction operators before m_op within the current path.
+    let mut has_connected_preceding = false;
+    if let Some(sub_slice) = ops.get((target_line.m_op_idx + 1)..first_l_idx) {
+        for op in sub_slice {
+            match op.op.as_slice() {
+                b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => {
+                    has_connected_preceding = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
     let mut has_preceding_path = false;
     for idx in (0..target_line.m_op_idx).rev() {
         let op = &ops[idx];
@@ -215,10 +228,10 @@ pub fn set_line_properties(
     }
 
     let is_simple_stroke = matches!(stroke_op.op.as_slice(), b"S" | b"s");
-    if (has_preceding_path || has_subsequent_path) && !is_simple_stroke {
+    if !is_simple_stroke {
         return Err(EditError::Invalid("changing properties of a line within a filled or compound path is not supported".into()));
     }
-    if has_subsequent_path && !subsequent_starts_with_m {
+    if has_connected_preceding || (has_subsequent_path && !subsequent_starts_with_m) {
         return Err(EditError::Invalid("changing properties of a connected multi-segment path is not supported".into()));
     }
 
@@ -301,8 +314,44 @@ pub fn update_line_endpoints(doc: &mut Document, page: usize, target: ObjectTarg
     let ops = pieces.parse().ops;
 
     let m_op = ops.get(target_line.m_op_idx).ok_or_else(|| EditError::Invalid("line moveto operator missing".into()))?;
+    let first_l_idx = *target_line.l_op_indices.first().ok_or_else(|| EditError::Invalid("line segment missing lineto operator".into()))?;
     let last_l_idx = *target_line.l_op_indices.last().ok_or_else(|| EditError::Invalid("line lineto operator missing".into()))?;
     let last_l_op = ops.get(last_l_idx).ok_or_else(|| EditError::Invalid("line lineto operator missing".into()))?;
+
+    let mut has_preceding_path = false;
+    if let Some(sub_slice) = ops.get((target_line.m_op_idx + 1)..first_l_idx) {
+        for op in sub_slice {
+            match op.op.as_slice() {
+                b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => {
+                    has_preceding_path = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut has_subsequent_path = false;
+    let mut subsequent_starts_with_m = false;
+    if let Some(sub_slice) = ops.get((last_l_idx + 1)..target_line.stroke_op_idx) {
+        for op in sub_slice {
+            match op.op.as_slice() {
+                b"m" => {
+                    if !has_subsequent_path {
+                        subsequent_starts_with_m = true;
+                    }
+                    has_subsequent_path = true;
+                }
+                b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => {
+                    has_subsequent_path = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    if has_preceding_path || (has_subsequent_path && !subsequent_starts_with_m) {
+        return Err(EditError::Invalid("editing endpoints of a connected multi-segment path is not supported".into()));
+    }
 
     let mut edits: Vec<(std::ops::Range<usize>, Vec<u8>)> = Vec::new();
 
@@ -650,6 +699,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
     let mut current_m_idx: usize = 0;
     let mut pending_segs: Vec<PendingSeg> = Vec::new();
     let mut raw_lines: Vec<ParsedLine> = Vec::new();
+    let mut total_dash_allocations: usize = 0;
 
     for (idx, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
@@ -701,7 +751,7 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
             }
             b"d" => {
                 if let Some(arr) = op.operands.first().and_then(Object::as_array) {
-                    let dash_vec: Vec<f64> = arr.iter().filter_map(Object::as_f64).collect();
+                    let dash_vec: Vec<f64> = arr.iter().take(16).filter_map(Object::as_f64).collect();
                     let phase = op.num(1).unwrap_or(0.0);
                     state.dash = (dash_vec, phase);
                 }
@@ -721,6 +771,10 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                         let dx = ux - prev_user[0];
                         let dy = uy - prev_user[1];
                         if (dx * dx + dy * dy).sqrt() > 1e-4 {
+                            total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
+                            if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                                return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
+                            }
                             let [a, b, c, d, _, _] = state.matrix.0;
                             let scale = ((a * a + b * b).sqrt() + (c * c + d * d).sqrt()) / 2.0;
                             let thickness = if scale > 1e-6 { (state.width * scale).max(0.1) } else { state.width.max(0.1) };
@@ -744,6 +798,10 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                     let dx = start_user[0] - prev_user[0];
                     let dy = start_user[1] - prev_user[1];
                     if (dx * dx + dy * dy).sqrt() > 1e-4 {
+                        total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
+                        if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                            return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
+                        }
                         let [a, b, c, d, _, _] = state.matrix.0;
                         let scale = ((a * a + b * b).sqrt() + (c * c + d * d).sqrt()) / 2.0;
                         let thickness = if scale > 1e-6 { (state.width * scale).max(0.1) } else { state.width.max(0.1) };
@@ -780,6 +838,10 @@ fn parse_page_lines(streams: &[(Object, Vec<u8>)]) -> Result<Vec<ParsedLine>, Ed
                     let dx = start_user[0] - prev_user[0];
                     let dy = start_user[1] - prev_user[1];
                     if (dx * dx + dy * dy).sqrt() > 1e-4 {
+                        total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
+                        if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                            return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
+                        }
                         let [a, b, c, d, _, _] = state.matrix.0;
                         let scale = ((a * a + b * b).sqrt() + (c * c + d * d).sqrt()) / 2.0;
                         let thickness = if scale > 1e-6 { (state.width * scale).max(0.1) } else { state.width.max(0.1) };
@@ -1077,5 +1139,41 @@ mod line_tests {
         assert_eq!(lines_after[0].start, [10.0, 20.0]);
         assert_eq!(lines_after[1].start, [10.0, 40.0]);
         assert!((lines_after[1].thickness - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_connected_multisegment_and_filled_paths_rejected() {
+        let mut doc = Document::new_empty();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        // Path with connected segments (0 0 m 10 0 l 10 10 l S) and a filled-and-stroked path (0 0 m 20 0 l 20 20 l B)
+        let stream_bytes = b"0 0 m 10 0 l 10 10 l S\n0 0 m 20 0 l 20 20 l B\n".to_vec();
+        let stream = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), stream_bytes))));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Array(vec![stream]));
+        let page = doc.add(page);
+        doc.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+
+        let lines = editable_lines(&doc, 0).unwrap();
+        assert_eq!(lines.len(), 4);
+
+        // Segment 0 of connected path
+        let target0 = ObjectTarget { kind: ObjectKind::VectorLine, index: 0 };
+        assert!(set_line_properties(&mut doc, 0, target0, Some([1.0, 0.0, 0.0]), Some(2.0), None).is_err());
+        assert!(update_line_endpoints(&mut doc, 0, target0, [0.0, 0.0], [15.0, 0.0]).is_err());
+
+        // Segment 2 of filled-and-stroked path (B operator)
+        let target2 = ObjectTarget { kind: ObjectKind::VectorLine, index: 2 };
+        assert!(set_line_properties(&mut doc, 0, target2, Some([1.0, 0.0, 0.0]), Some(2.0), None).is_err());
+
+        // Ensure document contents were not corrupted
+        let lines_after = editable_lines(&doc, 0).unwrap();
+        assert_eq!(lines_after.len(), 4);
     }
 }

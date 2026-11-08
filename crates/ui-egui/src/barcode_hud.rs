@@ -74,7 +74,7 @@ impl BarcodeHudState {
 
     /// Populate or update scanned codes for a page with explicit open control.
     pub fn update_codes_conditional(&mut self, codes: Vec<ScannedCode>, keep_open: bool) {
-        let prev_payload = self.active_code().map(|c| c.text.clone());
+        let prev_code_identity = self.active_code().map(|c| (c.page, c.id, c.text.clone(), c.rect));
         let target_rect = self.target_rect.take().or_else(|| self.active_code().map(|c| c.rect));
         self.scanned_codes = codes;
         if let Some(target) = target_rect {
@@ -86,11 +86,13 @@ impl BarcodeHudState {
         } else if self.active_index >= self.scanned_codes.len() {
             self.active_index = 0;
         }
-        let new_payload = self.active_code().map(|c| c.text.clone());
-        if prev_payload != new_payload {
+        let new_code_identity = self.active_code().map(|c| (c.page, c.id, c.text.clone(), c.rect));
+        if prev_code_identity != new_code_identity {
             self.edit_buffer = None;
             if let Some(active) = self.active_code() {
                 self.reembed_kind = Some(active.kind);
+            } else {
+                self.reembed_kind = None;
             }
         }
         self.open = keep_open;

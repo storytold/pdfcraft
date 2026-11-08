@@ -1259,6 +1259,15 @@ impl DocView {
         if self.select_anchor.is_some_and(|a| a > last) {
             self.select_anchor = None;
         }
+        if self.canvas_selection.selected.as_ref().is_some_and(|s| s.page > last || self.page_count == 0) {
+            self.canvas_selection.selected = None;
+            self.canvas_selection.symbol_palette_open = false;
+        }
+        self.canvas_selection.multi_selected.retain(|s| s.page <= last && self.page_count > 0);
+        if self.canvas_selection.hovered.as_ref().is_some_and(|h| h.page > last || self.page_count == 0) {
+            self.canvas_selection.hovered = None;
+        }
+        self.line_drag = None;
         self.goto = None;
         self.goto_point = None;
         self.zoom_anchor = None;

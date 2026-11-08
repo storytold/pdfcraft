@@ -95,10 +95,11 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     zip.start_file("ppt/_rels/presentation.xml.rels", options)?;
     zip.write_all(pres_rels.as_bytes())?;
 
-    // Determine presentation dimensions in EMUs (1 pt = 12700 EMUs)
-    let first_page = doc.pages.first();
-    let width_emu = first_page.map(|p| (p.width * 12700.0).round() as i64).unwrap_or(9144000);
-    let height_emu = first_page.map(|p| (p.height * 12700.0).round() as i64).unwrap_or(6858000);
+    // Determine presentation dimensions in EMUs (1 pt = 12700 EMUs), accommodating every page
+    let max_width = doc.pages.iter().map(|p| p.width as f64).fold(0.0, f64::max);
+    let max_height = doc.pages.iter().map(|p| p.height as f64).fold(0.0, f64::max);
+    let width_emu = if max_width > 0.0 { (max_width * 12700.0).round() as i64 } else { 9144000 };
+    let height_emu = if max_height > 0.0 { (max_height * 12700.0).round() as i64 } else { 6858000 };
 
     // 4. ppt/presentation.xml
     let mut pres_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

@@ -18,11 +18,18 @@ fn is_safe_numeric(text: &str) -> Option<f64> {
     if lower == "nan" || lower.contains("inf") {
         return None;
     }
-    let check_zeros = if let Some(rest) = trimmed.strip_prefix('-') { rest } else { trimmed };
+    let check_zeros = if let Some(rest) = trimmed.strip_prefix('-') {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix('+') {
+        rest
+    } else {
+        trimmed
+    };
     if check_zeros.starts_with('0') && check_zeros.len() > 1 && !check_zeros.starts_with("0.") {
         return None;
     }
-    if check_zeros.chars().all(|c| c.is_ascii_digit()) && check_zeros.len() > 15 {
+    let digit_count = check_zeros.chars().filter(|c| c.is_ascii_digit()).count();
+    if digit_count > 15 {
         return None;
     }
     let val = trimmed.parse::<f64>().ok()?;

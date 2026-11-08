@@ -66,7 +66,15 @@ pub fn parse_numeric(s: &str) -> Option<f64> {
         }
     }
     // Clean thousands commas and preserve sign
-    let is_negative = trimmed.starts_with('-') || trimmed.starts_with("$-") || trimmed.starts_with("€-");
+    let is_negative = trimmed.starts_with('-')
+        || trimmed.starts_with("$-")
+        || trimmed.starts_with("€-")
+        || trimmed.starts_with("£-")
+        || trimmed.starts_with("¥-")
+        || trimmed.starts_with("-$")
+        || trimmed.starts_with("-€")
+        || trimmed.starts_with("-£")
+        || trimmed.starts_with("-¥");
     let mut cleaned = String::with_capacity(unsigned.len() + 1);
     if is_negative {
         cleaned.push('-');
@@ -232,7 +240,7 @@ fn process_tables(
 
             for c in row {
                 let text = c.text.trim().to_string();
-                let num = if is_header { None } else { parse_numeric(&text) };
+                let num = parse_numeric(&text);
                 let style = if is_header {
                     STYLE_HEADER
                 } else if is_last && c.bold {
@@ -587,6 +595,10 @@ mod tests {
         assert_eq!(parse_numeric("123"), Some(123.0));
         assert_eq!(parse_numeric("  $1,234.56  "), Some(1234.56));
         assert_eq!(parse_numeric("€99.95"), Some(99.95));
+        assert_eq!(parse_numeric("£-12"), Some(-12.0));
+        assert_eq!(parse_numeric("¥-12"), Some(-12.0));
+        assert_eq!(parse_numeric("-£12.50"), Some(-12.50));
+        assert_eq!(parse_numeric("-¥1200"), Some(-1200.0));
         assert_eq!(parse_numeric("5$3"), None);
         assert_eq!(parse_numeric("45%"), None);
         assert_eq!(parse_numeric("02134"), None);
@@ -671,14 +683,44 @@ mod tests {
                     space_around: [false, false],
                 },
             ],
-            images: Vec::new(),
+            images: vec![crate::Image {
+                ext: "png",
+                bytes: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A].into(),
+                rect: [50.0, 50.0, 100.0, 100.0],
+                size: [50.0, 50.0],
+                rotation: 0.0,
+            }],
             background: None,
         };
 
         let bytes = xlsx(&[p], "Test Invoice");
         assert!(bytes.starts_with(b"PK\x03\x04"));
-        for part in ["[Content_Types].xml", "_rels/.rels", "docProps/core.xml", "xl/workbook.xml", "xl/styles.xml", "xl/worksheets/sheet1.xml"] {
+        for part in [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "docProps/core.xml",
+            "xl/workbook.xml",
+            "xl/styles.xml",
+            "xl/worksheets/sheet1.xml",
+            "xl/drawings/drawing1.xml",
+            "xl/media/image1.png",
+        ] {
             assert!(bytes.windows(part.len()).any(|w| w == part.as_bytes()), "missing part {part}");
         }
+    }
+
+    #[test]
+    fn test_sheet_xml_content() {
+        let rows = vec![XlsxRow {
+            row_num: 1,
+            cells: vec![
+                XlsxCell { col: 1, text: "Widget".into(), num: None, style: STYLE_DEFAULT },
+                XlsxCell { col: 2, text: "$19.99".into(), num: Some(19.99), style: STYLE_NUMBER_BORDER },
+            ],
+        }];
+        let xml = build_sheet_xml(0, &rows, &["A1:B1".to_string()], &[10, 10], true);
+        assert!(xml.contains("<v>19.99</v>"));
+        assert!(xml.contains("<mergeCell ref=\"A1:B1\"/>"));
+        assert!(xml.contains("<drawing r:id=\"rIdDrw1\"/>"));
     }
 }

@@ -126,6 +126,10 @@ fn is_rtl_char(c: char) -> bool {
     )
 }
 
+fn is_neutral_char(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '.' | ',' | '-' | '—' | ':' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '…')
+}
+
 /// Clusters glyphs on a single page into structured lines and runs.
 fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
     if glyphs.is_empty() {
@@ -165,10 +169,19 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
         let baseline_y = calculate_median(&origin_ys);
         let baseline_size = calculate_median(&font_sizes);
 
-        // Partition cluster into directional segments to preserve Hebrew/RTL logical order
+        // Partition cluster into directional segments to preserve Hebrew/RTL logical order across spaces
         let mut segments: Vec<(bool, Vec<RawGlyph>)> = Vec::new();
+        let mut current_direction = false;
         for g in cluster {
-            let is_rtl = is_rtl_char(g.char_code);
+            let is_rtl = if is_rtl_char(g.char_code) {
+                current_direction = true;
+                true
+            } else if is_neutral_char(g.char_code) {
+                current_direction
+            } else {
+                current_direction = false;
+                false
+            };
             if let Some(last_seg) = segments.last_mut() {
                 if last_seg.0 == is_rtl {
                     last_seg.1.push(g);

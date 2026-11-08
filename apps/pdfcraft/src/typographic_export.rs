@@ -33,6 +33,10 @@ pub fn export_pdf<P: AsRef<Path>, Q: AsRef<Path>>(pdf_path: P, output_path: Q, f
     let pdf_path_ref = pdf_path.as_ref();
     let output_path_ref = output_path.as_ref();
 
+    if !pdf_path_ref.exists() {
+        return Err(format!("Input PDF file not found: {}", pdf_path_ref.display()));
+    }
+
     let page_data =
         extract::extract_pages_full(pdf_path_ref).map_err(|e| format!("Failed to extract pages from PDF at {}: {e:#}", pdf_path_ref.display()))?;
 
@@ -81,5 +85,7 @@ mod tests {
         let out = Path::new("out.docx");
         let res = export_pdf(non_existent, out, ExportFormat::Docx);
         assert!(res.is_err(), "exporting non-existent PDF should return Err");
+        let err_msg = res.unwrap_err();
+        assert!(err_msg.contains("Input PDF file not found"), "unexpected error: {err_msg}");
     }
 }
