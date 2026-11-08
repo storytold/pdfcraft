@@ -156,7 +156,7 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
                 // Pictures flow upright: a picture the PDF mirrors or turns half round is flipped
                 // to match (a bottom-up bitmap vertically, a left-right mirror horizontally). The
-                // flip is a style, so simple HTML, which has none, shows the picture as stored.
+                // Simple HTML has no styles: the engine supplies pixels already flipped.
                 let flip = match im.upright_flips() {
                     _ if simple => "",
                     (false, false) => "",

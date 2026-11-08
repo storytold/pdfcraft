@@ -244,21 +244,36 @@ pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     for line in lines.iter().filter(|l| !l.text.trim().is_empty()) {
         let ink: Vec<[f64; 4]> = line.ink.iter().copied().filter(|r| r.iter().all(|v| v.is_finite())).collect();
         for block in group_layout(std::slice::from_ref(line), false) {
-            if block.rotation.abs() >= 0.1 || ink.is_empty() {
+            let angle = block.rotation.to_radians();
+            let (dx, dy) = (angle.cos(), angle.sin());
+            // Quarter-turned page content still has axis-aligned word boxes. Compare gaps
+            // along its baseline, so /Rotate can make the resulting pieces upright later.
+            if !line.positioned_words() || ink.is_empty() || dx.abs().max(dy.abs()) < 0.99999 {
                 out.push(block);
                 continue;
             }
+            let along = |r: [f64; 4]| {
+                let a = r[0] * dx + r[1] * dy;
+                let b = r[2] * dx + r[3] * dy;
+                [a.min(b), a.max(b)]
+            };
+            let narrow = |r: [f64; 4]| {
+                if dx.abs() > dy.abs() { [r[0], block.rect[1], r[2], block.rect[3]] } else { [block.rect[0], r[1], block.rect[2], r[3]] }
+            };
+            // Font names come from hostile PDF objects and would otherwise be copied in full
+            // for every tab-separated piece. Real PostScript font names fit within this cap.
+            let base_font: String = block.base_font.chars().take(127).collect();
             let words: Vec<&str> = line.text.split_whitespace().collect();
             if words.len() != ink.len() {
                 // The words can't be matched to their boxes: one piece over all of them.
                 let all = ink.iter().copied().reduce(union).unwrap_or(block.rect);
-                out.push(TextBlock { rect: [all[0], block.rect[1], all[2], block.rect[3]], ..block });
+                out.push(TextBlock { rect: narrow(all), base_font, ..block });
                 continue;
             }
             let mut start = 0;
             for end in 1..=words.len() {
-                let split =
-                    end == words.len() || ink.get(end).zip(ink.get(end - 1)).is_some_and(|(next, prev)| next[0] - prev[2] > PIECE_GAP * line.size);
+                let split = end == words.len()
+                    || ink.get(end).zip(ink.get(end - 1)).is_some_and(|(next, prev)| along(*next)[0] - along(*prev)[1] > PIECE_GAP * line.size);
                 if !split {
                     continue;
                 }
@@ -272,8 +287,8 @@ pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
                 out.push(TextBlock {
                     text,
                     editor_text,
-                    rect: [r[0], block.rect[1], r[2], block.rect[3]],
-                    base_font: block.base_font.clone(),
+                    rect: narrow(r),
+                    base_font: base_font.clone(),
                     size: block.size,
                     bold: block.bold,
                     italic: block.italic,

@@ -988,6 +988,9 @@ fn form_page() -> Page {
             size: 0.0,
             font: String::new(),
             read_only: false,
+            color: [0.0; 3],
+            alignment: 0,
+            round: false,
             kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: None },
             border: None,
             background: None,
@@ -998,6 +1001,9 @@ fn form_page() -> Page {
             size: 10.0,
             font: String::new(),
             read_only: false,
+            color: [0.0; 3],
+            alignment: 0,
+            round: false,
             kind: FieldKind::Text { value: "10115".into(), multiline: false, comb: Some(5), max_len: Some(5) },
             border: None,
             background: None,
@@ -1008,6 +1014,9 @@ fn form_page() -> Page {
             size: 9.0,
             font: String::new(),
             read_only: false,
+            color: [0.0; 3],
+            alignment: 0,
+            round: false,
             kind: FieldKind::Text { value: "a & b".into(), multiline: true, comb: None, max_len: None },
             border: None,
             background: None,
@@ -1018,6 +1027,9 @@ fn form_page() -> Page {
             size: 0.0,
             font: String::new(),
             read_only: false,
+            color: [0.0; 3],
+            alignment: 0,
+            round: false,
             kind: FieldKind::Check { checked: true },
             border: None,
             background: None,
@@ -1028,6 +1040,9 @@ fn form_page() -> Page {
             size: 0.0,
             font: String::new(),
             read_only: false,
+            color: [0.0; 3],
+            alignment: 0,
+            round: false,
             kind: FieldKind::Check { checked: false },
             border: None,
             background: None,
@@ -1038,6 +1053,9 @@ fn form_page() -> Page {
             size: 0.0,
             font: String::new(),
             read_only: false,
+            color: [0.0; 3],
+            alignment: 0,
+            round: false,
             kind: FieldKind::Choice { value: "Health".into(), options: vec!["Health".into(), "Pension".into()], editable: false },
             border: None,
             background: None,
@@ -1106,26 +1124,22 @@ fn word_makes_a_forms_fields_content_controls_that_keep_their_look() {
     assert_eq!(xml.matches("<w:sdt>").count(), 6, "{xml}");
     assert!(!xml.contains("FORMTEXT") && !xml.contains("<w:ffData>"), "{xml}");
     let arial = "<w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\" w:eastAsia=\"Arial\" w:cs=\"Arial\"/>";
-    // An empty field shows a placeholder, and its typed text takes the control's run properties
-    // (auto size: 65% of the 12 pt box, 7.8 pt).
-    assert!(
-        xml.contains(&format!(
-            "<w:sdtPr><w:rPr>{arial}<w:sz w:val=\"16\"/></w:rPr><w:alias w:val=\"Name\"/><w:tag w:val=\"Name\"/><w:showingPlcHdr/><w:text/></w:sdtPr>"
-        )),
-        "{xml}"
-    );
-    // A comb field spaces its characters one cell apart (100 pt over 5 cells, 10 pt text), in
-    // its value and in what is typed over it, and its title names its maximum length.
-    let comb = format!("<w:rPr>{arial}<w:spacing w:val=\"290\"/><w:sz w:val=\"20\"/></w:rPr>");
-    assert!(
-        xml.contains(&format!(
-            "<w:sdtPr>{comb}<w:alias w:val=\"Postcode (max. 5)\"/><w:tag w:val=\"Postcode\"/><w:text/></w:sdtPr><w:sdtContent><w:r>{comb}<w:t xml:space=\"preserve\">10115</w:t>"
-        )),
-        "{xml}"
-    );
-    assert!(xml.contains("<w:tag w:val=\"Notes\"/><w:text w:multiLine=\"1\"/>") && xml.contains(">a &amp; b</w:t>"), "{xml}");
+    // An empty field shows a placeholder, and its typed text takes its own properties.
+    let name = xml.split("<w:sdtPr>").nth(1).unwrap().split("</w:sdtPr>").next().unwrap();
+    assert!(name.starts_with(&format!("<w:rPr>{arial}<w:color w:val=\"000000\"/><w:sz w:val=\"16\"/></w:rPr>")), "{name}");
+    assert!(name.contains("<w:alias w:val=\"Name\"/>") && name.contains("<w:showingPlcHdr/>") && name.contains("<w:text/>"));
+    // The comb's 6 pt Courier advance plus 14 pt spacing is one 20 pt cell.
+    let courier = arial.replace("Arial", "Courier New");
+    let comb = format!("<w:rPr>{courier}<w:color w:val=\"000000\"/><w:spacing w:val=\"280\"/><w:sz w:val=\"20\"/></w:rPr>");
+    assert_eq!(xml.matches(&comb).count(), 2, "{xml}");
+    assert!(xml.contains("<w:alias w:val=\"Postcode (max. 5)\"/>"), "{xml}");
+    assert!(xml.contains(&format!("<w:r>{comb}<w:t xml:space=\"preserve\">10115</w:t>")), "{xml}");
+    assert!(xml.contains("<w:tag w:val=\"Notes\"/>") && xml.contains("<w:text w:multiLine=\"1\"/>") && xml.contains(">a &amp; b</w:t>"), "{xml}");
     // Check boxes and lists keep their look the same way.
-    assert!(xml.contains(&format!("<w:sdtPr><w:rPr>{arial}<w:sz w:val=\"16\"/></w:rPr><w:alias w:val=\"Yes\"/>")), "{xml}");
+    assert!(
+        xml.contains(&format!("<w:sdtPr><w:rPr>{arial}<w:color w:val=\"000000\"/><w:sz w:val=\"16\"/></w:rPr><w:alias w:val=\"Yes\"/>")),
+        "{xml}"
+    );
     assert!(xml.contains("<w14:checked w14:val=\"1\"/>") && xml.contains("<w14:checked w14:val=\"0\"/>"), "{xml}");
     assert!(xml.contains("<w:dropDownList><w:listItem w:displayText=\"Health\" w:value=\"Health\"/>"), "{xml}");
     // Word reads the check boxes through the Word 2010 namespace, which older readers may skip.
@@ -1153,6 +1167,9 @@ fn word_content_controls_keep_their_fields_names() {
         size: 0.0,
         font: String::new(),
         read_only: false,
+        color: [0.0; 3],
+        alignment: 0,
+        round: false,
         kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len },
         border: None,
         background: None,
@@ -1214,6 +1231,9 @@ fn word_bounds_hostile_shapes_and_fields() {
         size: f64::NAN,
         font: String::new(),
         read_only: false,
+        color: [0.0; 3],
+        alignment: 0,
+        round: false,
         kind: FieldKind::Check { checked: true },
         border: None,
         background: None,
@@ -1224,6 +1244,9 @@ fn word_bounds_hostile_shapes_and_fields() {
         size: -5.0,
         font: String::new(),
         read_only: false,
+        color: [0.0; 3],
+        alignment: 0,
+        round: false,
         kind: FieldKind::Text { value: "1".into(), multiline: false, comb: Some(0), max_len: Some(0) },
         border: None,
         background: None,
@@ -1501,6 +1524,9 @@ fn word_titles_a_radio_button_with_its_groups_one_choice() {
         size: 0.0,
         font: "ZapfDingbats".into(),
         read_only: false,
+        color: [0.0; 3],
+        alignment: 0,
+        round: false,
         kind: FieldKind::Radio { checked, buttons },
         border: None,
         background: None,
@@ -1539,7 +1565,7 @@ fn word_sets_field_text_in_the_fields_font() {
         xml[start..].split("w:ascii=\"").nth(1).unwrap().split('"').next().unwrap().to_string()
     };
     assert_eq!(family("Name"), "Courier New");
-    assert_eq!(family("Postcode"), "Arial", "a symbol font's glyphs aren't letters in Word");
+    assert_eq!(family("Postcode"), "Courier New", "comb values use fixed advances, including replacements");
     assert_eq!(family("Fund"), "Times New Roman");
     assert_eq!(family("Notes"), "Arial", "a field naming no font");
     assert_eq!(family("Yes"), "Arial", "a check box's X is Arial's");
@@ -1679,4 +1705,120 @@ fn word_shape_budget_keeps_layout_and_reports_only_positioned_art() {
     flowing.limit_shape_points(&mut budget);
     assert!(flowing.art_truncated && !flowing.art_framed);
     assert!(docx_checked(&[flowing], "Flow").1.is_empty());
+}
+
+#[test]
+fn office_regression_grouped_boxes_select_positioned_layout() {
+    let mut p = form_page();
+    p.fields.clear();
+    let paths = p.shapes.iter().take(FRAMING_SHAPES).flat_map(|s| s.paths.clone()).collect();
+    p.shapes = vec![Shape { paths, ..boxed([0.0; 4]) }];
+    let xml = part(&docx(&[p], "Grouped boxes"), "word/document.xml");
+    assert!(xml.contains("<v:rect id=\"Text"), "{xml}");
+}
+
+#[test]
+fn office_regression_retraced_rules_are_not_rectangles() {
+    let mut p = form_page();
+    p.shapes = vec![Shape { paths: vec![(vec![[10.0, 10.0], [30.0, 10.0], [10.0, 10.0], [10.0, 30.0]], true)], ..boxed([0.0; 4]) }];
+    let xml = part(&docx(&[p], "Retraced rules"), "word/document.xml");
+    assert!(xml.contains("<v:polyline id=\"Shape"));
+    assert!(!xml.contains("<v:rect id=\"Shape"));
+}
+
+#[test]
+fn office_regression_open_paths_fill_closed_but_stroke_open() {
+    let mut p = form_page();
+    p.shapes = vec![Shape { paths: vec![(vec![[10.0, 10.0], [30.0, 10.0], [20.0, 30.0]], false)], fill: Some([0.5; 3]), ..boxed([0.0; 4]) }];
+    let xml = part(&docx(&[p], "Open triangle"), "word/document.xml");
+    let paths: Vec<_> = xml.split("<v:polyline ").skip(1).map(|s| s.split("</v:polyline>").next().unwrap()).collect();
+    assert_eq!(paths.len(), 2);
+    assert!(paths[0].contains("stroked=\"f\"") && paths[0].contains("filled=\"t\""));
+    assert!(paths[0].contains("points=\"10.000pt,832.000pt,30.000pt,832.000pt,20.000pt,812.000pt,10.000pt,832.000pt\""));
+    assert!(paths[1].contains("stroked=\"t\"") && paths[1].contains("filled=\"f\""));
+    assert!(paths[1].contains("points=\"10.000pt,832.000pt,30.000pt,832.000pt,20.000pt,812.000pt\""));
+}
+
+#[test]
+fn office_regression_positioned_mixed_styles_use_each_line_piece_once() {
+    let mut p = form_page();
+    p.fields.clear();
+    p.lines = vec![
+        Block { size: 10.0, ..block("First", 60.0, 700.0, 85.0, 710.0) },
+        Block { size: 10.0, bold: true, ..block("Bold", 87.0, 700.0, 110.0, 710.0) },
+        Block { size: 10.0, italic: true, ..block("Italic", 112.0, 700.0, 140.0, 710.0) },
+    ];
+    let xml = part(&docx(&[p], "Pieces"), "word/document.xml");
+    for text in ["First", "Bold", "Italic"] {
+        let count = xml.split("<w:t xml:space=\"preserve\">").skip(1).filter(|s| s.split("</w:t>").next().unwrap().trim() == text).count();
+        assert_eq!(count, 1, "{xml}");
+    }
+    assert_eq!(xml.matches("<v:rect id=\"Text").count(), 1);
+    assert!(xml.contains("<w:b/>") && xml.contains("<w:i/>"));
+}
+
+#[test]
+fn office_regression_field_formatting_applies_to_values_and_replacements() {
+    let mut p = form_page();
+    p.fields.truncate(1);
+    p.fields[0].font = "Helvetica-BoldOblique".into();
+    p.fields[0].color = [1.0, 0.0, 0.0];
+    p.fields[0].alignment = 2;
+    let xml = part(&docx(&[p], "Styled field"), "word/document.xml");
+    assert_eq!(xml.matches("<w:b/><w:bCs/><w:i/><w:iCs/><w:color w:val=\"FF0000\"/>").count(), 2);
+    assert!(xml.contains("<w:jc w:val=\"right\"/>"));
+}
+
+#[test]
+fn office_regression_round_buttons_retain_one_visible_boundary() {
+    let mut p = form_page();
+    p.shapes.clear();
+    p.fields.retain(|f| f.name == "No");
+    p.fields[0].round = true;
+    let xml = part(&docx(&[p.clone()], "Round"), "word/document.xml");
+    assert_eq!(xml.matches("<a:prstGeom prst=\"ellipse\">").count(), 1, "{xml}");
+    assert!(xml.contains("<w14:checked w14:val=\"0\"/>"));
+    p.shapes =
+        vec![Shape { paths: vec![(vec![[95.0, 150.0], [100.0, 155.0], [95.0, 160.0], [90.0, 155.0], [95.0, 150.0]], true)], ..boxed([0.0; 4]) }];
+    p.fields[0].border = Some(Stroke { color: [0.0; 3], width: 1.0, dashed: false });
+    let xml = part(&docx(&[p], "Already outlined"), "word/document.xml");
+    assert_eq!(xml.matches("<v:polyline id=\"Shape").count(), 1);
+    assert!(!xml.contains("<a:prstGeom prst=\"ellipse\">"), "no duplicate border");
+}
+
+#[test]
+fn office_regression_repeated_text_widgets_share_a_custom_xml_value() {
+    let mut p = form_page();
+    p.fields.truncate(1);
+    p.fields[0].name = format!("{}A", "x".repeat(MAX_FIELD_NAME_CHARS));
+    p.fields[0].kind = FieldKind::Text { value: "a<&\rb".into(), multiline: true, comb: None, max_len: None };
+    let mut second = p.clone();
+    second.fields.push(Field { name: format!("{}B", "x".repeat(MAX_FIELD_NAME_CHARS)), ..p.fields[0].clone() });
+    let zip = docx(&[p, second], "Repeated");
+    let xml = part(&zip, "word/document.xml");
+    assert_eq!(xml.matches("w:xpath=\"/pc:fields/pc:field[@id='f1']\"").count(), 2);
+    assert_eq!(xml.matches("w:xpath=\"/pc:fields/pc:field[@id='f2']\"").count(), 1, "full names distinguish identical displayed tags");
+    let data = part(&zip, "customXml/item1.xml");
+    assert_eq!(data.matches("<pc:field id=").count(), 2);
+    assert!(data.contains(">a&lt;&amp;&#13;b</pc:field>"));
+    assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"../customXml/item1.xml\""));
+    assert!(part(&zip, "customXml/_rels/item1.xml.rels").contains("Target=\"itemProps1.xml\""));
+    assert!(part(&zip, "[Content_Types].xml").contains("/customXml/itemProps1.xml"));
+    let properties = part(&zip, "customXml/itemProps1.xml");
+    let store = properties.split("ds:itemID=\"").nth(1).unwrap().split('"').next().unwrap();
+    assert_eq!(xml.matches(&format!("w:storeItemID=\"{store}\"")).count(), 3);
+}
+
+#[test]
+fn office_regression_comb_values_use_constant_width_advances() {
+    let mut p = form_page();
+    p.fields.retain(|f| f.name == "Postcode");
+    p.fields[0].font = "Helvetica".into();
+    p.fields[0].kind = FieldKind::Text { value: "WiWiW".into(), multiline: false, comb: Some(5), max_len: Some(5) };
+    let xml = part(&docx(&[p], "Comb"), "word/document.xml");
+    assert_eq!(xml.matches("w:ascii=\"Courier New\"").count(), 2);
+    // Each 20 pt cell = Courier's 6 pt advance + 14 pt character spacing.
+    assert_eq!(xml.matches("<w:spacing w:val=\"280\"/>").count(), 2);
+    assert!(xml.contains("<w:ind w:left=\"140\"/>"));
+    assert!(xml.contains("<w:framePr w:w=\"2400\""));
 }

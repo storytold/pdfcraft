@@ -164,3 +164,12 @@ fn reading_shapes_leaves_out_what_an_empty_clip_hides() {
     assert_eq!(shapes.len(), 1, "{shapes:#?}");
     assert_eq!(shapes[0].bounds, [150.0, 150.0, 350.0, 350.0]);
 }
+
+#[test]
+fn office_regression_excess_saves_do_not_leak_their_transform() {
+    let data = format!("{}q 1 0 0 1 100 100 cm 0 0 10 10 re S Q 10 20 m 30 40 l S {}", "q ".repeat(256), "Q ".repeat(256));
+    let read = reading_shapes(&page(&data, "", &[]), 0).unwrap();
+    assert!(read.truncated);
+    assert_eq!(read.shapes.len(), 1);
+    assert_eq!(read.shapes[0].subpaths[0].points, [[10.0, 20.0], [30.0, 40.0]]);
+}

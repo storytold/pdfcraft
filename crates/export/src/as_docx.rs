@@ -3,6 +3,42 @@ use super::as_html::{esc, language_tag};
 use super::clip::font_family;
 use super::layout::{Block, Field, FieldKind, Image, Item, Page, Shape, Table, body_size, items};
 
+// This package contains one custom XML store. Its ID must agree in itemProps and every binding.
+const FIELD_STORE_ID: &str = "{A8EA4468-05AB-4E2B-BB18-926B8DA50E55}";
+const FIELD_STORE_NS: &str = "urn:pdfcraft:form-values";
+
+#[derive(Default)]
+struct FieldBindings<'a> {
+    names: std::collections::HashMap<&'a str, usize>,
+    values: Vec<&'a str>,
+}
+
+impl<'a> FieldBindings<'a> {
+    fn field(&mut self, field: &'a Field) -> String {
+        let FieldKind::Text { value, .. } = &field.kind else { return String::new() };
+        // The full qualified name identifies the PDF field; the displayed tag is truncated and
+        // two different long names may share it. Each widget binds to the same XML element.
+        let next = self.values.len() + 1;
+        let id = *self.names.entry(&field.name).or_insert_with(|| {
+            self.values.push(value);
+            next
+        });
+        format!(
+            "<w:dataBinding w:prefixMappings=\"xmlns:pc='{FIELD_STORE_NS}'\" w:xpath=\"/pc:fields/pc:field[@id='f{id}']\" w:storeItemID=\"{FIELD_STORE_ID}\"/>"
+        )
+    }
+
+    fn xml(&self) -> String {
+        let mut xml = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><pc:fields xmlns:pc=\"{FIELD_STORE_NS}\">");
+        for (i, value) in self.values.iter().enumerate() {
+            // XML parsers normalize literal CR; a character reference preserves the PDF value.
+            xml.push_str(&format!("<pc:field id=\"f{}\">{}</pc:field>", i + 1, esc(value).replace('\r', "&#13;")));
+        }
+        xml.push_str("</pc:fields>");
+        xml
+    }
+}
+
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
 pub(crate) fn rgb8(c: [f64; 3]) -> [u8; 3] {
     // The value is clamped to 0..=255 before the cast, so it cannot truncate.
@@ -154,25 +190,27 @@ fn framed(page: &Page) -> bool {
     // Bounded like `positioned`: past the budget the page keeps flowing.
     let mut budget: usize = 1_000_000;
     for s in &page.shapes {
-        let Some(b) = shape_bounds(s) else { continue };
-        let (w, h) = (b[2] - b[0], b[3] - b[1]);
-        let outline = s.stroke.is_some() || (s.fill.is_some() && w.min(h) <= 3.0);
-        if !outline || h < 4.0 {
-            continue;
-        }
-        let near = [b[0] - 6.0, b[1] - 6.0, b[2] + 6.0, b[3] + 6.0];
-        for blk in &page.blocks {
-            if budget == 0 {
-                return false;
+        for (points, _) in &s.paths {
+            let Some(b) = point_bounds(points.iter()) else { continue };
+            let (w, h) = (b[2] - b[0], b[3] - b[1]);
+            let outline = s.stroke.is_some() || (s.fill.is_some() && w.min(h) <= 3.0);
+            if !outline || h < 4.0 {
+                continue;
             }
-            budget -= 1;
-            if overlaps(near, blk.rect) {
-                found = found.saturating_add(1);
-                break;
+            let near = [b[0] - 6.0, b[1] - 6.0, b[2] + 6.0, b[3] + 6.0];
+            for blk in &page.blocks {
+                if budget == 0 {
+                    return false;
+                }
+                budget -= 1;
+                if overlaps(near, blk.rect) {
+                    found = found.saturating_add(1);
+                    break;
+                }
             }
-        }
-        if found >= FRAMING_SHAPES {
-            return true;
+            if found >= FRAMING_SHAPES {
+                return true;
+            }
         }
     }
     false
@@ -260,8 +298,12 @@ fn rgb_attr(c: [f64; 3]) -> String {
 
 /// The box of a shape's points, or `None` when it has none (or only hostile ones).
 fn shape_bounds(s: &Shape) -> Option<[f64; 4]> {
+    point_bounds(s.paths.iter().flat_map(|(points, _)| points))
+}
+
+fn point_bounds<'a>(points: impl Iterator<Item = &'a [f64; 2]>) -> Option<[f64; 4]> {
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-    for p in s.paths.iter().flat_map(|(points, _)| points) {
+    for p in points {
         b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
     }
     b.iter().all(|v| v.is_finite()).then_some(b)
@@ -276,6 +318,9 @@ fn axis_rect(points: &[[f64; 2]]) -> Option<[f64; 4]> {
         _ => return None,
     };
     let same = |u: f64, v: f64| (u - v).abs() < 0.01;
+    if corners.iter().enumerate().any(|(i, p)| corners.iter().skip(i + 1).any(|q| same(p[0], q[0]) && same(p[1], q[1]))) {
+        return None;
+    }
     let sides = [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[3]), (corners[3], corners[0])];
     if !sides.iter().all(|(p, q)| same(p[0], q[0]) || same(p[1], q[1])) {
         return None;
@@ -347,6 +392,26 @@ fn normalized(points: &[[f64; 2]], closed: bool, filled: bool) -> (Vec<[f64; 2]>
 fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut ArtBudget) -> Option<String> {
     if s.stroke.is_none() && s.fill.is_none() {
         return None;
+    }
+    // PDF fills implicitly close an open subpath; its stroke must still stay open (B/B*).
+    // Separate the two paints and charge both against the emitted-shape budget.
+    if s.fill.is_some() && s.stroke.is_some() && s.paths.iter().any(|(_, closed)| !closed) {
+        let mut out = String::new();
+        for (points, closed) in &s.paths {
+            let mut path = Shape { paths: vec![(points.clone(), *closed)], stroke: s.stroke, fill: s.fill };
+            if !closed {
+                path.stroke = None;
+                if let Some(xml) = shape_xml(&path, page_height, id, z, budget) {
+                    out.push_str(&xml);
+                }
+                path.fill = None;
+                path.stroke = s.stroke;
+            }
+            if let Some(xml) = shape_xml(&path, page_height, id, z, budget) {
+                out.push_str(&xml);
+            }
+        }
+        return (!out.is_empty()).then_some(out);
     }
     shape_bounds(s)?;
     let y = |v: f64| layout_number(page_height - v);
@@ -439,10 +504,20 @@ fn field_family(font: &str) -> String {
 
 /// The run properties of field text in Word family `family` at `size` points, spread `spacing`
 /// points apart.
-fn field_rpr(family: &str, size: f64, spacing: f64) -> String {
+fn field_rpr(f: &Field, family: &str, size: f64, spacing: f64) -> String {
     let half_points = (size * 2.0).round().clamp(2.0, 3276.0) as i64;
     let family = esc(family);
     let mut rpr = format!("<w:rPr><w:rFonts w:ascii=\"{family}\" w:hAnsi=\"{family}\" w:eastAsia=\"{family}\" w:cs=\"{family}\"/>");
+    if matches!(f.kind, FieldKind::Text { .. } | FieldKind::Choice { .. }) {
+        let font = f.font.to_ascii_lowercase();
+        if font.contains("bold") || font.contains("black") || font.contains("heavy") {
+            rpr.push_str("<w:b/><w:bCs/>");
+        }
+        if font.contains("italic") || font.contains("oblique") {
+            rpr.push_str("<w:i/><w:iCs/>");
+        }
+    }
+    rpr.push_str(&format!("<w:color w:val=\"{}\"/>", rgb_attr(f.color).trim_start_matches('#')));
     let twips = (spacing * 20.0).round();
     if twips.is_finite() && twips != 0.0 {
         rpr.push_str(&format!("<w:spacing w:val=\"{}\"/>", twips.clamp(-31680.0, 31680.0) as i64));
@@ -477,22 +552,31 @@ const FIELD_LOOK_HEIGHT: usize = 1 << 20;
 /// field's own frame, with the border inside the field's box as the PDF draws it. DrawingML, not
 /// VML: LibreOffice stacks every VML shape behind a DrawingML picture. `None` for a field with
 /// neither, or a hostile box.
-fn field_look_xml(f: &Field, page_height: f64, id: usize) -> Option<String> {
-    if f.border.is_none() && f.background.is_none() {
+fn field_look_xml(f: &Field, page_height: f64, id: usize, outlined: bool) -> Option<String> {
+    // A round button may draw its only circle in /AP, which isn't page artwork. Keep that
+    // boundary even when /MK has no border, but don't draw another over a page's own circle.
+    let border = f.border.filter(|_| !f.round || !outlined || f.background.is_some()).or_else(|| {
+        (f.round && !outlined && matches!(f.kind, FieldKind::Check { .. } | FieldKind::Radio { .. })).then_some(super::Stroke {
+            color: f.color,
+            width: 1.0,
+            dashed: false,
+        })
+    });
+    if border.is_none() && f.background.is_none() {
         return None;
     }
     let r = f.rect;
     if !r.iter().all(|v| v.is_finite()) {
         return None;
     }
-    let width = f.border.map_or(0.0, |b| if b.width.is_finite() { b.width.clamp(0.25, 12.0) } else { 1.0 });
+    let width = border.map_or(0.0, |b| if b.width.is_finite() { b.width.clamp(0.25, 12.0) } else { 1.0 });
     // DrawingML centres a line on the outline: an outline half the width inside keeps it in the box.
     let inset = (width / 2.0).min(((r[2] - r[0]) / 2.0).max(0.0)).min(((r[3] - r[1]) / 2.0).max(0.0));
     let (x, y) = (emu(layout_number(r[0] + inset)), emu(layout_number(page_height - r[3] + inset)));
     let (cx, cy) = (emu(layout_number(r[2] - r[0] - 2.0 * inset).max(0.01)), emu(layout_number(r[3] - r[1] - 2.0 * inset).max(0.01)));
     let hex = |c: [f64; 3]| rgb_attr(c).trim_start_matches('#').to_string();
     let fill = f.background.map_or("<a:noFill/>".to_string(), |c| format!("<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>", hex(c)));
-    let line = match f.border {
+    let line = match border {
         Some(b) => format!(
             "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>{}</a:ln>",
             emu(width),
@@ -502,12 +586,13 @@ fn field_look_xml(f: &Field, page_height: f64, id: usize) -> Option<String> {
         None => "<a:ln><a:noFill/></a:ln>".to_string(),
     };
     let doc_pr = FIELD_LOOK_HEIGHT.saturating_add(id);
+    let geometry = if f.round { "ellipse" } else { "rect" };
     Some(format!(
         "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"{doc_pr}\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">\
 <wp:simplePos x=\"0\" y=\"0\"/><wp:positionH relativeFrom=\"page\"><wp:posOffset>{x}</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"page\"><wp:posOffset>{y}</wp:posOffset></wp:positionV>\
 <wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:wrapNone/><wp:docPr id=\"{doc_pr}\" name=\"Field box {id}\"/><wp:cNvGraphicFramePr/>\
 <a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">\
-<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{fill}{line}</wps:spPr><wps:bodyPr/></wps:wsp>\
+<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"{geometry}\"><a:avLst/></a:prstGeom>{fill}{line}</wps:spPr><wps:bodyPr/></wps:wsp>\
 </a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"
     ))
 }
@@ -522,7 +607,7 @@ pub(crate) const MAX_FIELD_NAME_CHARS: usize = 128;
 /// field's maximum length is named in the control's title, since Word doesn't limit a control's
 /// length); a check box shows an X when checked (the PDF draws the box itself); a list is a
 /// drop-down.
-fn field_xml(f: &Field, page_height: f64) -> Option<String> {
+fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
     let r = f.rect;
     if !r.iter().all(|v| v.is_finite()) {
         return None;
@@ -540,10 +625,17 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
     // En spaces (half an em each) keep an empty field as wide as its box.
     let blank = |n: usize| "\u{2002}".repeat(n.clamp(1, 200));
     let fits = |advance: f64| if advance > 0.0 { (w / advance).floor() as usize } else { 1 };
+    let alignment = match f.alignment {
+        1 => "<w:jc w:val=\"center\"/>",
+        2 => "<w:jc w:val=\"right\"/>",
+        _ => "",
+    };
     let paragraph = match &f.kind {
         FieldKind::Text { value, multiline, comb, max_len } => {
             // A comb cell holds one character, centred: the run is spaced one cell per character.
-            let glyph = 0.55 * size;
+            // Word's character spacing is constant. A monospaced face gives existing and
+            // replacement Latin text the same 0.6 em advance, so wide/narrow letters don't drift.
+            let glyph = 0.6 * size;
             let cells = comb.filter(|n| *n > 0);
             // Word adds the spacing after the last character too, which ends the run a cell past
             // the box: the frame gets that cell more, or the last character wraps out of sight.
@@ -556,8 +648,12 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
             };
             // An empty field shows a placeholder of en spaces as wide as its box (one per comb
             // cell), so a click anywhere in the box lands in it; typing replaces it.
-            let (text, placeholder) =
-                if value.is_empty() { (blank(cells.unwrap_or_else(|| fits(0.5 * size))), "<w:showingPlcHdr/>") } else { (value.clone(), "") };
+            let (text, placeholder) = if value.is_empty() {
+                let empty = cells.map_or_else(|| blank(fits(0.5 * size)), |n| " ".repeat(n.clamp(1, 200)));
+                (empty, "<w:showingPlcHdr/>")
+            } else {
+                (value.clone(), "")
+            };
             // A multi-line value keeps its lines: Word ends a line at a break element, not at a
             // newline character (CR LF, CR or LF each end one line).
             let text_xml = if *multiline {
@@ -577,13 +673,15 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
                 None => name.clone(),
             };
             let multi = if *multiline { " w:multiLine=\"1\"" } else { "" };
-            let indent = format!("<w:ind w:left=\"{}\"/>", (left * 20.0).round().clamp(0.0, 31680.0) as i64);
+            let align = if cells.is_some() { "" } else { alignment };
+            let indent = format!("<w:ind w:left=\"{}\"/>{align}", (left * 20.0).round().clamp(0.0, 31680.0) as i64);
             let before = if *multiline { 0.0 } else { middle(size) };
             // The control's own run properties are what Word gives the text typed over its
             // placeholder: without them a typed value loses the font, size and comb spacing.
-            let rpr = field_rpr(&field_family(&f.font), size, spacing);
+            let family = if cells.is_some() { "Courier New".to_string() } else { field_family(&f.font) };
+            let rpr = field_rpr(f, &family, size, spacing);
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{lock}{placeholder}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{lock}{placeholder}{binding}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(frame, page_height, before, &indent),
                 text_xml
             )
@@ -591,7 +689,7 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
         FieldKind::Check { checked } | FieldKind::Radio { checked, .. } => {
             let size = (h.min(w) * 0.8).clamp(4.0, 24.0);
             // The X is Arial's, whatever font the PDF's field names (often ZapfDingbats).
-            let rpr = field_rpr("Arial", size, 0.0);
+            let rpr = field_rpr(f, "Arial", size, 0.0);
             // Word has no control that lets only one of several boxes, each in its own place, be
             // on: a radio button is a check box whose title says its group takes one choice.
             let props = match &f.kind {
@@ -614,12 +712,12 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
                 items.push_str(&format!("<w:listItem w:displayText=\"{o}\" w:value=\"{o}\"/>"));
             }
             let (text, placeholder) = if value.is_empty() { (blank(fits(0.5 * size)), "<w:showingPlcHdr/>") } else { (value.clone(), "") };
-            let rpr = field_rpr(&field_family(&f.font), size, 0.0);
+            let rpr = field_rpr(f, &field_family(&f.font), size, 0.0);
             // A combo box that takes typed text is a Word combo box, which does too.
             let list = if *editable { "comboBox" } else { "dropDownList" };
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{placeholder}<w:{list}>{items}</w:{list}></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
-                frame_ppr(r, page_height, middle(size), "<w:ind w:left=\"20\"/>"),
+                frame_ppr(r, page_height, middle(size), &format!("<w:ind w:left=\"20\"/>{alignment}")),
                 esc(&text)
             )
         }
@@ -656,7 +754,12 @@ fn rows(lines: &[Block]) -> Vec<Vec<&Block>> {
 
 /// A page that keeps its layout, and whether it had to leave shapes, fields or list items out to
 /// stay within [`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`] and [`MAX_DOCX_LIST_ITEMS`].
-fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize) -> (String, bool) {
+fn positioned_page<'a>(
+    page: &'a Page,
+    media: &mut Vec<(String, &'a Image)>,
+    shape_id: &mut usize,
+    bindings: &mut FieldBindings<'a>,
+) -> (String, bool) {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
     let mut s = String::from("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
@@ -758,9 +861,23 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     }
     // The fields' borders and fills, behind the text but over the page's own art and pictures:
     // a scanned form's thin check box lines get the solid box the PDF's fields draw over them.
+    let outlines: Vec<_> = page
+        .shapes
+        .iter()
+        .filter(|s| s.stroke.is_some())
+        .flat_map(|s| &s.paths)
+        .take(MAX_DOCX_PAGE_SHAPES)
+        .filter_map(|(points, _)| (points.len() >= 4).then(|| point_bounds(points.iter())).flatten())
+        .collect();
+    let mut outline_work = 1_000_000usize;
     for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
         *shape_id = shape_id.saturating_add(1);
-        if let Some(xml) = field_look_xml(f, page.height, *shape_id) {
+        let outlined = f.round
+            && outlines.iter().take(outline_work).any(|r| {
+                outline_work = outline_work.saturating_sub(1);
+                r.iter().zip(f.rect).all(|(a, b)| (*a - b).abs() <= 1.5)
+            });
+        if let Some(xml) = field_look_xml(f, page.height, *shape_id, outlined) {
             s.push_str(&xml);
         }
     }
@@ -769,7 +886,7 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     // text.
     let mut long_list = false;
     for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
-        if let Some(xml) = field_xml(f, page.height) {
+        if let Some(xml) = field_xml(f, page.height, &bindings.field(f)) {
             s.push_str(&xml);
             long_list |= matches!(&f.kind, FieldKind::Choice { options, .. } if options.len() > MAX_DOCX_LIST_ITEMS);
         }
@@ -859,6 +976,7 @@ pub fn docx_checked_with_language(pages: &[Page], title: &str, language: Option<
     // Word needs a paragraph between adjacent tables and after the last one in the body.
     let mut after_table = false;
     let mut shape_id = 0usize;
+    let mut bindings = FieldBindings::default();
     let layouts: Vec<bool> = pages.iter().map(positioned).collect();
     // A document most of whose pages keep their layout (a form) keeps it on every page: its
     // pages of notes then sit where they did instead of flowing past the page's end.
@@ -868,7 +986,7 @@ pub fn docx_checked_with_language(pages: &[Page], title: &str, language: Option<
         let text_w = (pw - 2 * (pw / 8).min(1440)) as f64 / 20.0;
         let kept = all_kept || layouts.get(page_index).copied().unwrap_or(false);
         if kept {
-            let (xml, left_out) = positioned_page(page, &mut media, &mut shape_id);
+            let (xml, left_out) = positioned_page(page, &mut media, &mut shape_id, &mut bindings);
             body.push_str(&xml);
             // Paths the reader left out are missing only where the page keeps its layout.
             if left_out || page.art_truncated || page.fields_truncated {
@@ -944,13 +1062,20 @@ xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:wps=\"h
 xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14 wps\">{background}<w:body>{body}\
 </w:body></w:document>"
     );
-    let types = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+    let field_types = if bindings.values.is_empty() {
+        ""
+    } else {
+        "<Override PartName=\"/customXml/itemProps1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.customXmlProperties+xml\"/>"
+    };
+    let types = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
 <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/>\
 <Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\
 <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
 <Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\
 <Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>\
-<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/></Types>";
+<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>{field_types}</Types>"
+    );
     let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
 <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
 <Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/></Relationships>";
@@ -964,6 +1089,9 @@ xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Igno
             "<Relationship Id=\"rIdImg{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{name}\"/>",
             i + 1
         ));
+    }
+    if !bindings.values.is_empty() {
+        doc_rels.push_str("<Relationship Id=\"rIdFields\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml\" Target=\"../customXml/item1.xml\"/>");
     }
     doc_rels.push_str("</Relationships>");
     let defaults = language_tag(language)
@@ -981,6 +1109,14 @@ xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Igno
         esc(title)
     );
     let mut z = Zip::default();
+    if !bindings.values.is_empty() {
+        z.add("customXml/item1.xml", bindings.xml().as_bytes(), true);
+        let props = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ds:datastoreItem ds:itemID=\"{FIELD_STORE_ID}\" xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\"><ds:schemaRefs><ds:schemaRef ds:uri=\"{FIELD_STORE_NS}\"/></ds:schemaRefs></ds:datastoreItem>"
+        );
+        z.add("customXml/itemProps1.xml", props.as_bytes(), true);
+        z.add("customXml/_rels/item1.xml.rels", b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rIdProps\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps\" Target=\"itemProps1.xml\"/></Relationships>", true);
+    }
     z.add("[Content_Types].xml", types.as_bytes(), true);
     z.add("_rels/.rels", rels.as_bytes(), true);
     z.add("docProps/core.xml", core.as_bytes(), true);

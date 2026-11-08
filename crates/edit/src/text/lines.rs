@@ -5,6 +5,11 @@ use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpr
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
+    /// Word boxes follow glyph order, not replacement `/ActualText` or reordered reading text.
+    pub(crate) fn positioned_words(&self) -> bool {
+        !self.actual_text && !self.runs.is_empty()
+    }
+
     /// The baseline's height in user space.
     pub fn origin_baseline(&self) -> f64 {
         self.origin.baseline

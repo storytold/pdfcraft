@@ -242,6 +242,7 @@ fn export_field(
     visible: &dyn Fn([f64; 4]) -> [f64; 4],
     unit: f64,
     looks: &mut Looks,
+    prepared: &FieldPreparation<'_>,
 ) -> Option<pdfcraft_export::Field> {
     use pdfcraft_forms::{FieldKind, flags};
     let kind = match f.kind {
@@ -253,12 +254,9 @@ fn export_field(
         },
         FieldKind::CheckBox => pdfcraft_export::FieldKind::Check { checked: button_on(f, w) },
         // A group's buttons are those the export keeps: shown, and on a page.
-        FieldKind::Radio => pdfcraft_export::FieldKind::Radio {
-            checked: button_on(f, w),
-            buttons: f.widgets.iter().filter(|b| !b.hidden && b.page.is_some()).count(),
-        },
+        FieldKind::Radio => pdfcraft_export::FieldKind::Radio { checked: button_on(f, w), buttons: prepared.buttons },
         FieldKind::Combo | FieldKind::List => pdfcraft_export::FieldKind::Choice {
-            value: f.display_value(),
+            value: prepared.shown.join(", "),
             options: f.options.iter().map(|(_, shown)| shown.clone()).collect(),
             // A combo box that takes typed text as well as its choices.
             editable: f.kind == FieldKind::Combo && f.has(flags::EDIT),
@@ -267,7 +265,7 @@ fn export_field(
     };
     // The font size and border width are in the page's units, as its box is: `unit` scales them
     // as it scales the page's text and strokes (a page with `/UserUnit` 2 draws them twice as big).
-    let (border, background) = widget_look(cos, w, looks);
+    let (border, background) = widget_look(cos, w);
     let border = border.map(|b| pdfcraft_export::Stroke { width: b.width * unit, ..b });
     // A widget may override its field's default appearance, as the PDF appearance writer does.
     let widget_da = cos
@@ -275,39 +273,100 @@ fn export_field(
         .and_then(|d| d.get(b"DA").cloned())
         .and_then(|o| cos.resolve(&o).as_string().map(|s| s.to_text()));
     let da = pdfcraft_forms::appearance::parse_da(widget_da.as_deref().unwrap_or(&f.da));
-    Some(pdfcraft_export::Field {
+    let mut field = pdfcraft_export::Field {
         name: f.name.clone(),
         rect: visible(w.rect),
         size: da.size * unit,
         font: dr_base_font(cos, &da.font),
         read_only: f.has(flags::READ_ONLY) || w.read_only,
+        color: da_colour(cos, &da.color),
+        alignment: cos
+            .dict(&pdfcraft_cos::Object::Ref(w.obj))
+            .and_then(|d| d.get(b"Q").cloned())
+            .and_then(|o| cos.resolve(&o).as_int())
+            .unwrap_or(f.quadding)
+            .clamp(0, 2) as u8,
+        round: widget_round(cos, w, looks),
         kind,
         border,
         background,
-    })
+    };
+    if field.size <= 0.0 || !field.size.is_finite() {
+        field.size = export_auto_size(&field);
+    }
+    Some(field)
 }
 
-/// A conservative size for a prepared widget, without cloning its strings. Count storage for
-/// option strings as well as their contents, so many empty choices cannot bypass the bound.
-fn prepared_field_bytes(f: &pdfcraft_forms::Field) -> Option<usize> {
-    use pdfcraft_forms::FieldKind;
-    let mut bytes = std::mem::size_of::<pdfcraft_export::Field>().checked_add(f.name.len())?.checked_add(MAX_FONT_NAME_CHARS * 4)?;
-    match f.kind {
-        FieldKind::Text => {
-            bytes = f.value.iter().try_fold(bytes, |n, value| n.checked_add(value.len()))?;
-        }
-        FieldKind::Combo | FieldKind::List => {
-            bytes = f.options.iter().try_fold(bytes, |n, (_, shown)| n.checked_add(std::mem::size_of::<String>())?.checked_add(shown.len()))?;
-            // This is display_value's selected text, measured without its temporary clones.
-            for value in &f.value {
-                let shown = f.options.iter().find(|(export, _)| export == value).map_or(value, |(_, shown)| shown);
-                bytes = bytes.checked_add(shown.len())?;
+/// Fit automatic values before handing them to Word, using the PDF appearance's sizing path.
+/// Standard fonts use their metrics (Word substitutes compatible families); other families
+/// keep the existing Helvetica/CJK approximation, since their Word substitution isn't known.
+fn export_auto_size(field: &pdfcraft_export::Field) -> f64 {
+    use pdfcraft_export::FieldKind;
+    let (text, multiline) = match &field.kind {
+        FieldKind::Text { value, multiline, comb: None, .. } => (value.as_str(), *multiline),
+        FieldKind::Choice { value, .. } => (value.as_str(), false),
+        _ => return ((field.rect[3] - field.rect[1]) * 0.65).clamp(4.0, 12.0),
+    };
+    let width = (field.rect[2] - field.rect[0] - 2.0).max(1.0);
+    let height = (field.rect[3] - field.rect[1]) * 0.65 * 1.15;
+    let font = pdfcraft_fonts::Std14::from_base_font(&field.font);
+    let measure = |text: &str, size| font.map_or_else(|| pdfcraft_fonts::cjk_width(text, size), |f| f.text_width(text, size));
+    pdfcraft_forms::appearance::auto_text_size(text, width, height.min(12.0 * 1.15), multiline, measure).clamp(4.0, 12.0)
+}
+
+/// Borrowed preparation shared by all widgets of a field. No value or option is cloned here.
+struct FieldPreparation<'a> {
+    shown: Vec<&'a str>,
+    bytes: Option<usize>,
+    buttons: usize,
+}
+
+fn field_preparation(f: &pdfcraft_forms::Field) -> FieldPreparation<'_> {
+    let mut shown = Vec::new();
+    let bytes = (|| {
+        let cap = |n: usize| (n <= MAX_EXPORT_FIELD_BYTES).then_some(n);
+        let mut bytes = cap(std::mem::size_of::<pdfcraft_export::Field>().checked_add(f.name.len())?.checked_add(MAX_FONT_NAME_CHARS * 4)?)?;
+        match f.kind {
+            pdfcraft_forms::FieldKind::Text => {
+                bytes = f.value.iter().try_fold(bytes, |n, v| cap(n.checked_add(v.len())?))?;
             }
-            bytes = bytes.checked_add(f.value.len().saturating_sub(1).checked_mul(2)?)?;
+            pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List => {
+                bytes =
+                    f.options.iter().try_fold(bytes, |n, (_, text)| cap(n.checked_add(std::mem::size_of::<String>())?.checked_add(text.len())?))?;
+                // A duplicate export value uses the first display text, as display_value does.
+                // Build the index once, before visiting any widgets, including rejected ones.
+                let mut options = HashMap::new();
+                for (value, text) in &f.options {
+                    options.entry(value.as_str()).or_insert(text.as_str());
+                }
+                for value in &f.value {
+                    let text = options.get(value.as_str()).copied().unwrap_or(value.as_str());
+                    bytes = cap(bytes.checked_add(text.len())?.checked_add(2)?)?;
+                    shown.push(text);
+                }
+            }
+            _ => {}
         }
-        _ => {}
+        Some(bytes)
+    })();
+    if bytes.is_none() {
+        shown.clear();
     }
-    Some(bytes)
+    FieldPreparation { shown, bytes, buttons: 0 }
+}
+
+#[cfg(test)]
+fn prepared_field_bytes(f: &pdfcraft_forms::Field) -> Option<usize> {
+    field_preparation(f).bytes
+}
+
+/// The widget must intersect a real page's visible crop before its coordinates are clamped
+/// into Word's positive page space. Off-crop controls must not reappear at the page edge.
+fn visible_widget(w: &pdfcraft_forms::Widget, pages: &[pdfcraft_render::PageInfo]) -> bool {
+    let Some(info) = w.page.and_then(|p| pages.get(p)) else { return false };
+    let c = info.crop.map(f64::from);
+    let r = w.rect;
+    !w.hidden && r.iter().all(|n| n.is_finite()) && r[0] < r[2] && r[1] < r[3] && r[0] < c[2] && r[2] > c[0] && r[1] < c[3] && r[3] > c[1]
 }
 
 /// Whether a check box or radio button `w` of `f` is on as the page shows it: its widget's
@@ -336,6 +395,12 @@ fn dr_base_font(cos: &pdfcraft_cos::Document, name: &str) -> String {
 /// How much of a base font's name an exported field keeps: any real font's name, and a hostile
 /// one can't grow each field.
 const MAX_FONT_NAME_CHARS: usize = 127;
+
+/// parse_da has already selected the last supported colour operation.
+fn da_colour(cos: &pdfcraft_cos::Document, colour: &str) -> [f64; 3] {
+    let values: Vec<_> = colour.split_whitespace().take(4).filter_map(|n| n.parse::<f64>().ok().map(pdfcraft_cos::Object::Real)).collect();
+    mk_colour(cos, Some(&pdfcraft_cos::Object::Array(values))).unwrap_or([0.0; 3])
+}
 
 /// A colour array of `/MK` (ISO 32000-2 Table 192): none (transparent), gray, RGB or CMYK
 /// components, as plain sRGB; `None` for none or anything else.
@@ -400,22 +465,63 @@ impl Looks {
             let draws = |op: &[u8]| {
                 matches!(op, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"EI")
             };
-            data.map(|d| pdfcraft_content::parse(&d).ops)
-                .filter(|ops| ops.iter().any(|op| draws(&op.op)))
-                .map(|ops| ops.iter().any(|op| matches!(op.op.as_slice(), b"c" | b"v" | b"y")))
+            data.map(|d| pdfcraft_content::parse(&d).ops).filter(|ops| ops.iter().any(|op| draws(&op.op))).map(|ops| appearance_round(&ops))
         };
         self.shapes.insert(r, shape);
         shape
     }
 }
 
-/// The border and background a PDF viewer draws for a widget: `/MK /BC` in `/BS /W` points
-/// (1 by default; dashed for `/S /D`) and `/MK /BG`. None for a widget drawn round (its
-/// appearance curves, as a radio button's circle does; without an appearance, a radio button),
-/// which a square Word frame can't draw, nor for a border of no width.
-fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget, looks: &mut Looks) -> (Option<pdfcraft_export::Stroke>, Option<[f64; 3]>) {
-    let Some(d) = cos.dict(&pdfcraft_cos::Object::Ref(w.obj)) else { return (None, None) };
-    let Some(mk) = d.get(b"MK").and_then(|o| cos.dict(o)) else { return (None, None) };
+/// Classify the largest painted boundary, not any curve (a square check mark may be curved).
+fn appearance_round(ops: &[pdfcraft_content::Op]) -> bool {
+    let empty = || [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut bounds = empty();
+    let mut curved = false;
+    let mut paths = Vec::new();
+    let mut largest = (false, 0.0, false);
+    for op in ops {
+        let name = op.op.as_slice();
+        if matches!(name, b"m" | b"re") {
+            paths.push((bounds, curved));
+            bounds = empty();
+            curved = false;
+        }
+        if matches!(name, b"m" | b"l" | b"c" | b"v" | b"y") {
+            curved |= matches!(name, b"c" | b"v" | b"y");
+            for [x, y] in op.operands.as_chunks::<2>().0 {
+                if let (Some(x), Some(y)) = (x.as_f64(), y.as_f64()) {
+                    bounds = [bounds[0].min(x), bounds[1].min(y), bounds[2].max(x), bounds[3].max(y)];
+                }
+            }
+        }
+        if name == b"re"
+            && let Some([x, y, w, h]) = op.nums::<4>()
+        {
+            bounds = [x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)];
+        }
+        if matches!(name, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
+            paths.push((bounds, curved));
+            if name != b"n" {
+                // A filled rectangular background is not a round button's outline. Prefer
+                // stroked boundaries, then the largest subpath, with straight edges on a tie.
+                let stroked = matches!(name, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+                for (b, curve) in &paths {
+                    let area = (b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0);
+                    if b.iter().all(|n| n.is_finite()) && area.is_finite() && (stroked, area, !curve) > (largest.0, largest.1, !largest.2) {
+                        largest = (stroked, area, *curve);
+                    }
+                }
+            }
+            paths.clear();
+            bounds = empty();
+            curved = false;
+        }
+    }
+    largest.2
+}
+
+fn widget_round(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget, looks: &mut Looks) -> bool {
+    let Some(d) = cos.dict(&pdfcraft_cos::Object::Ref(w.obj)) else { return w.round };
     // The shape is the one the widget shows: the normal appearance of its appearance state
     // (`/AS`), or its only one (a stream is always an indirect object). A state that draws nothing
     // (a radio button's empty off state), or none at all, leaves it to the form reader, which
@@ -428,15 +534,82 @@ fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget, looks: 
         pdfcraft_cos::Object::Dict(states) => w.state.as_ref().and_then(|state| states.get(&pdfcraft_forms::name_bytes(state))).and_then(stream_ref),
         _ => stream_ref(&n),
     });
-    let round = shown.and_then(|r| looks.shape(cos, r)).unwrap_or(w.round);
-    if round {
-        return (None, None);
-    }
+    shown.and_then(|r| looks.shape(cos, r)).unwrap_or(w.round)
+}
+
+/// The border and background a PDF viewer draws for a widget: `/MK /BC` in `/BS /W` points
+/// (1 by default; dashed for `/S /D`) and `/MK /BG`. The exporter draws round boundaries
+/// as ellipses; a border of no width remains absent.
+fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget) -> (Option<pdfcraft_export::Stroke>, Option<[f64; 3]>) {
+    let Some(d) = cos.dict(&pdfcraft_cos::Object::Ref(w.obj)) else { return (None, None) };
+    let Some(mk) = d.get(b"MK").and_then(|o| cos.dict(o)) else { return (None, None) };
     let bs = d.get(b"BS").and_then(|o| cos.dict(o));
     let width = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|o| cos.resolve(o).as_f64()).filter(|w| w.is_finite()).unwrap_or(1.0);
     let dashed = bs.as_ref().is_some_and(|b| b.name(b"S") == Some(b"D".as_slice()));
     let border = mk_colour(cos, mk.get(b"BC")).filter(|_| width > 0.0).map(|color| pdfcraft_export::Stroke { color, width: width.min(12.0), dashed });
     (border, mk_colour(cos, mk.get(b"BG")))
+}
+
+/// Simple HTML has no CSS. Apply its image flips to bounded pixels once per shared image and
+/// orientation, retaining PNG alpha, and report images that cannot be prepared.
+fn upright_html_images(pages: &mut [pdfcraft_export::Page], dropped: &mut Vec<usize>, work: &mut pdfcraft_cos::ImageBudget) {
+    use image::ImageDecoder as _;
+    let mut cache = HashMap::<_, Option<Arc<[u8]>>>::new();
+    let mut bytes_left = MAX_EXPORT_IMAGE_BYTES;
+    for (page, p) in pages.iter_mut().enumerate() {
+        p.images.retain_mut(|im| {
+            let (horizontal, vertical) = im.upright_flips();
+            if !horizontal && !vertical {
+                return true;
+            }
+            // All source buffers predate this pass. Shared Arc addresses identify repeated
+            // placements; no new source image is added during the pass.
+            let key = (im.bytes.as_ptr() as usize, horizontal, vertical);
+            let pixels = cache.entry(key).or_insert_with(|| {
+                let format = if im.ext == "jpg" { image::ImageFormat::Jpeg } else { image::ImageFormat::Png };
+                let mut reader = image::ImageReader::with_format(std::io::Cursor::new(&im.bytes), format);
+                let mut limits = image::Limits::default();
+                limits.max_alloc = Some(64 << 20);
+                limits.max_image_width = Some(16_384);
+                limits.max_image_height = Some(16_384);
+                reader.limits(limits);
+                let decoder = reader.into_decoder().ok()?;
+                let samples = decoder.total_bytes();
+                if samples > 64 << 20 {
+                    return None;
+                }
+                let paid = if im.ext == "jpg" { work.pay_jpeg(samples, &im.bytes) } else { work.pay_pixels(samples.saturating_mul(2)) };
+                if !paid {
+                    return None;
+                }
+                let mut rgba = image::DynamicImage::from_decoder(decoder).ok()?.into_rgba8();
+                if horizontal {
+                    image::imageops::flip_horizontal_in_place(&mut rgba);
+                }
+                if vertical {
+                    image::imageops::flip_vertical_in_place(&mut rgba);
+                }
+                let mut output = std::io::Cursor::new(Vec::new());
+                rgba.write_to(&mut output, image::ImageFormat::Png).ok()?;
+                let bytes = output.into_inner();
+                bytes_left = bytes_left.checked_sub(bytes.len())?;
+                Some(Arc::from(bytes))
+            });
+            match pixels {
+                Some(bytes) => {
+                    im.bytes = bytes.clone();
+                    im.ext = "png";
+                    im.flip = false;
+                    im.rotation = 0.0;
+                    true
+                }
+                None => {
+                    dropped.push(page);
+                    false
+                }
+            }
+        });
+    }
 }
 
 impl crate::Document {
@@ -484,21 +657,25 @@ impl crate::Document {
         // What widgets' appearances say about their shapes, read once per stream for the export.
         let mut looks = Looks::new();
         // Form fields by page (0-based), read once: Word keeps them as content controls.
-        let mut fields_by_page: HashMap<usize, Vec<(&pdfcraft_forms::Field, &pdfcraft_forms::Widget)>> = HashMap::new();
-        let fields = if art { pdfcraft_forms::fields(cos) } else { Vec::new() };
-        for f in &fields {
+        let mut fields_by_page: HashMap<usize, Vec<(usize, &pdfcraft_forms::Field, &pdfcraft_forms::Widget)>> = HashMap::new();
+        // The session refreshes this model on edit/undo/redo. Reading the form again would
+        // duplicate large shared PDF values before any preparation budget could reject them.
+        let fields: &[pdfcraft_forms::Field] = if art { &self.form } else { &[] };
+        let mut prepared: Vec<_> = fields.iter().map(field_preparation).collect();
+        for (index, (f, preparation)) in fields.iter().zip(&mut prepared).enumerate() {
             if matches!(f.kind, pdfcraft_forms::FieldKind::PushButton | pdfcraft_forms::FieldKind::Signature) {
                 continue;
             }
-            for w in f.widgets.iter().filter(|w| !w.hidden) {
+            for w in f.widgets.iter().filter(|w| visible_widget(w, &self.info.pages)) {
                 if let Some(p) = w.page {
-                    fields_by_page.entry(p).or_default().push((f, w));
+                    preparation.buttons += 1;
+                    fields_by_page.entry(p).or_default().push((index, f, w));
                 }
             }
         }
         // In the page's tab order: a protected Word form tabs through its fields in body order.
         for on_page in fields_by_page.values_mut() {
-            on_page.sort_by_key(|(_, w)| w.tab);
+            on_page.sort_by_key(|(_, _, w)| w.tab);
         }
         let pages = self
             .info
@@ -529,7 +706,7 @@ impl crate::Document {
                     let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                     pdfcraft_export::Block {
                         space_around,
-                        font: pdfcraft_edit::strip_subset_tag(&b.base_font).to_string(),
+                        font: pdfcraft_edit::strip_subset_tag(&b.base_font).chars().take(MAX_FONT_NAME_CHARS).collect(),
                         text: b.text,
                         rect: visible_rect(b.rect),
                         size: b.size * unit,
@@ -605,19 +782,29 @@ impl crate::Document {
                     on_page
                         .iter()
                         .take(pdfcraft_export::MAX_DOCX_PAGE_SHAPES)
-                        .filter_map(|(f, w)| {
-                            // Word plain-text controls cannot mask password input. Omitting the
-                            // control avoids disclosing /V or inviting unmasked replacement input.
-                            if f.kind == pdfcraft_forms::FieldKind::Text && f.has(pdfcraft_forms::flags::PASSWORD) {
+                        .filter_map(|(index, f, w)| {
+                            let preparation = prepared.get(*index)?;
+                            // These controls cannot faithfully represent masked input or multiple
+                            // selections. Framed Word controls also cannot rotate their text as
+                            // an arbitrary PDF widget does. Omit and report instead of silently
+                            // exporting a control with different input/layout semantics.
+                            let text_control = matches!(
+                                f.kind,
+                                pdfcraft_forms::FieldKind::Text | pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List
+                            );
+                            if (f.kind == pdfcraft_forms::FieldKind::Text && f.has(pdfcraft_forms::flags::PASSWORD))
+                                || (f.kind == pdfcraft_forms::FieldKind::List && f.has(pdfcraft_forms::flags::MULTI_SELECT))
+                                || (text_control && (w.rotation - i64::from(info.rotation)).rem_euclid(360) != 0)
+                            {
                                 fields_truncated = true;
                                 return None;
                             }
-                            let Some(remaining) = prepared_field_bytes(f).and_then(|bytes| field_bytes.checked_sub(bytes)) else {
+                            let Some(remaining) = preparation.bytes.and_then(|bytes| field_bytes.checked_sub(bytes)) else {
                                 fields_truncated = true;
                                 return None;
                             };
                             field_bytes = remaining;
-                            export_field(cos, f, w, &visible_rect, unit, &mut looks)
+                            export_field(cos, f, w, &visible_rect, unit, &mut looks, preparation)
                         })
                         .collect()
                 });
@@ -659,14 +846,21 @@ impl crate::Document {
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
         // RTF and Markdown leave pictures out.
         let (pages, mut truncated_pages) = match self.editor.as_ref() {
-            Some(editor) => self.export_pages_with(
-                !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
-                MAX_EXPORT_IMAGE_BYTES,
-                &mut pdfcraft_cos::ImageBudget::new(&editor.cos),
-                matches!(format, OfficeFormat::Docx),
-                MAX_EXPORT_SHAPE_POINTS,
-                MAX_EXPORT_FIELD_BYTES,
-            ),
+            Some(editor) => {
+                let mut work = pdfcraft_cos::ImageBudget::new(&editor.cos);
+                let (mut pages, mut dropped) = self.export_pages_with(
+                    !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
+                    MAX_EXPORT_IMAGE_BYTES,
+                    &mut work,
+                    matches!(format, OfficeFormat::Docx),
+                    MAX_EXPORT_SHAPE_POINTS,
+                    MAX_EXPORT_FIELD_BYTES,
+                );
+                if matches!(format, OfficeFormat::HtmlSimple) {
+                    upright_html_images(&mut pages, &mut dropped, &mut work);
+                }
+                (pages, dropped)
+            }
             None => (Vec::new(), Vec::new()),
         };
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
@@ -687,6 +881,8 @@ impl crate::Document {
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
+        truncated_pages.sort_unstable();
+        truncated_pages.dedup();
         OfficeExport { bytes, truncated_pages }
     }
 }

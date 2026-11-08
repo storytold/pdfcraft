@@ -290,6 +290,16 @@ impl Walk<'_> {
         let mut path = Path::default();
         let mut clip_pending = false;
         for op in ops {
+            // Ignore the entire over-deep scope. In particular its cm, path and clip changes
+            // must not survive the matching Q, whose graphics state we could not save.
+            if lost_saves > 0 {
+                match op.op.as_slice() {
+                    b"q" => lost_saves = lost_saves.saturating_add(1),
+                    b"Q" => lost_saves -= 1,
+                    _ => {}
+                }
+                continue;
+            }
             if self.out.truncated && (self.out.shapes.len() >= MAX_PAGE_SHAPES || self.points >= MAX_PAGE_POINTS) {
                 return;
             }
@@ -299,6 +309,9 @@ impl Walk<'_> {
                         saved.push(st.clone());
                     } else {
                         lost_saves = lost_saves.saturating_add(1);
+                        self.out.truncated = true;
+                        path = Path::default();
+                        clip_pending = false;
                     }
                 }
                 b"Q" => {

@@ -46,14 +46,16 @@ fn widget_shapes_are_read_once_per_stream_within_the_exports_budget() {
 
     let mut looks = Looks::new();
     for w in &widgets {
-        assert_eq!(widget_look(&doc, w, &mut looks), (None, None), "drawn round");
+        assert!(widget_round(&doc, w, &mut looks), "drawn round");
+        assert!(widget_look(&doc, w).0.is_some(), "round widgets retain their border");
     }
     assert_eq!(looks.shapes.len(), 1, "one stream, read once");
     assert_eq!(looks.bytes, MAX_LOOKS_BYTES - data.len());
 
     let mut spent = Looks::within(0);
     let square = Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false });
-    assert_eq!(widget_look(&doc, widgets[0], &mut spent), (square, None), "the reader's shape: a square check box");
+    assert!(!widget_round(&doc, widgets[0], &mut spent), "the reader's shape: a square check box");
+    assert_eq!(widget_look(&doc, widgets[0]), (square, None));
 }
 
 /// Three pages share one content stream, as a small hostile file can repeat expensive artwork
@@ -151,8 +153,8 @@ fn word_fields_use_each_widgets_default_appearance() {
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [6 0 R 7 0 R] >>".into(),
         "<< /Length 0 >>\nstream\n\nendstream".into(),
-        "<< /FT /Tx /T (Repeated) /DA (/Helv 12 Tf 0 g) /Kids [6 0 R 7 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 10 100 30] /DA (/Cour 9 Tf 0 g) >>".into(),
+        "<< /FT /Tx /T (Repeated) /DA (/Helv 12 Tf 0.5 g) /Q 1 /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 10 100 30] /DA (/Cour 9 Tf 1 0 0 rg) /Q 2 >>".into(),
         "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 40 100 60] >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
@@ -161,6 +163,7 @@ fn word_fields_use_each_widgets_default_appearance() {
     let id = session.open("widget-fonts.pdf", None, doc.bytes().clone(), None).unwrap();
     let pages = session.get(id).unwrap().export_pages();
     assert_eq!(pages[0].fields.iter().map(|f| (f.font.as_str(), f.size)).collect::<Vec<_>>(), [("Courier", 9.0), ("Helvetica", 12.0)]);
+    assert_eq!(pages[0].fields.iter().map(|f| (f.color, f.alignment)).collect::<Vec<_>>(), [([1.0, 0.0, 0.0], 2), ([0.5; 3], 1)]);
 }
 
 #[test]
@@ -179,7 +182,8 @@ fn word_widget_looks_decode_escaped_appearance_state_names() {
         ]);
         let fields = pdfcraft_forms::fields(&doc);
         let mut looks = Looks::new();
-        let (border, background) = widget_look(&doc, &fields[0].widgets[0], &mut looks);
+        assert!(!widget_round(&doc, &fields[0].widgets[0], &mut looks));
+        let (border, background) = widget_look(&doc, &fields[0].widgets[0]);
         assert!(border.is_some(), "the square appearance must override the radio's round fallback: {name}");
         assert_eq!(background, Some([1.0; 3]));
         assert_eq!(looks.shapes.len(), 1);
@@ -222,4 +226,131 @@ fn word_export_omits_password_controls_and_reports_the_page() {
     let xml = office_part(&export.bytes, "word/document.xml");
     assert!(!xml.contains("never-export-this-secret"), "the saved XML must not disclose the password");
     assert!(!xml.contains("<w:sdt"), "no unmasked control or editable placeholder replaces the password field");
+}
+
+fn office_regression_single_field(props: &str, rect: &str, page: &str) -> pdfcraft_cos::Document {
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R] {page} >>"),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        format!("<< /Type /Annot /Subtype /Widget /T (Field) /Rect [{rect}] {props} >>"),
+    ])
+}
+
+#[test]
+fn office_regression_unsupported_and_off_crop_widgets_are_not_misrepresented() {
+    for (props, rect, page, retained, reported) in [
+        ("/FT /Tx /V (outside)", "10 10 30 30", "/CropBox [50 50 150 150]", false, false),
+        ("/FT /Tx /V (partial)", "40 60 80 80", "/CropBox [50 50 150 150]", true, false),
+        ("/FT /Ch /Ff 2097152 /V [(A) (B)] /Opt [(A) (B)]", "60 60 120 80", "", false, true),
+        ("/FT /Tx /V (turned) /MK << /R 90 >>", "60 60 120 80", "", false, true),
+        ("/FT /Tx /V (upright) /MK << /R 90 >>", "60 60 120 80", "/Rotate 90", true, false),
+    ] {
+        let doc = office_regression_single_field(props, rect, page);
+        let mut session = Session::new();
+        let id = session.open("widgets.pdf", None, doc.bytes().clone(), None).unwrap();
+        let d = session.get(id).unwrap();
+        let pages = d.export_pages();
+        assert_eq!(!pages[0].fields.is_empty(), retained, "{props} {page}");
+        assert_eq!(pages[0].fields_truncated, reported, "{props} {page}");
+        assert_eq!(!d.export_office_checked(OfficeFormat::Docx).truncated_pages.is_empty(), reported);
+    }
+}
+
+#[test]
+fn office_regression_auto_sizing_fits_the_value_width() {
+    for (requested, shrinks) in [(0, true), (10, false)] {
+        let props = format!("/FT /Tx /DA (/Helv {requested} Tf 0 g) /V (WWWWWWWW)");
+        let doc = office_regression_single_field(&props, "60 60 120 80", "");
+        let mut session = Session::new();
+        let id = session.open("auto-size.pdf", None, doc.bytes().clone(), None).unwrap();
+        let pages = session.get(id).unwrap().export_pages();
+        let size = pages[0].fields[0].size;
+        if shrinks {
+            assert!(size >= 4.0 && pdfcraft_fonts::helvetica_width("WWWWWWWW", size) <= 58.0 + 0.01, "{size}");
+        } else {
+            assert_eq!(size, 10.0);
+        }
+    }
+}
+
+#[test]
+fn office_regression_square_boundaries_survive_curved_check_marks() {
+    let ops = pdfcraft_content::parse(b"0 0 10 10 re S 2 3 m 3 1 4 1 5 4 c 6 7 l S").ops;
+    assert!(!appearance_round(&ops));
+    for background in ["", "1 g 0 0 10 10 re f "] {
+        let data = format!("{background}5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c 2.2 10 0 7.8 0 5 c 0 2.2 2.2 0 5 0 c h S");
+        assert!(appearance_round(&pdfcraft_content::parse(data.as_bytes()).ops), "{background}");
+    }
+}
+
+#[test]
+fn office_regression_choice_preparation_preserves_first_match_and_bounds_values() {
+    let doc = office_regression_single_field("/FT /Ch /V [(same) (raw)] /Opt [[(same) (First)] [(same) (Second)]]", "10 10 100 30", "");
+    let mut fields = pdfcraft_forms::fields(&doc);
+    let prepared = field_preparation(&fields[0]);
+    assert_eq!(prepared.shown, ["First", "raw"]);
+    assert!(prepared.bytes.is_some());
+    fields[0].options = vec![("same".into(), "x".repeat(1024))];
+    fields[0].value = vec!["same".into(); 32_768];
+    let prepared = field_preparation(&fields[0]);
+    assert!(prepared.bytes.is_none());
+    assert!(prepared.shown.is_empty());
+}
+
+#[test]
+fn office_regression_retained_form_tracks_edit_undo_and_redo() {
+    let doc = office_regression_single_field("/FT /Tx /V (before) /DA (/Helv 10 Tf 0 g)", "10 10 150 30", "");
+    let mut session = Session::new();
+    let id = session.open("edited-field.pdf", None, doc.bytes().clone(), None).unwrap();
+    let value = |session: &Session| {
+        let pages = session.get(id).unwrap().export_pages();
+        match &pages[0].fields[0].kind {
+            pdfcraft_export::FieldKind::Text { value, .. } => value.clone(),
+            _ => panic!("text field"),
+        }
+    };
+    session.apply(id, Edit::SetFieldValue { name: "Field".into(), value: crate::FieldValue::Text("after".into()) }).unwrap();
+    assert_eq!(value(&session), "after");
+    session.undo(id).unwrap();
+    assert_eq!(value(&session), "before");
+    session.redo(id).unwrap();
+    assert_eq!(value(&session), "after");
+}
+
+#[test]
+fn office_regression_simple_html_bakes_flips_into_shared_pixels() {
+    let mut source = image::RgbaImage::new(2, 2);
+    for (i, pixel) in source.pixels_mut().enumerate() {
+        *pixel = image::Rgba([i as u8 * 50, 0, 0, 100 + i as u8]);
+    }
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    source.write_to(&mut encoded, image::ImageFormat::Png).unwrap();
+    let bytes: Arc<[u8]> = Arc::from(encoded.into_inner());
+    let im =
+        |flip, rotation| pdfcraft_export::Image { ext: "png", bytes: bytes.clone(), rect: [0.0, 0.0, 20.0, 20.0], size: [20.0; 2], flip, rotation };
+    let mut pages = vec![pdfcraft_export::Page {
+        width: 200.0,
+        height: 200.0,
+        images: vec![im(true, 0.0), im(true, 0.0), im(true, 180.0), im(false, 180.0)],
+        ..Default::default()
+    }];
+    let mut refused = pages.clone();
+    let mut refused_pages = Vec::new();
+    upright_html_images(&mut refused, &mut refused_pages, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(refused[0].images.is_empty());
+    assert!(refused_pages.iter().all(|p| *p == 0) && !refused_pages.is_empty());
+    let doc = pdfcraft_cos::Document::new_empty();
+    let mut dropped = Vec::new();
+    upright_html_images(&mut pages, &mut dropped, &mut pdfcraft_cos::ImageBudget::new(&doc));
+    assert!(dropped.is_empty());
+    assert!(Arc::ptr_eq(&pages[0].images[0].bytes, &pages[0].images[1].bytes));
+    for (index, expected) in [(0, [100, 150, 0, 50]), (2, [50, 0, 150, 100]), (3, [150, 100, 50, 0])] {
+        let output = image::load_from_memory(&pages[0].images[index].bytes).unwrap().into_rgba8();
+        assert_eq!(output.pixels().map(|p| p[0]).collect::<Vec<_>>(), expected);
+        assert!(output.pixels().all(|p| p[3] < 255), "alpha survives");
+        assert_eq!(pages[0].images[index].upright_flips(), (false, false));
+    }
+    assert!(!pdfcraft_export::html_simple(&pages, "flipped").contains("style="));
 }

@@ -12562,3 +12562,35 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+#[test]
+fn office_regression_positioned_words_follow_quarter_turned_baselines() {
+    for matrix in ["0 1 -1 0", "-1 0 0 -1", "0 -1 1 0"] {
+        let doc = text_page(&format!("BT /F1 12 Tf {matrix} 300 400 Tm [(Left) -6000 (Right)] TJ ET"));
+        let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+        assert_eq!(pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Left", "Right"], "{matrix}");
+        let a = pieces[0].rect;
+        let b = pieces[1].rect;
+        assert!(a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1], "{matrix}: {a:?} {b:?}");
+    }
+}
+
+#[test]
+fn office_regression_actual_text_is_not_assigned_to_unrelated_word_boxes() {
+    let doc = text_page("/Span <</ActualText (Right Left)>> BDC BT /F1 12 Tf 72 700 Td [(Left) -6000 (Right)] TJ ET EMC");
+    let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].text, "Right Left");
+}
+
+#[test]
+fn office_regression_split_lines_bound_each_font_name() {
+    let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td [{}] TJ ET", "(x) -2000 ".repeat(128)));
+    let r = pdfcraft_cos::ObjRef::new(5, 0);
+    let mut font = doc.get(r).as_dict().unwrap().clone();
+    font.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::Name(vec![b'x'; 65_536]));
+    doc.set(r, pdfcraft_cos::Object::Dict(font));
+    let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.len(), 128);
+    assert!(pieces.iter().all(|p| p.base_font.len() <= 127));
+}

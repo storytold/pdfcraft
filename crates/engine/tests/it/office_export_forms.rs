@@ -185,7 +185,7 @@ fn a_fields_border_and_fill_come_from_its_widget() {
         (f.border, f.background)
     };
     assert_eq!(look("Square"), (Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false }), Some([1.0; 3])));
-    assert_eq!(look("Round"), (None, None), "a round widget keeps the page's own drawing");
+    assert_eq!(look("Round"), look("Square"), "round widgets retain their border and fill");
     assert_eq!(look("Dashed"), (Some(pdfcraft_export::Stroke { color: [1.0, 0.0, 0.0], width: 2.0, dashed: true }), None));
     assert_eq!(look("Plain"), (None, None));
     assert_eq!(
@@ -193,7 +193,11 @@ fn a_fields_border_and_fill_come_from_its_widget() {
         (Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false }), None),
         "the state it shows is square"
     );
-    assert_eq!(look("Dot"), (None, None), "an empty shown state leaves it to the reader");
+    assert_eq!(look("Dot"), (Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false }), None));
+    for name in ["Round", "Dot"] {
+        assert!(pages[0].fields.iter().find(|f| f.name == name).unwrap().round);
+    }
+    assert!(!pages[0].fields.iter().find(|f| f.name == "CurveFirst").unwrap().round);
 }
 
 /// A page of text past the path reader's limit (a detailed chart, a hatched background) flows in

@@ -47,7 +47,7 @@ impl Image {
     /// PowerPoint, HTML). A mirrored picture turned half round is a left-right mirror (`-w 0 0 h`):
     /// a horizontal flip, not a vertical one; an upright picture turned half round flips both
     /// ways. Those writers don't draw other turns.
-    pub(crate) fn upright_flips(&self) -> (bool, bool) {
+    pub fn upright_flips(&self) -> (bool, bool) {
         let turn = if self.rotation.is_finite() { self.rotation.rem_euclid(360.0) } else { 0.0 };
         match ((turn - 180.0).abs() < 1.0, self.flip) {
             (true, true) => (true, false),
@@ -106,6 +106,12 @@ pub struct Field {
     pub font: String,
     /// The field can't be changed (`/Ff` ReadOnly, the field's or its widget's).
     pub read_only: bool,
+    /// Text colour from the effective /DA.
+    pub color: [f64; 3],
+    /// Paragraph justification: 0 left, 1 centre, 2 right.
+    pub alignment: u8,
+    /// The widget's outer boundary is round, independently of curves in its check mark.
+    pub round: bool,
     pub kind: FieldKind,
     /// The border a PDF viewer draws around the field (its widget's `/MK /BC` and `/BS`), and
     /// the colour it fills the field with (`/MK /BG`); `None` for none. A form whose boxes only
