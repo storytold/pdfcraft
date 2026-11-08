@@ -1,6 +1,7 @@
 {
   lib,
   rustPlatform,
+  fetchFromGitHub,
   fetchurl,
   cmake,
   perl,
@@ -35,9 +36,12 @@ let
   cargoToml = lib.importTOML ../Cargo.toml;
   attribution = lib.importTOML ../ATTRIBUTION.toml;
 
-  craftI18n = builtins.fetchGit {
-    url = "https://github.com/storytold/craft-i18n";
+  craftI18n = fetchFromGitHub rec {
+    name = "craft-i18n-${rev}";
+    owner = "storytold";
+    repo = "craft-i18n";
     rev = lib.fileContents ../craft-i18n.rev;
+    hash = "sha256-KTP2u+/3LHry7fOLUpv+UOXDBU7LZI5+1U9605jXtT4=";
   };
 
   models = builtins.filter (e: (e.kind or "") == "model") attribution.fetched;

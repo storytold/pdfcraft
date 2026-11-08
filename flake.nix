@@ -66,9 +66,9 @@
         default = pdfcraft;
       };
 
-      overlays.default = nixpkgs.lib.composeExtensions rust-overlay.overlays.default (
-        final: _prev: { pdfcraft = pdfcraftFor final; }
-      );
+      overlays.default = final: _prev: {
+        pdfcraft = pdfcraftFor (final.extend rust-overlay.overlays.default);
+      };
       homeModules.default = import ./nix/hm-module.nix self;
 
       devShells.${system}.default = pkgs.mkShell {
