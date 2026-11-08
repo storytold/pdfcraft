@@ -889,6 +889,24 @@ fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
     assert_eq!(c.comment_prefs.style(CommentTool::Rectangle).fill, None);
 }
 
+/// A tool's saved "Same as text" border colour (`"border_color": null`) clears an own border
+/// colour it had; a missing or malformed one keeps it.
+#[test]
+fn a_saved_same_as_text_clears_a_comment_tool_border_colour() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let red = Some([0.89, 0.13, 0.13]);
+    let mut a = PdfCraftApp::new();
+    a.comment_prefs.set_border_color(CommentTool::TextBox, red);
+    a.restore(r#"{"comment_styles":[{"tool":"comment.freetext","border_color":"red"}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, red, "malformed keeps it");
+    a.restore(r#"{"comment_styles":[{"tool":"comment.freetext","border_color":null}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, None, "null clears it");
+    let mut b = PdfCraftApp::new();
+    b.comment_prefs.set_border_color(CommentTool::TextBox, red);
+    b.restore(&a.persist());
+    assert_eq!(b.comment_prefs.style(CommentTool::TextBox).border_color, None, "a round trip keeps it cleared");
+}
+
 /// Persisted per-tool comment styles go through their clamping setters: hostile or malformed
 /// values are clamped or ignored, never trusted (#340).
 #[test]
@@ -909,6 +927,28 @@ fn comment_style_settings_clamp_and_refuse_hostile_values() {
     // A malformed colour is refused whole: the tool keeps its default.
     let note = a.comment_prefs.style(CommentTool::Note);
     assert_eq!(note.color, [1.0, 0.82, 0.0], "the default colour stays");
+}
+
+/// A tool's fill's and text's own opacities survive a restart, clamped; a tool without a fill or
+/// text keeps none, and the quick bar's Opacity (the whole comment's) clears them.
+#[test]
+fn part_opacity_defaults_persist_and_clamp() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut a = PdfCraftApp::new();
+    a.comment_prefs.set_part_opacity(CommentTool::Rectangle, Some(0.3), None);
+    a.comment_prefs.set_part_opacity(CommentTool::TextBox, Some(0.2), Some(1.0));
+    a.comment_prefs.set_part_opacity(CommentTool::Line, Some(0.5), Some(0.5));
+    let mut b = PdfCraftApp::new();
+    b.restore(&a.persist());
+    let parts = |app: &PdfCraftApp, tool| {
+        let s = app.comment_prefs.style(tool);
+        (s.fill_opacity, s.text_opacity)
+    };
+    assert_eq!(parts(&b, CommentTool::Rectangle), (Some(0.3), None));
+    assert_eq!(parts(&b, CommentTool::TextBox), (Some(0.2), Some(1.0)));
+    assert_eq!(parts(&b, CommentTool::Line), (None, None), "a line has no fill or text of its own");
+    b.restore(r#"{"comment_styles":[{"tool":"comment.freetext","fill_opacity":7,"text_opacity":-1}]}"#);
+    assert_eq!(parts(&b, CommentTool::TextBox), (Some(1.0), Some(0.1)), "clamped; the text stays visible");
 }
 
 #[test]
