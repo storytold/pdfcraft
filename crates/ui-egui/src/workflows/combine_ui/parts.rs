@@ -5,7 +5,7 @@ use super::{MAX_FOLDER_DEPTH, MAX_FOLDER_FILES};
 /// The PDFs, images and text files in `dir` (and, if `recursive`, the folders inside it, not
 /// following links), in natural order, at most [`MAX_FOLDER_FILES`]; and whether there were more.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::PathBuf>, bool) {
+pub(crate) fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::PathBuf>, bool) {
     let mut found = Vec::new();
     let mut more = false;
     let mut folders = vec![(dir.to_path_buf(), 0usize)];

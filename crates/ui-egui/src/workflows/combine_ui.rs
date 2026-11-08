@@ -28,11 +28,11 @@ pub(crate) use files::Incoming;
 pub use files::{Columns, CombineFile, CombineView, ConflictPreview, Lock, SortKey};
 pub(crate) use files::{Preview, RowAction};
 use files::{Snapshot, UnlockPrompt};
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use parts::ago;
 pub(crate) use parts::range_of;
 #[cfg(test)]
 pub(crate) use parts::{Part, moved_order, moved_pages, removed_pages, step_to};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use parts::{ago, combinable_in};
 #[cfg(test)]
 use parts::{title_of, utc_stamp};
 pub(crate) use view::page;
@@ -45,7 +45,7 @@ const HISTORY: usize = 100;
 
 /// Files found in a folder are added up to this many at a time.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_FOLDER_FILES: usize = 1000;
+pub(crate) const MAX_FOLDER_FILES: usize = 1000;
 /// How deep "Add folder and subfolders" looks.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FOLDER_DEPTH: usize = 16;
