@@ -62,7 +62,7 @@ impl AutoScroll {
 
     fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
         let ctx = ui.ctx();
-        let (pointer, middle_press, middle_down, middle_released, cancel, cancel_button, dt) = ctx.input(|i| {
+        let (pointer, middle_press, middle_down, middle_released, has_release_event, cancel, cancel_button, dt) = ctx.input(|i| {
             let cancel_button = [PointerButton::Primary, PointerButton::Secondary, PointerButton::Extra1, PointerButton::Extra2]
                 .into_iter()
                 .find(|button| i.pointer.button_pressed(*button));
@@ -75,6 +75,7 @@ impl AutoScroll {
                 }),
                 i.pointer.button_down(PointerButton::Middle),
                 i.pointer.button_released(PointerButton::Middle),
+                i.events.iter().any(|e| matches!(e, Event::PointerButton { button: PointerButton::Middle, pressed: false, .. })),
                 !i.focused
                     || i.key_pressed(Key::Escape)
                     || cancel_button.is_some()
@@ -83,7 +84,8 @@ impl AutoScroll {
                 i.stable_dt,
             )
         });
-        self.block_input = self.active() || self.cancel_button.is_some() || middle_press.is_some() || middle_down || middle_released;
+        self.block_input =
+            self.active() || self.cancel_button.is_some() || middle_press.is_some() || middle_down || middle_released || has_release_event;
         if let Some(button) = self.cancel_button {
             if !ctx.input(|i| i.pointer.button_down(button)) {
                 self.cancel_button = None;
@@ -115,10 +117,10 @@ impl AutoScroll {
         let (Some(anchor), Some(pointer)) = (self.anchor, pointer) else { return Vec2::ZERO };
         let displacement = pointer.y - anchor.y;
         let past_dead_zone = displacement.is_finite() && displacement.abs() > DEAD_ZONE;
-        if ctx.input(|i| held_past_dead_zone_in_frame(&i.events, anchor, pointer, middle_press, middle_down, middle_released)) {
+        if ctx.input(|i| held_past_dead_zone_in_frame(&i.events, anchor, pointer, middle_press, middle_down, has_release_event)) {
             self.held_past_dead_zone = true;
         }
-        if middle_released && self.held_past_dead_zone {
+        if (middle_released || has_release_event) && self.held_past_dead_zone {
             self.cancel();
             self.block_input = true;
             return Vec2::ZERO;
@@ -265,16 +267,16 @@ fn held_past_dead_zone_in_frame(
     pointer: Pos2,
     middle_press: Option<Pos2>,
     middle_down: bool,
-    middle_released: bool,
+    has_release_event: bool,
 ) -> bool {
     let outside = |pos: Pos2| {
         let dy = pos.y - anchor.y;
         dy.is_finite() && dy.abs() > DEAD_ZONE
     };
-    if middle_press.is_some() && middle_released {
+    if middle_press.is_some() && has_release_event {
         return false;
     }
-    if middle_released {
+    if has_release_event {
         for event in events {
             match *event {
                 Event::PointerMoved(pos) if outside(pos) => return true,
@@ -445,7 +447,8 @@ mod tests {
         });
         scroll.cancel();
 
-        // A press, move, and release arriving in a single frame is a click at the initial press position.
+        // A press, move, and release arriving in a single frame is a click at the initial press position,
+        // and stays latched across subsequent frames when egui delivers its deferred button_released state.
         frame(
             &ctx,
             &mut scroll,
@@ -457,6 +460,10 @@ mod tests {
                 assert!(d.y < 0.0);
             },
         );
+        frame(&ctx, &mut scroll, vec![], true, (true, false), |s, d| {
+            assert!(s.active(), "deferred button_released in the next frame must keep auto-scroll latched");
+            assert!(d.y < 0.0);
+        });
     }
 
     #[test]
