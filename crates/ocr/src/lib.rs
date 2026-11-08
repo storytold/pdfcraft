@@ -14,15 +14,16 @@
 //! searchable layer uses empty Type3 programs and ToUnicode maps, preserving Unicode without
 //! display fonts. WinAnsi-only invisible text keeps the standard Helvetica layout here.
 //!
-//! The ocrs models read the Latin alphabet (English and other languages written without
-//! accents); Tesseract (the `tesseract` module, off the web build) reads whatever its installed
-//! language packs cover.
+//! The ocrs models read the Latin alphabet without accents. When a PP-OCR model is installed
+//! beside them (`ppocr`), the same detector reads Chinese and accented Latin. Tesseract (the
+//! `tesseract` module, off the web build) reads whatever its installed language packs cover.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod confidence;
 pub mod merge;
 mod ocrs;
+mod ppocr;
 pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
@@ -31,6 +32,7 @@ pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
+    models_installed,
 };
 
 pub use pdfcraft_fonts::TextPlan;
@@ -415,7 +417,7 @@ pub fn text_layer(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPlan) -> Vec<
         // be drawn, and a NaN or infinite one would put non-finite numbers on the page. (NaN
         // fails every comparison, so the positivity checks already refuse it; the finiteness
         // checks keep that property explicit.)
-        if width <= 0.0 || !(height > 0.0 && height.is_finite()) || !(across > 0.0 && across.is_finite()) || !w.origin.iter().all(|v| v.is_finite()) {
+        if !(width > 0.0 && height > 0.0 && height.is_finite() && across > 0.0 && across.is_finite() && w.origin.iter().all(|v| v.is_finite())) {
             continue;
         }
         // The em square. Helvetica words: the word's own ink (cap height or x-height,

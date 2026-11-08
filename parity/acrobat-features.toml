@@ -6695,7 +6695,7 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/ocr/src/ocrs.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/ocrs.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/ocrs.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/ocrs.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+evidence = ["crates/ocr/src/ocrs.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/ocrs.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/ocrs.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/ocrs.rs::model_discovery_keeps_legacy_only_installations", "crates/ocr/src/ocrs.rs::tiles_on_a_magazine_page_stay_a_three_by_three_grid", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
 notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), and the web zip serves them for download (ocr.ocr-web); runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
@@ -6731,8 +6731,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
-notes = "The choice feeds both engines: ocrs reads only unaccented Latin (its model table holds English); tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover. Recognition quality beyond the tested English set is unproven."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ui-egui/tests/it/ocr.rs::latin_ocr_language_runs_from_the_dialog", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back", "crates/engine/src/tests.rs::latin_ocr_keeps_french_cedilla_and_grave", "crates/ocr/src/ocrs.rs::tiles_on_a_magazine_page_stay_a_three_by_three_grid"]
+notes = "English uses the ocrs model. Chinese and accented Latin use a PP-OCR recognition model on the same detector when those files are installed, and a page larger than the detector is read in overlapping tiles. Tesseract maps 12 allow-listed codes as far as the installed language packs cover."
 
 [[feature]]
 id = "ocr.searchable-image"

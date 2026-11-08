@@ -448,3 +448,32 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
     assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `publish`: a free name is taken as given; a taken one, including the document's own source
+/// file sitting at that exact path, gets the next free numbered name instead of being replaced.
+#[test]
+fn publish_never_replaces_a_file_already_at_the_name() {
+    let dir = test_dir("publish");
+    let target = dir.join("report.pdf");
+    let first = publish(&target, b"FIRST").unwrap();
+    assert_eq!(first, target, "a free name is taken as given");
+    assert_eq!(std::fs::read(&target).unwrap(), b"FIRST");
+    // A second publish under the same name (the source file, or an earlier run's output)
+    // never replaces it.
+    let second = publish(&target, b"SECOND").unwrap();
+    assert_eq!(file_name(&second), "report (2).pdf");
+    assert_eq!(std::fs::read(&target).unwrap(), b"FIRST", "the first file is untouched");
+    assert_eq!(std::fs::read(&second).unwrap(), b"SECOND");
+    // A name already taken by an unrelated file (not one `publish` itself created) is also
+    // skipped, not replaced.
+    std::fs::write(dir.join("report (3).pdf"), b"UNRELATED").unwrap();
+    let third = publish(&target, b"THIRD").unwrap();
+    assert_eq!(file_name(&third), "report (4).pdf");
+    assert_eq!(std::fs::read(dir.join("report (3).pdf")).unwrap(), b"UNRELATED");
+    assert_eq!(std::fs::read(&third).unwrap(), b"THIRD");
+    // The folder is created if it does not exist yet.
+    let nested = dir.join("out").join("nested.pdf");
+    assert_eq!(publish(&nested, b"NESTED").unwrap(), nested);
+    assert_eq!(std::fs::read(&nested).unwrap(), b"NESTED");
+    let _ = std::fs::remove_dir_all(&dir);
+}

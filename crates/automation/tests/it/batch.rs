@@ -200,6 +200,23 @@ fn batch_ocr_uses_existing_models_or_reports_the_missing_models_per_file() {
     }
 }
 
+/// #572: the batch OCR step loads the engine for the language the call asked for, not always
+/// English's. Needs a language whose own models are installed while English's are not (or the
+/// reverse), so a batch asking for one language can only succeed by loading that language's own
+/// engine; where both or neither are installed this proves nothing, so it is skipped.
+#[test]
+fn batch_ocr_loads_the_requested_languages_engine() {
+    if pdfcraft_engine::ocr::available() || !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: needs the Latin models installed and English's own not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let report = result(&mut auto, json!({"paths":["page.pdf"],"steps":["ocr"],"out_dir":"out","language":"la"}));
+    assert_eq!(report["completed"], 1, "a step hardcoded to English's engine would fail: {report}");
+}
+
 #[test]
 fn batch_output_collisions_are_safe_under_concurrent_writers() {
     let dir = tempfile::tempdir().unwrap();

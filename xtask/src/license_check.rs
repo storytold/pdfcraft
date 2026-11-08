@@ -62,11 +62,16 @@ fn validate(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Read only the two filename constants consumed by the OCR application. Fail closed if their
-/// declaration format changes; do not guess filenames or add a dependency on the OCR engine.
+/// Filename constants in `crates/ocr/src/lib.rs` that the app fetches. English detection and
+/// recognition, plus the Chinese and Latin recognition models and their dictionaries.
+const REQUIRED_OCR_CONSTANTS: &[&str] =
+    &["DETECTION_MODEL", "RECOGNITION_MODEL", "CHINESE_MODEL", "CHINESE_DICTIONARY", "LATIN_MODEL", "LATIN_DICTIONARY"];
+
+/// Read those filename constants. Fail closed if their declaration format changes; do not guess
+/// filenames or add a dependency on the OCR engine.
 fn check_required_ocr_metadata(source: &str, attribution: &assets::Manifest) -> Result<Vec<String>> {
     let mut problems = Vec::new();
-    for name in ["DETECTION_MODEL", "RECOGNITION_MODEL"] {
+    for name in REQUIRED_OCR_CONSTANTS {
         let prefix = format!("pub const {name}: &str = \"");
         let declarations: Vec<_> = source.lines().map(str::trim).filter_map(|line| line.strip_prefix(&prefix)).collect();
         let file = declarations.first().and_then(|value| value.strip_suffix("\";"));
@@ -409,7 +414,7 @@ mod tests {
     fn required_ocr_models_cannot_be_missing() {
         let source = include_str!("../../crates/ocr/src/ocrs.rs");
         let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 2);
+        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), REQUIRED_OCR_CONSTANTS.len());
         assert!(check_required_ocr_metadata(source, &original).unwrap().is_empty());
         for model in original.fetched.iter().filter(|f| f.kind == "model") {
             let mut m = assets::load(&assets::root()).unwrap();
@@ -422,7 +427,7 @@ mod tests {
     fn required_ocr_models_cannot_be_misclassified() {
         let source = include_str!("../../crates/ocr/src/ocrs.rs");
         let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 2);
+        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), REQUIRED_OCR_CONSTANTS.len());
         for model in original.fetched.iter().filter(|f| f.kind == "model") {
             let mut m = assets::load(&assets::root()).unwrap();
             m.fetched.iter_mut().find(|f| f.file == model.file).unwrap().kind = "font".into();

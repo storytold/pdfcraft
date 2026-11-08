@@ -592,8 +592,9 @@ impl PdfCraftApp {
         };
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+        } else if self.fail_spawn || std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).is_err() {
+            self.notify_tr("could not start a background thread");
+            return;
         }
         self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
         self.poll_ocr();
@@ -750,8 +751,9 @@ impl PdfCraftApp {
         };
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
+        } else if self.fail_spawn || std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).is_err() {
+            self.notify_tr("could not start a background thread");
+            return;
         }
         self.ocr_batch = Some(progress);
         self.poll_ocr();

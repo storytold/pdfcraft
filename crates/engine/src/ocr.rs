@@ -588,6 +588,12 @@ pub fn available() -> bool {
     ocrs_loaded() || Models::find().is_some() || tesseract_engine(configured.as_deref()).is_some()
 }
 
+/// Whether the models for `language` are installed. English is the ocrs pair. Chinese and the
+/// accented Latin languages need that detector plus their PP-OCR recognition model and dictionary.
+pub fn available_for(language: &str) -> bool {
+    pdfcraft_ocr::models_installed(language)
+}
+
 /// Why `engine` cannot run right now, named for the UI's tooltips (the Engine dropdown
 /// disables the choice with this text); `None` when it can. The app UI has no Tesseract
 /// location field of its own, so this judges the environment variable, exactly like

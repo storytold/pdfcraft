@@ -209,6 +209,7 @@ impl PdfCraftApp {
             ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
+            fail_spawn: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
             action_run: None,
