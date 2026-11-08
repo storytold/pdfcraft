@@ -288,10 +288,10 @@ impl ClientSession {
                     return Err(ClientError::UnknownOp);
                 };
                 if rejected.retryable {
-                    // Same `opId`, after a fresh base from the server.
-                    let op = self.pending[position].op.clone();
+                    // Wait for the snapshot: the operation is re-addressed to the
+                    // new head and resent with the same `opId`. Sending it now,
+                    // before the resync answer, would be stale again.
                     self.request_resync();
-                    self.outgoing.push_back(ClientMessage::Op(op));
                     Ok(Some(Effect::Retry { op_id: rejected.op_id.as_str().to_owned() }))
                 } else {
                     self.pending.remove(position);
@@ -484,8 +484,9 @@ mod tests {
         };
         assert!(matches!(client.receive(ServerMessage::Rejected(rejected))?, Some(Effect::Retry { .. })));
         let outgoing = client.take_outgoing();
-        assert!(matches!(outgoing.as_slice(), [ClientMessage::Resync(_), ClientMessage::Op(retry)] if retry.op_id == queued.op_id));
+        assert!(matches!(outgoing.as_slice(), [ClientMessage::Resync(_)]));
         assert_eq!(client.pending_len(), 1);
+        assert_eq!(client.pending_ops()[0].op_id, queued.op_id);
         Ok(())
     }
 

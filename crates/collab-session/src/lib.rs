@@ -299,13 +299,14 @@ fn attach(
                             let tail = snapshot.tail.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect();
                             let _ = events.send(Event::Snapshot { version: snapshot.version, epoch: snapshot.epoch, base: snapshot.base, tail });
                             if let Some(pending) = pending {
-                                for op in pending.into_iter().filter(|op| op.class == ConflictClass::Merge) {
+                                // In-flight operations and those queued while the
+                                // socket was down are re-addressed to the new head.
+                                for op in pending.into_iter().chain(held.drain(..)).filter(|op| op.class == ConflictClass::Merge) {
                                     if let Err(e) = session.enqueue(op) {
                                         let _ = events.send(Event::Notice(e.to_string()));
                                     }
                                 }
                             }
-                            held.clear();
                         }
                         Ok(Some(effect)) => forward(effect, events),
                         Ok(None) => {}
