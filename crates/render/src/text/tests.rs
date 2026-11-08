@@ -1185,6 +1185,69 @@ fn word_gaps_follow_position_not_drawing_order() {
     assert_eq!(layout(v).plain_text(), "שלום עולם");
 }
 
+/// A right-to-left show string in reverse order starts with the space that ends its word, and the next letter is pulled
+/// back over it (ISO 32000-2 §14.8.2.5.3): the space stays a word break after the word, not inside it (pdf.js #11656).
+#[test]
+fn a_space_taken_back_under_the_next_letter_stays_before_it() {
+    let rtl_line = |first: &str| {
+        // Drawn left to right: " הנידמה" with the space's advance taken back, then "רקבמ" after a word gap.
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box(first, 9.9, 0.0, 17.5, 11.0)];
+        let mut x = 17.5;
+        for c in ["נ", "י", "ד", "מ", "ה"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        x += 3.5;
+        for c in ["ר", "ק", "ב", "מ"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        layout(v)
+    };
+    let text = rtl_line("ה");
+    assert_eq!(text.plain_text().trim_end(), "מבקר המדינה");
+    assert_eq!(text.find("המדינה").len(), 1);
+    // The same with punctuation: the question mark ends the line, with no space before it.
+    assert_eq!(rtl_line("?").plain_text().trim_end(), "מבקר המדינ?");
+    // Right-to-left text drawn letter by letter leftwards: the letter after the space ends where the space starts, a
+    // rounding hair over it, and stays on its left.
+    let mut v = Vec::new();
+    let mut x = 60.0;
+    for c in ["ש", "ל", "ו", "ם"] {
+        v.push(em_box(c, x - 6.0, 0.0, x, 11.0));
+        x -= 6.0;
+    }
+    v.push(em_box(" ", x - 3.5, 0.0, x, 11.0));
+    x -= 3.5;
+    v.push(em_box("ע", x - 6.0, 0.0, x + 0.005, 11.0));
+    x -= 6.0;
+    for c in ["ו", "ל", "ם"] {
+        v.push(em_box(c, x - 6.0, 0.0, x, 11.0));
+        x -= 6.0;
+    }
+    assert_eq!(layout(v).plain_text(), "שלום עולם");
+    // A space inside a cluster, under a letter and the mark drawn on it, stays where x order puts it: before the mark.
+    let v = vec![
+        em_box("ש", 9.995, 0.0, 25.0, 11.0),
+        em_box(" ", 10.006, 0.0, 13.5, 11.0),
+        em_box("\u{5B4}", 10.003, 0.0, 12.8, 11.0),
+        em_box("ל", 25.0, 0.0, 31.0, 11.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "ל \u{5B4}ש");
+    // Left-to-right text has no reverse-order show strings: a space taken back there is still placed by position.
+    let v = vec![
+        em_box("a", 0.0, 0.0, 6.0, 11.0),
+        em_box("b", 6.0, 0.0, 12.0, 11.0),
+        em_box(" ", 12.0, 0.0, 15.5, 11.0),
+        em_box("c", 11.9, 0.0, 17.9, 11.0),
+    ];
+    assert_eq!(layout(v).plain_text().trim_end(), "abc");
+    // A space whose advance stands is placed by position, as before.
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box(" ", 6.0, 0.0, 9.5, 11.0), em_box("b", 9.5, 0.0, 15.5, 11.0)];
+    v.push(em_box("c", 15.5, 0.0, 21.5, 11.0));
+    assert_eq!(layout(v).plain_text(), "a bc");
+}
+
 /// #2667: a number or punctuation on a right-to-left line must not split it into separately reversed words.
 #[test]
 fn rtl_line_with_number_and_punctuation_reads_in_logical_order() {
