@@ -78,8 +78,8 @@ pub enum QuickTool {
     EditText,
     /// Add a stamp: click to place this stamp.
     Stamp(pdfcraft_engine::StampKind),
-    /// A custom stamp from the library (its index).
-    CustomStamp(usize),
+    /// A custom stamp from the library (stable entry identity).
+    CustomStamp(u64),
     /// Edit a PDF ▸ Link: draw link areas, select and edit links.
     Link,
     /// Use a certificate ▸ Digitally sign / Certify (visible): drag the signature's rectangle.
@@ -182,6 +182,7 @@ pub enum Dialog {
     PdfA,
     /// Custom stamps ▸ Create.
     CreateStamp,
+    EditStamp,
     /// Prepare for accessibility ▸ Add alternate text.
     AltText,
     /// PDF Optimizer ▸ Audit space usage (then back to the optimizer).

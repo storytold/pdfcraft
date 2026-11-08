@@ -127,7 +127,7 @@ impl Host for crate::PdfCraftApp {
                 crate::QuickTool::Snapshot => "snapshot".to_string(),
                 crate::QuickTool::ColumnSelect => "column-select".to_string(),
                 crate::QuickTool::Stamp(k) => format!("stamp-{}", k.name().trim_start_matches("PC").to_ascii_lowercase()),
-                crate::QuickTool::CustomStamp(i) => format!("custom-stamp-{i}"),
+                crate::QuickTool::CustomStamp(id) => format!("custom-stamp-id-{id}"),
                 crate::QuickTool::Fill(f) => format!("fill-{}", f.command().trim_start_matches("sign.fill.")),
                 crate::QuickTool::Field(f) => format!("field-{}", f.command().trim_start_matches("form.add.")),
                 crate::QuickTool::Comment(t) => t.command().trim_start_matches("comment.").to_string(),
