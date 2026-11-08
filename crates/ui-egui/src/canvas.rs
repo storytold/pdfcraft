@@ -2702,25 +2702,127 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
 
 /// Follows the link that was clicked. A link to another file comes back, to be opened once the
 /// document is no longer borrowed.
+fn hide_targets_edit(
+    session: &pdfcraft_engine::Session,
+    id: pdfcraft_engine::DocId,
+    targets: &[pdfcraft_render::HideTarget],
+    hide: bool,
+) -> Option<pdfcraft_engine::Edit> {
+    use pdfcraft_render::HideTarget;
+    let doc = session.get(id)?;
+    let mut matched_names = std::collections::HashSet::new();
+    for t in targets {
+        match t {
+            HideTarget::Field(name) => {
+                matched_names.insert(name.clone());
+            }
+            HideTarget::Annotation(obj_id) => {
+                let target_ref = pdfcraft_cos::ObjRef::new(obj_id.0, obj_id.1);
+                for f in doc.form.iter() {
+                    if f.obj == target_ref || f.widgets.iter().any(|w| w.obj == target_ref) {
+                        matched_names.insert(f.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    let is_affected = |f_name: &str| matched_names.iter().any(|m| f_name == *m || f_name.starts_with(&format!("{m}.")));
+    let changes: Vec<pdfcraft_engine::FieldChange> = doc
+        .form
+        .iter()
+        .filter(|f| is_affected(&f.name))
+        .map(|f| pdfcraft_engine::FieldChange {
+            name: f.name.clone(),
+            value: None,
+            read_only: None,
+            required: None,
+            display: Some(if hide { 1 } else { 0 }),
+        })
+        .collect();
+    if !changes.is_empty() {
+        let label = if hide { "Hide a field" } else { "Show a field" };
+        Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] })
+    } else {
+        None
+    }
+}
+
+/// Create an edit to reset form fields to their defaults.
+fn reset_form_edit(session: &pdfcraft_engine::Session, id: pdfcraft_engine::DocId, fields: &[String], exclude: bool) -> pdfcraft_engine::Edit {
+    let all: Vec<String> = session.get(id).map(|d| d.form.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
+    let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
+    let names = match (fields.is_empty(), exclude) {
+        (true, _) => None,
+        (false, false) => Some(all.iter().filter(|n| listed(n)).cloned().collect()),
+        (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
+    };
+    pdfcraft_engine::Edit::ResetForm { names }
+}
+
+fn run_link_target(
+    app: &mut PdfCraftApp,
+    index: usize,
+    target: &LinkTarget,
+    pending_edits: &mut Vec<pdfcraft_engine::Edit>,
+) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
+    let view_id = app.views[index].id;
+    let pages = app.session.get(view_id).map_or(0, |d| d.info.pages.len());
+    match target {
+        LinkTarget::Page(p, dest) => {
+            let view = &mut app.views[index];
+            if let Some(doc) = app.session.get(view.id) {
+                view.go_to_dest(*p, *dest, &doc.info);
+            }
+        }
+        LinkTarget::Uri(u) => app.request_document_url(u, crate::LinkOrigin::Link),
+        LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, changes, *preserve_rb),
+        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file.clone(), destination.clone())),
+        LinkTarget::Named(n) => match n.as_str() {
+            "NextPage" => app.views[index].step_page(true),
+            "PrevPage" => app.views[index].step_page(false),
+            "FirstPage" => app.views[index].go_to_page(0),
+            "LastPage" => app.views[index].go_to_page(pages.saturating_sub(1)),
+            _ => {} // ISO 32000-2 Table 215: if the viewer does not recognise the name, it shall take no action.
+        },
+        LinkTarget::Hide { targets, hide } => {
+            if let Some(edit) = hide_targets_edit(&app.session, view_id, targets, *hide) {
+                pending_edits.push(edit);
+            }
+        }
+        LinkTarget::ResetForm { fields, exclude } => {
+            app.views[index].forms.focus = None;
+            pending_edits.push(reset_form_edit(&app.session, view_id, fields, *exclude));
+        }
+        LinkTarget::Sequence(seq) => {
+            let mut last_remote = None;
+            for a in seq {
+                if let Some(remote) = run_link_target(app, index, a, pending_edits) {
+                    last_remote = Some(remote);
+                }
+            }
+            return last_remote;
+        }
+        LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", s)]),
+    }
+    None
+}
+
 fn follow_link(
     app: &mut PdfCraftApp,
     index: usize,
     target: Option<LinkTarget>,
 ) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
-    let view_id = app.views[index].id;
-    match target? {
-        LinkTarget::Page(p, dest) => {
-            let view = &mut app.views[index];
-            if let Some(doc) = app.session.get(view.id) {
-                view.go_to_dest(p, dest, &doc.info);
-            }
-        }
-        LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
-        LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
-        LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
+    let mut pending_edits = Vec::new();
+    let remote = run_link_target(app, index, &target?, &mut pending_edits);
+    if pending_edits.len() == 1 {
+        app.views[index].pending_edit = pending_edits.pop();
+    } else if !pending_edits.is_empty() {
+        app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Batch {
+            label: "Link actions".into(),
+            edits: pending_edits,
+        });
     }
-    None
+    remote
 }
 
 /// A finished marquee zoom, a signature rectangle drawn, or an empty signature field clicked.

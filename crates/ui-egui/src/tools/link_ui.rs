@@ -89,6 +89,17 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
         LinkTarget::Uri(u) => u.clone(),
         LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
         LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::Named(n) => match n.as_str() {
+            "NextPage" => tl!("Next page").to_string(),
+            "PrevPage" => tl!("Previous page").to_string(),
+            "FirstPage" => tl!("First page").to_string(),
+            "LastPage" => tl!("Last page").to_string(),
+            other => crate::i18n::fmt(tl!("{s} action"), &[("s", other)]),
+        },
+        LinkTarget::Hide { hide: true, .. } => tl!("Hide a field").to_string(),
+        LinkTarget::Hide { hide: false, .. } => tl!("Show a field").to_string(),
+        LinkTarget::ResetForm { .. } => tl!("Reset a form").to_string(),
+        LinkTarget::Sequence(seq) => seq.first().map(|a| target_label(info, a)).unwrap_or_default(),
         LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
     }
 }
