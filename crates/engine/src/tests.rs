@@ -5844,6 +5844,35 @@ fn backgrounds_and_watermarks_from_files() {
     assert!(s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(junk) }).is_err());
 }
 
+/// The web build reads a page at a time (prepared on the page, recognised in a worker, the
+/// lines sent back as JSON); with the real ocrs engine that finds the same words as reading in
+/// one go (needs the models: `cargo xtask models`; skipped without them).
+#[test]
+fn reading_a_page_at_a_time_finds_the_same_words() {
+    let settings = ocr::OcrSettings::default();
+    let Ok(engines) = ocr::recognizers(&settings) else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Invoice 42: pay by Friday").unwrap();
+    let typed = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(typed).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png.clone()), ("scan2.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let at_once = s.ocr_job(id, &[], settings.clone()).unwrap().run(&engines, |_, _| true);
+    let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+    let mut one_by_one = Vec::new();
+    while let Some(next) = steps.next_page() {
+        let shot = next.unwrap();
+        let lines = engines.primary.recognize(shot.image().unwrap(), &pdfcraft_ocr::RecognizeOptions::default()).unwrap();
+        let sent = ocr::lines_from_json(&pdfcraft_ocr::lines_to_json(&lines), engines.primary.id()).map_err(|e| e.to_string());
+        one_by_one.push(shot.place(sent.map(|lines| ocr::StrategyOutcome { lines, ..Default::default() })));
+    }
+    assert_eq!(one_by_one, at_once);
+    assert!(at_once.len() == 2 && at_once.iter().all(|p| p.skipped.is_none() && !p.words.is_empty()), "{at_once:?}");
+}
+
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
 #[test]
@@ -6549,6 +6578,35 @@ fn actions_fail_when_hidden_information_could_not_be_removed() {
     let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
     let e = actions::run_on(sanitize, "signed.pdf", signed, |_, _| {}).map(|r| r.log).unwrap_err();
     assert!(e.starts_with("Sanitize document:"), "{e}");
+}
+
+/// A PDF whose catalog names its language (`/Lang`) exports to Word and HTML in that language, so
+/// Word checks the spelling in it, not in English; one that names none exports as before.
+#[test]
+fn office_exports_take_the_documents_language() {
+    let pdf = |catalog: &str| {
+        pdfcraft_testkit::Pdf::new()
+            .obj(catalog)
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>")
+            .stream("", b"BT /F1 12 Tf 20 200 Td (Hello) Tj ET")
+            .build()
+    };
+    let mut s = Session::new();
+    let bg = s.open("lang.pdf", None, Arc::new(pdf("<< /Type /Catalog /Pages 2 0 R /Lang (bg-BG) >>")), None).unwrap();
+    let plain = s.open("plain.pdf", None, Arc::new(pdf("<< /Type /Catalog /Pages 2 0 R >>")), None).unwrap();
+    let d = s.get(bg).unwrap();
+    let docx = d.export_office(compare::OfficeFormat::Docx);
+    assert!(docx == pdfcraft_export::docx_with_language(&d.export_pages(), "lang", Some("bg-BG")), "Word names bg-BG");
+    assert!(docx != pdfcraft_export::docx(&d.export_pages(), "lang"), "Word names a language");
+    for format in [compare::OfficeFormat::Html, compare::OfficeFormat::HtmlSimple] {
+        let html = String::from_utf8(d.export_office(format)).unwrap();
+        assert!(html.contains("<html lang=\"bg-BG\">"), "{html}");
+    }
+    let d = s.get(plain).unwrap();
+    assert!(d.export_office(compare::OfficeFormat::Docx) == pdfcraft_export::docx(&d.export_pages(), "plain"), "no language, as before");
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("<html>\n"));
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::HtmlSimple)).unwrap().contains("<html>\n"));
 }
 
 #[test]

@@ -17,6 +17,8 @@ rten = { version = "0.26.0", default-features = false, features = ["onnx_format"
 rten-tensor = "0.26.0"
 rten-imageproc = "0.26.0"
 image = { version = "0.25", default-features = false }
+serde_json.workspace = true
+sha2 = "0.11"
 thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

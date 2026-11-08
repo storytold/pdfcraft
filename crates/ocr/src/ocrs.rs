@@ -50,6 +50,15 @@ pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
 pub const MULTILINGUAL_MODEL: &str = "multilingual-recognition.onnx";
 pub const ORIENTATION_MODEL: &str = "document-orientation.onnx";
 pub const DICTIONARY: &str = "multilingual-dictionary.txt";
+/// Their SHA-256s, as in ATTRIBUTION.toml. [`Ocr::from_bytes`] loads nothing else: rten's ONNX
+/// parser can spin forever on bytes that aren't a model (64 × 0xff does).
+pub const DETECTION_MODEL_SHA256: &str = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe";
+pub const RECOGNITION_MODEL_SHA256: &str = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
 
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -101,21 +110,41 @@ impl Models {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
-    multilingual: super::multilingual::Multilingual,
+    /// The multilingual recognizer and orientation classifier: loaded with the model files,
+    /// absent when the models come from bytes (the web build reads English only).
+    multilingual: Option<super::multilingual::Multilingual>,
 }
 
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        let mut ocr = Self::with_models(load(&models.detection)?, load(&models.recognition)?)?;
+        let dir = models.recognition.parent().ok_or(OcrError::NoModels)?;
+        ocr.multilingual = Some(super::multilingual::Multilingual::load(dir)?);
+        Ok(ocr)
+    }
+
+    /// Load the models from the contents of their files, where there is no file system (the web
+    /// build downloads them). Bytes that aren't the files ATTRIBUTION.toml names are an error.
+    pub fn from_bytes(detection: Vec<u8>, recognition: Vec<u8>) -> Result<Ocr, OcrError> {
+        let load = |name: &str, sha256: &str, data: Vec<u8>| {
+            if sha256_hex(&data) != sha256 {
+                return Err(OcrError::Load(name.into(), "not the expected model file (SHA-256 differs)".into()));
+            }
+            rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()))
+        };
+        Self::with_models(load(DETECTION_MODEL, DETECTION_MODEL_SHA256, detection)?, load(RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256, recognition)?)
+    }
+
+    fn with_models(detection: rten::Model, recognition: rten::Model) -> Result<Ocr, OcrError> {
         let params = ocrs::OcrEngineParams {
-            detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            detection_model: Some(detection),
+            recognition_model: Some(recognition),
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        let dir = models.recognition.parent().ok_or(OcrError::NoModels)?;
-        Ok(Ocr { engine, multilingual: super::multilingual::Multilingual::load(dir)? })
+        Ok(Ocr { engine, multilingual: None })
     }
 
     /// Load the models found by [`Models::find`].
@@ -165,6 +194,10 @@ impl Ocr {
         if !LANGUAGES.iter().any(|l| l.0 == language) {
             return Err(OcrError::Recognize(format!("unsupported language: {language}")));
         }
+        let multilingual = self
+            .multilingual
+            .as_ref()
+            .ok_or_else(|| OcrError::Recognize(format!("only English can be read: {language} needs the multilingual model")))?;
         checked_len(image.width(), image.height())?;
         use rten_imageproc::BoundingRect;
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
@@ -177,7 +210,7 @@ impl Ocr {
             let rect = line.iter().map(|r| r.bounding_rect()).fold([f32::INFINITY, f32::INFINITY, 0.0f32, 0.0f32], |a, r| {
                 [a[0].min(r.left()), a[1].min(r.top()), a[2].max(r.right()), a[3].max(r.bottom())]
             });
-            let words = self.multilingual.read_line(image, rect)?;
+            let words = multilingual.read_line(image, rect)?;
             if !words.is_empty() {
                 out.push(Line { words });
             }
@@ -188,19 +221,34 @@ impl Ocr {
     /// How far clockwise `image` must turn to be upright (0, 90, 180 or 270); uncertain,
     /// nearly blank and nearly solid pages stay at 0.
     pub fn orientation(&self, image: &image::RgbImage) -> Result<u16, OcrError> {
-        self.multilingual.orientation(image)
+        self.multilingual.as_ref().ok_or_else(|| OcrError::Recognize("the orientation model is not loaded".into()))?.orientation(image)
+    }
+
+    /// Whether the multilingual recognizer and orientation classifier are loaded (not with
+    /// models from bytes, [`Ocr::from_bytes`]).
+    pub fn reads_languages(&self) -> bool {
+        self.multilingual.is_some()
     }
 }
 
 /// The ocrs engine as a [`Recognizer`] (the default engine).
 pub struct OcrsRecognizer {
     engine: Ocr,
+    /// Loaded from bytes ([`OcrsRecognizer::from_ocr`]), not from model files: it stays
+    /// available without them.
+    in_memory: bool,
 }
 
 impl OcrsRecognizer {
     /// Load the models from `models`.
     pub fn load(models: &Models) -> Result<OcrsRecognizer, OcrError> {
-        Ok(OcrsRecognizer { engine: Ocr::load(models)? })
+        Ok(OcrsRecognizer { engine: Ocr::load(models)?, in_memory: false })
+    }
+
+    /// A recogniser loaded some other way than from model files: the web build downloads the
+    /// models and loads them with [`Ocr::from_bytes`].
+    pub fn from_ocr(engine: Ocr) -> OcrsRecognizer {
+        OcrsRecognizer { engine, in_memory: true }
     }
 
     /// Load the models found by [`Models::find`].
@@ -215,11 +263,12 @@ impl Recognizer for OcrsRecognizer {
     }
 
     fn available(&self) -> bool {
-        Models::find().is_some()
+        self.in_memory || Models::find().is_some()
     }
 
     fn languages(&self) -> Vec<(String, String)> {
-        LANGUAGES.iter().map(|(c, n)| ((*c).to_string(), (*n).to_string())).collect()
+        let all = self.engine.reads_languages();
+        LANGUAGES.iter().filter(|(c, _)| all || *c == "en").map(|(c, n)| ((*c).to_string(), (*n).to_string())).collect()
     }
 
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
@@ -235,7 +284,7 @@ impl Recognizer for OcrsRecognizer {
     }
 
     fn orientation(&self, image: &image::RgbImage) -> Option<Result<u16, OcrError>> {
-        Some(self.engine.orientation(image))
+        self.engine.reads_languages().then(|| self.engine.orientation(image))
     }
 }
 

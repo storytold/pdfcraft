@@ -68,9 +68,10 @@ pub struct Table {
     pub rect: [f64; 4],
     pub cols: Vec<f64>,
     pub rows: Vec<Vec<Cell>>,
-    /// Whether the page's ruled lines separate every pair of neighbouring cells, so the writers
-    /// can draw the table's borders.
-    pub ruled: bool,
+    /// `Some` when the page's ruled lines separate every pair of neighbouring cells, so the
+    /// writers draw the inside borders; it holds which outer edges (top, left, bottom, right) the
+    /// lines also draw, as only those get a border.
+    pub ruled: Option<[bool; 4]>,
 }
 
 /// What goes into the output, in order.
@@ -264,8 +265,11 @@ const RULE_BUDGET: usize = 4_000_000;
 /// Whether `rules` separate every pair of neighbouring cells of a table whose rows are `rows`
 /// (block indices, top to bottom) and whose columns start at `edges` and end at `right`: between
 /// two columns a vertical rule beside each row (unless a cell of that row spans across), and
-/// between two rows a horizontal rule under each column. Every check spends `budget`.
-fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64], right: f64, budget: &mut usize) -> bool {
+/// between two rows a horizontal rule under each column. Every check spends `budget`. When they
+/// do, says which outer edges (top, left, bottom, right) are ruled too: a rule over every column
+/// above the first row or below the last, or beside every row left of the first column or right
+/// of the last, no farther from the cells than the next row or column is.
+fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64], right: f64, budget: &mut usize) -> Option<[bool; 4]> {
     let vertical: Vec<&[f64; 4]> = rules.iter().filter(|r| r[2] - r[0] <= RULE_THICK && r[3] - r[1] > RULE_THICK).collect();
     let horizontal: Vec<&[f64; 4]> = rules.iter().filter(|r| r[3] - r[1] <= RULE_THICK && r[2] - r[0] > RULE_THICK).collect();
     let mut find = |set: &[&[f64; 4]], hit: &dyn Fn(&[f64; 4]) -> bool| -> bool {
@@ -295,7 +299,7 @@ fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64
                 let x = (r[0] + r[2]) / 2.0;
                 lo + COL_TOL < x && x <= hi + COL_TOL && r[1] <= mid && mid <= r[3] && clear(x)
             }) {
-                return false;
+                return None;
             }
         }
     }
@@ -307,11 +311,41 @@ fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64
                 let y = (r[1] + r[3]) / 2.0;
                 below_top - COL_TOL <= y && y <= above_bottom + COL_TOL && r[0] <= x && x <= r[2]
             }) {
-                return false;
+                return None;
             }
         }
     }
-    true
+    let (Some(first), Some(last), Some(&left), Some(&last_col)) = (spans.first(), spans.last(), edges.first(), edges.last()) else {
+        return Some([false; 4]);
+    };
+    // How far the next row or column is: an outer rule farther out than that frames something else.
+    let row_gap = |a: Option<&[f64; 2]>, b: Option<&[f64; 2]>, side: usize| a.zip(b).map_or(0.0, |(a, b)| (a[side] - b[side]).abs());
+    let top_gap = row_gap(Some(first), spans.get(1), 1);
+    let bottom_gap = row_gap(spans.len().checked_sub(2).and_then(|i| spans.get(i)), Some(last), 0);
+    let left_gap = edges.get(1).map_or(0.0, |e| e - left);
+    let right_gap = edges.len().checked_sub(2).and_then(|i| edges.get(i)).map_or(0.0, |e| last_col - e);
+    let mut over_columns = |lo: f64, hi: f64| {
+        mids.iter().all(|&x| {
+            find(&horizontal, &|r| {
+                let y = (r[1] + r[3]) / 2.0;
+                lo <= y && y <= hi && r[0] <= x && x <= r[2]
+            })
+        })
+    };
+    let top = over_columns(first[1] - COL_TOL, first[1] + top_gap + COL_TOL);
+    let bottom = over_columns(last[0] - bottom_gap - COL_TOL, last[0] + COL_TOL);
+    let mut beside_rows = |lo: f64, hi: f64| {
+        spans.iter().all(|span| {
+            let mid = (span[0] + span[1]) / 2.0;
+            find(&vertical, &|r| {
+                let x = (r[0] + r[2]) / 2.0;
+                lo <= x && x <= hi && r[1] <= mid && mid <= r[3]
+            })
+        })
+    };
+    let left_ruled = beside_rows(left - left_gap - COL_TOL, left + COL_TOL);
+    let right_ruled = beside_rows(right - COL_TOL, right.max(last_col + right_gap) + COL_TOL);
+    Some([top, left_ruled, bottom, right_ruled])
 }
 
 /// Detect tables in a page's blocks from their text layout: columns are left edges shared by
@@ -394,11 +428,13 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
         edges.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         let ncols = edges.len();
         let right = used.iter().map(|&i| blocks[i].rect[2]).fold(f64::MIN, f64::max) + COL_TOL;
-        let is_ruled = (2..=MAX_COLS).contains(&ncols) && !rules.is_empty() && {
+        let frame = if (2..=MAX_COLS).contains(&ncols) && !rules.is_empty() {
             let row_blocks: Vec<Vec<usize>> = run.iter().map(|row| row.iter().map(|(_, i)| *i).collect()).collect();
             ruled(blocks, rules, &row_blocks, &edges, right, budget)
+        } else {
+            None
         };
-        let ok = (ncols >= 3 || (ncols == 2 && (run.len() >= 3 || is_ruled))) && ncols <= MAX_COLS;
+        let ok = (ncols >= 3 || (ncols == 2 && (run.len() >= 3 || frame.is_some()))) && ncols <= MAX_COLS;
         if !ok {
             run.clear();
             return;
@@ -457,7 +493,7 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
             right,
             used.iter().map(|&i| blocks[i].rect[3]).fold(f64::MIN, f64::max),
         ];
-        out.push(Table { rect, cols: edges, rows: rows_out, ruled: is_ruled });
+        out.push(Table { rect, cols: edges, rows: rows_out, ruled: frame });
     };
     // Runs of consecutive multi-column rows are tables. Rows on either side of a run that
     // hold a single cell wide enough to span two columns (a header band, a totals row) join

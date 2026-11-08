@@ -415,7 +415,7 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
     h.run_steps(4);
     assert!(h.state_mut().execute("ocr.correct"));
     h.run_steps(3);
-    // The screen owns the window and its controls are all present (no dead controls).
+    // The screen's controls are all present (no dead controls).
     h.get_by_label("Run OCR");
     h.get_by_label("Reject");
     h.get_by_label("Next uncertain");

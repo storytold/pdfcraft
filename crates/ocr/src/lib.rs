@@ -35,7 +35,8 @@ pub mod tesseract;
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
-    ALPHABET, DETECTION_MODEL, DICTIONARY, LANGUAGES, MULTILINGUAL_MODEL, Models, ORIENTATION_MODEL, Ocr, OcrsRecognizer, RECOGNITION_MODEL,
+    ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, DICTIONARY, LANGUAGES, MULTILINGUAL_MODEL, Models, ORIENTATION_MODEL, Ocr, OcrsRecognizer,
+    RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
 };
 
 pub use pdfcraft_fonts::TextPlan;
@@ -486,6 +487,58 @@ pub fn text_layer(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPlan) -> Vec<
     out
 }
 
+/// The recognised lines as JSON, `[[["word", left, top, right, bottom], …], …]`, with the
+/// word's confidence as a sixth item when it has one: how the web build's OCR workers send what
+/// they found back to the page.
+pub fn lines_to_json(lines: &[Line]) -> String {
+    let word = |w: &Word| {
+        let mut items = vec![serde_json::json!(w.text), w.rect[0].into(), w.rect[1].into(), w.rect[2].into(), w.rect[3].into()];
+        items.extend(w.confidence.map(serde_json::Value::from));
+        serde_json::Value::Array(items)
+    };
+    serde_json::Value::Array(lines.iter().map(|l| serde_json::Value::Array(l.words.iter().map(word).collect())).collect()).to_string()
+}
+
+/// At most this many words come back for one page (a dense page has a few thousand).
+const MAX_JSON_WORDS: usize = 100_000;
+
+/// [`lines_to_json`] read back, the words credited to `source` (the engine the worker ran).
+/// Anything else (a word without its box, a box or confidence that isn't a finite number, too
+/// many words) is an error rather than a guess.
+pub fn lines_from_json(json: &str, source: &str) -> Result<Vec<Line>, OcrError> {
+    let bad = |why: &str| OcrError::Recognize(format!("unreadable result: {why}"));
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(&e.to_string()))?;
+    let lines = value.as_array().ok_or_else(|| bad("not a list of lines"))?;
+    let number = |v: &serde_json::Value| v.as_f64().map(|v| v as f32).filter(|v| v.is_finite());
+    let mut count = 0usize;
+    let mut out = Vec::with_capacity(lines.len().min(MAX_JSON_WORDS));
+    for line in lines {
+        let mut words = Vec::new();
+        for word in line.as_array().ok_or_else(|| bad("a line is not a list of words"))? {
+            count += 1;
+            if count > MAX_JSON_WORDS {
+                return Err(bad("too many words"));
+            }
+            let (text, rect, confidence) = match word.as_array().map(Vec::as_slice) {
+                Some([serde_json::Value::String(text), l, t, r, b]) => (text, [l, t, r, b], None),
+                Some([serde_json::Value::String(text), l, t, r, b, c]) => (text, [l, t, r, b], Some(c)),
+                _ => return Err(bad("a word is not [text, left, top, right, bottom, confidence?]")),
+            };
+            let mut r = [0f32; 4];
+            for (slot, v) in r.iter_mut().zip(rect) {
+                *slot = number(v).ok_or_else(|| bad("a word's box is not finite numbers"))?;
+            }
+            let mut w = Word::new(text.clone(), r, source);
+            if let Some(c) = confidence {
+                w = w.with_confidence(number(c).ok_or_else(|| bad("a word's confidence is not a finite number"))?);
+            }
+            words.push(w);
+        }
+        out.push(Line { words });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -913,6 +966,89 @@ mod tests {
         assert_eq!(ok.rgba().len(), 16);
         assert_eq!(ok.gray(5, 5), Some(255), "clamped reads stay inside");
         assert_eq!(ok.gray(-1, -1), Some(255));
+    }
+
+    /// The web build loads the models from downloaded bytes; they read the same text.
+    #[test]
+    fn reads_rendered_text_with_models_from_bytes() {
+        let Some(models) = Models::find().filter(|m| m.detection.ends_with(DETECTION_MODEL)) else {
+            eprintln!("skipped: ONNX OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::from_bytes(std::fs::read(&models.detection).unwrap(), std::fs::read(&models.recognition).unwrap()).unwrap();
+        let rec = OcrsRecognizer::from_ocr(ocr);
+        assert!(rec.available(), "a recogniser loaded from bytes needs no model files");
+        let (w, h, px) = test_image::hello();
+        let lines = rec.recognize(&OcrImage::new(w, h, px).unwrap(), &RecognizeOptions::default()).unwrap();
+        let text: Vec<String> = lines.iter().map(Line::text).collect();
+        assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+    }
+
+    /// The web build's workers send lines back as JSON; they arrive unchanged, credited to the
+    /// engine the worker ran.
+    #[test]
+    fn lines_survive_json() {
+        let lines = vec![
+            Line {
+                words: vec![
+                    Word::new("Total \"€250\"", [1.5, 2.0, 30.25, 12.0], "ocrs"),
+                    Word::new("due", [32.0, 2.0, 50.0, 12.0], "ocrs").with_confidence(87.5),
+                ],
+            },
+            Line::default(),
+            Line { words: vec![Word::new("日本語", [0.0, 20.0, 9.0, 30.0], "ocrs")] },
+        ];
+        assert_eq!(lines_from_json(&lines_to_json(&lines), "ocrs").unwrap(), lines);
+        assert_eq!(lines_from_json(&lines_to_json(&[]), "ocrs").unwrap(), Vec::<Line>::new());
+        let other = lines_from_json(&lines_to_json(&lines), "tesseract").unwrap();
+        assert!(other.iter().flat_map(|l| &l.words).all(|w| w.source == "tesseract"));
+    }
+
+    /// A result that isn't what a worker sends is an error, not a crash or a guess.
+    #[test]
+    fn malformed_json_lines_are_an_error() {
+        for json in [
+            "",
+            "{}",
+            "[1]",
+            "[[1]]",
+            "[[[\"a\", 1, 2, 3]]]",
+            "[[[\"a\", 1, 2, 3, 4, 5, 6]]]",
+            "[[[1, 1, 2, 3, 4]]]",
+            "[[[\"a\", \"1\", 2, 3, 4]]]",
+            "[[[\"a\", 1e999, 2, 3, 4]]]",
+            "[[[\"a\", null, 2, 3, 4]]]",
+            "[[[\"a\", 1, 2, 3, 4, null]]]",
+            "[[[\"a\", 1, 2, 3, 4, \"90\"]]]",
+        ] {
+            assert!(matches!(lines_from_json(json, "ocrs"), Err(OcrError::Recognize(_))), "{json}");
+        }
+        let many = format!("[[{}]]", vec!["[\"a\",0,0,1,1]"; MAX_JSON_WORDS + 1].join(","));
+        assert!(lines_from_json(&many, "ocrs").is_err());
+        let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        assert!(lines_from_json(&deep, "ocrs").is_err());
+    }
+
+    /// A download that isn't a model (an HTML error page, a truncated file) is an error, not a
+    /// crash or a hang.
+    #[test]
+    fn models_from_bad_bytes_are_an_error() {
+        for (detection, recognition) in [(Vec::new(), Vec::new()), (b"<!doctype html>".to_vec(), b"RTEN".to_vec()), (vec![0xff; 64], vec![0; 64])] {
+            assert!(matches!(Ocr::from_bytes(detection, recognition), Err(OcrError::Load(..))));
+        }
+    }
+
+    /// The hashes [`Ocr::from_bytes`] checks are the ones `cargo xtask models` verifies.
+    #[test]
+    fn model_hashes_match_attribution() {
+        let manifest = include_str!("../../../ATTRIBUTION.toml");
+        for (file, sha256) in [(DETECTION_MODEL, DETECTION_MODEL_SHA256), (RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256)] {
+            let entry = manifest
+                .split("[[fetched]]")
+                .find(|e| e.contains(&format!("file = \"{file}\"")))
+                .unwrap_or_else(|| panic!("{file} is not in ATTRIBUTION.toml"));
+            assert!(entry.lines().any(|l| l == format!("sha256 = \"{sha256}\"")), "{file}: SHA-256 differs from ATTRIBUTION.toml");
+        }
     }
 
     mod test_image {
