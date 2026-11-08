@@ -297,8 +297,11 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
             !*horizontal,
         )),
         ImageEdit::Replace { name, bytes } => {
-            if img.is_form {
-                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("grouped Form artwork cannot be replaced with a bitmap".into())));
+            // Checked before the new picture is embedded, so a refusal adds no object.
+            if !img.replaceable {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                    "this grouped artwork holds no single picture, so it cannot be replaced".into(),
+                )));
             }
             pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
         }
@@ -339,8 +342,12 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
             });
         let non_axis_transform = matches!(change, ImageEdit::Transform([a, b, c, d, _, _])
             if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
+        // A Form drawn as an added image (a file can mark one so) is replaced inside a copy of
+        // the Form, keeping its frame: as an added image it would become the bare picture.
+        let replaces_form = img.is_form && matches!(change, ImageEdit::Replace { .. });
         let should_promote = has_active_crop
             || non_axis_transform
+            || replaces_form
             || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
 
         if should_promote {
