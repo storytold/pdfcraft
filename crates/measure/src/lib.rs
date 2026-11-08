@@ -469,12 +469,18 @@ fn retained(m: &Measurement) -> usize {
         .into_iter()
         .fold(m.points.len().saturating_mul(std::mem::size_of::<Point>()), usize::saturating_add)
 }
-fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: usize, scales: &mut Scales) -> Result<Measurement> {
+/// The scale a measurement annotation reads with, through the listing's cache: a scale given by
+/// reference is read once, and its error kept, however many annotations name it.
+fn scale_of(doc: &Document, d: &Dict, scales: &mut Scales) -> Result<Scale> {
     let measure = d.get(b"Measure").ok_or_else(|| invalid("measurement has no scale"))?;
-    let scale = match measure.as_ref() {
-        Some(r) => scales.entry(r).or_insert_with(|| Scale::read(doc, measure).map_err(|e| e.to_string())).clone().map_err(|e| invalid(&e))?,
-        None => Scale::read(doc, measure)?,
-    };
+    match measure.as_ref() {
+        Some(r) => scales.entry(r).or_insert_with(|| Scale::read(doc, measure).map_err(|e| e.to_string())).clone().map_err(|e| invalid(&e)),
+        None => Scale::read(doc, measure),
+    }
+}
+
+fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: usize, scales: &mut Scales) -> Result<Measurement> {
+    let scale = scale_of(doc, d, scales)?;
     let key = if kind == Kind::Distance { &b"L"[..] } else { b"Vertices" };
     let o = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement has no vertices"))?);
     let a = o.as_array().ok_or_else(|| invalid("invalid measurement vertices"))?;
@@ -525,7 +531,19 @@ pub fn list(doc: &Document) -> Listing {
             // read their vertices once.
             let vertices = d.get(if kind == Kind::Distance { b"L".as_slice() } else { b"Vertices" }).map(|v| doc.resolve(v));
             let n = vertices.as_deref().and_then(Object::as_array).map_or(0, |a| a.len() / 2).min(MAX_POINTS);
-            work = work.saturating_add(if kind == Kind::Area { n.saturating_mul(n) } else { n.max(1) });
+            // An area's boundary check compares every pair of edges: charge it before reading the
+            // vertices, so a listing stops at its work bound rather than at a stall. The scale is
+            // resolved first, as `read_measurement` reads it: one that is rejected reads nothing at
+            // all, so it must not spend the work that later, valid measurements need.
+            if kind == Kind::Area {
+                if let Err(e) = scale_of(doc, d, &mut scales) {
+                    out.unsupported.push(Unsupported { page, index, reason: e.to_string() });
+                    continue;
+                }
+                work = work.saturating_add(n.saturating_mul(n));
+            } else {
+                work = work.saturating_add(n.max(1));
+            }
             if work > MAX_LISTED_WORK {
                 out.truncated = true;
                 return out;
