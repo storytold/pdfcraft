@@ -706,8 +706,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::a_file_opened_again_shows_its_last_view"]
-notes = "Desktop, on by default (Preferences ▸ Documents and view, #1767): a file opened again shows the page, zoom and page display it was last shown with, remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. Not remembered: the view rotation (display only) and the scroll position within the page; Fit height comes back as Fit width (the settings name only two fits)."
+evidence = ["crates/ui-egui/tests/it/ui.rs::a_file_opened_again_shows_its_last_view", "crates/ui-egui/tests/it/ui.rs::always_my_default_view_keeps_the_default_zoom_for_a_file_opened_again"]
+notes = "Desktop, on by default (Preferences ▸ Documents and view, #1767): a file opened again shows the page, zoom and page display it was last shown with, remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. With Always use my default zoom and page layout on, only the page comes back (#6591). Not remembered: the view rotation (display only) and the scroll position within the page; Fit height comes back as Fit width (the settings name only two fits)."
 
 [[feature]]
 id = "core.usage-rights-preserve"

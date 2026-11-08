@@ -1893,6 +1893,36 @@ fn a_file_opened_again_shows_its_last_view() {
     assert_eq!((app.last_views[0].page, app.last_views[0].zoom.as_str()), (1, "fit-page"));
 }
 
+/// #6591: with "Always use my default zoom and page layout" on, a file opened again comes back to
+/// its page but at the default zoom and page display, not the ones it was last shown with.
+#[test]
+fn always_my_default_view_keeps_the_default_zoom_for_a_file_opened_again() {
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    let path = std::env::temp_dir().join(format!("pdfcraft-last-view-always-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let p = path.clone();
+    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    {
+        let app = h.state_mut();
+        app.set_option("zoom", "50").unwrap();
+        let view = &mut app.views[0];
+        view.set_display(PageLayout::TwoUp, false);
+        view.set_cover(true);
+        view.go_to_page(2);
+    }
+    h.run_steps(3);
+    h.state_mut().close_tab(0);
+    let saved = h.state().persist();
+    let h = harness(move |app| {
+        app.restore(&saved);
+        app.set_option("default-zoom", "fit-width").unwrap();
+        app.set_option("always-default-view", "on").unwrap();
+        app.open_bytes("doc.pdf", Some(path), pages_fixture(3)).expect("opens");
+    });
+    assert!(h.state().restore_last_view, "the last view is still restored");
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit, v.layout, v.continuous, v.cover), (2, Fit::Width, PageLayout::Single, true, false));
+}
+
 /// #1767: a fixed zoom with a fraction comes back as it was, not rounded to a whole percent.
 #[test]
 fn a_fractional_zoom_is_remembered_exactly() {
