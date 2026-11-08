@@ -120,7 +120,16 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                     color = Some([f(i - 3), f(i - 2), f(i - 1)]);
                 }
             }
-            let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
+            // Only usable quads, by the rule redaction apply reads them with, so a mark's outline
+            // is the area apply removes (and with none, the `/Rect` both fall back to).
+            let quads: Vec<[f32; 8]> = d
+                .get(b"QuadPoints")
+                .map(|o| doc.resolve(o))
+                .map(|a| {
+                    let entries = a.as_array().into_iter().flatten().map(|x| doc.resolve(x).as_f64());
+                    pdfcraft_geom::quad_points::usable_quads(entries).into_iter().map(|q| q.map(|v| v as f32)).collect()
+                })
+                .unwrap_or_default();
             // Keep in step with `pdfcraft_render::inspect`.
             let points = match subtype.as_str() {
                 "Line" => Some(nums(b"L")).filter(|l| l.len() == 4).map(|l| l.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
@@ -254,7 +263,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
-        restylable: appearance::build(d).is_some(),
+        restylable: appearance::build(doc, d).is_some(),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),

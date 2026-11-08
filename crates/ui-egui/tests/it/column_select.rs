@@ -146,3 +146,25 @@ fn alt_drag_with_the_highlighter_marks_only_the_column() {
     let marks: Vec<(&str, usize)> = doc.info.annotations.iter().map(|a| (a.subtype.as_str(), a.quads.len())).collect();
     assert_eq!(marks, [("Highlight", 4)], "Name, Qty, Apple and 12, each its own quad");
 }
+
+/// A column's rows and tab-separated cells are not paragraphs, so Copy puts the plain text on
+/// the clipboard and no HTML, even where the clipboard would take it.
+#[test]
+fn a_column_selection_copies_plain_text_only() {
+    let offered = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let seen = offered.clone();
+    let mut h = harness(move |app| {
+        app.system_clipboard = true;
+        app.html_clipboard_override = Some(Box::new(move |_, _| {
+            *seen.lock().unwrap() += 1;
+            true
+        }));
+    });
+    let (from, to) = top_two_rows(&h);
+    drag(&mut h, from, to, Modifiers::ALT);
+    assert!(h.state_mut().execute("edit.copy"));
+    h.step();
+    assert_eq!(*offered.lock().unwrap(), 0, "no HTML for a column selection");
+    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Name\tQty\nApple\t12"));
+    assert!(copied, "the plain text goes out the usual way");
+}
