@@ -765,9 +765,11 @@ pub struct Report {
 fn is_action(d: &Dict) -> bool {
     match d.name(b"Type") {
         Some(t) => t == b"Action",
-        // An untyped dictionary with `/P` and `/K` is read as a structure element, unless its
-        // `/S` names a forbidden action: those two keys must not exempt one.
-        None => d.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s)) || !(d.get(b"P").is_some() && d.get(b"K").is_some()),
+        // An untyped dictionary with both `/P` and `/K` is a structure element, whatever its `/S`
+        // names: a custom role can be called `JavaScript` without being one. Replacing such an
+        // element would leave its parent's `/K` pointing at nothing.
+        None if d.get(b"P").is_some() && d.get(b"K").is_some() => false,
+        None => d.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s)),
     }
 }
 
