@@ -77,6 +77,7 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
+mod scan_ui;
 mod state;
 mod tools;
 mod workflows;
@@ -518,6 +519,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Scan & OCR ▸ From scanner.
+    pub scan: scan_ui::ScanUi,
     /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
@@ -582,6 +585,8 @@ pub struct PdfCraftApp {
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
+    /// Which job last wrote [`Self::progress_notice`], so Cancel stops that job and not another one that runs too.
+    pub progress_owner: widgets::ProgressOwner,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).

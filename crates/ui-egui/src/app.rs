@@ -203,6 +203,7 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            scan: scan_ui::ScanUi::default(),
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
             custom_actions: Vec::new(),
@@ -239,6 +240,7 @@ impl PdfCraftApp {
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
             progress_notice: None,
+            progress_owner: widgets::ProgressOwner::default(),
             page_clipboard: None,
             comment_clipboard: None,
             grid_drop: None,
@@ -634,6 +636,7 @@ impl eframe::App for PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
+        self.poll_scan();
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();

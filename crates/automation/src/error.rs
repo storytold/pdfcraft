@@ -7,13 +7,16 @@ pub enum ToolError {
     InvalidArgs(String),
     /// The tool ran and failed (the message is for the agent to read).
     Failed(String),
+    /// Like [`Self::Failed`], with the failure as data (`data`) for a caller that wants fields, not
+    /// prose. Displays as `message`. MCP carries `data` as the result's `structuredContent`.
+    FailedWith { message: String, data: serde_json::Value },
 }
 
 impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolError::UnknownTool(t) => write!(f, "unknown tool {t:?}"),
-            ToolError::InvalidArgs(m) | ToolError::Failed(m) => f.write_str(m),
+            ToolError::InvalidArgs(m) | ToolError::Failed(m) | ToolError::FailedWith { message: m, .. } => f.write_str(m),
         }
     }
 }

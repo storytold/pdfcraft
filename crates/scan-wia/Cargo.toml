@@ -1,0 +1,33 @@
+[package]
+name = "pdfcraft-wia"
+description = "The Windows WIA backend for craft-scan. The COM calls, and all the unsafe code of the scan stack, are in this crate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The workspace forbids unsafe_code, and a member cannot both inherit that and relax it. This
+# crate denies unsafe instead, and only `ffi` and `sinks` allow it (see docs/unsafe-audit.md).
+# Every unsafe block must carry a `// SAFETY:` comment.
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "deny"
+
+[dependencies]
+craft-scan = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# The implement macro names this crate. It is the same windows-core the windows crate uses.
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Devices_ImageAcquisition",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }

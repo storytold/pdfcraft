@@ -62,6 +62,8 @@ struct Pending {
     open_revision: Option<usize>,
     a11y_now: bool,
     ocr_now: bool,
+    scan_click: crate::scan_ui::ScanClick,
+    interrupt_action: Option<crate::scan_ui::InterruptAction>,
     scan_clean_now: bool,
     compare_now: bool,
     images_now: bool,
@@ -131,6 +133,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
+            Dialog::Scanner => 680.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
             Dialog::About => 820.0,
@@ -392,6 +395,16 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             let (go, cancel) = crate::ocr_ui::body(ui, app, &t);
             req.ocr_now = go;
             req.close = go || cancel;
+            return false;
+        }
+        Dialog::Scanner => {
+            req.scan_click = crate::scan_ui::body(ui, app, &t);
+            req.close = req.scan_click == crate::scan_ui::ScanClick::Close;
+            return false;
+        }
+        Dialog::ScanInterrupted => {
+            req.interrupt_action = crate::scan_ui::interrupted_body(ui, app, &t);
+            req.close = req.interrupt_action.is_some();
             return false;
         }
         Dialog::EnhanceScan => {
@@ -1743,6 +1756,32 @@ fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req:
     finish_redactions_and_fields(app, req);
     finish_edits(app, dialog, req);
     finish_close(app, dialog, modal_closed, req);
+    finish_scan(app, dialog, modal_closed, req);
+}
+
+/// The scanner's buttons, after the dialog is closed or kept: they may open the Scanner or the
+/// interrupted-scan dialog again.
+fn finish_scan(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &Pending) {
+    if dialog == Dialog::ScanInterrupted {
+        // Escape, a click outside, or the close button all mean Finish: keep what was scanned.
+        if let Some(action) = req.interrupt_action.or(modal_closed.then_some(crate::scan_ui::InterruptAction::Finish)) {
+            app.resolve_interrupt(action);
+        }
+    }
+    if matches!(
+        req.scan_click,
+        crate::scan_ui::ScanClick::Preview
+            | crate::scan_ui::ScanClick::Create
+            | crate::scan_ui::ScanClick::Insert
+            | crate::scan_ui::ScanClick::ReverseSides
+            | crate::scan_ui::ScanClick::MoreFronts
+            | crate::scan_ui::ScanClick::Stop
+    ) {
+        app.start_scan(req.scan_click);
+    }
+    if dialog == Dialog::Scanner && app.dialog != Some(Dialog::Scanner) {
+        app.scan_dialog_closed();
+    }
 }
 
 /// Runs the one-shot requests the dialog made.
