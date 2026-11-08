@@ -12,7 +12,8 @@
 //! - form-field widgets keep their field hierarchy, and the top-level fields are registered in the
 //!   destination `/AcroForm`;
 //! - structure-tree links (`/StructParent(s)`) and article beads (`/B`) are removed, because the
-//!   source structure tree is not copied;
+//!   source structure tree is not copied (Combine Files copies it afterwards and puts them back:
+//!   see `structure`);
 //! - named destinations are resolved against the source's name tree and become explicit ones;
 //! - layers (optional content groups) used by the pages are registered in the destination's
 //!   `/OCProperties`, keeping their default on/off state.

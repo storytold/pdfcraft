@@ -230,6 +230,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- 2026-11-06: M4, PR #1946 independent review: class-name renaming resolves indirect `/C` names, arrays and array members in their source. Synthetic collision tests preserve each file's attribute meaning and revision numbers after save/reopen; cyclic references remain bounded. Estimates unchanged.
+
+- 2026-11-06: M4, PR #1946 review: conflicting class-map meanings are checked on each source's own structure elements after combine/save/reopen. Documented role/class renaming and transitive role mappings; existing language and untagged-source regressions retained. Estimates unchanged.
+
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 
@@ -829,6 +833,7 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-12 | minor | M6: preserve carriage returns in exported CSV field names and values; saved-PDF round-trip coverage. Estimates unchanged. |
 | 2026-10-13 | minor | M4: Insert-from-file preserves source bookmarks; integration tests retained with current main. Estimates unchanged. |
 | 2026-10-14 | minor | M7/#128: Hebrew in Add text with the craft-fonts Hebr face (display order, points, ToUnicode, ActualText); estimates unchanged. |
+| 2026-10-13 | minor | M4: Combine preserves indirect class-map attributes. Estimates unchanged. |
 | 2026-10-12 | minor | M3/#1364 candidate: absolute local GoToR links require desktop consent or headless allow_absolute; existing relative navigation and validation retained. Estimates unchanged. |
 | 2026-10-12 | minor | M8: redaction retires inherited `/Resources` so a parent `/Pages` can't keep a removed XObject reachable; only redacted pages that inherit are pinned (one shared reference), unredacted pages are untouched; estimates unchanged |
 | 2026-10-12 | minor | M7/#1200 candidate: bounded local GoToR opening, root-confined automation, and action-preserving appearance edits; named destinations and window behavior remain partial; estimates unchanged. |
