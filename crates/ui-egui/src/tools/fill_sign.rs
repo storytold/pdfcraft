@@ -498,15 +498,16 @@ pub(crate) struct PageInput<'a> {
     pub(crate) text_border: TextBorder,
     pub(crate) signature: Option<&'a SavedSig>,
     pub(crate) initials: Option<&'a SavedSig>,
-    pub(crate) preview: &'a mut Option<(SavedSig, egui::TextureHandle)>,
+    pub(crate) preview: &'a mut Option<PageSignaturePreview>,
     pub(crate) author: &'a str,
     pub(crate) date_text: &'a Result<String, String>,
+    pub(crate) colors: crate::page_colors::PageColors,
 }
 
 /// Preview and clicks with a Fill & Sign tool on one page.
 pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bool, view: &mut DocView) -> Option<FillAction> {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let PageInput { tool, text_size, text_color, text_border, signature, initials, preview, author, date_text } = input;
+    let PageInput { tool, text_size, text_color, text_border, signature, initials, preview, author, date_text, colors } = input;
     let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
@@ -517,7 +518,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bo
     };
     if let Some(SavedSig::Image(image)) = saved {
         if let Some(rect) = image.rect(p, at, tool == FillTool::Initials) {
-            let tex = image_texture(ui, image, preview);
+            let tex = page_image_texture(ui, image, preview, colors);
             xf.paint_user_image(ui.painter(), tex, p, rect, i64::from(p.rotation), Color32::WHITE);
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::None);
         }
@@ -602,7 +603,13 @@ pub enum FillAction {
 }
 
 /// The in-place editor for typed text. Returns the edit once committed.
-pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, author: &str) -> Option<Edit> {
+pub(crate) fn type_box(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    author: &str,
+    colors: crate::page_colors::PageColors,
+) -> Option<Edit> {
     let tb = view.fill_text.clone()?;
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
@@ -622,8 +629,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         .constrain(false)
         .show(ctx, |ui| {
             let Some(t) = view.fill_text.as_mut() else { return };
-            // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
+            // The box follows the page's display colours, not the theme, and so does the caret (#655).
+            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(colors.paper());
             let font = egui::FontId::proportional((t.size as f32 * zoom).max(8.0));
             let natural = ui.fonts_mut(|f| f.layout_no_wrap(t.text.clone(), font.clone(), Color32::BLACK).size().x);
             let margin = egui::Margin::symmetric(4, 2);
@@ -639,8 +646,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                         .desired_rows(1)
                         .font(font)
                         .desired_width(width)
-                        .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
-                        .text_color(crate::comments::color32(t.color))
+                        .background_color(colors.editor_paper(Color32::from_rgba_unmultiplied(255, 255, 255, 230)))
+                        .text_color(colors.text(crate::comments::color32(t.color)))
                         .hint_text(tl!("Type text"))
                         .id_salt("fill-text-edit"),
                 )
@@ -807,6 +814,28 @@ pub(crate) fn signature_pad(
     }
     let (apply, cancel) = pad_buttons(ui, d);
     (apply, cancel, false)
+}
+
+pub(crate) struct PageSignaturePreview {
+    source: SignatureImage,
+    colors: crate::page_colors::PageColors,
+    texture: egui::TextureHandle,
+}
+
+fn page_image_texture(
+    ui: &egui::Ui,
+    image: &SignatureImage,
+    cache: &mut Option<PageSignaturePreview>,
+    colors: crate::page_colors::PageColors,
+) -> egui::TextureId {
+    if cache.as_ref().is_some_and(|cached| cached.source != *image || cached.colors != colors) {
+        *cache = None;
+    }
+    let cached = cache.get_or_insert_with(|| {
+        let pixels = colors.decoded_image(egui::ColorImage::from_rgba_unmultiplied(image.size(), image.rgba()));
+        PageSignaturePreview { source: image.clone(), colors, texture: ui.ctx().load_texture("page-signature", pixels, egui::TextureOptions::LINEAR) }
+    });
+    cached.texture.id()
 }
 
 fn image_texture(ui: &egui::Ui, image: &SignatureImage, cache: &mut Option<(SavedSig, egui::TextureHandle)>) -> egui::TextureId {
@@ -1036,6 +1065,41 @@ mod tests {
         assert!(d.undo_stroke());
         assert!(d.strokes.is_empty());
         assert!(!d.undo_stroke());
+    }
+
+    #[test]
+    fn page_signature_cache_uses_typed_keys_and_leaves_dialog_preview_alone() {
+        use super::*;
+        use crate::page_colors::PageColors;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 0, 0, 128])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let source = SignatureImage::from_bytes(png.get_ref()).unwrap();
+        let original = source.rgba().to_vec();
+        let ctx = egui::Context::default();
+        let (mut page, mut dialog) = (None, None);
+        let mut last = None;
+        let mut dialog_id = None;
+        for colors in [
+            PageColors::Dark(pdfcraft_render::DarkPalette::Soft),
+            PageColors::Dark(pdfcraft_render::DarkPalette::Soft),
+            PageColors::Original,
+            PageColors::Reading(pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
+        ] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let id = page_image_texture(ui, &source, &mut page, colors);
+                if let Some((previous, previous_id)) = last {
+                    assert_eq!(id == previous_id, colors == previous, "unchanged typed keys retain their texture");
+                }
+                last = Some((colors, id));
+                let id = image_texture(ui, &source, &mut dialog);
+                if let Some(previous_id) = dialog_id {
+                    assert_eq!(id, previous_id);
+                }
+                dialog_id = Some(id);
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(source.rgba(), original);
     }
 
     #[test]

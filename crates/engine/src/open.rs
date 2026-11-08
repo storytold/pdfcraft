@@ -345,6 +345,8 @@ impl Session {
             sig_cache,
             editor,
             config,
+            dark_pages: false,
+            dark_style: Default::default(),
             js_output: Default::default(),
             xfa,
             xfa_template: None,

@@ -69,10 +69,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
+                // Reserve the four icon buttons, Discord and their gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 3.0 * button
-                    + 54.0
+                    + 4.0 * button
+                    + 58.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
@@ -290,6 +290,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
                         app.execute("app.preferences");
                     }
+                    let dark_pages = app.dark_pages_enabled();
                     let (icon, label) = match app.theme_preference {
                         ThemePreference::System => ("monitor", tl!("Use system setting")),
                         ThemePreference::Light => ("sun", tl!("Light gray")),
@@ -306,6 +307,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                     }
                     egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+                    let dark_button = icons::button(ui, "file-text", button, dark_pages, tl!("Dark PDF pages"));
+                    if dark_button.clicked() {
+                        app.execute("view.dark_pages");
+                    }
+                    // A right-click picks how the dark pages look.
+                    egui::Popup::context_menu(&dark_button).id(dark_button.id.with("dark_pages_menu")).show(|ui| dark_pages_menu(app, ui));
                     if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
@@ -316,6 +323,26 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// How dark PDF pages look: the palette, and what happens to raster images.
+fn dark_pages_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    use crate::page_colors::{DARK_IMAGES, DARK_PALETTES};
+    let mut style = app.dark_style();
+    for (palette, label) in DARK_PALETTES {
+        if ui.add(widgets::radio(style.palette == palette, tl!(label))).clicked() {
+            style.palette = palette;
+        }
+    }
+    ui.separator();
+    for (images, label) in DARK_IMAGES {
+        if ui.add(widgets::radio(style.images == images, tl!(label))).clicked() {
+            style.images = images;
+        }
+    }
+    if style != app.dark_style() {
+        app.set_dark_style(style);
+    }
 }
 
 /// The right-click menu on the title bar's theme button.
