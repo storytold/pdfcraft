@@ -396,6 +396,11 @@ fn inter_subset(program_by_reference: bool, map_by_reference: bool, map_entries:
     let gid = |c: char| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
     let mut gids: Vec<u8> = std::iter::once(0).chain("A B C D".chars().map(gid)).flat_map(u16::to_be_bytes).collect();
     gids.resize(gids.len().max(map_entries * 2), 0);
+    if map_entries > 7 {
+        // The last CID has a glyph too, so a map read only as far as its start is told from one read whole.
+        let end = gids.len() - 2;
+        gids[end..].copy_from_slice(&gid('A').to_be_bytes());
+    }
     let stream = |doc: &mut Document, data: &[u8], by_reference: bool| {
         if by_reference { behind_parms_by_reference(doc, data) } else { Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), data)))) }
     };
@@ -448,6 +453,8 @@ fn a_subsets_program_and_cid_map_read_their_parameters_given_by_reference() {
 fn a_full_size_cid_map_behind_a_png_predictor_is_still_read() {
     let m = inter_subset(false, true, 0x1_0000);
     assert!(!m.outlined_cids.is_empty(), "the map was not read");
+    let last = 0xFFFF_usize;
+    assert!(m.outlined_cids.get(last / 64).is_some_and(|w| (*w >> (last % 64)) & 1 == 1), "the map was read only as far as its start");
     assert_eq!(m.encode("A").as_deref(), Some(&[0, 1][..]));
     assert_eq!(m.encode(" "), None, "the space's glyph is empty");
 }
