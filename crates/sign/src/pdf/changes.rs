@@ -68,13 +68,25 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         };
         placed_annots.extend(found.into_iter().map(|r| r.num));
     }
+    // The signed page tree's nodes: a change to one changes the pages, whatever it is labelled
+    // now. Every node, and every /Kids array object of its own, is read once; past the bound the
+    // tree is not known in full, and no change is judged against it.
+    let page_tree = page_tree_nodes(&old);
+    let page_tree_unbounded = page_tree.is_none();
+    let (page_nodes, kids_arrays) = page_tree.unwrap_or_default();
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_page_refs);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
+    // The signed catalog's /AcroForm, when it is an object of its own.
+    let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
     let signed_role = |num: u32| old_content.contains(&num) || signed_pages.contains(&num) || signed_resources.contains_key(&num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
     if annots_unbounded {
         disallowed.push(kind::OTHER);
+    }
+    if page_tree_unbounded {
+        // Past the bound the tree is not known in full: no change is judged against it.
+        disallowed.push(kind::PAGES);
     }
     // Every reference the signed revision makes, read only when a slot's generations narrowed.
     let signed_references = OnceCell::new();
@@ -117,6 +129,9 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         old_xfa_data: &old_xfa_data,
         signed_pages: &signed_pages,
         signed_annots: &signed_annots,
+        page_nodes: &page_nodes,
+        kids_arrays: &kids_arrays,
+        old_form,
         placed_annots: &placed_annots,
         annot_budget: &annot_budget,
         signed_resources: &signed_resources,
@@ -197,7 +212,75 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
             disallowed.push(what);
         }
     }
+    // DocMDP P=1 ("no changes allowed", ISO 32000-2 §12.8.2.2) permits only validation data to
+    // follow: the document security store, and document timestamps added for PAdES long-term
+    // archiving (§12.8.5). Those timestamps draw nothing. Any other signature added since — an
+    // approval signature, an unsigned signature widget, or a widget that paints over the signed
+    // page — is a change the certification forbids, however it is labelled.
+    if p == Some(1) {
+        only_validation_data(&mut allowed, &mut disallowed, doc, &old);
+    }
     if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+}
+
+/// DocMDP P=1 ("no changes allowed") permits only validation data to follow the signed revision:
+/// the security store, and document timestamps that draw nothing. A later approval signature, a
+/// visible widget or a changed catalog `/Perms` breaks the certification.
+fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'static str>, doc: &Document, old: &Document) {
+    if allowed.contains(&kind::SIGNATURE) && !only_invisible_timestamps_added(doc, old) {
+        allowed.retain(|k| *k != kind::SIGNATURE);
+        if !disallowed.contains(&kind::SIGNATURE) {
+            disallowed.push(kind::SIGNATURE);
+        }
+    }
+    // The catalog's /Perms names the certification signature itself. Elsewhere a change to it is
+    // judged as signing; under P=1 dropping or redirecting it is a change like any other.
+    // Compared by content: an indirect /Perms rewritten in place keeps its reference (and, shared
+    // with the trailer's /Info, would otherwise pass as a metadata change).
+    let perms = |d: &Document| d.root().and_then(|r| d.get(r).as_dict().and_then(|c| c.get(b"Perms").map(|p| (*d.resolve(p)).clone())));
+    if perms(doc) != perms(old) && !disallowed.contains(&kind::STRUCTURE) {
+        disallowed.push(kind::STRUCTURE);
+    }
+}
+
+/// Whether every signature object `doc` gained or changed since the signed revision `old` is an
+/// invisible document timestamp. A signature annotation (a widget, or a dictionary carrying a
+/// signature value or role) that the signed revision did not hold byte for byte must be a
+/// `/SubFilter /ETSI.RFC3161` value in a widget that shows nothing — no positive-area `/Rect`,
+/// or the Hidden or NoView flag set. An approval signature, an empty signature widget, or a
+/// visible one fails, whatever `/Type` or `/SubFilter` it claims. Judged on the objects
+/// themselves, not on the `/AcroForm /Fields` listing, so a widget with no `/T` or one reached
+/// only through a page's `/Annots` is covered too.
+fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
+    /// A widget shows nothing: no `/Rect` enclosing a positive area, or Hidden (2) / NoView (32).
+    fn invisible(doc: &Document, w: &Dict) -> bool {
+        let flags = w.get(b"F").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0);
+        let area =
+            super::listing::nums(doc, w, b"Rect").filter(|r| r.len() == 4).is_some_and(|r| (r[0] - r[2]).abs() > 0.5 && (r[1] - r[3]).abs() > 0.5);
+        !area || flags & (2 | 32) != 0
+    }
+    for num in doc.object_numbers() {
+        let new = doc.get(ObjRef { num, generation: doc.generation(num) });
+        let Some(d) = new.as_dict() else { continue };
+        // A signature object: a signature value, or a field or widget that carries one.
+        let is_value = matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp"));
+        let is_field = d.name(b"FT") == Some(b"Sig") || d.name(b"Subtype") == Some(b"Widget");
+        if !is_value && !is_field {
+            continue;
+        }
+        // Unchanged since signing: the certification already covered it.
+        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).as_deref() == Some(&*new) {
+            continue;
+        }
+        let value = if is_value { Some(d.clone()) } else { d.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) };
+        // A new or changed signature object passes only as an invisible document timestamp. A
+        // widget with no value (an empty signature field placed on the page) never does.
+        let timestamp = value.as_ref().is_some_and(super::validate::is_doc_timestamp);
+        if !timestamp || (is_field && !invisible(doc, d)) {
+            return false;
+        }
+    }
+    true
 }
 
 struct ChangedObjectClassifier<'a> {
@@ -208,10 +291,13 @@ struct ChangedObjectClassifier<'a> {
     old_xfa_data: &'a HashSet<u32>,
     signed_pages: &'a HashSet<u32>,
     signed_annots: &'a HashSet<u32>,
+    page_nodes: &'a HashSet<u32>,
+    kids_arrays: &'a HashSet<u32>,
     placed_annots: &'a HashSet<u32>,
     annot_budget: &'a Cell<usize>,
     signed_resources: &'a HashMap<u32, bool>,
     old_info: Option<u32>,
+    old_form: Option<u32>,
     dss: &'a HashSet<u32>,
 }
 
@@ -224,6 +310,8 @@ impl ChangedObjectClassifier<'_> {
             return Some(kind::SECURITY_STORE);
         }
         match new {
+            // A signed page-tree node's /Kids array of its own lists the pages.
+            Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
@@ -291,6 +379,15 @@ impl ChangedObjectClassifier<'_> {
         if self.signed_pages.contains(&r.num) {
             // A signed page is judged by what the page shows, whatever its new labels say.
             self.page_change_kind(dict, previous)
+        } else if previous.is_some() && self.page_nodes.contains(&r.num) {
+            // A signed page-tree node is a page-tree change, whatever its new version is labelled.
+            Some(kind::PAGES)
+        } else if let Some(previous) = previous.filter(|_| self.old.root().is_some_and(|root| root.num == r.num)) {
+            // The signed catalog, whatever /Type its new version carries.
+            Some(catalog_kind(self.doc, self.old, dict, previous))
+        } else if let Some(previous) = previous.filter(|_| self.old_form == Some(r.num)) {
+            // The signed form dictionary, held in an object of its own, whatever keys it carries now.
+            Some(acroform_kind(self.doc, self.old, dict, Some(previous)))
         } else if previous.is_some() && Some(r.num) == self.old_info {
             // Only the signed revision's own /Info dictionary is a metadata change.
             Some(kind::METADATA)
@@ -550,6 +647,10 @@ fn acroform(doc: &Document) -> Option<Dict> {
 fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
+    // A field taken out of the form: no DocMDP permission covers dropping a signed field.
+    if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
+        return kind::OTHER;
+    }
     let strip = |d: &Dict| -> Vec<(Vec<u8>, Object)> {
         let mut v: Vec<(Vec<u8>, Object)> =
             d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Fields" | b"SigFlags")).map(|(k, o)| (k.to_vec(), o.clone())).collect();
@@ -673,6 +774,62 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
     }
 }
 
+/// A change to the signed catalog `b`, now `d`.
+fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static str {
+    let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
+    if without(d, keys) != without(b, keys) {
+        kind::STRUCTURE
+    } else if !extensions_kept(doc, old, d, b) {
+        // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A writer
+        // adding a /DSS also declares the ESIC extension it belongs to, so a declaration may be
+        // added, but none that was signed may change or go.
+        kind::STRUCTURE
+    } else if d.get(b"AcroForm") != b.get(b"AcroForm") {
+        // Compare the forms themselves, inline or not.
+        let now = acroform(doc).unwrap_or_default();
+        acroform_kind(doc, old, &now, None)
+    } else if b.get(b"Perms") != d.get(b"Perms") {
+        kind::SIGNATURE
+    } else {
+        kind::METADATA
+    }
+}
+
+/// The nodes of `doc`'s page tree and the /Kids arrays that are objects of their own, by number:
+/// every dictionary with /Kids from the catalog's /Pages down. Each node, and each /Kids array
+/// object, is read once. `None` past a million nodes.
+fn page_tree_nodes(doc: &Document) -> Option<(HashSet<u32>, HashSet<u32>)> {
+    const MAX_NODES: usize = 1_000_000;
+    let (mut nodes, mut arrays) = (HashSet::new(), HashSet::new());
+    let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"Pages").and_then(Object::as_ref)));
+    let mut stack: Vec<ObjRef> = top.into_iter().collect();
+    while let Some(r) = stack.pop() {
+        if nodes.len() >= MAX_NODES {
+            return None;
+        }
+        let node = doc.get(r);
+        // A leaf (a page) has no /Kids.
+        let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
+        if !nodes.insert(r.num) || kids.as_ref().is_some_and(|a| !arrays.insert(a.num)) {
+            continue;
+        }
+        if let Some(kids) = doc.resolve(kids).as_array() {
+            stack.extend(kids.iter().filter_map(Object::as_ref));
+        }
+    }
+    Some((nodes, arrays))
+}
+
+/// Whether a list of references (`/Fields`) no longer holds an entry it held when signed. An
+/// entry is still held only by a reference that resolves now and that the signed revision
+/// resolved too, so to the same slot (a repaired alias counts): one rewritten to a generation
+/// the slot does not accept names nothing, and one to a newer generation names another object.
+fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>, now: Option<&Object>) -> bool {
+    let live = |d: &Document, r: &ObjRef| !matches!(*d.get(*r), Object::Null);
+    let now: HashSet<u32> = refs(doc, now).into_iter().filter(|r| live(doc, r) && live(old, r)).map(|r| r.num).collect();
+    refs(old, was).iter().filter(|r| live(old, r)).any(|r| !now.contains(&r.num))
+}
+
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature
@@ -695,31 +852,15 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     }) {
         return kind::OTHER;
     }
+    // Where a signed widget sits and whether it shows are what the page shows: filling the form
+    // changes its value and appearance, never its rectangle or its flags.
+    if before.is_some_and(|b| b.name(b"Subtype") == Some(b"Widget") && (d.get(b"Rect") != b.get(b"Rect") || d.get(b"F") != b.get(b"F"))) {
+        return kind::PAGE_CONTENT;
+    }
     match ty {
         // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
         Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
-        Some(b"Catalog") => {
-            let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
-            return match before {
-                Some(b) if without(d, keys) != without(b, keys) => kind::STRUCTURE,
-                // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A
-                // writer adding a /DSS also declares the ESIC extension it belongs to, so a
-                // declaration may be added, but none that was signed may change or go.
-                Some(b) if !extensions_kept(doc, old, d, b) => kind::STRUCTURE,
-                Some(b) => {
-                    if d.get(b"AcroForm") != b.get(b"AcroForm") {
-                        // Compare the forms themselves, inline or not.
-                        let now = acroform(doc).unwrap_or_default();
-                        acroform_kind(doc, old, &now, None)
-                    } else if b.get(b"Perms") != d.get(b"Perms") {
-                        kind::SIGNATURE
-                    } else {
-                        kind::METADATA
-                    }
-                }
-                None => kind::FORM_FILL,
-            };
-        }
+        Some(b"Catalog") => return before.map_or(kind::FORM_FILL, |b| catalog_kind(doc, old, d, b)),
         Some(b"Page") => {
             return match before {
                 Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
@@ -734,19 +875,32 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         Some(b"Pages") => return if before.is_some() { kind::PAGES } else { kind::STRUCTURE },
         _ => {}
     }
-    match d.name(b"Subtype") {
+    // The role an existing object plays (annotation, form field, the form) is the one it had when
+    // signed: keys its new version carries are written by whoever changed it. An indirect
+    // /OCProperties rewritten with an added /FT still decides which layers show (#1787 judges a
+    // signed page's resources this way; this applies it to every other object).
+    let role = before.unwrap_or(d);
+    // Nor does an existing annotation or widget turned into another kind of annotation edit the
+    // one it was: an empty signature widget rewritten as a /Square that covers signed text is no
+    // signature change, and no comment either.
+    if before.is_some_and(|b| b.name(b"Subtype") != d.name(b"Subtype")) {
+        return kind::OTHER;
+    }
+    // The new version's /FT still decides whether this is a signature: a signed widget relabelled
+    // as a text field is not a signature change, whatever it was when signed.
+    match role.name(b"Subtype") {
         Some(b"Widget") => return if d.name(b"FT") == Some(b"Sig") && signature_ok { kind::SIGNATURE } else { kind::FORM_FILL },
         Some(b"Link") => return kind::LINKS,
-        Some(_) if ty == Some(b"Annot") || d.contains(b"Rect") => return kind::COMMENTS,
+        Some(_) if role.name(b"Type") == Some(b"Annot") || role.contains(b"Rect") => return kind::COMMENTS,
         _ => {}
     }
-    if d.name(b"FT") == Some(b"Sig") && signature_ok {
+    if role.name(b"FT") == Some(b"Sig") && signature_ok {
         return kind::SIGNATURE;
     }
-    if d.contains(b"Fields") {
+    if role.contains(b"Fields") {
         return acroform_kind(doc, old, d, before);
     }
-    if d.contains(b"FT") || (d.contains(b"T") && d.contains(b"Kids")) || d.contains(b"DR") {
+    if role.contains(b"FT") || (role.contains(b"T") && role.contains(b"Kids")) || role.contains(b"DR") {
         return kind::FORM_FILL;
     }
     if before.is_none() {
@@ -754,4 +908,56 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         return kind::FORM_FILL;
     }
     kind::OTHER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A PDF of `objs` (numbered from 1) whose trailer also holds `trailer_extra`.
+    fn pdf(objs: &[&str], trailer_extra: &str) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// A P=1 signed revision whose catalog `/Perms` and trailer `/Info` are one indirect
+    /// dictionary (object 3). A later revision points its `/DocMDP` at another signature
+    /// dictionary already in the file, in place: the reference stays, no object is added, and
+    /// as the signed `/Info` the object reads as metadata, but the certification's own record
+    /// has changed.
+    #[test]
+    fn a_perms_dictionary_shared_with_info_rewritten_in_place_is_a_structure_change() {
+        let signed = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /Perms 3 0 R >>",
+                "<< /Type /Pages /Kids [] /Count 0 >>",
+                "<< /DocMDP 4 0 R >>",
+                "<< /Type /Sig >>",
+                "<< /Type /Sig >>",
+            ],
+            "/Info 3 0 R",
+        );
+        let old = Document::open(Arc::new(signed.clone())).unwrap();
+        let mut doc = Document::open(Arc::new(signed)).unwrap();
+        let other = ObjRef { num: 5, generation: 0 };
+        doc.update_dict(ObjRef { num: 3, generation: 0 }, |p| p.set(b"DocMDP".to_vec(), Object::Ref(other))).unwrap();
+        let edited = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        let doc = Document::open(Arc::new(edited)).unwrap();
+        match classify_changes(&doc, Some(old), Some(1)) {
+            Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
+            other => panic!("the certification's /Perms changed in place under P=1: {other:?}"),
+        }
+    }
 }
