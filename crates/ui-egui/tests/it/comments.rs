@@ -3567,20 +3567,25 @@ fn hotbar_settings_button_shows_one_tooltip() {
     let delay = f64::from(h.ctx.global_style().interaction.tooltip_delay);
     let start = h.ctx.input(|i| i.time);
     let elapsed = |h: &Harness<'static, PdfCraftApp>| h.ctx.input(|i| i.time) - start;
+    // The button's name; a second tooltip repeating it would make two. Checked after every
+    // frame, so one that shows only briefly is caught too.
+    let names = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label("Hotbar settings").count();
     let mut frames = 0;
     while h.query_all_by_label("Hotbar settings / add tools").next().is_none() {
         assert!(elapsed(&h) < 4.0 * delay && frames < 100, "no tooltip after {:.2}s of rest", elapsed(&h));
         h.step();
         frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
     }
     // Rest two more delays, so a second tooltip would have had its chance to open.
     let shown = elapsed(&h);
     while elapsed(&h) < shown + 2.0 * delay && frames < 100 {
         h.step();
         frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
     }
     assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
-    assert_eq!(h.query_all_by_label("Hotbar settings").count(), 1, "the button's name, and no second tooltip");
+    assert_eq!(names(&h), 1, "the button's name, and no second tooltip");
 }
 
 #[test]
