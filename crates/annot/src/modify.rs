@@ -372,7 +372,15 @@ pub fn add_reply(doc: &mut Document, page: usize, index: usize, text: &str, auth
 }
 
 /// A reply with a caller-chosen `/NM`.
-pub fn add_reply_named(doc: &mut Document, page: usize, index: usize, text: &str, author: &str, name: &str, meta: &Meta) -> Result<usize, AnnotError> {
+pub fn add_reply_named(
+    doc: &mut Document,
+    page: usize,
+    index: usize,
+    text: &str,
+    author: &str,
+    name: &str,
+    meta: &Meta,
+) -> Result<usize, AnnotError> {
     if name.trim().is_empty() {
         return Err(AnnotError::Invalid("an annotation name must not be empty".into()));
     }
