@@ -13780,6 +13780,7 @@ fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
         for style in [
             text::BlockStyle::default(),
             text::BlockStyle { ranges: vec![red.clone()], ..Default::default() },
+            text::BlockStyle { ranges: vec![text::RangeStyle { range: 0..draft.len(), ..red.clone() }], ..Default::default() },
             text::BlockStyle { bold: Some(true), ..Default::default() },
         ] {
             let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
