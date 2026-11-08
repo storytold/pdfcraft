@@ -44,6 +44,12 @@ impl JsOutput {
     /// Adds `lines` to the console within [`MAX_CONSOLE_LINES`] and [`MAX_CONSOLE_BYTES`]; what
     /// is past them is left out, which one closing line says.
     fn say(&mut self, lines: impl IntoIterator<Item = String>) {
+        let note = format!("more console lines were left out: the scripts printed more than {MAX_CONSOLE_LINES} lines or {MAX_CONSOLE_BYTES} bytes");
+        // Once the notice is written the console is closed: nothing may follow it, and a later
+        // rejection must not add a second copy.
+        if self.console.last() == Some(&note) {
+            return;
+        }
         let mut bytes: usize = self.console.iter().map(String::len).sum();
         let mut dropped = false;
         for l in lines {
@@ -54,8 +60,7 @@ impl JsOutput {
             bytes += l.len();
             self.console.push(l);
         }
-        let note = format!("more console lines were left out: the scripts printed more than {MAX_CONSOLE_LINES} lines or {MAX_CONSOLE_BYTES} bytes");
-        if dropped && self.console.last() != Some(&note) {
+        if dropped && !self.console.iter().any(|l| l == &note) {
             self.console.push(note);
         }
     }
@@ -74,15 +79,17 @@ impl JsOutput {
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
         // button's may show or hide a side panel, or open Save As.
+        // The warnings go through `say` like any other console line, so they count against the
+        // line and byte caps instead of growing the console past them.
+        let mut notes = Vec::new();
         for r in &o.requests {
             match r {
-                Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
-                Request::SaveAs => {
-                    self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())
-                }
+                Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
+                Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
                 r => self.requests.push(r.clone()),
             }
         }
+        self.say(notes);
         self.errors.extend(o.error.iter().cloned());
         // The document scripts run before every field script, so a failing one would repeat
         // once per calculation; it is reported once.
