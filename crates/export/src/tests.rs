@@ -137,7 +137,7 @@ fn word_table_cell_widths_follow_the_columns_they_span() {
             vec![cell("All", 3)],
             vec![cell("First", 1)],
         ],
-        ruled: false,
+        ruled: None,
     };
     let xml = docx_table(&table);
     assert!(xml.contains("<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/>"), "{xml}");
@@ -887,7 +887,7 @@ fn a_ruled_two_by_two_grid_is_a_table() {
     ];
     let (found, consumed) = tables(&blocks, &grid);
     assert_eq!(found.len(), 1);
-    assert!(found[0].ruled);
+    assert_eq!(found[0].ruled, Some([true; 4]), "the grid's frame is ruled on every side");
     assert_eq!(found[0].rows.len(), 2);
     assert!(consumed.iter().all(|used| *used));
     let p = Page { width: 320.0, height: 300.0, blocks: blocks.clone(), rules: grid, ..Page::default() };
@@ -898,4 +898,33 @@ fn a_ruled_two_by_two_grid_is_a_table() {
     assert!(tables(&blocks, &[]).0.is_empty(), "alignment alone does not make two by two a table");
     let underlines = [[20.0, 245.0, 300.0, 245.0]];
     assert!(tables(&blocks, &underlines).0.is_empty(), "a rule between the rows alone is no grid");
+}
+
+/// A grid drawn with inside lines only gets inside borders in Word, not a box the page never
+/// draws; an outer line far from the table (a page rule) is not its frame.
+#[test]
+fn a_ruled_table_gets_outer_borders_only_where_the_page_draws_them() {
+    let blocks = vec![
+        block("Name", 25.0, 250.0, 55.0, 261.0),
+        block("Value", 165.0, 250.0, 195.0, 261.0),
+        block("Alpha", 25.0, 225.0, 55.0, 236.0),
+        block("One", 165.0, 225.0, 185.0, 236.0),
+    ];
+    let inside = vec![[20.0, 245.0, 300.0, 245.0], [160.0, 220.0, 160.0, 270.0]];
+    let (found, _) = tables(&blocks, &inside);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].ruled, Some([false; 4]));
+    let xml = docx_table(&found[0]);
+    for edge in ["insideH", "insideV"] {
+        assert!(xml.contains(&format!("<w:{edge} w:val=\"single\"")), "{xml}");
+    }
+    for edge in ["top", "left", "bottom", "right"] {
+        assert!(xml.contains(&format!("<w:{edge} w:val=\"nil\"/>")), "{xml}");
+    }
+
+    let mut ruled_top = inside.clone();
+    ruled_top.push([20.0, 270.0, 300.0, 270.0]);
+    ruled_top.push([0.0, 500.0, 320.0, 500.0]);
+    ruled_top.push([0.0, 0.0, 320.0, 0.0]);
+    assert_eq!(tables(&blocks, &ruled_top).0[0].ruled, Some([true, false, false, false]), "only the top line near the table frames it");
 }
