@@ -66,6 +66,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -202,6 +203,11 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_waiting: None,
+            ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
@@ -209,6 +215,7 @@ impl PdfCraftApp {
             action_files_override: None,
             pdfa: Default::default(),
             compare_old: None,
+            compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
             doc_js: Default::default(),
@@ -243,6 +250,9 @@ impl PdfCraftApp {
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
+            html_clipboard_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            os_clipboard: None,
             clipboard_override: None,
             attach_override: None,
             duplicate_draft: None,
@@ -457,6 +467,7 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        self.apply_status_captions(lang);
         // Form date fields name months in the date language (Preferences ▸ Date format), which
         // follows the interface language until one is picked (#5303).
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
@@ -583,7 +594,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            // An OCR review not yet accepted or rejected is work the page would lose, too.
+            let dirty = self.work_at_risk();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
@@ -603,9 +615,15 @@ impl eframe::App for PdfCraftApp {
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
-            view.objects.set_input_blocked(blocked || self.active != Some(index));
-            if blocked || self.active != Some(index) {
+            let shut = blocked || self.active != Some(index);
+            view.objects.set_input_blocked(shut);
+            if shut {
                 view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing
@@ -624,6 +642,19 @@ impl eframe::App for PdfCraftApp {
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();
+        // The OCR Verify screen's worker may have finished while no frame was drawn.
+        if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
+        }
+        // A run or re-read asked for while the web build downloaded the models starts when they land.
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_verify.awaiting_models.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
+        }
+        // So may a page or region re-read's worker.
+        if self.ocr_verify.reread.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
+        }
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
@@ -682,6 +713,28 @@ impl eframe::App for PdfCraftApp {
         }
         chrome::tab_strip(self, ui);
         chrome::mode_bar(self, ui);
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
+        // recognized text brings it back with its review as it was.
+        if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
+            self.ocr_verify.open = false;
+        }
+        self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
+        if self.ocr_verify.open {
+            // The OCR Verify screen takes the document area (its four panes) under the window's
+            // tabs, menus and toolbar, which stay (#6485); the palette, dialogs and notices
+            // still show above it.
+            workflows::ocr_verify::show(self, ui);
+            palette::show(self, &ctx);
+            dialogs::show(self, &ctx);
+            self.show_progress(&ctx);
+            widgets::toast(self, &ctx);
+            self.finish_render_frame(&ctx);
+            if let Some(mut control) = self.control.take() {
+                control.finish_frame(&ctx, self);
+                self.control = Some(control);
+            }
+            return;
+        }
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
