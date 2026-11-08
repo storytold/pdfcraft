@@ -221,6 +221,9 @@ struct EmbeddedKind {
     cached_mappings: RefCell<HashMap<u8, GlyphId>>,
     /// PostScript name from the PDF.
     postscript_name: Option<String>,
+    /// PdfCraft patch (101): whether the font may take the Mac OS Roman reading at all, worked out
+    /// once when it is loaded (`EmbeddedKind::mac_roman_name`).
+    mac_roman_eligible: bool,
 }
 
 impl EmbeddedKind {
@@ -248,6 +251,27 @@ impl EmbeddedKind {
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
 
+        // PdfCraft patch (101): the font names no base encoding, not even one this reader doesn't
+        // know (which `read_encoding` reads as the built-in one), and isn't Symbol or ZapfDingbats,
+        // whose built-in encodings aren't Latin (ISO 32000-2 §9.6.6.1). Both as the editor's
+        // `unicode_map` decides them, Symbol and ZapfDingbats recognised by name as there.
+        let names_base_encoding = dict.get::<Name<'_>>(ENCODING).is_some()
+            || dict
+                .get::<Dict<'_>>(ENCODING)
+                .is_some_and(|d| d.get::<Name<'_>>(BASE_ENCODING).is_some());
+        let symbolic_builtin = dict.get::<Name<'_>>(BASE_FONT).is_some_and(|n| {
+            let name = n.as_str();
+            let flat: String = name
+                .rsplit('+')
+                .next()
+                .unwrap_or(name)
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            flat.contains("symbol") || flat.contains("zapf") || flat.contains("dingbat")
+        });
+
         Some(Self {
             base_font,
             differences,
@@ -259,6 +283,7 @@ impl EmbeddedKind {
             encoding,
             cached_mappings: RefCell::new(HashMap::new()),
             postscript_name,
+            mac_roman_eligible: !names_base_encoding && !symbolic_builtin,
         })
     }
 
@@ -420,25 +445,15 @@ impl EmbeddedKind {
     /// `iacute`), and reading every such code as Mac OS Roman turned "USDA’s" into "USDAís".
     /// A font that names its glyphs in its `post` table needn't keep the order (a Wingdings subset
     /// draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`).
-    /// `None` when the font is non-symbolic, names an encoding, is Symbol or ZapfDingbats (whose
+    /// `None` when the font is non-symbolic, names a base encoding (one this reader doesn't know
+    /// too), is Symbol or ZapfDingbats (whose
     /// built-in encodings aren't Latin, ISO 32000-2 §9.6.6.1; recognised by name as the editor's
     /// `unicode_map` recognises them), is a CFF program, names its glyphs, or either test fails
     /// (SAS's AMT fonts carry a wrong (1, 0) table, #4156): the code then reads as before. Glyph
     /// selection is unchanged.
     fn mac_roman_name(&self, code: u8) -> Option<&'static str> {
-        let symbolic_builtin = self.postscript_name.as_deref().is_some_and(|name| {
-            let flat: String = name
-                .rsplit('+')
-                .next()
-                .unwrap_or(name)
-                .chars()
-                .filter(char::is_ascii_alphanumeric)
-                .map(|c| c.to_ascii_lowercase())
-                .collect();
-            flat.contains("symbol") || flat.contains("zapf") || flat.contains("dingbat")
-        });
         if self.is_non_symbolic()
-            || symbolic_builtin
+            || !self.mac_roman_eligible
             || !matches!(self.encoding, Encoding::BuiltIn)
             || self.cff_blob.is_some()
             || !self.glyph_names.is_empty()

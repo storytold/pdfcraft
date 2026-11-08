@@ -258,7 +258,7 @@ fn a_symbol_or_zapfdingbats_font_in_the_macintosh_order_gets_no_mac_roman_readin
     let font = font(&[AGRAVE, EACUTE], Some(&map), &map, false);
     for name in ["ZapfDingbats", "AAAAAA+Symbol"] {
         let text = extracted_with(&font, &[0x88, 0x8E], name, "");
-        assert!(!text.contains(['à', 'é']), "{name}: {text:?}");
+        assert_eq!(text, "ˆŽ", "{name}: the codes read as WinAnsi, as before");
     }
 }
 
@@ -268,5 +268,14 @@ fn differences_naming_notdef_clear_the_mac_roman_reading_for_its_code() {
     let map = [(0x88, AGRAVE), (0x8E, EACUTE)];
     let font = font(&[AGRAVE, EACUTE], Some(&map), &map, false);
     let text = extracted_with(&font, &[0x88, 0x8E], "AAAAAA+Sym", "/Encoding << /Differences [142 /.notdef] >> ");
-    assert!(text.starts_with('à') && !text.contains('é'), "{text:?}");
+    assert_eq!(text, "à", "0x8E reads as nothing");
+}
+
+#[test]
+fn a_base_encoding_name_this_reader_does_not_know_keeps_the_mac_roman_reading_off() {
+    // An unknown `/Encoding` name is read as the built-in encoding, but it names a base encoding all the same, so the
+    // editor gives it no Mac OS Roman reading and neither does the renderer: the codes read as WinAnsi, as before.
+    let map = [(0x88, AGRAVE), (0x8E, EACUTE)];
+    let font = font(&[AGRAVE, EACUTE], Some(&map), &map, false);
+    assert_eq!(extracted_with(&font, &[0x88, 0x8E], "AAAAAA+Sym", "/Encoding /NoSuchEncoding "), "ˆŽ");
 }
