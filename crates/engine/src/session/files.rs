@@ -170,6 +170,11 @@ impl Session {
         if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
         }
+        // Signature states as the screen shows them, so not when its display copy could not be
+        // written. This copy is only printed, never saved.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
+        }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
 
@@ -397,7 +402,7 @@ impl Session {
 
     /// A new file (Combine, Extract, Split, Create) as bytes, checked like a save before anyone
     /// writes it (#1698, #2166): it reopens, and shows the pages it was built from.
-    fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    pub(crate) fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
         let bytes = self.write_unchecked(doc)?;
         let expected = pdfcraft_organize::page_count(doc)?;
         pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;

@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, check_permission, comment_list, display_bytes, display_config, guard, info_fields, inspect, js, keys_after,
-    note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices,
-    uses_scripts, write_incremental, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
+    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
+    undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind};
 
@@ -20,6 +20,19 @@ fn deletes_pages(edit: &Edit) -> bool {
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
+        self.apply_reporting(id, edit).map(|_| ())
+    }
+
+    /// Edit a PDF ▸ Edit text: make the grouped text on `page` (0-based) editable, as one undoable
+    /// [`Edit::PrepareText`], and say what it prepared, which fonts' maps it repaired and which
+    /// groups it left as they were (and why). The counts are this edit's own, not a preview's.
+    pub fn prepare_text(&mut self, id: DocId, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, EditError> {
+        self.apply_reporting(id, Edit::PrepareText { page })?
+            .ok_or_else(|| EditError::Invalid("preparing grouped text gave no result; the document was not changed".into()))
+    }
+
+    /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
+    fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -61,7 +74,7 @@ impl Session {
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
-            return Ok(());
+            return Ok(None);
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
@@ -228,7 +241,7 @@ impl Session {
             doc.xfa_scripts_off = true;
             doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
-        Ok(())
+        Ok(cx.prepared)
     }
 
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
@@ -342,7 +355,14 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                // The display copy is kept for a metadata edit, and so are its marks, unless the
+                // edit changed a verdict (a certification can forbid it): the page then draws the
+                // new one.
+                if !carry_verdict_marks(&doc.signatures, &mut signatures) {
+                    doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
+                    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+                }
                 doc.signatures = Arc::new(signatures);
             }
             doc.bytes = bytes;
@@ -386,8 +406,8 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -444,8 +464,8 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -467,6 +487,13 @@ impl Session {
         doc.renderer = RenderPool::new_inline(Arc::new(Vec::new()), doc.config.clone());
         doc.display = original.clone();
         doc.bytes = original;
+        // The page shows the original's own artwork again, so nothing counts as drawn, even if
+        // the refresh that follows fails.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            for sig in Arc::make_mut(&mut doc.signatures) {
+                sig.verdict_shown = false;
+            }
+        }
         #[cfg(test)]
         check_refresh_panic();
     }
@@ -528,8 +555,8 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;

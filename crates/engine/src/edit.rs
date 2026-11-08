@@ -470,6 +470,10 @@ pub enum Edit {
         /// Formatting changes (font, size, colour, alignment); default keeps the paragraph's.
         style: pdfcraft_edit::BlockStyle,
     },
+    /// Expose supported grouped source text on one page for direct editing.
+    PrepareText {
+        page: usize,
+    },
     /// An explicit open-licensed full font program, completing subsets or selected by a user.
     RegisterTextFont {
         page: usize,

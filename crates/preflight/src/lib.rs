@@ -877,6 +877,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
                     doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
                 }
             }
+            // The object stays in the file unless it is replaced: verify scans every object, so a
+            // forbidden annotation left behind would still be reported (clause 6.3.1).
+            doc.set(r, Object::Null);
             removed += 1;
             continue;
         }

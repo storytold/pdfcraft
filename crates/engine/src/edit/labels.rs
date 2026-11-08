@@ -113,6 +113,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Delete document JavaScript",
     "Edit document JavaScript",
     "Edit text",
+    "Prepare grouped text",
     "Load document font",
     "Move object",
     "Move objects",
@@ -275,6 +276,7 @@ impl Edit {
             Edit::SetDocumentScript { script: None, .. } => Label::of("Delete document JavaScript"),
             Edit::SetDocumentScript { .. } => Label::of("Edit document JavaScript"),
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
+            Edit::PrepareText { .. } => Label::of("Prepare grouped text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
@@ -292,6 +294,7 @@ impl Edit {
                     pdfcraft_edit::ArrangeOrder::SendToBack => "Send to back",
                 },
                 ImageEdit::RemoveCrop => "Remove crop",
+                ImageEdit::Ungroup => "Ungroup artwork",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
