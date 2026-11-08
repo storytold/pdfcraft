@@ -2692,6 +2692,24 @@ fn free_text_da_fonts_draw_in_their_standard_face() {
     }
 }
 
+/// Thai in a text box whose `/DA` names Times is drawn from the Thai face and the rest of its
+/// text in Times: after a Thai run the text goes back to `/TiRo`, never to `/Helv`, and both
+/// kinds of font are in the appearance's resources.
+#[test]
+fn thai_in_a_times_text_box_keeps_times_for_the_rest() {
+    // "สวัสดี Hi": Thai first, then Latin.
+    let annot = "<< /Type /Annot /Subtype /FreeText /Rect [45 630 245 700] /DA (0 g /TiRo 12 Tf) /BS << /W 0 >> /Contents <FEFF0E2A0E270E310E2A0E140E35002000480069> >>";
+    let (ap, fonts) = display_of(annot);
+    assert!(!ap.contains("/Helv"), "{ap}");
+    assert!(base_fonts(&fonts).contains(&"Times-Roman".to_string()), "{fonts:?}");
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    assert!(ap.contains("/PCTh1 ") && !ap.contains('?'), "the Thai is shaped: {ap}");
+    assert_eq!(ap.matches("/TiRo 12 Tf").count(), 2, "Times is selected again after the Thai: {ap}");
+    assert!(fonts.get(b"PCTh1").and_then(|f| f.as_dict()).is_some_and(|f| f.name(b"Subtype") == Some(&b"Type3"[..])), "{fonts:?}");
+}
+
 /// `/DS` (Table 177) sets the face, size and colour over `/DA`'s; a malformed one is ignored.
 #[test]
 fn free_text_ds_style_is_drawn() {
@@ -3150,6 +3168,69 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     };
     check(&doc);
     check(&reopen(&doc));
+}
+
+/// The `y` of every `1 0 0 1 x y Tm` in `content`: where each piece of text sits.
+fn baselines(content: &str) -> Vec<f64> {
+    content.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect()
+}
+
+/// Thai typed into Fill & Sign text or a text box is shaped and drawn from the Thai face, as Add
+/// text draws it: Type 3 glyphs (their streams objects of their own) with a ToUnicode map, never
+/// `?`. The box grows to hold the ink of its stacked marks and descenders, which reach past the
+/// 1.2 em lines boxes are sized by. A build without a Thai face refuses the text, saying why.
+#[test]
+fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
+    let mut doc = fixture();
+    // Each line has the face's highest stack (น้ำ) and deepest descender (ฎู).
+    let thai = "น้ำฎู บุญ\nปั้นน้ำฎู";
+    let item = |shape: Shape| NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: thai.into(), author: "Ada".into() };
+    let shapes = [
+        Shape::Typewriter { rect: [100.0, 700.0, 300.0, 716.0], font_size: 24.0 },
+        Shape::TextBox { rect: [100.0, 400.0, 400.0, 430.0], font_size: 30.0 },
+    ];
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        for shape in shapes {
+            let err = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap_err();
+            assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+        }
+        assert_eq!(list(&doc, 0).len(), 1, "nothing was added");
+        let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 }), &meta("b")).unwrap();
+        assert!(matches!(set_contents(&mut doc, 0, t, thai, &meta("")), Err(AnnotError::Undrawable(_))));
+        assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "hello");
+        return;
+    }
+    let reach = pdfcraft_fonts::shaped_text::thai_reach;
+    let (lo, hi) = (reach("ฎู").unwrap()[0], reach("น้ำ").unwrap()[1]);
+    for (shape, size) in shapes.into_iter().zip([24.0, 30.0]) {
+        let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
+        let doc = reopen(&doc);
+        let d = &list(&doc, 0)[t];
+        assert_eq!((text(d, b"Contents").as_str(), pdfcraft_fonts::undrawn_mark(d)), (thai, None));
+        let content = ap_content(&doc, d);
+        assert!(!content.contains('?') && content.contains("/PCTh1 "), "{content}");
+        // The glyphs and the text they stand for are objects of the saved file.
+        let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).unwrap();
+        let ap = doc.get(n);
+        let fonts = ap.as_dict().and_then(|s| s.get(b"Resources")).and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict());
+        let font = fonts.and_then(|f| f.get(b"PCTh1")).and_then(|f| f.as_dict()).unwrap().clone();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let cmap = doc.get(font.reference(b"ToUnicode").unwrap());
+        let Object::Stream(cmap) = &*cmap else { panic!("ToUnicode is a stream object") };
+        let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+        assert!(cmap.contains("<0E190E490E33>"), "น้ำ copies as typed: {cmap}");
+        let procs = font.get(b"CharProcs").and_then(|p| p.as_dict()).unwrap();
+        assert!(procs.iter().all(|(_, g)| matches!(g, Object::Ref(_))), "glyph programs are stream objects");
+        // Every line's ink lies inside the box: the appearance's BBox and its clip.
+        let (r, ys) = (rect(d), baselines(&content));
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= r[3] + 1e-3 && bottom + lo * size >= r[1] - 1e-3, "{ys:?} at {size} in {r:?}");
+    }
+    // New text refits the box to its ink too: the stack on its first line, the descender on its last.
+    set_contents(&mut doc, 0, 1, "น้ำ\nฎู", &meta("")).unwrap();
+    let d = &list(&doc, 0)[1];
+    let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
+    assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
 }
 
 const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
