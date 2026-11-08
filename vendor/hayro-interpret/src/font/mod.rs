@@ -771,8 +771,8 @@ pub(crate) fn numbered_names_name_their_codes<'a>(
 
 /// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
 /// (see `glyph_name_numbers`) when that number is the very code the glyph is shown with: the
-/// code's Latin-1 character, for codes above 127 too (`C174` reads `®`), as pdftotext, PDFium,
-/// MuPDF and Acrobat read it. The name and the code then agree, so nothing is guessed from an
+/// code's Latin-1 character, for codes above 127 too (`C174` reads `®`), as pdftotext, PDFium
+/// and MuPDF read it. The name and the code then agree, so nothing is guessed from an
 /// encoding table. A number naming another code (`/C1` at 233, review on #3239) and a control
 /// character read as nothing. Callers apply it only in a font where
 /// `numbered_names_name_their_codes` holds.

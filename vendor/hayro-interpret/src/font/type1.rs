@@ -143,7 +143,7 @@ impl Type1Font {
         // glyph list specification's full mapping (`f_i`, `hyphen.case`). A name that only
         // numbers the glyph (`C39`, `c251`) reads as the code's Latin-1 character only when its
         // number is that code (`C39` at 39) and every numbered name in the font names its own
-        // code, as pdftotext, PDFium, MuPDF and Acrobat read it. Anywhere else the number is no
+        // code, as pdftotext, PDFium and MuPDF read it. Anywhere else the number is no
         // evidence and reads as nothing: the code's StandardEncoding character would be a
         // guess, wrong wherever the font's /Encoding puts the glyph elsewhere (review on #3239).
         let name = self.code_to_ps_name(code)?;

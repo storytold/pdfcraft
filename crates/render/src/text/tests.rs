@@ -499,7 +499,7 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
 /// A glyph name that only numbers its glyph, with no `/ToUnicode` (ISO 32000-2 §9.10.2 has no
 /// route for it), reads as its code's Latin-1 character when the number is that very code, in
 /// decimal (`C70` at 70, `C0071` at 71, `MT72` at 72, `C39` at 39, `C174` at 174) or
-/// hexadecimal (`G49` at 0x49, `GE9` at 0xE9), as pdftotext, PDFium, MuPDF and Acrobat read
+/// hexadecimal (`G49` at 0x49, `GE9` at 0xE9), as pdftotext, PDFium and MuPDF read
 /// it: Windows printer drivers and typesetters name subset glyphs so. A control character
 /// (`C9` at 9) still reads as nothing. Only in a font where every numbered name names its own
 /// code: one more name numbering another code (`/C1` at 233, review on #3239) turns the whole
