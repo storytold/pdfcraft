@@ -5041,6 +5041,8 @@ fn ungroup_refuses_what_would_draw_differently() {
     ungroup(&[("Group", group(&[]))], fill, "/H gs /One gs", half()).unwrap();
     // The translucency ends with its q … Q scope.
     ungroup(&[("Group", group(&[]))], fill, "q /H gs Q", half()).unwrap();
+    // A Q with no q to restore is ignored, as the renderer ignores it: the translucency stays.
+    refused(ungroup(&[("Group", group(&[]))], fill, "/H gs Q", half()), "translucent");
     // Without a group, translucency at the Do applies to each part just as it would inline.
     ungroup(&[], fill, "/H gs", half()).unwrap();
     ungroup(&[("Group", group(&[]))], fill, "", None).unwrap();

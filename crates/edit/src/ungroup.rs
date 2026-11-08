@@ -691,7 +691,8 @@ pub(crate) fn translucent_at(doc: &Document, resources: &Dict, ops: &[Op], at: u
     for op in ops.iter().take(at) {
         match op.op.as_slice() {
             b"q" => stack.push(now),
-            b"Q" => now = stack.pop().unwrap_or([false; 4]),
+            // A Q with nothing to restore is ignored, as renderers ignore it.
+            b"Q" => now = stack.pop().unwrap_or(now),
             b"gs" => {
                 let Ok(Some((_, i))) = resource_operand(op) else { continue };
                 let Some(gs) = op.name(i).and_then(|n| states.get(n)).map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()) else {
