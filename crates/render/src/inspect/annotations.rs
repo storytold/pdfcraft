@@ -360,9 +360,9 @@ impl<'a> Inspector<'a> {
         let ft = self.name(d, b"FT").or(parent_ft);
         let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
-        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
-            Ok(Object::Array(k)) => k.as_slice(),
-            _ => &[],
+        let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k.clone(),
+            _ => Vec::new(),
         };
         let field_kids: Vec<_> = kids.iter().filter(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok())).collect();
         if !field_kids.is_empty() {
@@ -378,14 +378,20 @@ impl<'a> Inspector<'a> {
                     Some(Ok(Object::Reference(p))) => Some(*p),
                     _ => None,
                 };
-                if here.is_none() || parent == here {
+                if parent == here {
                     self.field(k, Some((&full, ft.clone(), ff)), out, seen, depth + 1);
                 } else {
                     let own = parent.map(|p| self.qualified_name(p)).unwrap_or_default();
                     self.field(k, Some((&own, ft.clone(), ff)), out, seen, depth + 1);
                 }
             }
-            return;
+            // "A field's children in the hierarchy may also include widget annotations" (ISO
+            // 32000-2 §12.7.4): widget annotations listed beside named kids are still this
+            // field's widgets, listed as a field of this name, as the form reader reads them.
+            kids.retain(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_err() && self.name(kd, b"Subtype").as_deref() == Some("Widget")));
+            if kids.is_empty() {
+                return;
+            }
         }
         let flags = ff.unwrap_or(0);
         let kind = match ft.as_deref() {
@@ -413,9 +419,15 @@ impl<'a> Inspector<'a> {
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
-        // The widget is either this dict (merged field/widget) or its first kid.
-        let widget = if d.get(b"Rect").is_ok() { Some(d) } else { kids.first().and_then(|k| self.dict(k)) };
-        let page = widget.and_then(|w| w.get(b"P").ok()).and_then(|p| self.page_of(p)).or_else(|| self.find_widget_page(o, kids));
+        // The widget is this dict (merged field/widget) or its first kid. A merged dict that also
+        // lists widget kids has them as its widgets (ISO 32000-2 §12.7.4), as the form reader has it.
+        let widget_kid = kids.iter().filter_map(|k| self.dict(k)).find(|kd| self.name(kd, b"Subtype").as_deref() == Some("Widget"));
+        let widget = match widget_kid {
+            Some(w) => Some(w),
+            None if d.get(b"Rect").is_ok() => Some(d),
+            None => kids.first().and_then(|k| self.dict(k)),
+        };
+        let page = widget.and_then(|w| w.get(b"P").ok()).and_then(|p| self.page_of(p)).or_else(|| self.find_widget_page(o, &kids));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
         out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });

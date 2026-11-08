@@ -102,7 +102,10 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
         Some(c) if first.kind == FieldKind::Radio => same.find(|t| t.kind == FieldKind::Radio && t.state_for(c).is_some()).unwrap_or(first),
         _ => first,
     };
-    if f.read_only() {
+    // The name is read-only when the first field of it is, whichever field draws the choice; and
+    // a radio choice reaches every radio field of the name, so none of them may be read-only.
+    let radio_locked = f.kind == FieldKind::Radio && named.iter().filter_map(|&i| all.get(i)).any(|t| t.kind == FieldKind::Radio && t.read_only());
+    if f.read_only() || first.read_only() || radio_locked {
         return Err(FormError::ReadOnly(name.into()));
     }
     write_value(doc, f, value, scripts)?;

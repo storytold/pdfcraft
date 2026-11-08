@@ -2476,6 +2476,114 @@ fn nameless_widgets_of_an_unlisted_field_are_options_of_its_name() {
     }
 }
 
+/// A kid with `/T` that a field's `/Kids` lists but whose `/Parent` names a different field is
+/// named up that field's chain (ISO 32000-2 §12.7.4.2), not under the field listing it.
+#[test]
+fn a_named_kid_whose_parent_is_another_field_is_named_under_it() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /FT /Tx /T (Listing) /Kids [5 0 R] >>".into(),                          // 4
+        "<< /Type /Annot /Subtype /Widget /T (k) /Parent 6 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+        "<< /T (Other) /Kids [5 0 R] >>".into(),                                    // 6 unlisted
+    ];
+    let names: Vec<String> = fields(&document(&objs)).into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["Other.k"]);
+}
+
+/// The two kids of [`radio_kids_with_names`] (`Group1`, no `/Parent`), with the one drawing
+/// `Choice2` (6, read first) or the one drawing `Choice1` (5) read-only.
+fn radio_kids_one_read_only(read_only: u32) -> Document {
+    let kid = |n: u32, state: &str, x: u32| {
+        let ff = if n == read_only { 49153 } else { 49152 };
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff {ff} /T (Group1) /V /Off /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /Off 7 0 R /{state} 7 0 R >> >> >>",
+            x + 15
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /FT /Btn /Ff 49152 /T (Group1) /Kids [6 0 R 5 0 R] >>".into(),
+        kid(5, "Choice1", 50),
+        kid(6, "Choice2", 100),
+        "<< /Length 0 >>
+stream
+
+endstream"
+            .into(),
+    ];
+    document(&objs)
+}
+
+/// A radio choice by the name reaches every radio field of that name (ISO 32000-2 §12.7.4.2), so
+/// it is refused when any of them is read-only: the first one, even when a later one draws the
+/// choice, or a later one, even when the first draws it. Nothing is written.
+#[test]
+fn a_radio_choice_by_the_name_is_refused_when_a_field_of_the_name_is_read_only() {
+    for (read_only, choice) in [(6, "Choice1"), (5, "Choice2")] {
+        let mut doc = radio_kids_one_read_only(read_only);
+        let state = |doc: &Document| {
+            [4, 5, 6].map(|n| {
+                doc.get(ObjRef { num: n, generation: 0 }).as_dict().map(|d| (d.name(b"V").map(<[u8]>::to_vec), d.name(b"AS").map(<[u8]>::to_vec)))
+            })
+        };
+        let before = state(&doc);
+        let err = set_value(&mut doc, "Group1", &FieldValue::Radio(Some(choice.into()))).unwrap_err();
+        assert!(matches!(err, FormError::ReadOnly(_)), "{read_only} read-only, {choice}: {err}");
+        assert_eq!(state(&doc), before, "{read_only} read-only, {choice}: nothing written");
+    }
+}
+
+/// A nameless widget listed in `/Fields` that the field before it already claimed is not read a
+/// second time as a nameless field with no buttons.
+#[test]
+fn a_listed_widget_its_parent_claimed_is_read_once() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                         // 3
+        "<< /FT /Tx /T (p) /Kids [5 0 R] >>".into(),                                      // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 4 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+    ];
+    let all = fields(&document(&objs));
+    assert_eq!(all.iter().map(|f| (f.name.as_str(), f.widgets.len())).collect::<Vec<_>>(), [("p", 1)]);
+}
+
+/// A nameless widget listed in `/Fields` whose `/Parent` doesn't list it in its `/Kids` is still
+/// read, as it was before such widgets were read through their parent.
+#[test]
+fn a_listed_widget_its_parent_omits_is_still_read() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /FT /Tx /T (p) /Kids [] >>".into(),                                     // 4 unlisted
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 4 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+    ];
+    let all = fields(&document(&objs));
+    let widgets: Vec<u32> = all.iter().flat_map(|f| &f.widgets).map(|w| w.obj.num).collect();
+    assert_eq!(widgets, [5]);
+}
+
+/// A field merged with its widget whose `/Kids` holds a dictionary that isn't a widget keeps
+/// itself as its one widget: only widget kids replace it (ISO 32000-2 §12.7.4).
+#[test]
+fn a_merged_field_with_a_kid_that_is_not_a_widget_keeps_itself_as_widget() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),                   // 3
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (t) /Rect [50 700 150 715] /P 3 0 R /Kids [5 0 R] >>".into(), // 4
+        "<< /Foo 1 >>".into(),                                                      // 5
+    ];
+    let all = fields(&document(&objs));
+    let widgets: Vec<(u32, [f64; 4])> = all.iter().flat_map(|f| &f.widgets).map(|w| (w.obj.num, w.rect)).collect();
+    assert_eq!(widgets, [(4, [50.0, 700.0, 150.0, 715.0])]);
+}
+
 #[test]
 fn locked_fields_only_take_unlocking() {
     let mut doc = one_page();

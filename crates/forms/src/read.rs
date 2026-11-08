@@ -393,10 +393,19 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = f.as_ref() {
                 // A `/Fields` entry that is a nameless kid of a field `/Fields` doesn't list is
-                // read through that field, which names it (ISO 32000-2 §12.7.4.2).
+                // read through that field, which names it (ISO 32000-2 §12.7.4.2). A kid a field
+                // already read has claimed as its widget is not read again as a nameless field;
+                // one its parent's `/Kids` omits is still read on its own, as before.
                 let nameless_kid = doc.get(r).as_dict().is_some_and(|d| !d.contains(b"T") && d.contains(b"Parent"));
-                let start = if nameless_kid { unlisted_root(doc, r, &seen.fields).unwrap_or(r) } else { r };
-                walk(doc, start, &base, &page_of, &mut seen, &mut out, 0);
+                if nameless_kid {
+                    if let Some(root) = unlisted_root(doc, r, &seen.fields) {
+                        walk(doc, root, &base, &page_of, &mut seen, &mut out, 0);
+                    }
+                    if seen.widgets.contains(&r) {
+                        continue;
+                    }
+                }
+                walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
             }
         }
     }
@@ -557,10 +566,10 @@ fn walk(
         _ => return,
     };
     // A field's widgets are its widget kids. The field dictionary is its own widget only when it
-    // has none: field and widget are merged "when a field has only a single associated widget
+    // has none (no kid whose `/Subtype` is `/Widget`): field and widget are merged "when a field has only a single associated widget
     // annotation" (ISO 32000-2 §12.7.4), so a merged dictionary that also lists widget kids is a
     // field whose buttons are those kids, not one more (often zero-area) button.
-    let has_widget_kids = kids.iter().any(|k| doc.get(*k).as_dict().is_some());
+    let has_widget_kids = kids.iter().any(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.name(b"Subtype") == Some(b"Widget")));
     let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") && !has_widget_kids { vec![r] } else { kids };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
