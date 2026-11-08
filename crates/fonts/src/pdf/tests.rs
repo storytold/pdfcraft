@@ -342,6 +342,72 @@ fn type3_glyph_boxes_are_read_within_bounds() {
     assert_eq!(Metrics::from_dict(&doc, &f).ascent, 10.0);
 }
 
+/// `/Differences` with the glyph names `names` from code 0, set on the Type 3 font `f`.
+fn with_differences(f: &mut Dict, names: &[String]) {
+    let mut items = vec![Object::Int(0)];
+    items.extend(names.iter().map(|n| Object::name(n)));
+    let mut enc = Dict::new();
+    enc.set(b"Differences".to_vec(), Object::Array(items));
+    f.set(b"Encoding".to_vec(), Object::Dict(enc));
+}
+
+/// The glyph descriptions the encoding reaches are the ones read, since its `/Differences`
+/// "shall specify the complete character encoding" (ISO 32000-2 Table 110): a drawn glyph past
+/// the first [`MAX_TYPE3_GLYPHS`] descriptions still counts.
+#[test]
+fn type3_glyph_boxes_are_read_for_the_glyphs_the_encoding_reaches() {
+    let mut doc = Document::new_empty();
+    let mut procs = vec!["1 0 0 0 1 10 d1"; MAX_TYPE3_GLYPHS + 44];
+    procs.push("1 0 0 0 1 1000 d1");
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    with_differences(&mut f, &[format!("g{}", MAX_TYPE3_GLYPHS + 44), "g0".into()]);
+    assert_eq!(Metrics::from_dict(&doc, &f).ascent, 1000.0);
+}
+
+/// Byte limits on glyph descriptions: one larger than [`MAX_TYPE3_GLYPH_BYTES`] is skipped, its
+/// `d1` box unread, and the rest are read; once the font's [`MAX_TYPE3_FONT_BYTES`] run out,
+/// the boxes read so far may miss glyphs that are drawn, so a nonzero `/FontBBox` stands.
+#[test]
+fn type3_glyph_byte_limits_leave_honest_metrics() {
+    let mut doc = Document::new_empty();
+    let unit = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let pad = |head: &str, len: usize| format!("{head}{}", " ".repeat(len.saturating_sub(head.len())));
+    let oversized = pad("1 0 0 0 1 1000 d1", MAX_TYPE3_GLYPH_BYTES + 100);
+    let procs = [oversized.as_str(), "1 0 0 0 1 3 d1"];
+    let mut f = type3(&mut doc, unit, [0, -2, 10, 5], &procs);
+    with_differences(&mut f, &["g0".into(), "g1".into()]);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (3.0, 0.0), "the oversized glyph is skipped, the other read");
+
+    let filler = pad("0 0 m", MAX_TYPE3_GLYPH_BYTES - 1000);
+    let fillers = MAX_TYPE3_FONT_BYTES / (MAX_TYPE3_GLYPH_BYTES - 1000) + 1;
+    let mut procs = vec!["1 0 0 0 1 1 d1"];
+    procs.extend(std::iter::repeat_n(filler.as_str(), fillers));
+    procs.push("1 0 0 0 1 1000 d1");
+    let mut f = type3(&mut doc, unit, [0, -2, 10, 5], &procs);
+    let names: Vec<String> = (0..procs.len()).map(|i| format!("g{i}")).collect();
+    with_differences(&mut f, &names);
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!((m.ascent, m.descent), (5.0, -2.0), "the /FontBBox, not the first glyph's box alone");
+}
+
+/// A Type 3 font measured from its glyphs' `d1` boxes keeps them over a descriptor's `/Ascent`
+/// and `/Descent`, which are optional for Type 3 (ISO 32000-2 Table 120).
+#[test]
+fn type3_d1_glyph_boxes_win_over_descriptor_metrics() {
+    let mut doc = Document::new_empty();
+    let small = [0.0042, 0.0, 0.0, 0.0042, 0.0, 0.0];
+    let mut f = type3(&mut doc, small, [0, 0, 0, 0], &["13 0 2 -8 9 33 d1"]);
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"Ascent".to_vec(), Object::Int(891));
+    descriptor.set(b"Descent".to_vec(), Object::Int(-216));
+    let reference = doc.add(Object::Dict(descriptor));
+    f.set(b"FontDescriptor".to_vec(), Object::Ref(reference));
+    let m = Metrics::from_dict(&doc, &f);
+    assert!((m.ascent - 33.0 * 0.0042).abs() < 1e-12 && (m.descent + 8.0 * 0.0042).abs() < 1e-12, "{} {}", m.ascent, m.descent);
+}
+
 #[test]
 fn simple_fonts_decode_and_encode_through_their_encoding() {
     let mut doc = Document::new_empty();
