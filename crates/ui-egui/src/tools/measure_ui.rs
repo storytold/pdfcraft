@@ -383,6 +383,20 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
         state.cancel();
     }
 }
+/// The document's saved measurements, read again only after an edit. The Measure objects panel
+/// and the Measurements side panel share it.
+pub(crate) fn listing<'a>(state: &'a mut MeasureView, doc: &Document) -> &'a Result<measure::Listing, String> {
+    let generation = doc.edit_generation();
+    if state.listing.as_ref().is_none_or(|(g, _)| *g != generation) {
+        state.listing = Some((generation, doc.measurements()));
+    }
+    &state.listing.get_or_insert_with(|| (generation, doc.measurements())).1
+}
+/// Show a saved measurement: select its annotation and make it the panel's current reading.
+pub(crate) fn show_saved(state: &mut MeasureView, m: &measure::Measurement) {
+    state.reading = Some(m.reading.clone());
+    state.scale = Some(m.scale.clone());
+}
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().id_salt("measure-panel").show(ui, |ui| panel_body(app, ui, t));
 }
@@ -406,9 +420,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     let page = app.views[index].current;
     let info = doc.info.pages.get(page).cloned();
     let state = &mut app.views[index].measure;
-    if state.listing.as_ref().is_none_or(|(g, _)| *g != doc.edit_generation()) {
-        state.listing = Some((doc.edit_generation(), doc.measurements()));
-    }
+    listing(state, doc);
     if state.seeded_page != Some(page) {
         state.seeded_page = Some(page);
         // One page unit (the one the scale's unit gives) and what it measures.
@@ -604,7 +616,7 @@ pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
         export_csv(app);
     }
 }
-fn export_csv(app: &mut PdfCraftApp) {
+pub(crate) fn export_csv(app: &mut PdfCraftApp) {
     let Some((_, id)) = app.active_ids() else { return };
     let result = app.session.get(id).ok_or_else(|| "no such document".to_string()).and_then(|d| d.measurements());
     match result {

@@ -1571,6 +1571,54 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
 }
 
 #[test]
+fn the_measurements_panel_lists_filters_and_shows_every_saved_measurement() {
+    use pdfcraft_engine::measure::{Kind, NewMeasurement, Scale};
+    let (mut h, _c) = harness_pages(2);
+    let doc = h.state().views[0].id;
+    for (page, kind, points, label) in [
+        (0, Kind::Distance, vec![[20.0, 30.0], [80.0, 110.0]], "North wall"),
+        (0, Kind::Area, vec![[100.0, 130.0], [160.0, 130.0], [160.0, 210.0], [100.0, 210.0]], "Room"),
+        (1, Kind::Distance, vec![[20.0, 30.0], [140.0, 30.0]], "Hallway"),
+    ] {
+        let edit = pdfcraft_engine::Edit::AddMeasurement(NewMeasurement {
+            page,
+            kind,
+            points,
+            scale: Scale::default(),
+            style: pdfcraft_engine::Style::default(),
+            label: label.into(),
+            author: "Tester".into(),
+        });
+        assert!(h.state_mut().apply_edit(edit), "{label} is added");
+    }
+    h.state_mut().set_option("panel", "measurements").unwrap();
+    h.run_steps(4);
+    let saved = h.state().session.get(doc).unwrap().measurements().unwrap().measurements;
+    assert_eq!(saved.len(), 3);
+    let label = |m: &pdfcraft_engine::measure::Measurement| {
+        let kind = if m.reading.kind == Kind::Area { "Area" } else { "Distance" };
+        format!("{kind}: {}", m.reading.label)
+    };
+    for m in &saved {
+        assert!(h.query_by_label(&label(m)).is_some(), "{} is listed", m.label);
+    }
+    // A row on another page goes there, selects the annotation and makes it the reading.
+    let hallway = saved.iter().find(|m| m.label == "Hallway").unwrap().clone();
+    h.get_by_label(&label(&hallway)).click();
+    h.run_steps(6);
+    let view = &h.state().views[0];
+    assert_eq!(view.comments.selected, Some((1, hallway.index)));
+    assert_eq!(view.current, 1);
+    assert_eq!(view.measure.reading.as_ref().map(|r| r.label.clone()), Some(hallway.reading.label.clone()));
+    // Filtering by kind leaves only that kind; the filter shows how many there are.
+    h.get_by_label("Area 1").click();
+    h.run_steps(3);
+    for m in &saved {
+        assert_eq!(h.query_by_label(&label(m)).is_some(), m.reading.kind == Kind::Area, "{} after filtering", m.label);
+    }
+}
+
+#[test]
 fn a_1_to_50_scale_in_millimetres_measures_a_10_mm_line_as_500_mm() {
     // #2752: a plan drawn at 1:50 is "1 mm = 50 mm". The page side of the scale was fixed in
     // points, so this stored 1 pt = 50 mm, 72 / 25.4 = 2.835 times too big.
