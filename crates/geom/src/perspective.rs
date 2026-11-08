@@ -13,7 +13,7 @@ impl Homography {
     /// The transform that takes each of `from` to the point at the same index of `to`. `None`
     /// when three of either set are collinear or a coordinate is not finite.
     pub fn from_points(from: [Point; 4], to: [Point; 4]) -> Option<Self> {
-        if !in_general_position(from) || !in_general_position(to) {
+        if from.iter().chain(to.iter()).flatten().any(|v| !v.is_finite()) {
             return None;
         }
         // x' = (h0 x + h1 y + h2) / (h6 x + h7 y + 1), y' likewise with h3..h5: eight unknowns,
@@ -81,43 +81,20 @@ fn solve8(mut m: [[f64; 9]; 8]) -> Option<[f64; 8]> {
     Some(out)
 }
 
-/// Returns `true` when all four points are finite and no three of them are collinear.
-fn in_general_position(points: [Point; 4]) -> bool {
+/// Axis-aligned `[min_x, min_y, max_x, max_y]` bounding box of finite `points`.
+fn bounds(points: &[Point]) -> Option<[f64; 4]> {
+    let &[first, ref rest @ ..] = points else { return None };
     if points.iter().flatten().any(|v| !v.is_finite()) {
-        return false;
+        return None;
     }
-    let min_x = points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
-    let max_x = points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
-    let min_y = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-    let max_y = points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
-    let span = max_x - min_x;
-    let rise = max_y - min_y;
-    if span <= 0.0 || rise <= 0.0 || !span.is_finite() || !rise.is_finite() {
-        return false;
-    }
-    let q = points.map(|[x, y]| [(x - min_x) / span, (y - min_y) / rise]);
-    let cross = |o: Point, a: Point, b: Point| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    let dist = |a: Point, b: Point| (a[0] - b[0]).hypot(a[1] - b[1]);
-    (0..4).all(|i| {
-        let (o, a, b) = (q[i], q[(i + 1) % 4], q[(i + 2) % 4]);
-        let (d0, d1, d2) = (dist(o, a), dist(a, b), dist(b, o));
-        let (l_min, l_max) = (d0.min(d1).min(d2), d0.max(d1).max(d2));
-        let c = cross(o, a, b);
-        l_min > 0.0 && c.is_finite() && c.abs() > 1e-9 * l_min * l_max
-    })
+    Some(rest.iter().fold([first[0], first[1], first[0], first[1]], |[x0, y0, x1, y1], &[x, y]| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]))
 }
 
 /// The four corners in reading order for a y-down space (view or raster pixels): top-left,
 /// top-right, bottom-right, bottom-left, whatever order they were given in. `None` unless they
 /// form a convex quadrilateral with a non-negligible area.
 pub fn order_quad(points: [Point; 4]) -> Option<[Point; 4]> {
-    if points.iter().flatten().any(|v| !v.is_finite()) {
-        return None;
-    }
-    let min_x = points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
-    let max_x = points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
-    let min_y = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-    let max_y = points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+    let [min_x, min_y, max_x, max_y] = bounds(&points)?;
     let span = max_x - min_x;
     let rise = max_y - min_y;
     let size = span.max(rise);
@@ -204,7 +181,7 @@ mod tests {
         let tr = [200.0, 5.0];
         let br = [210.0, 300.0];
         let bl = [0.0, 290.0];
-        for q in [[br, tl, bl, tr], [bl, br, tr, tl], [tl, tr, br, bl], [tr, bl, tl, br]] {
+        for q in [[br, tl, bl, tr], [bl, br, tr, tl], [tl, tr, br, bl], [tl, bl, br, tr], [tr, bl, tl, br]] {
             assert_eq!(order_quad(q), Some([tl, tr, br, bl]), "{q:?}");
         }
     }
@@ -213,6 +190,8 @@ mod tests {
     fn concave_degenerate_or_non_finite_quads_are_refused() {
         // A dart: one corner inside the triangle of the other three.
         assert_eq!(order_quad([[0.0, 0.0], [100.0, 0.0], [20.0, 20.0], [0.0, 100.0]]), None);
+        assert_eq!(order_quad([[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [0.0, 100.0]]), None);
+        assert_eq!(order_quad([[0.0, 0.0], [100.0, 0.0], [100.0, 0.0], [0.0, 100.0]]), None);
         assert_eq!(order_quad([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]]), None);
         assert_eq!(order_quad([[5.0, 5.0]; 4]), None);
         assert_eq!(order_quad([[f64::NAN, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]), None);
