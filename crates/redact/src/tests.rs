@@ -61,6 +61,68 @@ fn reopen(doc: &Document) -> Document {
     Document::open(Arc::new(write_incremental(doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// A word drawn as outlines names itself in /ActualText. A mark over part of it removes the
+/// outlines (a shading painting them is clipped instead), and the name, which would still read the
+/// whole word, goes with them. A word the mark misses keeps its own.
+#[test]
+fn redacted_paint_loses_the_actual_text_that_names_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (SECRET)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f EMC /Span <</ActualText (KEPT)>> BDC 100 200 60 20 re f EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_clipped, r.paths_removed), (0, 1));
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("KEPT"), "{c}");
+
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(b"/Span <</ActualText (SHADED)>> BDC /Sh0 sh EMC", "/Shading << /Sh0 7 0 R >>", vec![shading.as_bytes().to_vec()]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    apply(&mut doc, None).unwrap();
+    let c = content(&doc, 0);
+    // Drawn after a clip that cuts the region out.
+    assert!(!c.contains("SHADED") && c.find("W*").zip(c.find(" sh")).is_some_and(|(w, s)| w < s), "{c}");
+
+    // A path that clips as it paints.
+    let mut doc = one_page(b"q /Span <</ActualText (CLIPS)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h W f EMC Q", "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("CLIPS"), "{c}");
+}
+
+/// Nested names around redacted paint all go, the innermost too, whichever scope was cut first.
+#[test]
+fn redacted_paint_loses_every_name_around_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (OUTER)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f /Span <</ActualText (INNER)>> BDC 100 130 m 160 130 l 160 150 l 100 150 l h f EMC EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 155.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 2);
+    let c = content(&doc, 0);
+    assert!(!c.contains("OUTER") && !c.contains("INNER"), "{c}");
+}
+
+/// Removing hidden text clips nothing, so a shading on the same page keeps the words that name it.
+#[test]
+fn removing_hidden_text_keeps_the_alt_text_of_a_shading() {
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 3 Tr 10 200 Td (SECRET) Tj ET /Figure <</Alt (chart)>> BDC /Sh0 sh EMC",
+        "/Shading << /Sh0 7 0 R >>",
+        vec![shading.as_bytes().to_vec()],
+    );
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("(chart)"), "{c}");
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.
@@ -79,6 +141,91 @@ fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     assert!(c.contains("0 0 0 rg") && c.contains("20 95 20 15 re f"), "{c}");
     let doc = reopen(&doc);
     assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// `content` behind a PNG Up predictor whose `/DecodeParms` is an indirect object added to `doc`,
+/// in a stream with `dict`'s entries too.
+fn predicted(doc: &mut Document, dict: pdfcraft_cos::Dict, content: &[u8]) -> pdfcraft_cos::Stream {
+    use pdfcraft_cos::{Dict, Object, Stream};
+    // One column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let parms = doc.add(Object::Dict([(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect::<Dict>()));
+    let mut s = Stream::flate(Dict::new(), &rows);
+    for (k, v) in dict.iter() {
+        s.dict.set(k.to_vec(), v.clone());
+    }
+    s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    s
+}
+
+/// Content whose `/DecodeParms` is given by reference is read through the reference, on the page
+/// and in a form: the text under a mark goes. Read with the predictor's tag bytes left in, no glyph
+/// was found under the mark, and the redaction left the text in the file and said it was done.
+#[test]
+fn content_with_parameters_given_by_reference_is_redacted() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let secret = b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET";
+    let marked = [[5.0, 90.0, 120.0, 115.0]];
+    let mut page = one_page(b"", "", vec![]);
+    let s = predicted(&mut page, Dict::new(), secret);
+    page.set(ObjRef::new(4, 0), s);
+    // The parameters take object 7 and the form 8.
+    let mut form = one_page(b"/Fm Do", "/XObject << /Fm 8 0 R >>", vec![]);
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 300, 300].into_iter().map(Object::Int).collect()));
+    dict.set(
+        b"Resources".to_vec(),
+        Object::Dict(
+            [(b"Font".to_vec(), Object::Dict([(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0)))].into_iter().collect()))].into_iter().collect(),
+        ),
+    );
+    let s = predicted(&mut form, dict, secret);
+    form.set(ObjRef::new(8, 0), s);
+    for (mut doc, what) in [(page, "page"), (form, "form")] {
+        assert_eq!(under(&mut doc, 0, &marked), 6, "{what}");
+        mark(&mut doc, 0, &marked, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 6), "{what}");
+        let mut saved = reopen(&doc);
+        assert_eq!(under(&mut saved, 0, &marked), 0, "{what}");
+        // Nor is the text left in a stream the page no longer draws, read with its parameters.
+        for (r, o) in saved.scan_objects() {
+            let Object::Stream(s) = &*o else { continue };
+            let data = pdfcraft_cos::DecodeBudget::new(usize::MAX, 0).decode_with_damage(&saved, s, usize::MAX).map(|(d, _)| d).unwrap_or_default();
+            assert!(!data.windows(6).any(|w| w == b"SECRET"), "{what}: {r:?}");
+        }
+    }
+}
+
+/// An image removed under a mark stays in the page's resources while another of its content
+/// streams, with `/DecodeParms` given by reference, still draws it. Read without the parameters,
+/// that stream seemed not to draw it, and the page lost the image there.
+#[test]
+fn an_image_drawn_again_in_content_with_parameters_by_reference_stays() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let img = stream("/Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", [255, 255, 255, 255]);
+    let mut doc = one_page(b"q 10 0 0 10 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+    let again = predicted(&mut doc, Dict::new(), b"q 10 0 0 10 200 200 cm /Im1 Do Q");
+    let again = doc.add(Object::Stream(again));
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(again)])))
+        .unwrap();
+    mark(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let doc = reopen(&doc);
+    assert!(content(&doc, 0).contains("200 200 cm /Im1 Do"), "{}", content(&doc, 0));
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    // The save numbers objects afresh: the image is told by what it is.
+    let Some(Object::Stream(image)) = xo.reference(b"Im1").map(|r| (*doc.get(r)).clone()) else { panic!("no /Im1: {xo:?}") };
+    assert_eq!((image.dict.name(b"Subtype"), image.decoded().ok()), (Some(&b"Image"[..]), Some(vec![255; 4])));
 }
 
 /// #2130: a font with no /Widths is drawn with its embedded program's advances. Measured with a

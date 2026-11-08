@@ -79,6 +79,68 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(status(&check(&reopened, &Options::default()), Rule::TaggedContent), Status::Passed);
 }
 
+/// Page content behind a predictor whose `/DecodeParms` are given by reference is read through
+/// them: autotagging writes the text back as it was, marked, not with the predictor's tag bytes in
+/// it (a `\0` every eight bytes, which split `24` into `2 4`).
+#[test]
+fn autotag_text_reads_content_with_parameters_given_by_reference() {
+    use pdfcraft_cos::{Dict, ObjRef};
+    let mut content = b"BT /F1 24 Tf 72 700 Td (Hello World) Tj ET".to_vec();
+    content.resize(content.len().div_ceil(8) * 8, b' ');
+    // PNG rows of eight bytes, each tagged 0 (no prediction).
+    let rows: Vec<u8> = content.chunks(8).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream(""),
+            FONT.into(),
+        ],
+        "",
+    );
+    let parms: Dict = [(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(8))].into_iter().collect();
+    let parms = doc.add(Object::Dict(parms));
+    let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
+    predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    doc.set(ObjRef::new(4, 0), predicted);
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1 });
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let written = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(written) = &*written else { panic!("page content") };
+    let text = String::from_utf8_lossy(&written.decoded_strict().unwrap()).into_owned();
+    assert!(text.contains("/F1 24 Tf") && text.contains("(Hello World) Tj"), "{text}");
+}
+
+/// Autotagging refuses a page whose content it can't read whole, and says why: content past
+/// 16 MiB, or content that doesn't decode strictly, with the decoder's reason right after.
+#[test]
+fn autotag_text_says_why_it_cannot_read_a_page() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let reason = |content: Stream| {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream(""),
+                FONT.into(),
+            ],
+            "",
+        );
+        doc.set(ObjRef::new(4, 0), content);
+        match autotag_text(&mut doc) {
+            Err(AutoTagError::Unsupported { reason, .. }) => reason,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(reason(Stream::from_raw(Dict::new(), vec![b' '; 17 << 20])), "decoding the content takes more than 16 MiB");
+    let mut corrupt = Stream::from_raw(Dict::new(), b"not zlib data".to_vec());
+    corrupt.dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let why = reason(corrupt);
+    assert!(why.starts_with("content cannot be decoded strictly: FlateDecode: "), "{why}");
+}
+
 #[test]
 fn autotag_text_refuses_paint_and_does_not_modify_the_document() {
     let mut doc = pdf(
@@ -1085,6 +1147,185 @@ fn mark_tag_artifact_validates_parent_and_all_mcids_before_mutating_document() {
     mark_decorative(&mut absent, ObjRef::new(7, 0)).unwrap();
     assert_eq!(absent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
     assert_eq!(*absent.get(ObjRef::new(9, 0)), before_pt);
+}
+
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A tag's content in a stream damaged partway stays tagged: rewriting the stream from what
+/// decoded would lose what follows the damage. Nothing changes, the structure tree and the stream
+/// included. Content in a whole stream before a damaged one is marked, and the damaged one kept
+/// as stored.
+#[test]
+fn a_tags_content_in_a_stream_damaged_partway_is_not_rewritten() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let content = b"/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC /Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC\n";
+    let damaged = damaged_flate(content, b"0 0 1 rg 0 0 10 10 re f");
+    let mut doc = figures_doc();
+    doc.set(ObjRef::new(4, 0), damaged.clone());
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let state = |doc: &Document| (contents(doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)), doc.get(ObjRef::new(4, 0)));
+    let before = state(&doc);
+    assert_eq!(figures(&doc).len(), 2, "read up to the damage");
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(state(&doc), before);
+
+    let mut doc = figures_doc();
+    let other = doc.add(damaged_flate(b"0 g\n", b"0 0 1 rg 0 0 10 10 re f"));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(other)])))
+        .unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
+    assert_ne!(list.first(), Some(&Object::Ref(ObjRef::new(4, 0))), "the tag's stream is rewritten");
+    assert_eq!(list.get(1), Some(&Object::Ref(other)), "kept as stored");
+}
+
+/// What follows the damage is unknown, the syntax the next stream starts in too, so a tag's
+/// content in a stream after a damaged one stays tagged. Here a comment the damage leaves open
+/// runs on into the next stream, up to its first end of line, and a string starting there reads
+/// as operators, among them what looks like the figure's content: rewritten, it would change the
+/// string. Nothing changes, the structure tree included.
+#[test]
+fn a_tags_content_after_a_damaged_stream_is_not_rewritten() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let in_a_string = b"(a note\n/Figure << /MCID 0 >> BDC 0 g EMC\n) pop /Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC";
+    for (damaged, after) in [(b"0 g\n".as_slice(), None), (b"0 g % a comment".as_slice(), Some(in_a_string.as_slice()))] {
+        let mut doc = figures_doc();
+        if let Some(after) = after {
+            doc.set(ObjRef::new(4, 0), Stream::from_raw(Dict::new(), after.to_vec()));
+        }
+        let first = doc.add(damaged_flate(damaged, b"\n0 0 1 rg 0 0 10 10 re f"));
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(ObjRef::new(4, 0))])))
+            .unwrap();
+        let state = |doc: &Document| {
+            (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+        };
+        let before = state(&doc);
+        assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged), "{damaged:?}");
+        assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged), "{damaged:?}");
+        assert_eq!(state(&doc), before, "{damaged:?}");
+    }
+}
+
+/// A page may split its content between an operator's operands and its keyword. When the operands
+/// of the figure's `BDC` end the stream before one damaged from its start or one that doesn't
+/// decode, the `BDC` the page reads is in what wasn't read: joined without it, those operands and
+/// the next tag's read as one `BDC`, which reaches into the stream after it. Neither marking
+/// changes anything, the structure tree included.
+#[test]
+fn a_tags_operands_before_a_stream_not_read_whole_are_not_rewritten() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let rest = b" BDC q 40 0 0 20 10 150 cm /Im Do Q EMC";
+    for damaged in [true, false] {
+        let mut doc = figures_doc();
+        doc.set(ObjRef::new(4, 0), Stream::from_raw(Dict::new(), b"/Figure << /MCID 0 >>".to_vec()));
+        let hidden = if damaged {
+            damaged_flate(b"", rest)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), rest);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = doc.add(hidden);
+        let after = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC".to_vec())));
+        let listed = Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(after)]);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed)).unwrap();
+        let state = |doc: &Document| {
+            (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+        };
+        let before = state(&doc);
+        assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged), "damaged: {damaged}");
+        assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged), "damaged: {damaged}");
+        assert_eq!(state(&doc), before, "damaged: {damaged}");
+    }
+}
+
+/// A tag's content not found on the page may be in a stream that doesn't decode: it isn't known
+/// to be off the page, so neither marking changes anything, the structure tree included.
+#[test]
+fn a_tags_content_not_found_beside_a_stream_that_does_not_decode_is_not_taken_for_absent() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    doc.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Int(2))).unwrap();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let other = doc.add(Object::Stream(Stream::from_raw(dict, b"/Figure << /MCID 2 >> BDC 0 g EMC".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(other), Object::Ref(ObjRef::new(4, 0))])))
+        .unwrap();
+    let state = |doc: &Document| {
+        (doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)))
+    };
+    let before = state(&doc);
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!(state(&doc), before);
+}
+
+/// A tag's content not found before the damage in a damaged stream may be past it: it isn't known
+/// to be off the page, so neither marking changes anything.
+#[test]
+fn a_tags_content_past_the_damage_is_not_taken_for_absent() {
+    use pdfcraft_cos::ObjRef;
+    let damaged =
+        damaged_flate(b"/Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC\n", b"/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC");
+    let mut doc = figures_doc();
+    doc.set(ObjRef::new(4, 0), damaged);
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let before = (contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)));
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!((contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0))), before);
+}
+
+/// A page's `/StructParents` given by reference is read through it: the parent tree no longer
+/// points the marked content at the tag.
+#[test]
+fn struct_parents_given_by_reference_are_read() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let by_reference = || {
+        let mut doc = figures_doc();
+        let key = doc.add(Object::Int(0));
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"StructParents".to_vec(), Object::Ref(key))).unwrap();
+        doc
+    };
+    let nums = |doc: &Document| doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    let mut doc = by_reference();
+    mark_decorative(&mut doc, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(nums(&doc), Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Ref(ObjRef::new(8, 0))])])));
+    let mut doc = by_reference();
+    mark_tag_artifact(&mut doc, ObjRef::new(8, 0)).unwrap();
+    assert_eq!(nums(&doc), Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Null])])));
+}
+
+/// A content stream that doesn't decode at all is kept as stored, and a tag in the page's other
+/// streams is still marked: only running past the decode budget refuses.
+#[test]
+fn a_tag_beside_a_stream_that_does_not_decode_is_marked() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let other = doc.add(Object::Stream(Stream::from_raw(dict, b"0 g".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(other), Object::Ref(ObjRef::new(4, 0))])))
+        .unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let contents = doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let Some(Object::Array(list)) = contents else { panic!("contents {contents:?}") };
+    assert_eq!(list.first(), Some(&Object::Ref(other)), "kept as stored");
 }
 
 fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
