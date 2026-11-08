@@ -36,6 +36,7 @@ pub mod js;
 mod layers;
 pub mod links;
 pub mod model3d;
+mod object_clip;
 pub mod ocr;
 mod open;
 pub mod optimizer;
@@ -108,6 +109,7 @@ pub use pdfcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, T
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
+pub use object_clip::{ObjectClip, ObjectClipboard};
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
 pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};

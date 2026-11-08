@@ -262,6 +262,15 @@ impl Document {
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
     }
 
+    /// Edit text: whether grouped artwork `index` on `page` (0-based, as [`Self::page_images`]
+    /// lists them) shows text that [`Edit::PrepareText`](crate::Edit::PrepareText) would make
+    /// editable. Reads the page without changing it; `false` for a logo, a group that can't be
+    /// opened or a page that can't be read.
+    pub fn grouped_text_at(&self, page: usize, index: usize) -> bool {
+        let Some(editor) = self.editor.as_ref() else { return false };
+        crate::guard(|| pdfcraft_edit::text::forms::grouped_text_at(&editor.cos, page, index)).is_ok_and(|r| r.is_ok_and(|yes| yes))
+    }
+
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
         self.editor.as_ref().and_then(|e| e.text_blocks(page).ok()).map(|b| b.as_ref().clone()).unwrap_or_default()
