@@ -19,6 +19,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 
+# The crash test drives the daemon over a real socket and signs its own tokens,
+# exactly as the cabinet would.
+[dev-dependencies]
+jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto", "use_pem"] }
+rand = "0.8"
+rsa = "0.9"
+tungstenite = "0.30"
+
 [[bin]]
 name = "pdfcraft-collab-server"
 path = "src/main.rs"

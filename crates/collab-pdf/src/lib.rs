@@ -604,6 +604,10 @@ impl Adapter for PdfAdapter {
     fn commit(&mut self, version: u64, epoch: u64) -> Result<CommitOutcome, AdapterError> {
         let bytes = self.session.save_bytes(self.id).map_err(map_edit)?;
         if let Some(store) = self.store.as_mut() {
+            // The window between the acknowledged journal record and this base
+            // write is the one a crash test parks in (see `store.rs`); it is a
+            // no-op unless a debug build is explicitly armed.
+            store::park_at_fault("commit-before-base");
             store.write_base(version, epoch, bytes.as_slice())?;
             // Entries the new base contains are skipped at replay by version, so
             // a failed truncation costs disk, not correctness.

@@ -238,6 +238,34 @@ fn read_cabinet(dir: &Path) -> Result<Option<CabinetCopy>, AdapterError> {
     Ok(Some(copy))
 }
 
+/// Park the process at a named crash window so that an outside `SIGKILL` lands
+/// exactly there instead of wherever the scheduler happened to be.
+///
+/// A test arms it with `PDFCRAFT_COLLAB_FAULT=<point>` and
+/// `PDFCRAFT_COLLAB_FAULT_MARKER=<path>`: once the marker file exists the
+/// process is parked, and the test kills it. Debug builds only, so a
+/// deployment cannot set an environment variable that stalls a room. The
+/// windows themselves are the ones RFC §8.1 reasons about; `PdfAdapter::commit`
+/// parks `commit-before-base` between the journal record and the base write.
+#[cfg(debug_assertions)]
+pub(crate) fn park_at_fault(point: &str) {
+    if std::env::var("PDFCRAFT_COLLAB_FAULT").ok().as_deref() != Some(point) {
+        return;
+    }
+    let Some(marker) = std::env::var_os("PDFCRAFT_COLLAB_FAULT_MARKER") else { return };
+    if fs::write(&marker, point.as_bytes()).is_err() {
+        // No marker means the test cannot tell the window was reached; parking
+        // anyway would only turn a failed marker into a timeout.
+        return;
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn park_at_fault(_point: &str) {}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let temporary = path.with_extension("tmp");
     {

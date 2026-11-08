@@ -4634,14 +4634,18 @@ dependencies = [
 name = "pdfcraft-collab-daemon"
 version = "0.18.1"
 dependencies = [
+ "jsonwebtoken",
  "pdfcraft-collab-hub",
  "pdfcraft-collab-pdf",
  "pdfcraft-collab-proto",
  "pdfcraft-collab-server",
  "pdfcraft-collab-ws",
+ "rand 0.8.8",
+ "rsa 0.9.10",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tungstenite",
 ]
 
 [[package]]
