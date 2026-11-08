@@ -1048,6 +1048,164 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+/// #6440: added text in a print file can be gray or CMYK, painted with `g` / `k`, so its black
+/// stays 100 K. The ink survives save and reopen; another colour drops it for good.
+#[test]
+fn gray_and_cmyk_added_text_writes_g_and_k_until_it_is_recoloured() {
+    use crate::added::Ink;
+    let item_stream = |doc: &Document, i: usize| {
+        let obj = list_added(doc)[i].obj;
+        let Object::Stream(s) = &*doc.get(obj) else { panic!("an item is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let mut doc = fixture();
+    let base = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    let mut black = base.clone();
+    black.set_ink(Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(black.color, [0.0; 3], "100 K looks black on screen");
+    let mut gray = AddedText { rect: [72.0, 400.0, 300.0, 500.0], ..base.clone() };
+    gray.set_ink(Some(Ink::Gray(0.25)));
+    add_content(&mut doc, 0, &Content::Text(black)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(gray)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 200.0, 300.0, 300.0], ..base.clone() })).unwrap();
+
+    let doc = reopen(&doc);
+    let (k, g, rgb) = (item_stream(&doc, 0), item_stream(&doc, 1), item_stream(&doc, 2));
+    assert!(k.contains("/PCFHelvetica 14 Tf 0 0 0 1 k\n") && !k.contains("rg"), "{k}");
+    assert!(g.contains("/PCFHelvetica 14 Tf 0.25 g\n") && !g.contains("rg"), "{g}");
+    assert!(rgb.contains("/PCFHelvetica 14 Tf 0 0 0 rg\n"), "RGB text paints as before: {rgb}");
+    let inks: Vec<Option<Ink>> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.painted_ink() } else { None }).collect();
+    assert_eq!(inks, [Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), Some(Ink::Gray(0.25)), None]);
+
+    // Another colour drops the ink, and picking the ink's look again later doesn't bring it back;
+    // picking that look while the ink is there keeps it.
+    let Content::Text(cmyk) = list_added(&doc)[0].content.clone() else { panic!() };
+    let mut same = cmyk.clone();
+    same.set_color([0.0; 3]);
+    assert_eq!(same, cmyk, "black on 100 K stays 100 K");
+    let mut recoloured = cmyk.clone();
+    recoloured.set_color([1.0, 0.0, 0.0]);
+    assert_eq!(recoloured.ink, None);
+    recoloured.set_color([0.0; 3]);
+    assert_eq!((recoloured.ink, recoloured.painted_ink()), (None, None), "the ink stays gone");
+
+    // Set directly, a colour paints in RGB too, and the item reads back without the ink: what a
+    // draft with its stale ink dropped compares equal to.
+    let mut doc = doc;
+    let red = AddedText { color: [1.0, 0.0, 0.0], ..cmyk };
+    update_content(&mut doc, 0, 0, &Content::Text(red.clone())).unwrap();
+    let stream = item_stream(&doc, 0);
+    assert!(stream.contains("1 0 0 rg") && !stream.contains(" k\n"), "{stream}");
+    let mut settled = red;
+    settled.drop_stale_ink();
+    for doc in [&doc, &reopen(&doc)] {
+        let Content::Text(back) = list_added(doc)[0].content.clone() else { panic!() };
+        // The stored box is the text's own height.
+        assert_eq!(back, AddedText { rect: back.rect, ..settled.clone() });
+    }
+
+    // CMYK looks as ISO 32000-2 §10.4.2.5 maps it to RGB; an ink out of range is refused.
+    assert_eq!(Ink::Cmyk([0.5, 0.0, 1.0, 0.25]).rgb(), [0.25, 0.75, 0.0]);
+    let mut wrong = base;
+    wrong.ink = Some(Ink::Gray(1.5));
+    assert!(add_content(&mut doc, 0, &Content::Text(wrong)).is_err());
+}
+
+/// #6440: a file edited by hand paints its added text in RGB unless the stored gray or CMYK is
+/// in range, the right length and still the look of `/Color`; nothing in it panics.
+#[test]
+fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), ..AddedText::default() })).unwrap();
+    let obj = list_added(&doc)[0].obj;
+    let real = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+    // A `/CMYK` far longer than four numbers, as a hostile file might store it: an ink first.
+    let long = real(&[0.0, 0.0, 0.0, 1.0].repeat(50_000));
+    let long_ref = Object::Ref(doc.add(long.clone()));
+    let ink_ref = Object::Ref(doc.add(real(&[0.0, 0.0, 0.0, 1.0])));
+    let read_text = |entries: &[(&[u8], Object)]| {
+        let mut edited = doc.clone();
+        let Object::Stream(mut s) = (*edited.get(obj)).clone() else { panic!("an item is a stream") };
+        let mut params = s.dict.get(b"PCAdded").and_then(|p| p.as_dict().cloned()).unwrap();
+        for (key, value) in entries {
+            params.set(key.to_vec(), value.clone());
+        }
+        s.dict.set(b"PCAdded".to_vec(), Object::Dict(params));
+        edited.set(obj, Object::Stream(s));
+        let Content::Text(t) = list_added(&edited)[0].content.clone() else { panic!() };
+        t
+    };
+    let read = |entries: &[(&[u8], Object)]| read_text(entries).ink;
+    // As PDFCraft writes it: the ink stands.
+    assert_eq!(read(&[(b"Color", real(&[0.5; 3])), (b"Gray", Object::Real(0.5))]), Some(Ink::Gray(0.5)));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", ink_ref)]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), "by reference");
+    // Finer than it paints, it reads back as painted (`0.5 g`), its look with it.
+    let fine = read_text(&[(b"Color", real(&[0.50049; 3])), (b"Gray", Object::Real(0.50049))]);
+    assert_eq!((fine.ink, fine.color), (Some(Ink::Gray(0.5)), [0.5; 3]));
+    for (what, entries) in [
+        ("a colour the ink isn't the look of", vec![(&b"Color"[..], real(&[1.0, 0.0, 0.0])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]),
+        ("three CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 1.0]))]),
+        ("five CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0, 0.0]))]),
+        ("a long CMYK", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long.clone())]),
+        ("a long CMYK by reference", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long_ref.clone())]),
+        ("gray a long array", vec![(b"Color", real(&[0.0; 3])), (b"Gray", long.clone())]),
+        ("CMYK not an array", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", Object::Real(1.0))]),
+        ("gray out of range", vec![(b"Color", real(&[1.0; 3])), (b"Gray", Object::Real(2.0))]),
+        ("gray not a number", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black"))]),
+        (
+            "a CMYK entry not a number",
+            vec![
+                (b"Color", real(&[0.0; 3])),
+                (b"CMYK", Object::Array(vec![Object::Real(0.0), Object::name("Bad"), Object::Real(0.0), Object::Real(1.0)])),
+            ],
+        ),
+        (
+            "gray not a number beside a CMYK",
+            vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black")), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))],
+        ),
+        ("gray NaN", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::Real(f64::NAN))]),
+        ("CMYK infinite", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, f64::INFINITY]))]),
+    ] {
+        assert_eq!(read(&entries), None, "{what}");
+    }
+}
+
+/// #6440: an ink finer than the thousandth `g` and `k` are written to is kept as painted, so the
+/// item, its stored `/CMYK` and what it reads back as are what the page shows.
+#[test]
+fn an_ink_is_kept_as_it_is_painted() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    let mut t = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    t.set_ink(Some(Ink::Cmyk([0.12345, 0.00049, 0.0, 0.99951])));
+    let painted = Ink::Cmyk([0.123, 0.0, 0.0, 1.0]);
+    assert_eq!((t.ink, t.color), (Some(painted), painted.rgb()));
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let doc = reopen(&doc);
+    let item = &list_added(&doc)[0];
+    let Object::Stream(s) = &*doc.get(item.obj) else { panic!("an item is a stream") };
+    let stream = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(
+        stream.contains(
+            "/PCFHelvetica 14 Tf 0.123 0 0 1 k
+"
+        ),
+        "{stream}"
+    );
+    let stored = s
+        .dict
+        .get(b"PCAdded")
+        .and_then(|p| p.as_dict())
+        .and_then(|p| p.get(b"CMYK"))
+        .and_then(Object::as_array)
+        .map(|a| a.iter().filter_map(Object::as_f64).collect::<Vec<_>>());
+    assert_eq!(stored, Some(vec![0.123, 0.0, 0.0, 1.0]));
+    let Content::Text(back) = &item.content else { panic!() };
+    assert_eq!(back.painted_ink(), Some(painted));
+}
+
 /// #4464: a page left with one added item draws that item and nothing else.
 #[test]
 fn an_isolated_item_is_all_that_is_left_on_its_page() {
@@ -3514,7 +3672,10 @@ fn page_content_bytes(doc: &Document, page: usize) -> Vec<u8> {
     }
 }
 
-/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2).
+/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2), on a real optional
+/// content layer: the catalog's `/OCProperties` declares object 7 as the only OCG and the page
+/// resources' `/Properties` maps `/L0` to it, so `/OC /L0 BDC` marks a valid optional-content
+/// member rather than a dangling name.
 fn image_page() -> Document {
     image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET")
 }
@@ -3534,12 +3695,13 @@ fn remove_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), Edit
 
 fn image_page_with(content: &str) -> Document {
     let objs: Vec<String> = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /Order [7 0 R] >> >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> /Properties << /L0 7 0 R >> >> >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /OCG /Name (Layer 0) >>".into(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
@@ -3751,6 +3913,30 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
     assert!(close(images::page_images(&doc, 0).unwrap()[0].visible_rect.unwrap(), moved(start.visible_rect.unwrap())));
     let caption: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
     assert_eq!(caption, ["Caption"]);
+}
+
+#[test]
+fn moving_an_image_inside_marked_content_leaves_every_sequence_intact() {
+    // `translate_images` changes the image's own `cm`; its `Do` stays where it was, so a moved
+    // image stays in the sequence that tags it (an image on a layer sits in `/OC … BDC`).
+    for content in [
+        "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+        "/OC /L0 BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+    ] {
+        let mut doc = image_page_with(content);
+        let before = images::page_images(&doc, 0).unwrap()[0].rect;
+        images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]).unwrap();
+        let after = images::page_images(&doc, 0).unwrap()[0].rect;
+        assert!(close(after, [before[0] + 10.0, before[1], before[2] + 10.0, before[3]]), "{content}: {after:?}");
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let count = |name: &str| ops.iter().filter(|op| op.is(name)).count();
+        assert_eq!((count("BDC"), count("EMC")), (2, 2), "{content}: both sequences remain");
+        let first = ops.iter().position(|op| op.is("BDC")).unwrap();
+        let end = ops.iter().position(|op| op.is("EMC")).unwrap();
+        let image = ops.iter().position(|op| op.is("Do")).unwrap();
+        assert!(first < image && image < end, "{content}: the image is still inside its own sequence");
+        assert!(!ops[end..].iter().any(|op| op.is("Do")), "{content}: the other sequence gained no image");
+    }
 }
 
 #[test]
@@ -5120,6 +5306,308 @@ fn the_graphics_state_carries_over_between_content_streams() {
     assert!(close(l.rect[0], 100.0) && close(l.size, 10.0), "{l:?}");
 }
 
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A page whose first content stream is damaged after its text, and whose second is whole.
+fn damaged_page() -> (Document, pdfcraft_cos::Stream) {
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+    let damaged = damaged_flate(b"BT /F1 12 Tf 72 700 Td (Damaged) Tj ET\n", b"BT /F1 12 Tf 72 500 Td (After the damage) Tj ET");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged.clone());
+    (doc, damaged)
+}
+
+/// An edit that would rewrite a content stream damaged partway is refused: written from what
+/// decoded, it would lose what follows the damage, which other readers may still read. So is an
+/// edit in a later stream: what the damage hides can change how that stream reads, a string or
+/// comment it leaves open, or the graphics state. An edit in a stream before the damage goes on,
+/// and leaves the damaged one as it is stored.
+#[test]
+fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
+    let (mut doc, damaged) = damaged_page();
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Damaged", "Whole"], "read up to the damage");
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::rewrite_block(&mut doc, 0, 0, Some("Edited"), &text::BlockStyle::default()).unwrap_err();
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::replace_line(&mut doc, 0, 1, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), damaged.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(texts(&doc), ["Edited", "Damaged"]);
+    let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
+    assert_eq!(list.get(1), Some(&Object::Ref(pdfcraft_cos::ObjRef::new(5, 0))));
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, damaged.raw, "stored as it was");
+}
+
+/// A comment the damage leaves open runs on into the next stream, up to its first end of line,
+/// so a string starting there reads as operators: a line of text inside it. That line is in a
+/// stream after the damage, and isn't edited.
+#[test]
+fn text_a_damaged_stream_runs_on_into_is_not_edited() {
+    let mut doc = split_page("", "(note\nBT /F1 12 Tf 72 600 Td (Inside a string) Tj ET\n) pop");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged_flate(b"0 g % a comment", b"\n"));
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Inside a string"], "the comment runs on into the next stream");
+    let listed = pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned();
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned(), listed);
+}
+
+/// A content stream that doesn't decode is never written over. A partial rewrite of the page's
+/// last paragraph closes its marker past the last operator read, in the page's last stream, here
+/// one that doesn't decode: the rewrite is refused, not that stream replaced by the close. An
+/// empty stream there takes the close.
+#[test]
+fn a_content_stream_that_does_not_decode_is_never_written_over() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    let mut doc = split_page(src, "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), pdfcraft_cos::Stream::from_raw(dict, b"0 0 1 rg 0 0 10 10 re f".to_vec()));
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+    let refused = text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap_err();
+    assert!(refused.to_string().contains("can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page(src, "");
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."]);
+}
+
+/// A content stream that doesn't decode at all is no damage to write over: it is kept as stored,
+/// and the page's streams before it are read and edited. A stream of a few MB is read for
+/// selecting objects.
+#[test]
+fn a_content_stream_that_does_not_decode_is_kept_and_edited_before() {
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unknown = pdfcraft_cos::Stream::from_raw(dict, b"BT /F1 12 Tf 72 700 Td (Unread) Tj ET".to_vec());
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), unknown.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), ["Edited"]);
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, unknown.raw, "stored as it was");
+
+    let large = format!("{}0 0 m 10 10 l S", " ".repeat(2 << 20));
+    assert!(editable_objects(&split_page(&large, "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
+/// A content stream that doesn't decode hides its operators as damage does. Here its `/Filter` is
+/// given by reference, which a file may do and which isn't read here, and it holds a `cm` that
+/// moves what the page draws after it. Text and images there aren't edited, as the edit would be
+/// worked out without the `cm`.
+#[test]
+fn content_after_a_stream_that_does_not_decode_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let hidden_move = |doc: &mut Document| {
+        let filter = doc.add(Object::name("FlateDecode"));
+        let mut s = Stream::flate(Dict::new(), b"1 0 0 1 0 -300 cm");
+        s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+        doc.set(ObjRef::new(4, 0), s);
+    };
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (After) Tj ET");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged or can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page("", "q 100 0 0 100 200 200 cm /Im1 Do Q");
+    hidden_move(&mut doc);
+    let listed = contents(&doc);
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+}
+
+/// A text object still open at a stream not read whole goes on in it: the text that stream shows
+/// starts where the text before it ends, so editing that text would move it. The edit is refused.
+/// A change before the text object, in the same stream, goes on. The same holds when the hidden
+/// stream is the page's last.
+#[test]
+fn text_a_stream_not_read_whole_goes_on_from_is_not_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    // The hidden stream between the text and a stream closing it, or the page's last.
+    for (damaged, last) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("damaged: {damaged}, last: {last}");
+        let shown: &[u8] = if last { b"(World) Tj ET" } else { b"(World) Tj" };
+        let mut doc = split_page("BT /F1 12 Tf 72 700 Td (Before) Tj ET BT /F1 12 Tf 72 600 Td (Hello) Tj", "ET");
+        let hidden = if damaged {
+            damaged_flate(b"", shown)
+        } else {
+            let filter = doc.add(Object::name("FlateDecode"));
+            let mut s = Stream::flate(Dict::new(), shown);
+            s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+            s
+        };
+        let hidden = Object::Ref(doc.add(hidden));
+        let mut listed = vec![Object::Ref(ObjRef::new(4, 0)), hidden];
+        if !last {
+            listed.push(Object::Ref(ObjRef::new(5, 0)));
+        }
+        let listed = Object::Array(listed);
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), listed.clone())).unwrap();
+        let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["Before", "Hello"], "{what}");
+        let refused = text::replace_line(&mut doc, 0, 1, "Hi").unwrap_err();
+        assert!(refused.to_string().contains("goes on in a content stream"), "{what}: {refused}");
+        assert_eq!(contents(&doc), Some(listed), "{what}");
+        text::replace_line(&mut doc, 0, 0, "Earlier").unwrap();
+    }
+}
+
+/// An image's `q cm … Q` that closes past a stream not read whole, one that doesn't decode or one
+/// damaged partway, may hold what that stream draws (here a square, in the image's `cm`), also when
+/// the square's operands end the stream before it and only its keyword is hidden. Moving the image
+/// leaves that `cm` as it is and gives the `Do` a `cm` of its own, so the square stays, with a clip
+/// on the image too, which then stays where it is as one the square may share. A crop goes around
+/// the `Do` alone, and a crop PdfCraft put in that scope isn't removed. A scope that closes in a
+/// damaged stream before its damage holds none of it: its `cm` takes the move.
+#[test]
+fn an_image_whose_scope_closes_past_a_stream_not_read_whole_moves_alone() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let first_stream = |doc: &Document| {
+        let Some(Object::Array(list)) = contents(doc) else { panic!("contents {:?}", contents(doc)) };
+        let Some(Object::Stream(first)) = list.first().map(|f| (*doc.resolve(f)).clone()) else { panic!("no first stream") };
+        String::from_utf8(first.decoded().unwrap()).unwrap()
+    };
+    let later_streams = |doc: &Document| match contents(doc) {
+        Some(Object::Array(list)) => list.get(1..).map(<[Object]>::to_vec),
+        other => panic!("contents {other:?}"),
+    };
+    // The image in `q 100 0 0 100 50 50 cm`, a stream not read whole drawing a square in that
+    // `cm`, then the scope's `Q`. Split, the square's operands come before the hidden keyword.
+    let page = |clip: &str, damaged: bool, split: bool| {
+        let operands = if split && !damaged { " 1.5 0 0.5 0.5" } else { "" };
+        let mut doc = two_stream_image_page(&format!("q 100 0 0 100 50 50 cm {clip}/Im1 Do{operands}"), "Q");
+        let hidden = match (damaged, split) {
+            (true, false) => damaged_flate(b"", b"0 0 1 rg 1.5 0 0.5 0.5 re f"),
+            (true, true) => damaged_flate(b"0 0 1 rg 1.5 0", b" 0.5 0.5 re f"),
+            (false, _) => {
+                let filter = doc.add(Object::name("FlateDecode"));
+                let mut s = Stream::flate(Dict::new(), if split { b"re f".as_slice() } else { b"0 0 1 rg 1.5 0 0.5 0.5 re f" });
+                s.dict.set(b"Filter".to_vec(), Object::Ref(filter));
+                s
+            }
+        };
+        let hidden = doc.add(hidden);
+        let listed = vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden), Object::Ref(ObjRef::new(5, 0))];
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(listed))).unwrap();
+        doc
+    };
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    for damaged in [false, true] {
+        for split in [false, true] {
+            for clip in ["", "0 0 1 1 re W n ", "/PdfCraftImageCrop MP 0 0 1 1 re W n "] {
+                let what = format!("damaged: {damaged}, split: {split}, clip: {clip:?}");
+                let mut doc = page(clip, damaged, split);
+                let later = later_streams(&doc);
+                images::change_image(&mut doc, 0, 0, &shift).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.contains("100 0 0 100 50 50 cm"), "{what}: the scope's cm stays: {first}");
+                assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [60.0, 50.0, 160.0, 150.0]), "{what}: the image moved");
+
+                let mut doc = page(clip, damaged, split);
+                images::change_image(&mut doc, 0, 0, &images::ImageChange::Crop([60.0, 60.0, 140.0, 140.0])).unwrap();
+                assert_eq!(later_streams(&doc), later, "{what}: cropped, the streams after it as they were");
+                let first = first_stream(&doc);
+                assert!(first.starts_with("q 100 0 0 100 50 50 cm"), "{what}: nothing put at the scope's start: {first}");
+
+                if clip.contains("PdfCraftImageCrop") {
+                    let mut doc = page(clip, damaged, split);
+                    let listed = contents(&doc);
+                    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::RemoveCrop).unwrap_err();
+                    assert!(refused.to_string().contains("may also clip"), "{what}: {refused}");
+                    assert_eq!(contents(&doc), listed, "{what}");
+                }
+            }
+        }
+    }
+
+    let mut doc = two_stream_image_page("q 100 0 0 100 50 50 cm /Im1 Do", "");
+    doc.set(ObjRef::new(5, 0), damaged_flate(b"Q\n", b"0 0 1 rg 1.5 0 0.5 0.5 re f"));
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let first = first_stream(&doc);
+    assert!(first.contains("100 0 0 100 60 50 cm") && !first.contains("50 50 cm"), "closed before the damage: {first}");
+}
+
+/// A content stream whose `/DecodeParms`, or a parameter in them, is given by reference is read
+/// through the reference: its text is listed and edited, not read with the predictor's tag bytes
+/// left in it.
+#[test]
+fn content_with_parameters_given_by_reference_is_read_and_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let content = b"BT /F1 12 Tf 72 700 Td (Predicted) Tj ET";
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    for given in ["parameters", "predictor"] {
+        let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+        let predictor = Object::Int(12);
+        let parms = if given == "parameters" {
+            Object::Ref(doc.add(Object::Dict([(b"Predictor".to_vec(), predictor)].into_iter().collect::<Dict>())))
+        } else {
+            Object::Dict([(b"Predictor".to_vec(), Object::Ref(doc.add(predictor)))].into_iter().collect())
+        };
+        let mut s = Stream::flate(Dict::new(), &rows);
+        s.dict.set(b"DecodeParms".to_vec(), parms);
+        doc.set(ObjRef::new(4, 0), s);
+        assert_eq!(texts(&doc), ["Predicted", "Whole"], "{given} by reference");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        assert_eq!(texts(&reopen(&doc)), ["Edited", "Whole"], "{given} by reference");
+    }
+}
+
+/// Objects are selected only from content read whole: what a damaged stream hides past the
+/// damage could change the graphics state of every later item.
+#[test]
+fn objects_are_not_listed_from_a_content_stream_damaged_partway() {
+    let (doc, _) = damaged_page();
+    let refused = editable_objects(&doc, 0).unwrap_err();
+    assert!(refused.to_string().contains("damaged partway"), "{refused}");
+    assert!(editable_objects(&split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
 fn two_stream_image_page(first: &str, second: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -5168,6 +5656,52 @@ fn arrange_and_crop_image_in_second_content_stream_succeeds() {
     assert!(close(after_crop[0].visible_rect.unwrap(), [210.0, 210.0, 290.0, 290.0]));
     assert_eq!(after_crop[1].name, "Im0");
     assert_eq!(after_crop[1].visible_rect, Some(after_crop[1].rect));
+}
+
+/// What follows the damage in a content stream is unknown, the graphics state the later streams
+/// draw in too: here it hides a `cm` that doubles them. An image after the damage isn't moved, as
+/// the move is worked out without that `cm`, and one before it isn't arranged to after it, beside
+/// an added item there. An image before the damage is moved.
+#[test]
+fn images_after_a_content_stream_damaged_partway_are_not_moved() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let image = "q 100 0 0 100 200 200 cm /Im1 Do Q";
+    let hidden_scale = || damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = two_stream_image_page("", image);
+    doc.set(ObjRef::new(4, 0), hidden_scale());
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page(image, "");
+    let damaged = doc.add(hidden_scale());
+    let mut added = Dict::new();
+    added.set(b"PCAdded".to_vec(), Object::Dict(Dict::new()));
+    let added = doc.add(Object::Stream(Stream::from_raw(added, b"q 0 0 1 rg 0 0 10 10 re f Q".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(damaged), Object::Ref(added)]))
+    })
+    .unwrap();
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    // Arranged within the content before the damage, it goes on.
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(added), Object::Ref(damaged)]))
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap();
+
+    let mut doc = two_stream_image_page(image, "");
+    doc.set(ObjRef::new(5, 0), hidden_scale());
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let moved = images::page_images(&reopen(&doc), 0).unwrap();
+    assert!(close(moved[0].rect, [210.0, 200.0, 310.0, 300.0]), "{:?}", moved[0].rect);
 }
 
 /// One page whose font draws a few Hebrew letters (ToUnicode): A ב, B ד, C י, D ו, E ק, F ש,
@@ -6211,6 +6745,126 @@ fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     let broken = doc.add(Object::Stream(Stream::from_raw(filter, vec![1, 2, 3])));
     doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(broken))).unwrap();
     assert!(editable_objects(&doc, 0).is_err(), "an undecodable stream is refused");
+}
+
+/// Invisible text moves on top only when something painted after it covers it: an XObject drawn
+/// over its box (an image, or a form holding one), or any inline image or shading. An image
+/// clipped away entirely, or drawn elsewhere, does not move it.
+#[test]
+fn revealed_text_moves_on_top_only_when_painted_over() {
+    let on_top_of = |doc: Document| {
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        revealed_under_paint(&doc, 0, block.invisible, block.rect, &ops, at)
+    };
+    let on_top = |content: &str| on_top_of(image_page_with(content));
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    assert!(on_top(&format!("BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET {scan}")), "the scan covers it");
+    assert!(!on_top(&format!("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET {scan}")), "an image elsewhere");
+    assert!(!on_top(&format!("{scan} BT /F1 12 Tf 3 Tr 110 150 Td (Over) Tj ET")), "the scan is drawn first");
+    assert!(!on_top(&format!("BT /F1 12 Tf 0 Tr 110 150 Td (Shown) Tj ET {scan}")), "visible text stays where it is");
+    assert!(!on_top("BT /F1 12 Tf 3 Tr 110 150 Td (Path) Tj ET 0 0 600 800 re f"), "a filled path does not move it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Shade) Tj ET /Sh sh"), "a shading after it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Inline) Tj ET BI /W 1 /H 1 /CS /G /BPC 8 ID x EI"), "an inline image after it");
+    let under = "BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET";
+    let elsewhere = "q 50 0 0 50 400 600 cm /Im0 Do Q";
+    assert!(!on_top(&format!("{under} q 0 0 10 10 re W n {scan} Q")), "the scan is clipped away entirely");
+    assert!(on_top(&format!("{under} {elsewhere} {scan}")), "two images, the second over it");
+    assert!(on_top(&format!("{under} {scan} {elsewhere}")), "two images, the first over it");
+    assert!(!on_top(&format!("{under} {elsewhere} {elsewhere}")), "two images, neither over it");
+    let in_form = |content: &str| {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 7 0 R >> >> >>";
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A");
+        let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im0 6 0 R >> >>", "/Im0 Do");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page.into(),
+            stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            image,
+            form,
+        ];
+        on_top_of(build(&objs.iter().map(String::as_str).collect::<Vec<_>>()))
+    };
+    assert!(in_form(&format!("{under} q 200 0 0 100 100 100 cm /Fm0 Do Q")), "a form holding the scan, over it");
+    assert!(!in_form(&format!("{under} q 50 0 0 50 400 600 cm /Fm0 Do Q")), "a form holding an image elsewhere");
+}
+
+/// Revealed OCR text is checked where the rewrite lands, not only where it was: an image drawn
+/// after it over just the moved or grown text still lifts the text on top, on both rewrite paths.
+#[test]
+fn an_ocr_rewrite_goes_on_top_of_paint_over_where_it_lands() {
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let moved = text::BlockStyle { offset: Some([-290.0, -450.0]), ..Default::default() };
+    let sized = text::BlockStyle { size: Some(24.0), ..Default::default() };
+    let spaced = text::BlockStyle { line_spacing: Some(3.0), ..Default::default() };
+    let range = text::RangeStyle {
+        range: 0..2,
+        family: None,
+        resource: None,
+        size: Some(120.0),
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let enlarged = text::BlockStyle { ranges: vec![range], ..Default::default() };
+    let above = "q 200 0 0 60 100 200 cm /Im0 Do Q";
+    let cases = [
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved", &moved),
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved\nTwice", &moved),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there, this line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there,\nthis line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 110 230 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &text::BlockStyle::default()),
+    ];
+    let low = "q 200 0 0 30 100 300 cm /Im0 Do Q";
+    let cases = cases.into_iter().map(|(c, e, s)| (c, e, s, scan)).chain([
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &sized, low),
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &spaced, low),
+        ("BT /F1 12 Tf 3 Tr 110 150 Td (Hi there) Tj ET", "Hi there", &enlarged, above),
+    ]);
+    for (content, edit, style, scan) in cases {
+        let mut doc = image_page_with(&format!("{content} {scan}"));
+        let before = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        assert!(!revealed_under_paint(&doc, 0, true, before.rect, &ops, at), "{edit:?}: the old box alone is clear of the scan");
+        text::rewrite_block(&mut doc, 0, 0, Some(edit), style).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let scan_at = ops.iter().position(|o| o.is("Do")).unwrap();
+        let shows = ["Tj", "TJ", "'", "\""];
+        assert!(ops.iter().skip(scan_at).any(|o| shows.iter().any(|s| o.is(s))), "{edit:?}: the rewrite is drawn over the scan");
+    }
+}
+
+/// [`crate::Reach`] grows the old box to the move, the width either way and the lines below.
+#[test]
+fn a_rewrites_reach_covers_its_move_width_and_lines() {
+    let reach = |offset, width, rows, upright| crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset, width, rows, pitch: 10.0, upright }.bounds();
+    assert_eq!(reach([0.0, 0.0], 20.0, 1, true), [10.0, 90.0, 30.0, 110.0]);
+    assert_eq!(reach([5.0, -50.0], 20.0, 1, true), [10.0, 40.0, 35.0, 100.0]);
+    assert_eq!(reach([0.0, 0.0], 50.0, 3, true), [-20.0, 70.0, 60.0, 110.0]);
+    assert_eq!(reach([0.0, 0.0], 30.0, 4, false), [-40.0, 40.0, 80.0, 150.0]);
+    assert_eq!(reach([f64::NAN, 0.0], 20.0, 1, true)[0], f64::NEG_INFINITY);
+    let larger = crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset: [0.0, 0.0], width: 20.0, rows: 1, pitch: 24.0, upright: true };
+    assert_eq!(larger.bounds(), [10.0, 76.0, 30.0, 124.0], "a larger size grows the line up as well as down");
+}
+
+/// Revealed OCR text may have to go on top of the page; a page whose marked content nests too deep
+/// for that is refused before either rewrite path changes anything.
+#[test]
+fn an_ocr_rewrite_refused_on_top_leaves_the_document_as_it_was() {
+    let content = format!("{} BT /F1 20 Tf 3 Tr 42 44 Td (John) Tj ET /Im Do {}", "/X BMC ".repeat(10_001), "EMC ".repeat(10_001));
+    let mut doc = text_page(&content);
+    assert!(text::text_blocks(&doc, 0).unwrap()[0].invisible);
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    for edit in ["Jane", "Jane\nDoe"] {
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(edit), &text::BlockStyle::default()).unwrap_err();
+        assert!(error.to_string().contains("nested too deeply"), "{edit:?}: {error}");
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap() == before, "{edit:?}: a refused rewrite changes nothing");
+    }
 }
 
 #[test]
@@ -9852,6 +10506,133 @@ fn content_units_does_not_swallow_subsequent_units_on_standalone_gs() {
     assert_eq!(units.len(), 2);
 }
 
+/// A 1 × 1 grey inline image whose one sample is `data`.
+fn inline_image(data: char) -> String {
+    format!("BI /W 1 /H 1 /CS /G /BPC 8 ID {data} EI")
+}
+
+/// What page 0 paints, in order: `BI x` for an inline image with sample `x`, `Do x,y` for an
+/// XObject placed by a `cm` translating to x,y, and `Tj` for text. A `cm` lasts until its `Q`, so an
+/// XObject moved out of its `q`/`Q` wrapper shows as a bare `Do `.
+fn painted(doc: &Document) -> Vec<String> {
+    let mut at = vec![String::new()];
+    pdfcraft_content::parse(&page_content_bytes(doc, 0))
+        .ops
+        .iter()
+        .filter_map(|op| match op.op.as_slice() {
+            b"q" => {
+                at.push(at.last().unwrap().clone());
+                None
+            }
+            b"Q" => {
+                at.pop();
+                None
+            }
+            b"cm" => {
+                let m = op.nums::<6>().unwrap();
+                *at.last_mut().unwrap() = format!("{},{}", m[4], m[5]);
+                None
+            }
+            b"Do" => Some(format!("Do {}", at.last().unwrap())),
+            b"BI" => Some(format!("BI {}", String::from_utf8_lossy(&op.inline.as_ref().unwrap().1))),
+            b"Tj" => Some("Tj".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The index in [`images::page_images`] of the image whose box starts at `x`,`y`.
+fn image_at(doc: &Document, x: f64, y: f64) -> usize {
+    images::page_images(doc, 0).unwrap().iter().position(|i| (i.rect[0] - x).abs() < 1e-6 && (i.rect[1] - y).abs() < 1e-6).unwrap()
+}
+
+#[test]
+fn content_units_keep_each_top_level_inline_image_to_itself() {
+    // The parser emits a whole inline image as one `BI` op; its unit must not run on to the end
+    // (#3146). Inline images at the start, side by side and at the end are one unit each.
+    let content = format!(
+        "{} q 200 0 0 100 100 100 cm /Im0 Do Q {} {} q 10 0 0 10 300 300 cm /Im0 Do Q {}",
+        inline_image('a'),
+        inline_image('b'),
+        inline_image('c'),
+        inline_image('d')
+    );
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..1, 1..5, 5..6, 6..7, 7..11, 11..12]);
+}
+
+#[test]
+fn content_units_keep_a_nested_inline_image_inside_its_enclosing_unit() {
+    // A `BI` inside `q`/`Q` or a marked-content sequence stays part of that sequence's unit.
+    let content = format!("q {} Q /Span << /MCID 0 >> BDC {} EMC {}", inline_image('a'), inline_image('b'), inline_image('c'));
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..3, 3..6, 6..7]);
+}
+
+#[test]
+fn send_backward_after_a_top_level_inline_image_moves_one_step() {
+    // Before #3146 the inline image's unit swallowed everything after it, so SendBackward on a later
+    // image acted like SendToBack: it must step behind the text only.
+    let content = format!(
+        "{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q",
+        inline_image('x')
+    );
+    let mut doc = image_page_with(&content);
+    let front = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["BI x", "Do 100,100", "Do 200,200", "Tj"]);
+}
+
+#[test]
+fn arrange_steps_an_image_past_one_inline_image_at_a_time() {
+    // Before #3146 BringForward on B, inside the first inline image's unit, put it in front of
+    // everything. One step forward is past the next inline image only, and one step back again
+    // is behind that inline image only.
+    let content = format!(
+        "q 100 0 0 100 100 100 cm /Im0 Do Q {} q 150 0 0 150 200 200 cm /Im0 Do Q {} BT /F1 12 Tf 72 700 Td (Text) Tj ET q 50 0 0 50 300 300 cm /Im0 Do Q",
+        inline_image('a'),
+        inline_image('b')
+    );
+    let mut doc = image_page_with(&content);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::BringForward).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "BI b", "Do 200,200", "Tj", "Do 300,300"]);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "Do 200,200", "BI b", "Tj", "Do 300,300"]);
+}
+
+#[test]
+fn arrange_around_inline_images_at_the_ends_of_the_stream() {
+    // Before #3146 BringToFront on the last image after an inline image "succeeded" without moving
+    // it. It is already in front, so it is refused and nothing changes.
+    let content =
+        format!("{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q", inline_image('a'));
+    let mut doc = image_page_with(&content);
+    let before = page_content_bytes(&doc, 0);
+    let front = image_at(&doc, 200.0, 200.0);
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringToFront).is_err());
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    // Send to back goes behind the inline image that starts the stream.
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendToBack).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 200,200", "BI a", "Do 100,100", "Tj"]);
+
+    // Bring to front goes past the inline image that ends the stream.
+    let content = format!("q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET {}", inline_image('z'));
+    let mut doc = image_page_with(&content);
+    let back = image_at(&doc, 100.0, 100.0);
+    arrange(&mut doc, 0, back, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Tj", "BI z", "Do 100,100"]);
+}
+
 #[test]
 fn different_inline_soft_masks_have_distinct_identities() {
     let doc = Document::new_empty();
@@ -10019,6 +10800,86 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert!(error.to_string().contains("justification"));
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+/// The OCR stamp path registers the plan's Type3 faces (a free `PCOcr…` name per stamp, so a
+/// page that is OCR'd twice keeps both layers' fonts), and the stamped codes extract back
+/// through the font's ToUnicode CMap.
+#[test]
+fn stamp_with_fonts_registers_the_planned_type3_faces() {
+    if without_craft_fonts("stamp_with_fonts_registers_the_planned_type3_faces") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let mut plan = pdfcraft_fonts::TextPlan::for_words(["日本"]);
+    assert_eq!(plan.missing(), 0);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, |p| {
+        let codes: Vec<u8> = p.encoding(0).iter().map(|&(_, c)| c).collect();
+        let mut c = format!("BT 3 Tr /PCHelv 1 Tf\n/{} 1 Tf 100 700 Td ", p.fonts[0].name).into_bytes();
+        c.extend_from_slice(&pdfcraft_fonts::literal(&codes));
+        c.extend_from_slice(b" Tj ET");
+        c
+    })
+    .unwrap();
+    assert!(plan.fonts[0].name.starts_with("PCOcr"), "{:?}", plan.fonts[0].name);
+    // The registered font carries a ToUnicode CMap; the engine's own reader decodes the run.
+    let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text.contains("日本")), "{lines:?}");
+    // A second stamp on the same page takes the next free name; the first layer's font stands.
+    let mut second = pdfcraft_fonts::TextPlan::for_words(["語"]);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut second, |p| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes())
+        .unwrap();
+    assert_eq!(second.fonts[0].name, format!("{}1", plan.fonts[0].name));
+}
+
+/// A Type3 face built for page 1 is reused on page 2, but page 2 already has a font under the
+/// name page 1 gave it: page 2's own font keeps its name, and the shared face is registered on
+/// page 2 under a free one that the plan carries for page 2's content. (The plan is written out
+/// by hand, so this runs without the craft-fonts build input.)
+#[test]
+fn a_reused_type3_face_never_replaces_a_later_page_s_font_of_the_same_name() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 6 0 R /Resources << /Font << /PCOcr 7 0 R >> >> >>",
+        &stream("", ""),
+        &stream("", "BT /PCOcr 12 Tf 72 700 Td (own) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let glyph = pdfcraft_fonts::GlyphOutline { contours: vec![vec![[0.1, 0.0], [0.9, 0.0], [0.5, 0.8]]], width: 1.0, bbox: [0.1, 0.0, 0.9, 0.8] };
+    let mut plan = pdfcraft_fonts::TextPlan::default();
+    plan.fonts.push(pdfcraft_fonts::PlannedType3 { family: "Test", glyphs: vec![('日', glyph)], name: String::new(), object: None });
+    let draw = |p: &pdfcraft_fonts::TextPlan| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes();
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, draw).unwrap();
+    assert_eq!(plan.fonts[0].name, "PCOcr", "free on page 1");
+    let face = plan.fonts[0].object.expect("built once");
+    stamp_with_fonts(&mut doc, 1, "OCR", &mut plan, draw).unwrap();
+    assert_ne!(plan.fonts[0].name, "PCOcr", "page 2 already has a PCOcr");
+    let page2 = &pdfcraft_model::pages(&doc)[1];
+    let res = doc.resolve(page2.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    assert_eq!(fonts.get(b"PCOcr").and_then(|o| o.as_ref()), Some(pdfcraft_cos::ObjRef::new(7, 0)), "page 2's own font keeps its name");
+    assert_eq!(fonts.get(plan.fonts[0].name.as_bytes()).and_then(|o| o.as_ref()), Some(face), "the shared face, under a free name");
+    assert_eq!(plan.fonts[0].object, Some(face), "still built once");
+}
+
+#[test]
+fn planned_type3_charproc_has_valid_metrics_and_encloses_its_ink() {
+    let glyph = pdfcraft_fonts::GlyphOutline {
+        contours: vec![vec![[-0.1001, -0.2001], [0.9001, 1.1001]]],
+        width: 0.8,
+        bbox: [-0.1001, -0.2001, 0.9001, 1.1001],
+    };
+    let parsed = pdfcraft_content::parse(&text::glyph_path(&glyph));
+    assert_eq!(parsed.skipped, 0);
+    let metrics = &parsed.ops[0];
+    assert!(metrics.is("d1"));
+    assert_eq!(metrics.operands.len(), 6);
+    assert_eq!((metrics.num(0), metrics.num(1)), (Some(800.0), Some(0.0)));
+    assert_eq!((metrics.num(2), metrics.num(3), metrics.num(4), metrics.num(5)), (Some(-101.0), Some(-201.0), Some(901.0), Some(1101.0)));
 }
 
 #[test]
