@@ -1267,6 +1267,18 @@ fn a_taken_back_neutral_beside_latin_text_keeps_its_place() {
     v.push(em_box("A", x - 13.0, 0.0, x - 6.5, 11.0));
     v.push(em_box("B", x - 6.5, 0.0, x, 11.0));
     assert_eq!(layout(v).plain_text(), "שלום (AB");
+    // A number reads as right-to-left beside a neutral: a question mark taken back over the space after "15", drawn in
+    // reverse order, still ends the line with no space before it.
+    let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("?", 9.9, 0.0, 15.0, 11.0)];
+    v.push(em_box("1", 15.0, 0.0, 20.5, 11.0));
+    v.push(em_box("5", 20.5, 0.0, 26.0, 11.0));
+    v.push(em_box(" ", 26.0, 0.0, 29.5, 11.0));
+    let mut x = 29.5;
+    for c in ["ף", "י", "ע", "ס"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim_end(), "סעיף 15?");
 }
 
 /// A mark drawn between a space and the letter taken back over it does not keep them apart: the space still ends the
@@ -1289,6 +1301,17 @@ fn a_mark_between_a_space_and_its_taken_back_letter_keeps_the_space_before_both(
     };
     assert_eq!(line(12.0).trim_end(), "מבקר המדינה\u{5B8}");
     assert_eq!(line(9.95).trim_end(), "מבקר המדינה\u{5B8}");
+    // PDFBOX-5487's Arabic: a tanwin pulled back over the space, and the alef it sits on starting at the space's own
+    // start, so x order puts the alef after the space.
+    let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("\u{64B}", 9.5, 0.0, 16.3, 11.0), em_box("ا", 10.0, 0.0, 12.8, 11.0)];
+    let mut x = 12.8;
+    for c in ["ر", "ي", "ر", "ق", "ت"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    v.push(em_box("ي", 3.0, 0.0, 6.0, 11.0));
+    v.push(em_box("ف", 6.0, 0.0, 9.5, 11.0));
+    assert_eq!(layout(v).plain_text().trim_end(), "تقريراً في");
 }
 
 /// Two taken-back spaces on one line each stay before their letter, and a second space drawn before a taken-back one

@@ -343,8 +343,8 @@ const TAKEN_BACK_SCAN: usize = 8;
 /// and the letter keep drawing order, which puts each mark after its letter once the line is reversed, as Unicode
 /// stores it. Only a right-to-left letter or a neutral (punctuation, a symbol) after the blank counts: left-to-right
 /// text has no reverse-order show strings, and in scanned pages' invisible text layers its spaces overlap letters at
-/// random. A neutral counts only inside right-to-left text: the nearest glyph with a strong direction before it, and
-/// the nearest after the blank, is right-to-left or the line's edge. A parenthesis that opens Latin text then stays
+/// random. A neutral counts only inside right-to-left text: the nearest letter or number before it, and the nearest
+/// after the blank, is right-to-left (numbers count as such beside neutrals) or the line's edge. A parenthesis that opens Latin text then stays
 /// where x order puts it, as on a line without right-to-left text. A glyph that only touches the blank's start was
 /// drawn beside it, as text set letter by letter leftwards is, and x order already reads it right. A blank that a
 /// glyph placed before them also reaches over sits inside a cluster (a letter and the marks drawn on it), where its
@@ -353,12 +353,13 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
     let glyph = |placed: &[usize], p: usize| placed.get(p).and_then(|&i| glyphs.get(i)).copied();
     let blank = |g: &TextGlyph| !g.text.is_empty() && g.text.chars().all(char::is_whitespace);
     let mark = |g: &TextGlyph| !g.text.is_empty() && g.text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM);
-    // Some(true) for right-to-left text, Some(false) for left-to-right text (Latin letters, European digits), None for
-    // a glyph without a strong direction.
+    // The direction a glyph gives the text around it: Some(false) for left-to-right letters, Some(true) for
+    // right-to-left letters and for numbers, which read as right-to-left beside neutrals (UAX #9 N1, as in
+    // `reverse_rtl`), None for a glyph without one.
     let strong = |g: &TextGlyph| {
-        if g.text.chars().any(|c| c.is_alphanumeric() && !is_rtl(c)) {
+        if g.text.chars().any(|c| c.is_alphabetic() && !is_rtl(c)) {
             Some(false)
-        } else if g.text.chars().any(|c| c.is_alphanumeric()) {
+        } else if g.text.chars().any(char::is_alphanumeric) {
             Some(true)
         } else {
             None
@@ -395,29 +396,34 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
             }
         }
         let Some(ink) = next.filter(|&i| glyphs.get(i).is_some_and(|g| !mark(g))) else { continue };
-        // The marks drawn between them, wherever x order put them next to the blank, go with them.
-        let between = |i: usize| i > space && i < ink;
-        let mut q = p.checked_sub(1);
-        for _ in 0..TAKEN_BACK_SCAN {
-            match q.and_then(|q| placed.get(q)) {
-                Some(&i) if between(i) => q = q.and_then(|q| q.checked_sub(1)),
+        // The glyphs x order put next to the blank that were drawn after it, up to and including the letter: the
+        // letter and the marks drawn between them, on either side of the blank.
+        let drawn_with = |i: usize| i > space && i <= ink;
+        let mut q = p;
+        for _ in 0..=TAKEN_BACK_SCAN {
+            match q.checked_sub(1).and_then(|k| placed.get(k)) {
+                Some(&i) if drawn_with(i) => q -= 1,
                 _ => break,
             }
         }
-        let Some(q) = q.filter(|&q| placed.get(q) == Some(&ink)) else { continue };
         let mut r = p;
-        for _ in 0..TAKEN_BACK_SCAN {
-            match r.checked_add(1).and_then(|r| placed.get(r)) {
-                Some(&i) if between(i) => r += 1,
+        for _ in 0..=TAKEN_BACK_SCAN {
+            match r.checked_add(1).and_then(|k| placed.get(k)) {
+                Some(&i) if drawn_with(i) => r += 1,
                 _ => break,
             }
+        }
+        if q == p || !placed.get(q..=r).is_some_and(|group| group.contains(&ink)) {
+            continue;
         }
         let Some(g) = glyphs.get(ink).copied() else { continue };
         let width = s.rect[2] - s.rect[0];
         let covered = g.rect[2].min(s.rect[2]) - s.rect[0];
         let taken_back = g.rect[0] <= s.rect[0] && width > 0.0 && covered >= 0.5 * width;
         let alone = q.checked_sub(1).and_then(|b| glyph(placed, b)).is_none_or(|before| before.rect[2] <= s.rect[0]);
+        // A left-to-right letter or a European digit after the blank never moves; a neutral moves inside right-to-left text.
         let direction = match strong(g) {
+            _ if g.text.chars().any(|c| c.is_alphanumeric() && !is_rtl(c)) => false,
             Some(rtl) => rtl,
             None => rtl_side(placed, q.checked_sub(1), |p| p.checked_sub(1)) && rtl_side(placed, r.checked_add(1), |p| p.checked_add(1)),
         };
