@@ -338,8 +338,15 @@ fn tab_delimited(t: &str) -> Result<Vec<(String, Vec<String>)>, DataError> {
 }
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
-/// (detected from the content).
+/// (detected from the content). All or nothing: on an error `doc` is left as it was.
 pub fn import(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+    let mut work = doc.clone();
+    let report = import_into(&mut work, bytes)?;
+    *doc = work;
+    Ok(report)
+}
+
+fn import_into(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let report = if bytes.starts_with(b"%FDF") {
         import_fdf(doc, bytes)?
     } else {

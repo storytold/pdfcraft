@@ -37,7 +37,11 @@ const ASCII_DATA_LIMIT: usize = 4096;
 /// XFDF has no appearance state (`/AS`), so where `/N`, `/R` or `/D` holds one stream per state
 /// only the selected state's stream is written (ISO 32000-2 §12.5.5: `/AS` picks it); a normal
 /// appearance with no selected stream has nothing to draw and nothing is written.
-pub(crate) fn encode(doc: &Document, d: &Dict) -> Option<String> {
+///
+/// `budget` is what the export may still write (decoded XML), shared by all of its comments, as
+/// import reads at most [`MAX_IMPORT_APPEARANCE_BYTES`]: an appearance past it is left out rather
+/// than written for import to skip. It is charged for what is written.
+pub(crate) fn encode(doc: &Document, d: &Dict, budget: &mut usize) -> Option<String> {
     if !has_appearance(doc, d) {
         return None;
     }
@@ -55,13 +59,15 @@ pub(crate) fn encode(doc: &Document, d: &Dict) -> Option<String> {
             }
         }
     }
-    let mut writer = Writer { doc, out: String::new(), values: MAX_VALUES, path: Vec::new() };
+    let limit = MAX_APPEARANCE_BYTES.min(*budget);
+    let mut writer = Writer { doc, out: String::new(), values: MAX_VALUES, path: Vec::new(), limit };
     writer.dict(Some(b"AP"), &ap, 0)?;
     // The checks while writing leave room for the closing tags and line breaks: the finished XML
     // must fit what the reader accepts, or the comment would arrive without its appearance.
-    if writer.out.len() > MAX_APPEARANCE_BYTES {
+    if writer.out.len() > limit {
         return None;
     }
+    *budget = budget.saturating_sub(writer.out.len());
     let b64 = base64::engine::general_purpose::STANDARD.encode(writer.out.as_bytes());
     // Line breaks every 76 characters, as base 64 text usually has them; the reader skips them.
     let mut wrapped = String::with_capacity(b64.len() + b64.len() / 76 + 1);
@@ -80,6 +86,8 @@ struct Writer<'a> {
     values: usize,
     /// The references being written, so a reference back to one of them ends the cycle.
     path: Vec<ObjRef>,
+    /// At most this much XML.
+    limit: usize,
 }
 
 impl Writer<'_> {
@@ -88,7 +96,7 @@ impl Writer<'_> {
     }
 
     fn spend(&mut self, depth: usize) -> Option<()> {
-        if depth > MAX_NESTING || self.out.len() > MAX_APPEARANCE_BYTES {
+        if depth > MAX_NESTING || self.out.len() > self.limit {
             return None;
         }
         self.values = self.values.checked_sub(1)?;
@@ -151,7 +159,7 @@ impl Writer<'_> {
             Object::Dict(d) => self.dict(key, d, depth)?,
             Object::Stream(s) => {
                 // The data plus its hexadecimal form must fit what is left of the budget.
-                if s.raw.len().saturating_mul(2).saturating_add(self.out.len()) > MAX_APPEARANCE_BYTES {
+                if s.raw.len().saturating_mul(2).saturating_add(self.out.len()) > self.limit {
                     return None;
                 }
                 self.out.push_str(&format!("<STREAM{k}>\n"));
@@ -218,7 +226,8 @@ pub(crate) enum Node {
 
 /// Read the text of an `<appearance>` element: base 64, then the XML it holds. `budget` is what
 /// the import may still read (decoded bytes) and is charged. The result is the `/AP` dictionary,
-/// with a normal appearance (`/N`) that is a stream or a dictionary of streams.
+/// with a normal appearance (`/N`) that is one stream: XFDF has no appearance state (`/AS`), so a
+/// dictionary of states would leave nothing selected to draw (ISO 32000-2 §12.5.5).
 pub(crate) fn decode(text: &str, budget: &mut usize) -> Result<Node, String> {
     let limit = MAX_APPEARANCE_BYTES.min(*budget);
     // Base 64 is 4 characters for 3 bytes: refuse a text that decodes past the limit before
@@ -250,14 +259,7 @@ pub(crate) fn decode(text: &str, budget: &mut usize) -> Result<Node, String> {
     let mut values = MAX_VALUES;
     let node = read(root, 0, &mut values)?;
     let usable = match &node {
-        Node::Dict(entries) => entries.iter().any(|(k, v)| {
-            k.as_slice() == b"N"
-                && match v {
-                    Node::Stream(..) => true,
-                    Node::Dict(states) => !states.is_empty() && states.iter().all(|(_, s)| matches!(s, Node::Stream(..))),
-                    _ => false,
-                }
-        }),
+        Node::Dict(entries) => entries.iter().any(|(k, v)| k.as_slice() == b"N" && matches!(v, Node::Stream(..))),
         _ => false,
     };
     if !usable {

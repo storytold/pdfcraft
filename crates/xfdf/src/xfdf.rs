@@ -357,7 +357,7 @@ fn annotation_names(doc: &Document, pages: &[pdfcraft_model::Page], only: Option
 
 /// The elements inside a comment's XFDF element: its text (plain and rich), default appearance
 /// and style, ink, vertices, appearance (with `ap`) and pop-up (on page `pi`).
-fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap: bool) {
+fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap: Option<&mut usize>) {
     let rc = text_of(doc, d, b"RC");
     match text_of(doc, d, b"Contents") {
         Some(c) => {
@@ -386,7 +386,9 @@ fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap
     if let Some(ds) = text_of(doc, d, b"DS") {
         let _ = write!(out, "<defaultstyle>{}</defaultstyle>", esc(&ds));
     }
-    if ap && let Some(b64) = super::appearance::encode(doc, d) {
+    if let Some(budget) = ap
+        && let Some(b64) = super::appearance::encode(doc, d, budget)
+    {
         let _ = write!(out, "<appearance>{b64}</appearance>");
     }
     let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
@@ -428,6 +430,8 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
     // NM of every annotation, for inreplyto. A selected annotation without one (other tools
     // leave /NM out) gets a name for this export, so a reply copied with it still finds it.
     let names = annotation_names(doc, &pages, only);
+    // What the import reads of appearances, over all of the comments.
+    let mut appearance_budget = super::appearance::MAX_IMPORT_APPEARANCE_BYTES;
     for (pi, p) in pages.iter().enumerate() {
         for (ai, a) in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default().into_iter().enumerate() {
             if only.is_some_and(|only| !only.contains(&(pi, ai))) {
@@ -516,7 +520,7 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
             // XFDF 3.0 carries a stamp's appearance, and none for a rect with no area; a copy and
             // paste (`own`) carries every comment's, so the copy looks the same.
             let has_area = rect.len() == 4 && rect[0] != rect[2] && rect[1] != rect[3];
-            xfdf_annot_children(doc, out, &d, pi, has_area && (own || sub == b"Stamp"));
+            xfdf_annot_children(doc, out, &d, pi, (has_area && (own || sub == b"Stamp")).then_some(&mut appearance_budget));
             let _ = writeln!(out, "</{tag}>");
         }
     }
@@ -980,7 +984,10 @@ fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
     };
     let source = rich.document().input_text();
     let Some(markup) = source.get(first.range().start..last.range().end) else { return };
-    let markup = if elements.len() == 1 { standalone(rich, markup) } else { markup.to_string() };
+    let markup = match elements.as_slice() {
+        [only] => standalone(rich, *only, markup),
+        _ => markup.to_string(),
+    };
     // Rich text is an XML document of its own; export left its declaration out.
     d.set(b"RC".to_vec(), PdfString::text(&format!("<?xml version=\"1.0\"?>{markup}")));
     if !has_contents {
@@ -988,30 +995,51 @@ fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
     }
 }
 
-/// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML document of
-/// its own: the namespace prefixes it uses but inherits from the XFDF around it are declared on
-/// it. Unchanged when it stands alone already, or when the declarations would not make it parse.
-fn standalone(rich: roxmltree::Node, markup: &str) -> String {
-    if parse_form_xml(markup).is_ok() {
-        return markup.to_string();
-    }
+/// Whether start tag `tag` declares attribute `name` (white space may come before the `=`).
+fn declares(tag: &str, name: &str) -> bool {
+    tag.match_indices(name).any(|(i, _)| {
+        let before = tag.get(..i).and_then(|b| b.chars().next_back());
+        let after = tag.get(i + name.len()..).map(str::trim_start);
+        before.is_some_and(char::is_whitespace) && after.is_some_and(|a| a.starts_with('='))
+    })
+}
+
+/// The one element `markup` (`element`, cut out of `rich`, a `<contents-richtext>`) as an XML
+/// document of its own: the namespaces it inherits from the XFDF around it are declared on it,
+/// the default one (XHTML declared on `<contents-richtext>`, say; not XFDF's own, which a
+/// standalone document has no use for) and the prefixes it uses. Unchanged when nothing is
+/// inherited, or when the declarations would not make it parse.
+fn standalone(rich: roxmltree::Node, element: roxmltree::Node, markup: &str) -> String {
     // The start tag's name ends at white space, `/` or `>`.
     let Some(name_end) = markup.get(1..).and_then(|t| t.find(|c: char| c.is_whitespace() || c == '/' || c == '>')).map(|i| i + 1) else {
         return markup.to_string();
     };
     let start_tag = markup.get(..markup.find('>').unwrap_or(markup.len())).unwrap_or(markup);
     let mut declared = String::new();
+    if let Some(uri) = element.tag_name().namespace()
+        && !markup.get(1..name_end).is_some_and(|n| n.contains(':'))
+        && uri != XFDF_NS
+        && !declares(start_tag, "xmlns")
+    {
+        let _ = write!(declared, " xmlns=\"{}\"", esc(uri));
+    }
     for ns in rich.namespaces() {
         let Some(prefix) = ns.name() else { continue };
-        if prefix == "xml" || !markup.contains(&format!("{prefix}:")) || start_tag.contains(&format!("xmlns:{prefix}=")) {
+        if prefix == "xml" || !markup.contains(&format!("{prefix}:")) || declares(start_tag, &format!("xmlns:{prefix}")) {
             continue;
         }
         let _ = write!(declared, " xmlns:{prefix}=\"{}\"", esc(ns.uri()));
+    }
+    if declared.is_empty() {
+        return markup.to_string();
     }
     let (Some(head), Some(tail)) = (markup.get(..name_end), markup.get(name_end..)) else { return markup.to_string() };
     let fixed = format!("{head}{declared}{tail}");
     if parse_form_xml(&fixed).is_ok() { fixed } else { markup.to_string() }
 }
+
+/// XFDF's own namespace (ISO 19444-1).
+const XFDF_NS: &str = "http://ns.adobe.com/xfdf/";
 
 /// Put an annotation dictionary on a page, replacing one with the same `/NM`. Returns its
 /// reference.
@@ -1064,6 +1092,24 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
                 _ => {
                     d.remove(b"QuadPoints");
                 }
+            }
+        }
+        // The outline is drawn inside /Rect: it is grown to hold every quad, so the whole area
+        // the mark removes shows (a /Rect with no area would show none of it).
+        let quads: Vec<f64> =
+            d.get(b"QuadPoints").and_then(Object::as_array).map(|q| q.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
+        if !quads.is_empty() {
+            let rect = rect_strict(doc, d.get(b"Rect"));
+            let start = rect.map(|[x0, y0, x1, y1]| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
+            let bounds = quads
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .fold(start, |b, [x, y]| Some(b.map_or([*x, *y, *x, *y], |[l, bo, r, t]| [l.min(*x), bo.min(*y), r.max(*x), t.max(*y)])));
+            if let Some(b) = bounds
+                && Some(b) != rect
+            {
+                d.set(b"Rect".to_vec(), arr(&b));
             }
         }
     }
@@ -1163,7 +1209,18 @@ pub fn import_comments(
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
 ) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, page, fresh, offset.filter(|o| o.iter().all(|v| v.is_finite())), super::appearance::MAX_IMPORT_APPEARANCE_BYTES)
+    // Into a copy, kept only when the whole import succeeds.
+    let mut work = doc.clone();
+    let report = import_xfdf_with(
+        &mut work,
+        text,
+        page,
+        fresh,
+        offset.filter(|o| o.iter().all(|v| v.is_finite())),
+        super::appearance::MAX_IMPORT_APPEARANCE_BYTES,
+    )?;
+    *doc = work;
+    Ok(report)
 }
 
 pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {

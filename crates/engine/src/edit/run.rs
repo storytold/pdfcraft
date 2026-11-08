@@ -162,12 +162,22 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
-/// What a comment import left out of comments it did import (an appearance it could not read, so
-/// the comment is drawn from its other entries), in the repair log: said, not slipped in.
+/// What a comment import left out of comments it did import (an appearance it could not read),
+/// in the repair log as one line: said, not slipped in.
 fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
-    for why in &report.skipped {
-        doc.note_repair(format!("imported comment {why}; its appearance was left out and it is drawn from its other entries"));
+    if report.skipped.is_empty() {
+        return;
     }
+    let shown: Vec<&str> = report.skipped.iter().take(5).map(String::as_str).collect();
+    let more = report.skipped.len().saturating_sub(shown.len());
+    let more = if more > 0 { format!("; and {more} more") } else { String::new() };
+    doc.note_repair(format!(
+        "imported {} comment{} without the appearance the file gave {} (PdfCraft draws it where it can; it may look different or not show): {}{more}",
+        report.skipped.len(),
+        if report.skipped.len() == 1 { "" } else { "s" },
+        if report.skipped.len() == 1 { "it" } else { "them" },
+        shown.join("; ")
+    ));
 }
 
 /// Dates and unique ids stamped onto what an edit creates.

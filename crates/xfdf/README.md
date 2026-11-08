@@ -30,7 +30,10 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   PdfCraft always draws) and otherwise draws the comment and records the reason in
   `Report::skipped` (the engine puts it in the repair log); it refuses one over 16 MiB, 64 MiB per
   import, 64 nesting levels or 100,000 values. Export leaves out one past those limits or whose
-  rect has no area; where `/AS` selects one of several states, the selected stream is written.
+  rect has no area, and stops at the 64 MiB an import reads; where `/AS` selects one of several
+  states, the selected stream is written (and import, with no `/AS` in XFDF, refuses a normal
+  appearance of several states). Import and FDF import are all or nothing: on an error the
+  document is left as it was.
 - **FDF**: fields (with `/Kids` hierarchies) and indirect comments. Nested annotation values
   are copied under FDF object numbers; shared references and cycles remain shared. A stamp's appearance
   (`/AP`, with the forms and images it draws) is copied, as in XFDF, and an `/AP` in the file comes

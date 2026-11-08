@@ -535,6 +535,10 @@ fn unreadable_appearances_are_skipped_recorded_and_drawn_again() {
         ("a bad number", b64(r#"<DICT KEY="AP"><STREAM KEY="N"><FIXED KEY="X" VAL="nan"/><DATA ENCODING="ASCII">q Q</DATA></STREAM></DICT>"#)),
         ("a DTD", b64(r#"<!DOCTYPE d [<!ENTITY a "aaaa">]><DICT KEY="AP"><STREAM KEY="N"><DATA ENCODING="ASCII">&a;</DATA></STREAM></DICT>"#)),
         ("too deep", b64(&deep)),
+        (
+            "states with none selected",
+            b64(r#"<DICT KEY="AP"><DICT KEY="N"><STREAM KEY="On"><DATA ENCODING="ASCII">q Q</DATA></STREAM></DICT></DICT>"#),
+        ),
     ] {
         let mut dst = pages(1);
         let report = import(&mut dst, appearance_xfdf(&inner, "square").as_bytes()).unwrap_or_else(|e| panic!("{why}: {e}"));
@@ -817,7 +821,7 @@ fn an_exported_appearance_always_fits_what_import_reads() {
     let mut src = pages(1);
     content_stamp(&mut src, "big", vec![0u8; (appearance::MAX_APPEARANCE_BYTES / 2) - 4096]);
     let d = named(&src, "big");
-    if let Some(text) = appearance::encode(&src, &d) {
+    if let Some(text) = appearance::encode(&src, &d, &mut appearance::MAX_IMPORT_APPEARANCE_BYTES.clone()) {
         let mut budget = appearance::MAX_IMPORT_APPEARANCE_BYTES;
         appearance::decode(&text, &mut budget).expect("what export writes, import reads");
     }
@@ -891,6 +895,7 @@ fn the_selected_appearance_state_is_what_xfdf_carries() {
 fn a_chain_of_forms_comes_back_whole_from_fdf_or_is_refused() {
     let chain = |forms: usize| {
         let mut src = pages(1);
+        put(&mut src, annot("Text", "first", [10.0, 10.0, 30.0, 30.0]));
         let mut inner = src.add(Object::Stream(Stream { dict: Dict::new(), raw: b"%innermost".to_vec().into() }));
         for _ in 0..forms {
             let mut xo = Dict::new();
@@ -910,18 +915,23 @@ fn a_chain_of_forms_comes_back_whole_from_fdf_or_is_refused() {
         export_fdf(&src, true, false, "src.pdf").unwrap()
     };
     let mut dst = pages(1);
-    import(&mut dst, &chain(20)).unwrap();
+    import(&mut dst, &chain(60)).unwrap();
     let d = named(&dst, "chain");
     let mut at = dst.resolve(sub_dict(&dst, &d, b"AP").get(b"N").unwrap());
-    for level in 0..20 {
+    for level in 0..60 {
         let Object::Stream(s) = at.as_ref() else { panic!("level {level}: {at:?}") };
         let fm = sub_dict(&dst, &sub_dict(&dst, &s.dict, b"Resources"), b"XObject").get(b"Fm").cloned().unwrap_or(Object::Null);
         at = dst.resolve(&fm);
     }
     let Object::Stream(innermost) = at.as_ref() else { panic!("the innermost form was lost: {at:?}") };
     assert_eq!(innermost.raw.as_ref(), b"%innermost");
-    let err = import(&mut pages(1), &chain(80)).unwrap_err();
+    let mut dst = pages(1);
+    let before = dst.add(Object::Null);
+    let err = import(&mut dst, &chain(80)).unwrap_err();
     assert!(err.to_string().contains("nest more than"), "{err}");
+    // All or nothing: the note before the stamp, and the forms copied so far, are not left behind.
+    assert_eq!(dst.add(Object::Null).num, before.num + 1);
+    assert!(xfdf::find_by_name(&dst, "first").is_none());
 }
 
 /// A `/P` an FDF comment holds points into the FDF; it is replaced, and nothing it reaches is
@@ -1005,7 +1015,9 @@ fn an_imported_redaction_mark_is_drawn_even_when_cloudy_or_undrawable() {
         let d = named(&dst, "x");
         let n = dst.resolve(sub_dict(&dst, &d, b"AP").get(b"N").unwrap());
         let Object::Stream(n) = n.as_ref() else { panic!("{extra}: no appearance") };
-        assert_ne!(n.decoded().unwrap(), b"%nothing", "{extra}");
+        let drawn = n.decoded().unwrap();
+        assert_ne!(drawn, b"%nothing", "{extra}");
+        assert!(String::from_utf8_lossy(&drawn).contains("h S"), "{extra}: the outline is stroked: {}", String::from_utf8_lossy(&drawn));
         assert!(!d.contains(b"BE"), "{extra}");
         // The file's appearance was not read in at all.
         for num in before.num..dst.add(Object::Null).num {
@@ -1047,4 +1059,70 @@ fn a_long_dash_array_comes_back() {
     put(&mut src, d);
     let (_, dst) = round_trip_xfdf(&src);
     assert_eq!(f64s(&dst, sub_dict(&dst, &named(&dst, "sq"), b"BS").get(b"D")), dashes);
+}
+
+/// Export stops writing appearances where import would stop reading them, so every appearance
+/// written comes back.
+#[test]
+fn export_writes_no_more_appearance_than_import_reads() {
+    let mut src = pages(1);
+    content_stamp(&mut src, "a", b"0 0 m 1 1 l S".to_vec());
+    let d = named(&src, "a");
+    let mut probe = usize::MAX;
+    let one = appearance::encode(&src, &d, &mut probe).unwrap();
+    let size = usize::MAX - probe;
+    let mut budget = size * 3 / 2;
+    assert_eq!(appearance::encode(&src, &d, &mut budget), Some(one));
+    assert_eq!(appearance::encode(&src, &d, &mut budget), None, "past what import reads");
+}
+
+/// A page an FDF stamp's appearance reaches (its /Type a reference here) is not copied in with
+/// its contents.
+#[test]
+fn an_fdf_appearance_that_reaches_a_page_copies_no_page_in() {
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [2 0 R] >> >>\nendobj\n\
+2 0 obj\n<< /Type /Annot /Subtype /Stamp /Rect [10 10 60 60] /NM (s) /Page 0 /AP << /N 3 0 R >> >>\nendobj\n\
+3 0 obj\n<< /Subtype /Form /BBox [0 0 1 1] /PieceInfo 4 0 R /Length 3 >>\nstream\nq Q\nendstream\nendobj\n\
+4 0 obj\n<< /Type 6 0 R /Contents 5 0 R >>\nendobj\n\
+5 0 obj\n<< /Length 11 >>\nstream\npagecontent\nendstream\nendobj\n\
+6 0 obj\n/Page\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut dst = pages(1);
+    let before = dst.add(Object::Null);
+    import(&mut dst, fdf).unwrap();
+    for num in before.num..dst.add(Object::Null).num {
+        if let Object::Stream(s) = dst.get(ObjRef::new(num, 0)).as_ref() {
+            assert_ne!(s.raw.as_ref(), b"pagecontent", "the page's contents were copied in");
+        }
+    }
+    let n = dst.resolve(sub_dict(&dst, &named(&dst, "s"), b"AP").get(b"N").unwrap());
+    let Object::Stream(n) = n.as_ref() else { panic!("no appearance") };
+    assert!(matches!(n.dict.get(b"PieceInfo"), None | Some(Object::Null)), "{:?}", n.dict.get(b"PieceInfo"));
+}
+
+/// Rich text keeps the default (XHTML) namespace it inherits from `<contents-richtext>`, and a
+/// prefix it redeclares with spaces around `=` is not declared twice.
+#[test]
+fn rich_text_keeps_an_inherited_default_namespace() {
+    let xml = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/" xmlns:a="urn:a" xmlns:b="urn:b"><annots>
+<text page="0" rect="10,10,30,30" name="d"><contents>hi</contents><contents-richtext xmlns="http://www.w3.org/1999/xhtml"><body><p>hi</p></body></contents-richtext></text>
+<text page="0" rect="40,10,60,30" name="w"><contents>hi</contents><contents-richtext><body xmlns="http://www.w3.org/1999/xhtml" xmlns:a = "urn:a2" a:x="1" b:y="2"><p>hi</p></body></contents-richtext></text>
+</annots></xfdf>"#;
+    let mut dst = pages(1);
+    import(&mut dst, xml.as_bytes()).unwrap();
+    let rc = text(&dst, &named(&dst, "d"), b"RC").unwrap();
+    let parsed = common::parse_form_xml(&rc).unwrap();
+    assert_eq!(parsed.root_element().tag_name().namespace(), Some("http://www.w3.org/1999/xhtml"), "{rc}");
+    let rc = text(&dst, &named(&dst, "w"), b"RC").unwrap();
+    assert!(common::parse_form_xml(&rc).is_ok(), "{rc}");
+    assert!(!rc.contains(r#"xmlns:a="urn:a""#), "{rc}");
+}
+
+/// A redaction mark whose /Rect has no area shows its quads all the same: the /Rect grows to hold
+/// them.
+#[test]
+fn a_redaction_marks_rect_holds_its_quads() {
+    let xml = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><redact page="0" name="r" rect="50,50,50,50" coords="10,40,90,40,10,20,90,20"/></annots></xfdf>"#;
+    let mut dst = pages(1);
+    import(&mut dst, xml.as_bytes()).unwrap();
+    assert_eq!(f64s(&dst, named(&dst, "r").get(b"Rect")), vec![10.0, 20.0, 90.0, 50.0]);
 }

@@ -11287,7 +11287,12 @@ fn imported_bookmarks_undo_in_one_step() {
 fn a_comment_imported_without_its_appearance_is_said_in_the_repair_log() {
     let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><stamp page="0" name="st" rect="10,10,110,60" icon="Draft"><appearance>@@@not base 64@@@</appearance></stamp></annots></xfdf>"#;
     let said = |s: &Session, id: DocId| {
-        s.get(id).unwrap().repair_log().iter().filter(|l| l.contains("imported comment st: the appearance is not base 64")).count()
+        s.get(id)
+            .unwrap()
+            .repair_log()
+            .iter()
+            .filter(|l| l.contains("imported 1 comment without the appearance") && l.contains("st: the appearance is not base 64"))
+            .count()
     };
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::ImportData { name: "notes.xfdf".into(), bytes: Arc::new(xfdf.as_bytes().to_vec()) }).unwrap();

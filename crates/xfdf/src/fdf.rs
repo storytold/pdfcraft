@@ -413,6 +413,10 @@ fn deep(
             copy?
         }
         Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, dst, x, depth + 1, path, budget)).collect::<Result<_, _>>()?),
+        // A page or page tree the comment reaches is the file's, not the comment's: copied in, it
+        // would bring its contents along (as export, which nulls them; `resolve` bounds the hops
+        // of an indirect /Type).
+        Object::Dict(d) if d.get(b"Type").is_some_and(|t| matches!(src.resolve(t).as_name(), Some(b"Page" | b"Pages"))) => Object::Null,
         Object::Dict(d) => {
             Object::Dict(d.iter().map(|(k, v)| Ok((k.clone(), deep(src, dst, v, depth + 1, path, budget)?))).collect::<Result<_, DataError>>()?)
         }
