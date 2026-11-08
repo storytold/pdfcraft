@@ -369,6 +369,39 @@ fn other_shares_and_devices_are_refused_by_name() {
     }
 }
 
+/// A device name is refused with `--root` and without, as with the roots: joined to the
+/// canonicalized root (`\\?\…`) it was created as a file Explorer can neither open nor delete,
+/// and without a root it wrote into the device, `NUL` swallowing the document. Reading is refused
+/// too, with a root and without.
+#[cfg(windows)]
+#[test]
+fn device_names_are_refused_with_a_root_and_without() {
+    let base = folders("devices");
+    let names = ["aux.pdf", "NUL.pdf", "nul .pdf", "nul:.pdf", "COM¹.pdf", "conin$.pdf"];
+    let mut rooted = McpServer::new(Automation::new().with_root(base.join("in2")).unwrap());
+    let mut free = McpServer::new(Automation::new());
+    for server in [&mut rooted, &mut free] {
+        ok(server, "doc_open", json!({"path": s(&base.join("in2/c.pdf"))}));
+    }
+    for name in names {
+        refused(&mut rooted, "doc_save", json!({"doc": 1, "path": name}), "reserved device names");
+        refused(&mut free, "doc_save", json!({"doc": 1, "path": s(&base.join("in2").join(name))}), "reserved device names");
+        refused(&mut rooted, "doc_open", json!({"path": name}), "reserved device names");
+        refused(&mut free, "doc_open", json!({"path": s(&base.join("in2").join(name))}), "reserved device names");
+    }
+    // A path naming the device itself, by its prefix: with a root it is outside it anyway, and
+    // without one it is refused like the names above.
+    for device in [r"\\.\NUL", r"\\?\NUL", r"\\.\COM1"] {
+        refused(&mut rooted, "doc_save", json!({"doc": 1, "path": device}), "reserved device names");
+        refused(&mut free, "doc_save", json!({"doc": 1, "path": device}), "reserved device names");
+        refused(&mut free, "doc_open", json!({"path": device}), "reserved device names");
+    }
+    // Listed through `\\?\`, which shows such a file if one was made.
+    let listed: Vec<String> =
+        std::fs::read_dir(base.join("in2").canonicalize().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(listed, ["c.pdf"]);
+}
+
 #[test]
 fn without_roots_nothing_is_confined() {
     let base = folders("none");

@@ -214,6 +214,13 @@ fn names_from_documents_become_one_plain_file_name() {
     }
     assert_eq!(child(&dir, "ok.png"), dir.join("ok.png"));
     assert_eq!(child(&dir, "../x.png"), dir.join(".._x.png"));
+    // A Windows device name, here from documents named `NUL.v1`, `aux` and `COM¹`, gets a `_`.
+    assert_eq!(child(&dir, "NUL.v1_page_1.png"), dir.join("_NUL.v1_page_1.png"));
+    assert_eq!(child(&dir, "aux.pdf"), dir.join("_aux.pdf"));
+    assert_eq!(child(&dir, "COM¹.pdf"), dir.join("_COM¹.pdf"));
+    // The device part ends at the first dot, so these name ordinary files.
+    assert_eq!(child(&dir, "COM¹-page1.pdf"), dir.join("COM¹-page1.pdf"));
+    assert_eq!(child(&dir, "console.pdf"), dir.join("console.pdf"));
 }
 
 #[cfg(windows)]

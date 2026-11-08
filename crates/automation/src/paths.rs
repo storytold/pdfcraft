@@ -1,5 +1,6 @@
 use super::error::{Result, failed};
 use super::{Automation, Path, PathBuf, StagingName, file_access, foreign_share, staging_suffixes};
+use pdfcraft_platform::file_names::is_windows_device_name;
 
 impl Automation {
     // ---- paths -------------------------------------------------------------------------------
@@ -18,8 +19,11 @@ impl Automation {
 
     /// [`resolve`](Self::resolve) with the kind of access named, for the places where a file that
     /// is only read may still be missing (a path checked up front, whose absence is reported per
-    /// file later). The automation roots, if any, get the last word.
+    /// file later). On Windows a device name (`NUL`, `aux.pdf`, `COM¹`) is refused first, with a
+    /// root or without ([`file_access::refuse_device_names`]). The automation roots, if any, get
+    /// the last word.
     pub(crate) fn resolve_for(&self, path: &str, access: file_access::Access, may_be_missing: bool) -> Result<PathBuf> {
+        file_access::refuse_device_names(path, Path::new(path)).map_err(failed)?;
         let target = self.resolve_in_root(path, may_be_missing)?;
         self.check_roots(path, &target, access)?;
         Ok(target)
@@ -106,9 +110,14 @@ pub(crate) fn lexical(path: &Path) -> Option<PathBuf> {
 /// The file `name` inside `dir`, where `name` comes from a document or an argument: separators,
 /// colons (a Windows drive or stream) and control characters become `_`, and a name of only dots
 /// gets a leading `_`, so it is one plain file name and can't lead out of `dir`.
+///
+/// A Windows device name (`NUL.v1_page_1.png`, from a document named `NUL.v1`) gets a leading
+/// `_` too, as the desktop app's attachment names do. Written as given, it reaches the device,
+/// or, through a root's `\\?\` form, makes a file that Explorer can neither open nor delete.
+/// Prefixed on every system, so the files can be copied to Windows.
 pub(crate) fn child(dir: &Path, name: &str) -> PathBuf {
     let mut safe: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '_' } else { c }).collect();
-    if safe.chars().all(|c| c == '.') {
+    if safe.chars().all(|c| c == '.') || is_windows_device_name(&safe) {
         safe.insert(0, '_');
     }
     dir.join(safe)

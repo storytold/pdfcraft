@@ -21,8 +21,10 @@
 //! files it was given; they don't guard against other programs on the computer.
 
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
+
+use pdfcraft_platform::file_names::is_windows_device_name;
 
 /// Read access or write access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,10 +137,37 @@ fn absolute(shown: &str, path: &Path) -> Result<PathBuf, String> {
         return Err("automation path rejected: path is empty".into());
     }
     // Checked as given: making `…\NUL` absolute gives the device path `\\.\NUL` on Windows.
-    if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if is_device_name(&n.to_string_lossy()))) {
+    refuse_device_names(shown, path)?;
+    std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
+}
+
+/// On Windows, an error naming `shown` when `path` names a device ([`is_windows_device_name`]),
+/// in a component (`out\NUL.pdf`) or in its prefix (`\\.\NUL`, `\\?\COM1`).
+///
+/// A plain name reaches the device rather than a file, or, joined to a folder written as `\\?\…`
+/// (as a canonicalized `--root` is), is created as a file that other programs can neither open
+/// nor delete by its plain path. A prefix names the device itself. Other device paths
+/// (`\\.\pipe\x`, `\\.\PhysicalDrive0`) are left to the roots, which refuse every device namespace
+/// by name; without a root nothing else is confined.
+pub(crate) fn refuse_device_names(shown: &str, path: &Path) -> Result<(), String> {
+    if cfg!(windows) && path.components().any(names_a_device) {
         return Err(format!("automation path rejected: reserved device names are not allowed: {shown}"));
     }
-    std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
+    Ok(())
+}
+
+/// Whether `component` names a Windows device: a plain name (`NUL.pdf`), or the device of a
+/// `\\.\NUL` or `\\?\NUL` prefix. Prefixes only occur in Windows paths.
+fn names_a_device(component: Component<'_>) -> bool {
+    let name = match component {
+        Component::Normal(name) => name,
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::DeviceNS(name) | Prefix::Verbatim(name) => name,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    is_windows_device_name(&name.to_string_lossy())
 }
 
 /// `absolute` with its links followed; for a path that doesn't exist (yet), its nearest existing
@@ -215,13 +244,6 @@ pub(crate) fn foreign_share(path: &Path, root: &Path) -> bool {
         Some(format!("{kind}\\{}\\{}", a.to_string_lossy(), b.to_string_lossy()).to_lowercase())
     }
     share(path).is_some_and(|s| share(root).as_ref() != Some(&s))
-}
-
-/// A Windows device name (`CON`, `NUL`, `COM1`… also with an extension), which names no file.
-fn is_device_name(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
-    let numbered = |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
 }
 
 #[cfg(test)]
@@ -381,8 +403,29 @@ mod tests {
         let e = roots.check(&s(base.join("out/NUL")), Access::Write).unwrap_err();
         assert!(e.contains("reserved device names"), "{e}");
         assert!(roots.check(&s(base.join("out/com1.txt")), Access::Write).is_err());
+        // The superscript digits name a port too.
+        let e = roots.check(&s(base.join("out/COM¹.pdf")), Access::Write).unwrap_err();
+        assert!(e.contains("reserved device names"), "{e}");
+        // A colon ends the device part too: `nul:.pdf` is the device, not a stream of a file.
+        let e = roots.check(&s(base.join("out/nul:.pdf")), Access::Write).unwrap_err();
+        assert!(e.contains("reserved device names"), "{e}");
         assert_eq!(roots.check(&s(base.join("out/console.txt")), Access::Write), Ok(()));
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A device named by a path's prefix is refused like one named by a component: `\\.\NUL`
+    /// and `\\?\NUL` are the device itself. Other device paths, and drives or shares written
+    /// with a prefix, are left to the roots.
+    #[cfg(windows)]
+    #[test]
+    fn devices_named_by_a_prefix_are_refused() {
+        for path in [r"\\.\NUL", r"\\.\com1", r"\\?\nul", r"\\?\LPT1", r"\\.\NUL\x.pdf"] {
+            let e = refuse_device_names(path, Path::new(path)).unwrap_err();
+            assert!(e.contains("reserved device names"), "{path}: {e}");
+        }
+        for path in [r"\\.\pipe\x", r"\\.\C:\a.pdf", r"\\?\C:\x\a.pdf", r"\\?\UNC\host\share\a.pdf", r"\\host\share\a.pdf", r"C:\x\a.pdf"] {
+            assert_eq!(refuse_device_names(path, Path::new(path)), Ok(()), "{path}");
+        }
     }
 
     /// Every file a tool reads or writes goes through `Automation::resolve`, which holds it to the
