@@ -103,8 +103,10 @@ config works across the suite) keep the agent to the folders you give it:
 - `--root DIR` still works and can be combined with these flags. Both then apply: a path must be
   inside `--root` and inside the matching automation root.
 
-`pdfcraft-cli mcp` always runs the session in its own process (there is no flag to connect it to a
-running app), so the roots cover every server it starts. The desktop app is not confined by them.
+Without `--connect`, `pdfcraft-cli mcp` runs the session in its own process, so the roots cover
+every server it starts. In connected mode (`--connect FILE`), `--root DIR` is forwarded to the
+window, but `--automation-read-root` and `--automation-write-root` are not supported yet and are
+refused at start.
 
 What the roots do not cover: tools that take no path still read and change the open documents, and
 `text_extract` and the other inspection tools return their content. Keychain and Windows
@@ -158,3 +160,55 @@ resources and their templates are preserved.
 Unknown top-level argument keys are refused with JSON-RPC `-32602` (invalid params) instead of
 being ignored, so a misspelled argument is reported rather than silently dropped. Clients that
 sent extra keys before get an error now.
+
+## Connected mode: the open window
+
+`pdfcraft-cli mcp --connect FILE [--root DIR] [--compact]` works on the desktop app started with
+`pdfcraft --control FILE` instead of a session of its own:
+
+- **Every tool and resource acts on the window's documents.** Each call goes to the window's
+  control method `tool.call {name, arguments, root?}`, which runs the same tool table on the
+  window's session between frames, like a menu command, and draws what changed. `doc` ids are the
+  window's (`doc_list`, `ui_state`); a document a tool opens or makes gets a tab behind the
+  person's. Each authenticated connection keeps its own paragraph listings and OCR review
+  context. List a page with `text_paragraphs` before editing/rendering by paragraph number.
+  Another connection's listing cannot renumber your targets; an outside edit or bounded-state
+  eviction requires a fresh listing/review. `--root` confines paths, including a save destination
+  inherited from an already-open document, as it does headless; `--automation-read-root` and
+  `--automation-write-root` are not supported yet with `--connect`.
+- **Read-only window inspection**: `ui_state`, `ui_inspect` and `ui_screenshot` (an image) are
+  listed in normal and compact mode. MCP inspection uses the protected `tool.inspect` boundary
+  rather than the existing trusted UI driver's `ui.inspect`. MCP does not expose UI input or menu commands: those could
+  bypass path confinement or make a signature without the person's click. Use document tools
+  for edits. Inspection and captures are refused while a signing or password dialog is open.
+- **Left to the person**: all `sign_*` calls, `fill_sign_add` with a signature or initials,
+  embedded signature-image export (`comment_image_preview`), `redact_apply`, `doc_close`,
+  `edit_undo` and `edit_redo` are
+  refused in the window, including through `command_run` and `command_batch`. An agent may add
+  a signature field, text and dates, or redaction marks; the person reviews and signs/applies in
+  the app. No signing credentials are accepted by these connected tools. Headless mode keeps
+  its existing signing and history behavior. Connected history is refused because its snapshots
+  may belong to the person and may restore a signature; no agent-specific history provenance
+  has been established. Use Undo/Redo in the window yourself.
+- **Security**: the control file is checked as `pdfcraft-cli ui` checks it (a regular file of
+  yours, owner-only permissions on Unix, no link) and read again at each reconnection. The
+  token goes only to `127.0.0.1`. No port is opened by the CLI. A lost, malformed or timed-out
+  reply is never automatically replayed: it may already have changed the document. Inspect
+  `ui_state`/`doc_info` before deciding whether to retry; a later call reconnects.
+  On Windows this check does not validate file ACLs: keep the control file in a directory only
+  your account can write. Once connected, tools run with the desktop process's permissions;
+  permitted file operations do not ask for a separate confirmation on every call. Configure
+  `--root` to restrict file access; edits to already-open documents are a separate capability.
+- **Typing is preserved**: if a window editor has uncommitted text (comments included), a queued edit or an open dialog, document
+  tools refuse with guidance to finish typing and close the dialog first. A tool never saves an older field value
+  behind the editor or overwrites the person's draft. Changed documents invalidate cached
+  rendering and stale object/field selections; the active tab and reader's place are kept.
+- **When the window isn't there**, the server still starts (a missing control file is reported
+  on stderr) and each tool answers how to start the app; a control file others can read is
+  refused at start.
+- **Limits**: a tool runs on the window's thread, so a long one (OCR, optimizing) holds the window
+  up, and the control channel gives up after 30 s (the tool may still finish). A hidden,
+  minimized or locked window may draw no frames: screenshots then fail after 5 s, and
+  requests can wait until it is drawn again.
+
+Ask Agent (`wait_for_request`, `reply_to_request`) is not part of this bridge.

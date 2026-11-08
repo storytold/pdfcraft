@@ -4,7 +4,8 @@
 //! - [`Automation`] is a tool set over an engine [`Session`]: open, inspect, render, extract and
 //!   find text, edit pages and metadata, undo/redo, save, combine, extract and split. Every tool
 //!   has a JSON Schema ([`tools`]) and takes and returns JSON, so the same table drives the MCP
-//!   server ([`mcp`]), `pdfcraft-cli run` and (later) the UI control channel.
+//!   server ([`mcp`]), `pdfcraft-cli run` and the UI control channel ([`window`]: the open window
+//!   runs the same tools on its own documents).
 //! - Pages are **1-based** in every tool, as people number them. Rectangles are in PDF points
 //!   with the origin at the top-left of the displayed page.
 //! - An optional root directory confines every path a tool reads or writes. Separately,
@@ -35,6 +36,8 @@ mod redact;
 mod signing;
 mod text_cache;
 mod tools;
+#[cfg(feature = "mcp")]
+pub mod window;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -82,10 +85,49 @@ struct OcrReview {
     pages: Vec<pdfcraft_engine::ocr::OcrPage>,
 }
 
+/// Conversation state owned by one authenticated window connection, separate from render
+/// caches. It is lent with the session and restored even when a tool fails.
+#[cfg(feature = "mcp")]
+#[derive(Default)]
+pub struct ConnectedState {
+    listed: HashMap<(DocId, usize), Vec<BlockKey>>,
+    evicted: HashSet<DocId>,
+    ocr_reviews: HashMap<DocId, OcrReview>,
+    next_ocr_review: u64,
+    versions: HashMap<DocId, u64>,
+}
+
+#[cfg(feature = "mcp")]
+impl ConnectedState {
+    fn discard_stale(&mut self, session: &Session) {
+        self.ocr_reviews.retain(|_, review| session.stale_reason(&review.guard).is_none());
+        let stale: Vec<_> = self
+            .versions
+            .iter()
+            .filter(|(id, revision)| session.get(**id).is_none_or(|doc| doc.edit_generation() != **revision))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            self.listed.retain(|(doc, _), _| *doc != id);
+            self.evicted.remove(&id);
+            self.ocr_reviews.remove(&id);
+            self.versions.remove(&id);
+        }
+    }
+
+    fn remember_versions(&mut self, session: &Session) {
+        let documents: HashSet<_> = self.listed.keys().map(|(id, _)| *id).chain(self.ocr_reviews.keys().copied()).collect();
+        self.versions = documents.into_iter().filter_map(|id| session.get(id).map(|doc| (id, doc.edit_generation()))).collect();
+    }
+}
+
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
     session: Session,
     root: Option<PathBuf>,
+    /// Enforce the connected-window policy on every dispatch, including nested commands.
+    #[cfg(feature = "mcp")]
+    window_policy: bool,
     /// The read and write folders of `--automation-read-root` / `--automation-write-root`.
     roots: Option<Arc<file_access::AutomationRoots>>,
     /// Synchronous renderers, rebuilt when a document's working bytes change.
@@ -98,6 +140,8 @@ pub struct Automation {
     /// Documents that lost a listing to the cap. A page of one with no listing is refused rather
     /// than read as "a number is a position", which the page may no longer match.
     evicted: HashSet<DocId>,
+    /// Connected clients must list a page before addressing its paragraphs by number.
+    requires_listing: bool,
     /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
     ocr_reviews: HashMap<DocId, OcrReview>,
     next_ocr_review: u64,
@@ -115,10 +159,13 @@ impl Automation {
             session: Session::new(),
             root: None,
             roots: None,
+            #[cfg(feature = "mcp")]
+            window_policy: false,
             renderers: HashMap::new(),
             texts: TextCache::default(),
             listed: HashMap::new(),
             evicted: HashSet::new(),
+            requires_listing: false,
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
         }
@@ -162,6 +209,87 @@ impl Automation {
 
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// The folder every path is confined to, if any (`--root`).
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// Run the tool `name` on someone else's `session`, such as the open window's, so the
+    /// tools act on the documents the person sees (their ids are the session's). The session is
+    /// lent for the call and always handed back, also when the tool panics (that is reported as
+    /// a failure). `root`, when given, confines paths as [`Self::with_root`] does. Caches
+    /// (renderers, page text) last for the call only, since the owner may change the documents
+    /// between calls.
+    #[cfg(feature = "mcp")]
+    pub fn run_on(session: &mut Session, root: Option<&Path>, name: &str, args: &Value) -> Result<Vec<Content>> {
+        Self::run_on_with_state(session, &mut ConnectedState::default(), root, name, args)
+    }
+
+    /// Run a connected call with the same connection's listing/review state. Render caches
+    /// remain per-call; retained state is invalidated after another editor changes a document.
+    #[cfg(feature = "mcp")]
+    pub fn run_on_with_state(
+        session: &mut Session,
+        state: &mut ConnectedState,
+        root: Option<&Path>,
+        name: &str,
+        args: &Value,
+    ) -> Result<Vec<Content>> {
+        Self::run_lent(session, state, root, |lent| lent.call(name, args))
+    }
+
+    #[cfg(feature = "mcp")]
+    fn run_lent(
+        session: &mut Session,
+        state: &mut ConnectedState,
+        root: Option<&Path>,
+        run: impl FnOnce(&mut Self) -> Result<Vec<Content>>,
+    ) -> Result<Vec<Content>> {
+        state.discard_stale(session);
+        let mut lent = Self {
+            session: std::mem::take(session),
+            listed: std::mem::take(&mut state.listed),
+            evicted: std::mem::take(&mut state.evicted),
+            ocr_reviews: std::mem::take(&mut state.ocr_reviews),
+            next_ocr_review: state.next_ocr_review,
+            requires_listing: true,
+            #[cfg(feature = "mcp")]
+            window_policy: true,
+            ..Self::new()
+        };
+        let confined = match root {
+            Some(r) => lent.with_root_in_place(r),
+            None => Ok(()),
+        };
+        let out = confined.and_then(|()| match pdfcraft_engine::guard(|| run(&mut lent)) {
+            Ok(result) => result,
+            Err(problem) => {
+                lent.listed.clear();
+                lent.evicted.clear();
+                lent.ocr_reviews.clear();
+                Err(failed(format!("internal error: {problem}; list the page or start OCR review again")))
+            }
+        });
+        *session = std::mem::take(&mut lent.session);
+        lent.ocr_reviews.retain(|_, review| session.stale_reason(&review.guard).is_none());
+        state.listed = std::mem::take(&mut lent.listed);
+        state.evicted = std::mem::take(&mut lent.evicted);
+        state.ocr_reviews = std::mem::take(&mut lent.ocr_reviews);
+        state.next_ocr_review = lent.next_ocr_review;
+        state.remember_versions(session);
+        out
+    }
+
+    #[cfg(feature = "mcp")]
+    fn with_root_in_place(&mut self, root: &Path) -> Result<()> {
+        let canonical = root.canonicalize().map_err(|e| failed(format!("--root {}: {e}", root.display())))?;
+        if !canonical.is_dir() {
+            return Err(failed(format!("--root {}: the root must be a folder", root.display())));
+        }
+        self.root = Some(canonical);
+        Ok(())
     }
 
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`

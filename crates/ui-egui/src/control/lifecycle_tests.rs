@@ -266,7 +266,7 @@ fn a_request_expired_in_the_channel_is_never_dispatched_or_deferred() {
         let mut host = ReadinessHost::new(ready);
         let (reply, waiting) = channel();
         let since = web_time::Instant::now().checked_sub(std::time::Duration::from_secs(10)).unwrap();
-        client.tx.send(ControlRequest { since, method: "ui.state".into(), params: json!({}), reply }).unwrap();
+        client.tx.send(ControlRequest { since, connection: 0, method: "ui.state".into(), params: json!({}), reply }).unwrap();
         control.tick(&ctx, &mut host);
         let error = waiting.try_recv().expect("expired channel request replies on the first tick").expect_err("expired request cannot dispatch");
         assert!(error.contains(if ready { "finished starting" } else { "still starting" }), "{error}");
