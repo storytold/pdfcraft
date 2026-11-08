@@ -28,13 +28,15 @@ const PROBE: char = '\u{0627}';
 const DEVANAGARI_PROBE: char = '\u{0915}';
 /// Gurmukhi letter ka: selecting a filename alone must not accept a face from another script.
 const GURMUKHI_PROBE: char = '\u{0A15}';
-/// Recognized Noto Gurmukhi filenames in distribution layouts and fontconfig directories.
+/// Recognized Noto and Lohit Gurmukhi filenames in distribution layouts and fontconfig directories.
 const UNIX_GURMUKHI_FILES: &[&str] = &[
     "google-noto/NotoSansGurmukhi-Regular.ttf",
     "truetype/noto/NotoSansGurmukhi-Regular.ttf",
     "noto/NotoSansGurmukhi-Regular.ttf",
     "google-noto-vf/NotoSansGurmukhi[wdth,wght].ttf",
     "noto/NotoSansGurmukhi[wdth,wght].ttf",
+    "lohit-gurmukhi/Lohit-Gurmukhi.ttf",
+    "truetype/lohit-punjabi/Lohit-Gurmukhi.ttf",
 ];
 /// Telugu letter ka: the face must have it to cover Telugu.
 const TELUGU_PROBE: char = '\u{0C15}';
@@ -740,6 +742,33 @@ mod tests {
             eprintln!("{last_resort:?} is not installed on this machine — optional to the loader, so nothing to check");
         }
     }
+
+    /// Both distro paths and fontconfig selections retain Noto priority and filename filtering.
+    #[test]
+    fn lohit_gurmukhi_candidates_follow_noto_in_unix_layouts() {
+        let noto_files = [
+            "google-noto/NotoSansGurmukhi-Regular.ttf",
+            "truetype/noto/NotoSansGurmukhi-Regular.ttf",
+            "noto/NotoSansGurmukhi-Regular.ttf",
+            "google-noto-vf/NotoSansGurmukhi[wdth,wght].ttf",
+            "noto/NotoSansGurmukhi[wdth,wght].ttf",
+        ];
+        let lohit_files = ["lohit-gurmukhi/Lohit-Gurmukhi.ttf", "truetype/lohit-punjabi/Lohit-Gurmukhi.ttf"];
+        let standard = unix_candidates(UNIX_GURMUKHI_FILES, &[]);
+        let mut expected = Vec::new();
+        for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+            expected.extend(noto_files.iter().chain(lohit_files.iter()).map(|file| Path::new(root).join(file)));
+        }
+        assert_eq!(standard, expected, "Lohit follows the unchanged Noto order in each standard root");
+
+        let noto = PathBuf::from("/custom/fonts/NotoSansGurmukhi-Regular.ttf");
+        let lohit = PathBuf::from("/custom/fonts/Lohit-Gurmukhi.ttf");
+        let unrelated = PathBuf::from("/custom/fonts/Lohit-Devanagari.ttf");
+        let installed = [lohit.clone(), unrelated, noto.clone(), lohit.clone()];
+        expected.extend([noto, lohit]);
+        assert_eq!(unix_candidates(UNIX_GURMUKHI_FILES, &installed), expected, "configured faces keep priority and are deduplicated");
+    }
+
     /// Exercise the same filename allowlist/path selector on Windows without claiming Unix execution.
     #[test]
     fn fourth_review_gurmukhi_unix_and_macos_candidates() {
