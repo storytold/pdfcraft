@@ -9167,26 +9167,35 @@ fn an_update_cut_off_before_its_trailer_shows_its_pages_as_the_model_reads_them(
     assert_eq!(size, (300, 150), "and its new first page");
 }
 
-/// The same update with its footer, and a file with data after `%%EOF` that holds no object (a
-/// web page glued to a served file), are read through their tables as before: the second has a
-/// stale copy of its page that only a rebuild would show. A
-/// cut-off update that ends within the footer window leaves the older `startxref` near the end,
-/// which the model reads too: both keep the older revision there.
+/// The same update with its footer is read through its table as before: renderer and model both
+/// show its two pages.
 #[test]
-fn complete_updates_trailing_data_and_short_cut_off_updates_read_as_before() {
+fn a_complete_update_reads_as_before() {
     let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 5000, true));
-    assert_eq!((count, size, model), (2, (300, 150), 2), "a complete update");
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
 
+/// A file with data after `%%EOF` that holds no object (a web page glued to a served file) is read
+/// through its table as before, by the renderer and the model alike: the file has a stale copy of
+/// its page that only a rebuild would show.
+#[test]
+fn trailing_data_without_objects_reads_as_before() {
     let mut junk = one_page_file_with(true);
     junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj</p>");
     junk.extend(std::iter::repeat_n(b' ', 5000));
     junk.extend_from_slice(b"</html>\n");
-    let ((count, size), _) = renderer_and_model_pages(junk);
-    assert_eq!((count, size), (1, (200, 100)), "trailing data without objects");
-
-    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 100, false));
-    assert_eq!((count, size, model), (1, (200, 100), 1), "a short cut-off update");
+    let ((count, size), model) = renderer_and_model_pages(junk);
+    assert_eq!((count, size, model), (1, (200, 100), 1));
 }
+
+/// A cut-off update that ends within the footer window leaves the older `startxref` near the end,
+/// which the model reads too: both keep the older revision there.
+#[test]
+fn a_short_cut_off_update_reads_as_before() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 100, false));
+    assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
 /// A file cut short in the middle of its last update, whose new page tree names a page that is
 /// not there: the rebuilt table finds no page, so the older table is read and the file still
 /// opens with the page it had, rather than not at all.
