@@ -1949,3 +1949,151 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
+
+/// A 200 × 300 pt page with one line, from (50, 150) to (150, 150).
+fn one_line_pdf() -> Vec<u8> {
+    line_pages_pdf(1)
+}
+
+/// `pages` pages like [`one_line_pdf`]'s, sharing its content.
+fn line_pages_pdf(pages: usize) -> Vec<u8> {
+    let content = "1 w 50 150 m 150 150 l S";
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 4)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    objects.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 3 0 R /Resources << >> >>".to_string()));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    pdf
+}
+
+/// #6116: the snap marker shows where the first point will land, before any point is placed,
+/// as it does for the second.
+#[test]
+fn the_measure_snap_marker_shows_before_the_first_point() {
+    let mut h = harness(|app| {
+        app.open_bytes("plan.pdf", None, one_line_pdf()).unwrap();
+        app.set_option("zoom", "200").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+    });
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    // About a point off each end of the line (PDF y up), within the 6 px snap distance.
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0);
+    let label = |h: &Harness<'static, PdfCraftApp>| painted_text(h).into_iter().find(|(text, _, _)| text == "Endpoint").map(|(_, _, rect)| rect);
+    let marked = |h: &Harness<'static, PdfCraftApp>| label(h).is_some();
+    h.hover_at(at(51.0, 150.5));
+    h.run_steps(2);
+    assert!(h.state().views[0].measure.points.is_empty(), "nothing placed yet");
+    assert!(marked(&h), "the first point's snap is shown");
+    // It is drawn at the endpoint, its label beside it, not where the pointer is.
+    let (end, pointer) = (at(50.0, 150.0), at(51.5, 150.0));
+    h.hover_at(pointer);
+    h.run_steps(2);
+    let shown = label(&h).expect("the snap is shown");
+    assert!((shown.left() - (end.x + 10.0)).abs() < (shown.left() - (pointer.x + 10.0)).abs(), "{shown:?}, endpoint {end:?}, pointer {pointer:?}");
+    // Off the line, nothing to snap to: no marker.
+    h.hover_at(at(100.0, 250.0));
+    h.run_steps(2);
+    assert!(!marked(&h));
+    // The first point lands where the marker said, and the second still shows its own.
+    h.hover_at(at(51.0, 150.5));
+    h.run_steps(2);
+    h.drag_at(at(51.0, 150.5)); // press
+    h.drop_at(at(51.0, 150.5)); // release
+    h.run_steps(2);
+    let first = *h.state().views[0].measure.points.first().expect("the first point is placed");
+    assert!((first[0] - 50.0).abs() < 1e-6 && (first[1] - 150.0).abs() < 1e-6, "snapped to the endpoint: {first:?}");
+    h.hover_at(at(149.0, 149.5));
+    h.run_steps(2);
+    assert!(marked(&h), "the second point's snap is shown too");
+
+    // Every measuring tool shows it for its first point, and none does with snapping off.
+    for tool in ["measure-perimeter", "measure-area", "measure-calibrate", "measure-distance"] {
+        h.state_mut().set_option("quick", tool).unwrap();
+        h.hover_at(at(51.0, 150.5));
+        h.run_steps(2);
+        assert!(h.state().views[0].measure.points.is_empty(), "{tool}: a new tool starts with no points");
+        assert!(marked(&h), "{tool}: the first point's snap is shown");
+    }
+    h.state_mut().views[0].measure.snap_enabled = false;
+    h.hover_at(at(149.0, 149.5));
+    h.run_steps(2);
+    assert!(!marked(&h), "no marker without Snap to drawing");
+
+    // With a point placed on one page, the pointer over another snaps there and says so: the next
+    // click starts a measurement on that page.
+    let mut h = harness(|app| {
+        app.open_bytes("plans.pdf", None, line_pages_pdf(2)).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+    });
+    h.run_steps(4);
+    let at = |h: &Harness<'static, PdfCraftApp>, page: usize, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(page).expect("page on screen");
+        egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0)
+    };
+    let first = at(&h, 0, 100.0, 250.0);
+    h.hover_at(first);
+    h.run_steps(1);
+    h.drag_at(first); // press
+    h.drop_at(first); // release
+    h.run_steps(2);
+    assert_eq!((h.state().views[0].measure.page, h.state().views[0].measure.points.len()), (Some(0), 1));
+    let end = at(&h, 1, 50.0, 150.0);
+    h.hover_at(at(&h, 1, 51.0, 150.0));
+    h.run_steps(2);
+    let shown = label(&h).expect("the other page's snap is shown");
+    assert!((shown.left() - (end.x + 10.0)).abs() < 3.0 && (shown.bottom() - (end.y - 10.0)).abs() < 6.0, "{shown:?}, endpoint {end:?}");
+}
+
+/// #6116 review: Shift holds a point level or plumb with the measurement's last point, which only
+/// means something on that point's page. Over another page the point is where the pointer snaps,
+/// and the click that starts a measurement there places it exactly.
+#[test]
+fn shift_on_another_page_does_not_constrain_to_the_first_pages_points() {
+    let mut h = harness(|app| {
+        app.open_bytes("plans.pdf", None, line_pages_pdf(2)).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+    });
+    h.run_steps(4);
+    let at = |h: &Harness<'static, PdfCraftApp>, page: usize, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(page).expect("page on screen");
+        egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0)
+    };
+    let click = |h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2| {
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p); // press
+        h.drop_at(p); // release
+        h.run_steps(2);
+    };
+    // A first point on page 1, away from the line.
+    let p = at(&h, 0, 60.0, 250.0);
+    click(&mut h, p);
+    assert_eq!((h.state().views[0].measure.page, h.state().views[0].measure.points.len()), (Some(0), 1));
+    // Shift held, a click on page 2's endpoint starts there, on the endpoint.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    let p = at(&h, 1, 51.0, 150.5);
+    click(&mut h, p);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+    let m = &h.state().views[0].measure;
+    assert_eq!(m.page, Some(1));
+    let first = *m.points.first().expect("a point on page 2");
+    assert!((first[0] - 50.0).abs() < 1e-6 && (first[1] - 150.0).abs() < 1e-6, "on the endpoint, not held to page 1's point: {first:?}");
+}
