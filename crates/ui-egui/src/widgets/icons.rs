@@ -35,13 +35,24 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
+    styled_button(ui, name, box_size, selected, tooltip, None)
+}
+
+/// [`button`], with the glyph in `tint` rather than the theme's icon colour (an icon that shows a
+/// colour the user chose).
+pub fn tinted_button(ui: &mut egui::Ui, name: &str, box_size: f32, tooltip: &str, tint: Color32) -> Response {
+    styled_button(ui, name, box_size, false, tooltip, Some(tint))
+}
+
+fn styled_button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str, tint: Option<Color32>) -> Response {
     let t = Tokens::get(ui.ctx());
+    let icon = tint.unwrap_or(t.icon);
     // The shared button paints no fill of its own: the eased press wash below replaces it.
     let clear = |icon| ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon };
     let style = IconButtonStyle {
-        normal: clear(t.icon),
-        hovered: clear(t.icon),
-        pressed: Some(clear(t.icon)),
+        normal: clear(icon),
+        hovered: clear(icon),
+        pressed: Some(clear(icon)),
         selected: clear(t.accent_text),
         corner_radius: t.radius.into(),
         focus_stroke: Stroke::new(1.0, t.accent),

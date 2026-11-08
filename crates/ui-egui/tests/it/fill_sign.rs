@@ -381,6 +381,58 @@ fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
     }
 }
 
+/// Whether the Border popup's choice `label` is the current one.
+fn chosen(h: &Harness<'static, PdfCraftApp>, label: &str) -> bool {
+    h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+}
+
+/// Open the quick bar's Border popup, unless it is open. The button is labelled with the border.
+fn open_border(h: &mut Harness<'static, PdfCraftApp>) {
+    if h.query_by_label("None").is_none() {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.starts_with("Border:")))
+            .next()
+            .expect("the Border button")
+            .click();
+        h.run_steps(2);
+    }
+}
+
+/// #6644: Fill Text's Border is one button in the bar's column, with or without a border; its
+/// width, colour and shape are in a popup, which stays open while they are used.
+#[test]
+fn the_border_is_one_button_in_the_bar_and_its_controls_a_popup() {
+    use pdfcraft_engine::BorderShape;
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    // The bar's height settles over a few frames once the tool's controls appear.
+    h.run_steps(8);
+    let column = h.get_by_label("Select (V)").rect();
+    let in_column = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        let r = h.get_by_label(label).rect();
+        assert_eq!((r.width(), r.center().x), (column.width(), column.center().x), "{label}: {r:?}, column {column:?}");
+    };
+    in_column(&h, "Border: None");
+    let settings_y = h.get_by_label("Hotbar settings").rect().center().y;
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::ComboBox).count(), 0, "no box in the bar");
+    assert!(h.query_by_label("1 pt").is_none(), "its choices are in the popup");
+
+    open_border(&mut h);
+    h.get_by_label("1 pt").click();
+    h.run_steps(4);
+    assert_eq!(h.state().fill_text_border, 1.0);
+    assert!(h.query_by_label("Border colour").is_some(), "choosing a width leaves the popup open, with the colour");
+    h.get_by_label("Oval").click();
+    h.run_steps(4);
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Oval);
+    assert!(h.query_by_label("Border colour").is_some(), "choosing a shape leaves the popup open");
+
+    in_column(&h, "Border: 1 pt");
+    assert_eq!(h.get_by_label("Hotbar settings").rect().center().y, settings_y, "a border doesn't lengthen the bar");
+    click(&mut h, 300.0, 400.0);
+    h.run_steps(3);
+    assert!(h.query_by_label("1 pt").is_none(), "a click outside closes it");
+}
+
 /// With a placed text selected, the toolbar shows its own border, also after Comment Properties
 /// changed it, and changes only that text: the Border colour button gives its border its own
 /// colour ("Same as text" takes it back), and new text keeps the toolbar's own border.
@@ -398,9 +450,7 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
         (a.page, a.index)
     };
     let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
-    let shows = |h: &Harness<'static, PdfCraftApp>, value: &str| {
-        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
-    };
+    let shows = |h: &Harness<'static, PdfCraftApp>, value: &str| h.query_by_label(&format!("Border: {value}")).is_some();
     h.state_mut().views[0].comments.selected = Some((page, index));
     // As Comment Properties ▸ Thickness does.
     h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(2.0), endings: None });
@@ -408,15 +458,13 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
     assert!(shows(&h, "2 pt"), "the toolbar shows the selected text's border");
     assert_eq!(h.state().fill_text_border, 0.0, "new text keeps none");
 
-    h.get_by_label("Border colour").click();
-    h.run_steps(2);
+    open_border(&mut h);
     h.get_by_label("Red").click();
     h.run_steps(4);
     let red = Some([0.89, 0.13, 0.13]);
     assert_eq!(props(&h).border_color, red, "the selected text's border is red");
     assert_eq!(h.state().fill_text_border_color, None, "new text's border keeps the text's colour");
-    h.get_by_label("Border colour").click();
-    h.run_steps(2);
+    open_border(&mut h);
     h.get_by_label("Same as text").click();
     h.run_steps(4);
     assert_eq!(props(&h).border_color, None);
@@ -435,18 +483,11 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     h.run_steps(2);
+    open_border(&mut h);
     assert_eq!(h.query_all_by_label("Border shape").count(), 0, "no shape without a border");
     h.state_mut().fill_text_border = 1.0;
     h.run_steps(2);
-    // The shape control shows "Rectangle"; pick Circle for new text. It is the last of the text's
-    // controls, so in a vertical bar it may sit below the bar's end: scrolled to first, as by hand.
-    h.query_all_by_role(egui::accesskit::Role::ComboBox)
-        .find(|n| n.value().as_deref() == Some("Rectangle"))
-        .expect("the shape control")
-        .scroll_to_me();
-    h.run_steps(2);
-    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Rectangle")).expect("the shape control").click();
-    h.run_steps(2);
+    // The shape control shows "Rectangle"; pick Circle for new text.
     h.get_by_label("Circle").click();
     h.run_steps(2);
     assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle);
@@ -471,13 +512,8 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     // Selected, an oval from the toolbar: one undo step.
     h.state_mut().views[0].comments.selected = Some((page, index));
     h.run_steps(3);
-    h.query_all_by_role(egui::accesskit::Role::ComboBox)
-        .find(|n| n.value().as_deref() == Some("Circle"))
-        .expect("shows the text's own")
-        .scroll_to_me();
-    h.run_steps(2);
-    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Circle")).expect("shows the text's own").click();
-    h.run_steps(2);
+    open_border(&mut h);
+    assert!(chosen(&h, "Circle"), "shows the text's own");
     h.get_by_label("Oval").click();
     h.run_steps(4);
     assert_eq!(props(&h).border_shape, Some(BorderShape::Oval));
@@ -486,7 +522,8 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     // As Comment Properties does: the toolbar shows it.
     h.state_mut().apply_edit(pdfcraft_engine::Edit::BorderShapeAnnotation { page, index, shape: BorderShape::Rectangle });
     h.run_steps(3);
-    assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("Rectangle")), "the selected text's own");
+    open_border(&mut h);
+    assert!(chosen(&h, "Rectangle"), "the selected text's own");
 
     // The circle for new text lasts until PdfCraft quits; a saved default is read back.
     let mut restored = PdfCraftApp::new();
@@ -520,8 +557,7 @@ fn no_border_takes_the_oval_or_circle_away_too() {
     let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
     assert_eq!(props(&h).border_shape, Some(BorderShape::Circle));
     let no_border = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("1 pt")).expect("the Border control").click();
-        h.run_steps(2);
+        open_border(h);
         h.get_by_label("None").click();
         h.run_steps(4);
     };
@@ -552,7 +588,8 @@ fn fill_text_border_frames_new_and_selected_text() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     h.run_steps(2);
-    h.get_by_label("Border:");
+    open_border(&mut h);
+    h.get_by_label("Border");
     let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
         click(h, 50.0, y);
         h.event(egui::Event::Text("Same".into()));
@@ -579,11 +616,9 @@ fn fill_text_border_frames_new_and_selected_text() {
 
     // The plain text selected, then framed with 2 pt from the toolbar.
     h.state_mut().views[0].comments.selected = Some((page, index));
-    h.query_all_by_role(egui::accesskit::Role::ComboBox)
-        .find(|n| n.value().as_deref() == Some("1.5 pt"))
-        .expect("the Border control, showing the border for new text")
-        .click();
-    h.run_steps(2);
+    h.run_steps(3);
+    open_border(&mut h);
+    assert!(chosen(&h, "None"), "the popup shows the selected text's border, not new text's");
     h.get_by_label("2 pt").click();
     h.run_steps(4);
     assert_eq!(h.state().fill_text_border, 1.5, "new text keeps its own");

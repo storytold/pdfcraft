@@ -330,9 +330,9 @@ fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
 }
 
 /// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected
-/// text (`picked`), or for new text when none is selected. The label shows in a vertical bar, as the
-/// font size's does.
-fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>, vertical: bool) {
+/// text (`picked`), or for new text when none is selected: a button in the bar with a popup, as
+/// the font size has (#6644).
+fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>) {
     // The selected text's own border (Comment Properties may have changed it
     // since): the controls below show it and change only it. Without one they
     // set what new text gets until PdfCraft quits; Make Current Properties
@@ -349,43 +349,45 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
     let mut border = was;
     // A border around the text, in its colour; the text keeps its place.
     let border_label = |w: f64| if w > 0.0 { format!("{w} pt") } else { tl!("None").to_string() };
-    let label = vertical.then(|| ui.label(tl!("Border:")));
-    let combo = craft_ui::ComboBox::from_id_salt("fill-text-border")
-        .selected_text(border_label(was.width))
-        .width(72.0)
-        .show_ui(ui, |ui| {
+    // One button in the bar's column: the width, colour and shape controls would not fit it (#6644).
+    let tip = format!("{} {}", tl!("Border:"), border_label(was.width));
+    // Dashed with no border; with one, its shape in its colour. Always a Lucide glyph on the shared
+    // button, so it hovers, presses and weighs as the bar's other icons do.
+    let resp = if was.width > 0.0 {
+        let glyph = if was.shape == pdfcraft_engine::BorderShape::Rectangle { "square" } else { "circle" };
+        icons::tinted_button(ui, glyph, 32.0, &tip, comments::color32(was.color.unwrap_or(app.fill_text_color)))
+    } else {
+        icons::button(ui, "square-dashed", 32.0, false, &tip)
+    };
+    // Choices in the popup itself: a combo box or colour popup inside it is outside it to a click.
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(200.0);
+        let heading = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(text).font(theme::semibold(12.0)));
+        // The title has no colon, as the two below; catalogs have only the form with one.
+        heading(ui, tl!("Border:").trim_end_matches(|c: char| c == ':' || c == '\u{ff1a}' || c.is_whitespace()));
+        ui.horizontal_wrapped(|ui| {
             for w in crate::fill_sign::TEXT_BORDERS {
                 ui.selectable_value(&mut border.width, w, border_label(w));
             }
-        })
-        .response;
-    match label {
-        Some(label) => {
-            combo.labelled_by(label.id);
-        }
-        None => {
-            combo.on_hover_text(tl!("Border:"));
-        }
-    }
-    // The border's own colour (the text's unless picked).
-    if was.width > 0.0
-        && let Some(color) = comments::border_colour_button(ui, was.color, [0.0; 3])
-    {
-        border.color = color;
-    }
-    // Its shape: an oval or a circle goes around the text, which keeps its place.
-    if was.width > 0.0 {
-        craft_ui::ComboBox::from_id_salt("fill-text-border-shape")
-            .selected_text(tl!(was.shape.name()))
-            .width(96.0)
-            .show_ui(ui, |ui| {
+        });
+        if was.width > 0.0 {
+            // Its shape: an oval or a circle goes around the text, which keeps its place.
+            heading(ui, tl!("Border shape"));
+            ui.horizontal_wrapped(|ui| {
                 for shape in pdfcraft_engine::BorderShape::ALL {
                     ui.selectable_value(&mut border.shape, shape, tl!(shape.name()));
                 }
-            })
-            .response
-            .on_hover_text(tl!("Border shape"));
-    }
+            });
+            // The border's own colour (the text's unless picked).
+            heading(ui, tl!("Border colour"));
+            if ui.add(egui::Button::new(tl!("Same as text")).selected(was.color.is_none())).clicked() {
+                border.color = None;
+            }
+            if let Some(color) = comments::swatch_grid(ui, was.color) {
+                border.color = Some(color);
+            }
+        }
+    });
     // No border, no shape: an oval or a circle left without its line would
     // keep its box grown around a shape that isn't drawn.
     if border.width <= 0.0 {
@@ -462,7 +464,7 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
             app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
         }
         // After the text's own controls, so they keep their place in a bar that scrolls.
-        fill_text_border_controls(ui, app, selected_fill_text(app), vertical);
+        fill_text_border_controls(ui, app, selected_fill_text(app));
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
