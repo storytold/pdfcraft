@@ -1,7 +1,6 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
-    shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -102,9 +101,7 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     Ok(lines)
 }
 
-pub(super) fn is_thai(c: char) -> bool {
-    matches!(u32::from(c), 0x0E00..=0x0E7F)
-}
+pub(super) use pdfcraft_fonts::shaped_text::{Piece, is_thai};
 
 /// Arabic letters, marks, digits and punctuation: an item with any of them is shaped with the
 /// craft-fonts Arabic face.
@@ -184,13 +181,6 @@ fn mirrored(c: char) -> char {
     }
 }
 
-/// A piece of a line with shaped text, in drawing order.
-pub(super) enum Piece {
-    /// Shown in the item's own standard font.
-    Latin(String),
-    Shaped(Vec<ShapedCluster>),
-}
-
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
 pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
@@ -244,14 +234,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             });
         }
     }
-    let width = pieces
-        .iter()
-        .map(|p| match p {
-            Piece::Latin(s) => latin_width(t, s),
-            // Each cluster is shown on its own, so the spacing follows each once.
-            Piece::Shaped(clusters) => clusters.iter().map(|c| c.advance * t.size + t.char_spacing).sum::<f64>(),
-        })
-        .sum();
+    let width = pdfcraft_fonts::shaped_text::pieces_width(&pieces, t.size, t.char_spacing, |s, _| latin_width(t, s));
     Ok((pieces, width))
 }
 
@@ -282,13 +265,7 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
 }
 
 pub(super) fn thai_error(e: GlyphError, text: &str) -> EditError {
-    EditError::Invalid(match e {
-        GlyphError::NoFont => {
-            "Thai text needs a Thai font in this build; rebuild with CRAFT_FONTS_DIR pointing to craft-fonts with a Thai face".into()
-        }
-        GlyphError::Missing => format!("the Thai font can't show \"{text}\""),
-        GlyphError::TooComplex => "the Thai glyphs are too complex; use a shorter text box".into(),
-    })
+    EditError::Invalid(pdfcraft_fonts::shaped_text::thai_message(e, text))
 }
 
 /// The box a text item occupies (height from its lines).
