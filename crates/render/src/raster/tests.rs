@@ -596,12 +596,14 @@ fn dotted_token_with_a_refused_sign_run_reads_as_zero() {
     // an absent slot -- the model parser's real branch reads `---1.5abc` as 0.0 and
     // keeps the array, trailing garbage included, and `---280.0` is the same zero.
     use hayro_syntax::object::{Array, FromBytes, MaybeRef, Object};
-    for src in ["[---1.5abc 7]", "[---280.0 7]"] {
+    for src in ["[---1.5abc 7]", "[---280.0 7]", "[---1e400.5 7]"] {
         let a = Array::from_bytes(src.as_bytes()).unwrap();
         let items: Vec<_> = a.raw_iter().collect();
         assert_eq!(items.len(), 2, "{src}: {items:?}");
         assert!(matches!(items[0], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 0.0), "{src}: {:?}", items[0]);
         assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{src}: {:?}", items[1]);
+        // The typed read agrees: a `Rect` reads the same two numbers.
+        assert_eq!(a.iter::<f32>().collect::<Vec<_>>(), vec![0.0, 7.0], "{src}");
     }
 }
 #[test]

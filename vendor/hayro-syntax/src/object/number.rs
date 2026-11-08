@@ -113,6 +113,21 @@ impl Skippable for Number {
             _ => return None,
         }
 
+        // PdfCraft patch (39): an exponent tail can carry the dot (`---1e400.5`);
+        // a refused token is judged whole, as in `read_inner`, before the check
+        // below.
+        if refused && matches!(r.peek_byte(), Some(b'e' | b'E')) {
+            r.forward();
+            if matches!(r.peek_byte(), Some(b'+' | b'-')) {
+                r.forward();
+            }
+            let tail_start = r.offset();
+            r.forward_while(|b| b.is_ascii_digit() || b == b'.');
+            if r.range(tail_start..r.offset()).is_some_and(|t| t.contains(&b'.')) {
+                dotted = true;
+            }
+        }
+
         // See issue 994. Don't accept numbers that are followed by a regular character.
         if r.peek_byte().is_some_and(is_regular_character) {
             // PdfCraft patch (38): a refused sign run over a dotted body reads as
@@ -170,6 +185,16 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
         // here too, consuming the whole token as `Number::skip` does.
         let body_start = r.offset();
         r.forward_while(|b| b.is_ascii_digit() || b == b'-' || b == b'.');
+        // PdfCraft patch (39): the dot can sit past an exponent marker
+        // (`---1e400.5`); the model parser judges the whole token, so the scan
+        // follows the exponent before deciding (#6601 review).
+        if matches!(r.peek_byte(), Some(b'e' | b'E')) {
+            r.forward();
+            if matches!(r.peek_byte(), Some(b'+' | b'-')) {
+                r.forward();
+            }
+            r.forward_while(|b| b.is_ascii_digit() || b == b'.');
+        }
         let dotted = r.range(body_start..r.offset()).is_some_and(|t| t.contains(&b'.'));
         r.forward_while(is_regular_character);
         if dotted {
@@ -565,7 +590,8 @@ mod tests {
         // A refused run over a dotted body is the model parser's real branch: zero,
         // the whole token consumed, trailing garbage included (patch (38)). `-+5.5`
         // is the same case the object parser's real-prefix fallback reads as 0.0.
-        for src in ["---280.0", "---1.5abc", "-+5.5"] {
+        // The dot can also sit past an exponent marker (patch (39)).
+        for src in ["---280.0", "---1.5abc", "-+5.5", "---1e400.5"] {
             let mut r = Reader::new(src.as_bytes());
             assert_eq!(r.read_without_context::<f64>().unwrap(), 0.0, "{src}");
             assert!(r.at_end(), "{src}: the whole token was read");
