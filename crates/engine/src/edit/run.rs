@@ -148,6 +148,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::RemoveStandardId { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
+        | Edit::PrepareText { .. }
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
         | Edit::Flatten { .. }
@@ -198,6 +199,9 @@ pub(crate) struct EditCtx {
     /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
     /// removed the catalog's XMP packet.
     pub(crate) redaction_identification: pdfcraft_redact::Identification,
+    /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
+    /// [`Session::prepare_text`](crate::Session::prepare_text).
+    pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
 }
 
 impl EditCtx {
@@ -229,6 +233,7 @@ impl EditCtx {
             redaction_overlays: Vec::new(),
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
+            prepared: None,
         }
     }
 
@@ -733,6 +738,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
+        }
+        Edit::PrepareText { page } => {
+            let result = pdfcraft_edit::text::forms::prepare(doc, *page)?;
+            if result.expanded == 0 && result.repaired_fonts == 0 {
+                return Err(EditError::Invalid(
+                    result.refused.first().cloned().unwrap_or_else(|| "this page has no supported grouped text to prepare".into()),
+                ));
+            }
+            cx.prepared = Some(result);
         }
         Edit::RegisterTextFont { page, bytes } => {
             pdfcraft_edit::text::register_text_font(doc, *page, bytes)?;

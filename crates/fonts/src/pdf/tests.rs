@@ -892,3 +892,44 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
+
+#[test]
+fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without_replacing_the_program() {
+    use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+    let original = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let expected = skrifa::FontRef::new(original).unwrap().charmap().map('Ω').unwrap();
+    let mut subset = original.to_vec();
+    let count = u16::from_be_bytes(subset[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = subset[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    subset[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        subset[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    assert!(skrifa::FontRef::new(&subset).unwrap().cmap().is_err());
+    let mut doc = Document::new_empty();
+    let program = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &subset)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let mut gids = vec![0; 36];
+    gids[34..36].copy_from_slice(&(expected.to_u32() as u16).to_be_bytes());
+    let gids = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &gids)));
+    let mut descendant = Dict::new();
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    descendant.set(b"CIDToGIDMap".to_vec(), Object::Ref(gids));
+    let unicode = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), b"1 beginbfchar <0011> <03a9> endbfchar")));
+    let source = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(descendant)])),
+            ("ToUnicode", Object::Ref(unicode)),
+        ],
+    );
+    let editor = embedded_sfnt(&doc, &source).expect("the source outlines must be usable in the editor");
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+    let shaped = crate::source_shaping::shape(&editor, "Ω").expect("the rebuilt cmap must work in the actual shaping engine too");
+    assert_eq!(shaped.glyphs[0].id, expected);
+    let Object::Stream(saved) = doc.get(program).as_ref().clone() else { panic!("fixture") };
+    assert_eq!(saved.decoded().unwrap(), subset, "the source PDF font program stays byte-for-byte intact");
+}
