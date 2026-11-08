@@ -450,5 +450,8 @@ fn an_appearance_the_signed_signature_widget_shares_is_not_a_form_fill() {
     let own = signed("4 0 R");
     assert_eq!(verdict(&redrawn(&own).open(), own.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
     let shared = signed("6 0 R");
-    assert_refused(&redrawn(&shared).open(), shared.open(), 2);
+    // Not a comment either: P=3 refuses it too.
+    for p in [2, 3] {
+        assert_eq!(verdict(&redrawn(&shared).open(), shared.open(), Some(p)), Modification::Disallowed(vec![super::kind::OTHER]), "P={p}");
+    }
 }
