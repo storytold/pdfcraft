@@ -10159,6 +10159,20 @@ fn a_gap_inside_a_word_is_not_measured_as_a_space() {
     assert_eq!(tj_gaps(&page_content_bytes(&reopen(&doc), 0)), [-330.0]);
 }
 
+/// Two spaces between two words are drawn as one gap twice as wide as a space: the measure is of one
+/// space, or a space set into the line comes out two spaces wide.
+#[test]
+fn a_run_of_spaces_in_the_line_is_measured_as_one_space() {
+    // `F1` draws the two spaces between "ab" and "ba" (Helvetica, 278 thousandths each); `F2` has none.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf (  ) Tj /F2 12 Tf (ba) Tj ET");
+    let line = &text::text_lines(&doc, 0).unwrap()[0];
+    assert_eq!((line.text.as_str(), line.ink.len()), ("ab  ba", 2), "the fixture reads as two words and two spaces");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab ba ab").unwrap().substituted, None);
+    let gaps = tj_gaps(&page_content_bytes(&reopen(&doc), 0));
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert!(gaps.iter().all(|g| (g + 278.0).abs() < 15.0), "each space is one space wide, not two: {gaps:?}");
+}
+
 /// A single word has no gap to measure, so the guess stays.
 #[test]
 fn a_space_a_subset_cannot_show_is_a_guess_when_the_line_has_one_word() {

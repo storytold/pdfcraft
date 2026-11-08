@@ -633,7 +633,8 @@ const WORD_GAP_EMS: std::ops::Range<f64> = 0.05..1.0;
 
 /// How wide the gaps between the words of `lines` are, in ems, as the lines themselves draw them:
 /// the median distance from the box of one word to the next on an upright line, less the character
-/// spacing that follows a word (a gap set by [`source_show`] adds it back). `None` when the lines
+/// spacing that follows a word (a gap set by [`source_show`] adds it back), shared among the spaces
+/// the text has between them. `None` when the lines
 /// have no two words a gap apart.
 ///
 /// A producer that leaves the space out of a subset (pdfTeX writes its width as 0) sets word gaps
@@ -650,8 +651,21 @@ pub(crate) fn line_word_gap<'a>(lines: impl IntoIterator<Item = &'a TextLine>) -
             continue;
         }
         let tracking = line.origin.state.char_spacing / line.size;
-        for pair in line.ink.windows(2) {
-            let gap = (pair[1][0] - pair[0][2]) / em - tracking;
+        // The spaces the text has between one word and the next: a gap that holds two is two spaces wide.
+        let mut spaces: Vec<f64> = Vec::new();
+        let (mut run, mut after_word) = (0u32, false);
+        for c in line.text.chars() {
+            if c.is_whitespace() {
+                run = run.saturating_add(1);
+            } else {
+                if after_word && run > 0 {
+                    spaces.push(f64::from(run));
+                }
+                (run, after_word) = (0, true);
+            }
+        }
+        for (pair, spaces) in line.ink.windows(2).zip(spaces) {
+            let gap = ((pair[1][0] - pair[0][2]) / em - tracking) / spaces;
             if gap.is_finite() && WORD_GAP_EMS.contains(&gap) {
                 gaps.push(gap);
             }
