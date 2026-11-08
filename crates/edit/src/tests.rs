@@ -13761,7 +13761,8 @@ fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_aft
 /// The Unicode row breaks are invisible moves, not glyphs. A draft carrying them (text pasted
 /// from a browser or Word) breaks the row on both rewrite paths, rather than being refused
 /// because no fallback face has an outline for U+2028 (#6272). The paragraph is one wide row, so
-/// a break that was dropped would leave the words on one row instead of two.
+/// a break that was dropped would leave the words on one row instead of two. A one-line edit has
+/// no next row, so there each break is written as a space.
 #[test]
 fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
     let red = text::RangeStyle {
@@ -13776,12 +13777,21 @@ fn unicode_row_breaks_break_the_row_instead_of_needing_a_glyph() {
     };
     for separator in ['\u{2028}', '\u{2029}', '\u{0085}', '\u{000B}', '\u{000C}', '\u{001C}', '\u{001D}', '\u{001E}'] {
         let draft = format!("one{separator}two");
-        for style in [text::BlockStyle::default(), text::BlockStyle { ranges: vec![red.clone()], ..Default::default() }] {
+        for style in [
+            text::BlockStyle::default(),
+            text::BlockStyle { ranges: vec![red.clone()], ..Default::default() },
+            text::BlockStyle { bold: Some(true), ..Default::default() },
+        ] {
             let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
             text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
             let doc = reopen(&doc);
             let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
             assert_eq!(lines, ["one", "two"], "U+{:04X}", u32::from(separator));
         }
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::replace_line(&mut doc, 0, 0, &draft).unwrap_or_else(|e| panic!("U+{:04X}: {e}", u32::from(separator)));
+        let doc = reopen(&doc);
+        let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["one two"], "a one-line edit keeps U+{:04X} on its line", u32::from(separator));
     }
 }
