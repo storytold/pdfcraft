@@ -197,9 +197,20 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
         let Some(d) = node.as_dict() else { continue };
         // A kids array shared by reference is read once, and what is scheduled counts as visited:
         // nodes sharing one array can't multiply it.
-        if let Some(kids) =
-            d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(r.num))).map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())
-        {
+        // A `/Kids` reference is recorded as seen only when it resolves to an array: a reference
+        // to a dictionary is a node of its own, and skipping it here would drop its scripts.
+        if let Some(kids) = d.get(b"Kids").and_then(|k| {
+            if let Object::Ref(r) = k
+                && seen.contains(&r.num)
+            {
+                return None;
+            }
+            let array = doc.resolve(k).as_array().cloned()?;
+            if let Object::Ref(r) = k {
+                seen.insert(r.num);
+            }
+            Some(array)
+        }) {
             let room = 10_000usize.saturating_sub(visited + stack.len());
             stack.extend(kids.into_iter().take(room));
         }
