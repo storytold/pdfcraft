@@ -23,11 +23,14 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   printed this way went from 4.3 MB to 231 KB (Standard) and 161 KB (Mobile). Not merged yet:
   side-by-side tiles, rotated strips, masks. Content arrays use the shared space boundary
   policy, so trailing comments, split operands and graphics state keep their meaning after merging.
+  A page whose content doesn't decode, or is damaged partway, is left as it is: written again from
+  what decoded, it would lose the rest.
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
   through form XObjects, up to 12 deep; the smallest over all uses).
   Page-local `/UserUnit` scaling is included, so large-format pages are measured in physical inches.
   If a use can't be
-  measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a
+  measured (forms nested deeper or drawn too many times, or content that doesn't decode or is
+  damaged partway, which may draw an image larger past the damage), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
   stencil `/Mask` has its own resolution, so the picture changes under it and it stays as it is.
