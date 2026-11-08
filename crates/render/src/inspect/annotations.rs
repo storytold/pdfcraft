@@ -138,10 +138,12 @@ impl<'a> Inspector<'a> {
                     color = Some([f(i - 3), f(i - 2), f(i - 1)]);
                 }
             }
+            // Only usable quads, by the rule redaction apply reads them with (keep in step with
+            // `pdfcraft_annot::summaries`): a malformed one is not drawn as zeros.
             let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
                 Ok(Object::Array(q)) => {
-                    let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
-                    v.as_chunks::<8>().0.to_vec()
+                    let entries = q.iter().map(|o| self.resolve(o).as_float().ok().map(f64::from));
+                    pdfcraft_geom::quad_points::usable_quads(entries).into_iter().map(|quad| quad.map(|v| v as f32)).collect()
                 }
                 _ => Vec::new(),
             };
