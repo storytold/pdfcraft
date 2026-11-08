@@ -1857,7 +1857,9 @@ mod tests {
         let pages = file.job.take().unwrap().run(&r, |_, _| true);
         let out = file.finish(pages).unwrap();
         assert_eq!((fake.calls(), out.words(), out.file_skipped.clone()), (1, 1, None));
-        assert_eq!(out, recognize_file("t.pdf", bytes, None, force, &r, |_, _| true).unwrap(), "the same as reading it in one call");
+        let whole = recognize_file("t.pdf", bytes, None, force, &r, |_, _| true).unwrap();
+        // The saved bytes carry a modification time, so two saves a second apart differ there alone.
+        assert_eq!((out.pages, out.file_skipped), (whole.pages, whole.file_skipped), "the same as reading it in one call");
     }
 
     /// Two inputs of one name (from different folders, or differing only in case) would
