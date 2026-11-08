@@ -61,6 +61,7 @@ fn signature(signed: bool, visible: bool, page: Option<usize>, rect: Option<[f64
     pdfcraft_engine::SignatureInfo {
         field: "Signature1".into(),
         signed,
+        read_only: false,
         page,
         rect,
         visible,

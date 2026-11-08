@@ -52,6 +52,9 @@ pub struct SignatureInfo {
     /// Fully qualified field name.
     pub field: String,
     pub signed: bool,
+    /// The field's effective ReadOnly flag (`/Ff` bit 1, inherited through `/Parent`): the
+    /// writer refuses to sign it, so the panel must not offer to.
+    pub read_only: bool,
     /// 0-based page of its widget, and the widget rectangle (user space).
     pub page: Option<usize>,
     pub rect: Option<[f64; 4]>,

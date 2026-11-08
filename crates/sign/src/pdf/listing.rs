@@ -300,6 +300,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         let mut info = SignatureInfo {
             field: f.name.clone(),
             signed: v.is_some(),
+            read_only: f.read_only(doc),
             page,
             rect,
             visible,
@@ -343,6 +344,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         let mut info = SignatureInfo {
             field: "DocumentTimestamp".to_string(),
             signed: true,
+            read_only: false,
             page: None,
             rect: None,
             visible: false,

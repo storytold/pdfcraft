@@ -859,6 +859,7 @@ mod tests {
         SignatureInfo {
             field: "Signature".into(),
             signed: true,
+            read_only: false,
             page: None,
             rect: None,
             visible: false,
