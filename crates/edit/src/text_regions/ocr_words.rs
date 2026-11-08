@@ -24,6 +24,8 @@ const MIN_SQUEEZE: f64 = 0.75;
 #[derive(Debug, PartialEq)]
 struct Change {
     runs: Range<usize>,
+    /// Which of the draft's words replace them.
+    words: Range<usize>,
     text: String,
     squeeze: Option<f64>,
 }
@@ -47,13 +49,23 @@ fn changes(runs: &[usize], kept_as: &[Option<usize>], new: &[&str], redrawn: &mu
                 continue 'plan;
             }
             if first_run < run {
-                out.push(Change { runs: first_run..run, text: new.get(first_new..at).unwrap_or_default().join(" "), squeeze: None });
+                out.push(Change {
+                    runs: first_run..run,
+                    words: first_new..at,
+                    text: new.get(first_new..at).unwrap_or_default().join(" "),
+                    squeeze: None,
+                });
             }
             first_run = run.saturating_add(1);
             first_new = at.saturating_add(*count);
         }
         if first_run < runs.len() {
-            out.push(Change { runs: first_run..runs.len(), text: new.get(first_new..).unwrap_or_default().join(" "), squeeze: None });
+            out.push(Change {
+                runs: first_run..runs.len(),
+                words: first_new..new.len(),
+                text: new.get(first_new..).unwrap_or_default().join(" "),
+                squeeze: None,
+            });
         } else if first_new < new.len()
             && let Some(last) = runs.len().checked_sub(1)
         {
@@ -62,6 +74,40 @@ fn changes(runs: &[usize], kept_as: &[Option<usize>], new: &[&str], redrawn: &mu
         }
         return out;
     }
+}
+
+/// Each word of `text` as a byte range.
+fn word_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (at, c) in text.char_indices() {
+        match (c.is_whitespace(), start) {
+            (true, Some(from)) => {
+                out.push(from..at);
+                start = None;
+            }
+            (false, None) => start = Some(at),
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        out.push(from..text.len());
+    }
+    out
+}
+
+/// Whether `plan` can stand for the spacing in `draft`, whose words are `words`. Spaces beside a
+/// change are nothing to draw: Backspacing over a word leaves one either side of where it was, and
+/// the words around it stay where the scan has them. Anything else that isn't one space has to be
+/// drawn, inside the new words or between two words nothing else changed, which only the whole
+/// rewrite can do.
+fn spacing_fits(draft: &str, words: &[Range<usize>], plan: &[Change]) -> bool {
+    words.windows(2).enumerate().all(|(index, pair)| {
+        let [before, after] = pair else { return true };
+        let gap = draft.get(before.end..after.start).unwrap_or(" ");
+        let boundary = index.saturating_add(1);
+        gap == " " || (gap.chars().all(|c| c == ' ') && plan.iter().any(|change| change.words.start == boundary || change.words.end == boundary))
+    })
 }
 
 /// The phrase's stretch `indices` of `lines`, as a paragraph of its own. It keeps the whole
@@ -235,9 +281,8 @@ pub(crate) fn rewrite_changed_words(
     let runs: Vec<Vec<&str>> = members.iter().filter_map(|i| lines.get(*i)).map(|line| line.text.split_whitespace().collect()).collect();
     let old: Vec<&str> = runs.iter().flatten().copied().collect();
     let new: Vec<&str> = draft.split_whitespace().collect();
-    // Words the layer doesn't show apart (a run per letter, say) can't be kept apart, and spacing
-    // other than one space between words is the draft's to keep, which only the whole rewrite can.
-    if !phrase.editor_text.split_whitespace().eq(old.iter().copied()) || draft.trim() != new.join(" ") {
+    // Words the layer doesn't show apart (a run per letter, say) can't be kept apart.
+    if !phrase.editor_text.split_whitespace().eq(old.iter().copied()) {
         return None;
     }
     // A single word that changes has nothing to keep. With the same words, the plan is empty.
@@ -251,6 +296,9 @@ pub(crate) fn rewrite_changed_words(
     let mut squeezes = BTreeMap::new();
     for _ in 0..MAX_TRIES {
         let mut plan = changes(&counts, &kept_as, &new, &mut redrawn);
+        if !spacing_fits(draft, &word_ranges(draft), &plan) {
+            return None;
+        }
         for change in &mut plan {
             change.squeeze = squeezes.get(&change.runs.start).copied();
         }
@@ -308,19 +356,50 @@ mod tests {
         assert_eq!(plan(runs, "a x b c"), [(0..1, "a x b".to_owned())], "a word went in between its words");
     }
 
+    #[test]
+    fn a_drafts_words_are_found_by_their_bytes() {
+        assert!(word_ranges("").is_empty() && word_ranges("  ").is_empty());
+        assert_eq!(word_ranges("ab  é c "), [0..2, 4..6, 7..8]);
+    }
+
+    /// The plan for `draft` against the words a, b and c, and whether it stands for its spacing.
+    fn fits(draft: &str) -> bool {
+        let (old, new): (Vec<&str>, Vec<&str>) = (vec!["a", "b", "c"], draft.split_whitespace().collect());
+        let plan = changes(&[1, 1, 1], &kept_words(&old, &new).unwrap(), &new, &mut BTreeSet::new());
+        spacing_fits(draft, &word_ranges(draft), &plan)
+    }
+
+    #[test]
+    fn spaces_beside_a_change_are_nothing_to_draw() {
+        assert!(fits("a b c"));
+        assert!(fits("a b c "), "after the words");
+        assert!(fits("  a b c"), "before them");
+        assert!(fits("a  c"), "either side of a deleted word");
+        assert!(fits("  b c"), "where a first word went");
+        assert!(fits("a   x  c"), "either side of a replacement");
+    }
+
+    #[test]
+    fn spacing_that_has_to_be_drawn_doesnt_fit() {
+        assert!(!fits("a  b c"), "between words nothing else changed");
+        assert!(!fits("x  y c"), "inside the new words");
+        assert!(!fits("a\u{3000}x c"), "another kind of space, even beside a change");
+        assert!(!fits("a\u{a0}x c"));
+    }
+
     /// Word boxes 10 wide, with a gap of 4 between them.
     const BOXES: [[f64; 4]; 3] = [[0.0, 0.0, 10.0, 10.0], [14.0, 0.0, 24.0, 10.0], [28.0, 0.0, 38.0, 10.0]];
 
     fn room_for(right: f64) -> (bool, BTreeMap<usize, f64>, BTreeSet<usize>) {
         let (mut squeezes, mut redrawn) = (BTreeMap::new(), BTreeSet::new());
-        let change = Change { runs: 0..1, text: "x".to_owned(), squeeze: None };
+        let change = Change { runs: 0..1, words: 0..1, text: "x".to_owned(), squeeze: None };
         (make_room(&change, right, &BOXES, &mut squeezes, &mut redrawn), squeezes, redrawn)
     }
 
     #[test]
     fn a_word_that_fits_is_left_alone() {
         assert_eq!(room_for(12.0), (false, BTreeMap::new(), BTreeSet::new()), "it ends in the gap's first half");
-        let last = Change { runs: 2..3, text: "x".to_owned(), squeeze: None };
+        let last = Change { runs: 2..3, words: 2..3, text: "x".to_owned(), squeeze: None };
         assert!(!make_room(&last, 900.0, &BOXES, &mut BTreeMap::new(), &mut BTreeSet::new()), "the last word has the page to grow into");
     }
 
@@ -343,6 +422,6 @@ mod tests {
         let (counts, old, new) = ([1, 1, 1], ["a", "b", "c"], ["x", "b", "c"]);
         let mut redrawn = BTreeSet::from([1]);
         let planned = changes(&counts, &kept_words(&old, &new).unwrap(), &new, &mut redrawn);
-        assert_eq!(planned, [Change { runs: 0..2, text: "x b".to_owned(), squeeze: None }]);
+        assert_eq!(planned, [Change { runs: 0..2, words: 0..2, text: "x b".to_owned(), squeeze: None }]);
     }
 }

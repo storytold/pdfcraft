@@ -491,14 +491,40 @@ fn a_cover_stops_at_the_word_beside_it() {
     assert!(smith < 0.02, "Smith keeps its ink: {smith}");
 }
 
-/// Spacing the word plan can't hold goes to the rewrite that can: it isn't quietly dropped.
+/// Deleting a word with Backspace leaves the spaces either side of it. That isn't spacing anyone
+/// asked for: the words around it stay where the scan has them, with the gap already between them.
 #[test]
-fn spacing_inside_a_draft_is_kept_by_redrawing_the_phrase() {
+fn the_spaces_a_deleted_word_leaves_keep_the_scan() {
+    for (draft, scan, drawn) in [
+        ("John  Example", vec!["John", "Example"], vec![]),
+        ("  John Example", vec!["John", "Example"], vec![]),
+        ("John   Smyth  Example", vec!["John", "Example"], vec!["Smyth"]),
+    ] {
+        let (mut s, id) = uneven_phrase();
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: draft.into(), style: Default::default() }).unwrap();
+        let (kept, redrawn) = scan_and_drawn(&s, id);
+        assert_eq!(
+            (kept.iter().map(String::as_str).collect::<Vec<_>>(), redrawn.iter().map(String::as_str).collect::<Vec<_>>()),
+            (scan, drawn),
+            "{draft:?}"
+        );
+    }
+}
+
+/// Spacing that has to be drawn goes to the rewrite that can draw it: inside new words, or typed
+/// between words nothing else changed. It isn't quietly dropped.
+#[test]
+fn spacing_that_has_to_be_drawn_redraws_the_phrase() {
+    for draft in ["Jon  Smyth Example", "John  Smith Example"] {
+        let (mut s, id) = uneven_phrase();
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: draft.into(), style: Default::default() }).unwrap();
+        let (scan, _) = scan_and_drawn(&s, id);
+        assert!(scan.is_empty(), "{draft:?} keeps nothing as the scan: {scan:?}");
+    }
     let (mut s, id) = uneven_phrase();
-    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John  Smyth Example".into(), style: Default::default() }).unwrap();
-    let (scan, drawn) = scan_and_drawn(&s, id);
-    assert!(scan.is_empty(), "{scan:?}");
-    assert!(drawn.join(" ").contains("John  Smyth"), "the typed spaces are there: {drawn:?}");
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "Jon  Smyth Example".into(), style: Default::default() }).unwrap();
+    let (_, drawn) = scan_and_drawn(&s, id);
+    assert!(drawn.join("").contains("Jon  Smy"), "the typed spaces are there: {drawn:?}");
 }
 
 /// A layer whose words are already narrowed (50 Tz): squeezing a replacement narrows it further,
