@@ -355,11 +355,11 @@ title = "Deterministic full-save mode"
 area = "A"
 tier = "P2"
 milestone = "M1"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = "M1.9 option"
+evidence = ["crates/cos/tests/it/writer.rs::saves_are_byte_identical_across_runs_and_keep_associated_files"]
+notes = "Same document and edits give the same bytes: full and incremental saves are checked byte-identical across separately opened documents (own hash state), with and without object streams (crates/cos/tests/it/writer.rs); /ID derives from the content. SOURCE_DATE_EPOCH, when set to whole seconds, fixes the clock the engine stamps /ModDate and edit dates with. Missing: encrypted saves (random salts and IVs), a UI or automation switch, no check against another producer."
 
 [[feature]]
 id = "core.linearization"
@@ -415,11 +415,11 @@ title = "PDF 2.0 UTF-8 text strings"
 area = "A"
 tier = "P1"
 milestone = "M2"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/cos/tests/it/writer.rs::a_2_0_document_writes_text_as_utf8", "crates/annot/src/tests.rs::comment_text_and_author_follow_the_document_version", "crates/forms/src/tests.rs::text_values_follow_the_document_version", "crates/organize/src/tests.rs::info_and_attachment_descriptions_follow_the_document_version"]
+notes = "Reading UTF-8 (BOM) text strings already worked. Document::text_string writes UTF-8 with a BOM for a document whose header says 2.0 and UTF-16BE before; bookmark titles, /Info entries, annotation /Contents, /T and /Subj, form values, field names, tooltips and options, and attachment descriptions use it. Missing: other writers (XFA-synced fields, accessibility text, XMP-synced values, form actions, signature fields) still write UTF-16BE, which PDF 2.0 readers accept; layer names are only read, never written; /Version in the catalog is not consulted; not checked with veraPDF or Acrobat."
 
 [[feature]]
 id = "core.pdf20-associated-files"
@@ -427,11 +427,11 @@ title = "PDF 2.0 associated files (/AF)"
 area = "A"
 tier = "P1"
 milestone = "M2"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/cos/tests/it/writer.rs::saves_are_byte_identical_across_runs_and_keep_associated_files"]
+notes = "Full and incremental saves keep the catalog's and a page's /AF references and the file specification they point to, with its /AFRelationship and embedded stream (tested). Missing: listing or editing associated files and /AFRelationship in the UI or a tool, a sanitizer choice, PDF/A-3 checks beyond preflight's AFRelationship rule."
 
 [[feature]]
 id = "core.pdf20-dpart"

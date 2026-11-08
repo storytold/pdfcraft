@@ -2574,7 +2574,7 @@ fn protect_fails_closed_when_randomness_is_unavailable() {
     CALLS.store(0, Ordering::SeqCst);
     for rng in [fail_rng, zero_rng, fail_second_rng] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        let mut cx = EditCtx::new(None, 0);
+        let mut cx = EditCtx::new(None, 0, false);
         cx.rng = rng;
         let err = run_edit(&mut doc, &Edit::Protect(protection(Some("secret"), None)), &mut cx);
         assert!(matches!(err, Err(EditError::Protection(_))), "Protect must fail closed when CSPRNG fails: {err:?}");

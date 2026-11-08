@@ -65,6 +65,8 @@ pub struct Document {
     /// Position of the `%PDF-` header (some files have junk before it).
     header_offset: usize,
     version: String,
+    /// Version in the bytes this document was opened from.
+    saved_version: String,
     /// The authenticated security handler of an encrypted document.
     security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     /// Object number of the `/Encrypt` dictionary (never encrypted itself).

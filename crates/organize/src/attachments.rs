@@ -55,9 +55,9 @@ pub fn add_attachment(
     let mut spec = Dict::new();
     spec.set(b"Type".to_vec(), Object::name("Filespec"));
     spec.set(b"F".to_vec(), Object::String(PdfString::text(&key)));
-    spec.set(b"UF".to_vec(), Object::String(PdfString::text(&key)));
+    spec.set(b"UF".to_vec(), Object::String(doc.text_string(&key)));
     if let Some(d) = description.map(str::trim).filter(|d| !d.is_empty()) {
-        spec.set(b"Desc".to_vec(), Object::String(PdfString::text(d)));
+        spec.set(b"Desc".to_vec(), Object::String(doc.text_string(d)));
     }
     let mut files = Dict::new();
     files.set(b"F".to_vec(), Object::Ref(stream));

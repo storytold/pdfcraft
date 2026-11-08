@@ -184,7 +184,10 @@ pub(crate) struct EditCtx {
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
     pub(crate) seed: u64,
+    /// The clock is fixed (`SOURCE_DATE_EPOCH`).
+    reproducible: bool,
     pub(crate) count: u64,
+    used_ids: std::collections::HashSet<String>,
     /// Platform CSPRNG (`getrandom::fill`). Tests replace it so Protect can fail closed.
     pub(crate) rng: fn(&mut [u8]) -> Result<(), getrandom::Error>,
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
@@ -196,13 +199,15 @@ pub(crate) struct EditCtx {
 }
 
 impl EditCtx {
-    pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
+    /// `reproducible`: the clock is fixed (`SOURCE_DATE_EPOCH`), so nothing outside the edit, the
+    /// document and the clock may reach the ids it makes.
+    pub(crate) fn new(now: Option<i64>, salt: u64, reproducible: bool) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
             seed ^= (t as u64).rotate_left(17);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if now.is_some() {
+        if now.is_some() && !reproducible {
             // Real clock: mix in sub-second time so ids from two sessions don't collide.
             seed ^= std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as u64).unwrap_or(0) << 32;
         }
@@ -218,11 +223,23 @@ impl EditCtx {
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
+            reproducible,
             count: 0,
+            used_ids: std::collections::HashSet::new(),
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
         }
+    }
+
+    /// Under a fixed clock, ties the ids to the state of the document the edit starts from.
+    pub(crate) fn bind_to_document(&mut self, doc: &pdfcraft_cos::Document) {
+        if self.reproducible {
+            let size = u64::try_from(doc.trailer().int(b"Size").unwrap_or(0)).unwrap_or(0);
+            let state = (doc.bytes().len() as u64) ^ ((doc.modified_objects().len() as u64) << 24) ^ (size << 44);
+            self.seed ^= state.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(23);
+        }
+        self.used_ids.extend(pdfcraft_annot::summaries(doc).into_iter().filter_map(|summary| summary.name));
     }
 
     /// 32 bytes of entropy for new encryption keys, salts and generated owner passwords from the
@@ -245,15 +262,20 @@ impl EditCtx {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             z ^ (z >> 31)
         };
-        let (a, b) = (next(), next());
-        let id = format!(
-            "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-            a >> 32,
-            (a >> 16) & 0xffff,
-            a & 0xfff,
-            0x8000 | (b >> 48) & 0x3fff,
-            b & 0xffff_ffff_ffff
-        );
+        let id = loop {
+            let (a, b) = (next(), next());
+            let candidate = format!(
+                "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+                a >> 32,
+                (a >> 16) & 0xffff,
+                a & 0xfff,
+                0x8000 | (b >> 48) & 0x3fff,
+                b & 0xffff_ffff_ffff
+            );
+            if self.used_ids.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
         pdfcraft_annot::Meta { date: self.date.clone(), id }
     }
 }
@@ -931,4 +953,50 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reproducible_tests {
+    use super::EditCtx;
+
+    #[test]
+    fn a_reproducible_id_skips_a_name_already_in_the_document() {
+        const EXISTING: &str = "00000000-0000-4000-8000-000000000000";
+        let source = |name: &str| {
+            format!(
+                "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /NM ({name}) >> endobj\ntrailer << /Root 1 0 R /Size 5 >>\n%%EOF\n"
+            )
+            .into_bytes()
+        };
+        let open = |name: &str| pdfcraft_cos::Document::open(std::sync::Arc::new(source(name))).unwrap();
+        let mut first = EditCtx::new(Some(1_700_000_000), 0, true);
+        first.bind_to_document(&open(EXISTING));
+        let generated = first.meta().id;
+        let mut next = EditCtx::new(Some(1_700_000_000), 0, true);
+        next.bind_to_document(&open(&generated));
+        assert_ne!(next.meta().id, generated);
+    }
+
+    #[test]
+    fn a_fixed_clock_makes_the_same_ids_whatever_the_wall_clock_says() {
+        let first = EditCtx::new(Some(1_700_000_000), 7, true);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = EditCtx::new(Some(1_700_000_000), 7, true);
+        assert_eq!(first.seed, second.seed);
+        // Bound to a document, a fixed clock still separates one state of it from the next.
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(
+            b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R /Size 2 >>\n%%EOF\n".to_vec(),
+        ))
+        .unwrap();
+        let (mut one, mut again) = (EditCtx::new(Some(1_700_000_000), 0, true), EditCtx::new(Some(1_700_000_000), 0, true));
+        one.bind_to_document(&doc);
+        again.bind_to_document(&doc);
+        assert_eq!(one.seed, again.seed, "the same state makes the same ids");
+        doc.add(pdfcraft_cos::Object::Null);
+        let mut later = EditCtx::new(Some(1_700_000_000), 0, true);
+        later.bind_to_document(&doc);
+        assert_ne!(one.seed, later.seed, "a changed document makes other ids");
+        // A real clock still separates sessions: its sub-second time is part of the seed.
+        assert_ne!(first.seed, EditCtx::new(Some(1_700_000_000), 7, false).seed);
+    }
 }
