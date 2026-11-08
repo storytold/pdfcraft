@@ -26,5 +26,6 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 /// for saves; without it the browser downloads the file.
 pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
 
-/// Told every frame whether any tab has unsaved work, so a host page can warn before leaving.
+/// Told every frame whether any tab has unsaved work, or an OCR review is not yet accepted or
+/// rejected, so a host page can warn before leaving.
 pub type HostDirtyFn = Box<dyn FnMut(bool)>;

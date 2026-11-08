@@ -317,6 +317,9 @@ mod tests {
 
     #[test]
     fn translated_card_description_leaves_room_for_the_action() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let de = crate::i18n::Lang::from_code("de").unwrap();
         crate::i18n::set_current(de);
         let ctx = egui::Context::default();

@@ -125,6 +125,27 @@ fn text_is_wrapped_and_paginated() {
 }
 
 #[test]
+fn text_of_many_form_feeds_makes_its_pages_in_linear_time() {
+    // Each form feed starts a page: adding each to the page tree copied all the pages before it,
+    // which made forty thousand of them take over a minute in a debug build, against about two
+    // seconds when the tree is written once.
+    let text = "x\u{c}".repeat(40_000);
+    let start = std::time::Instant::now();
+    let doc = from_text("many", &text, LETTER, 11.0).unwrap();
+    let took = start.elapsed();
+    let tree = doc.get(doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap());
+    let tree = tree.as_dict().unwrap();
+    assert_eq!(tree.get(b"Kids").and_then(|k| k.as_array()).map(|a| a.len()), Some(40_001));
+    assert_eq!(tree.int(b"Count"), Some(40_001));
+    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    // Blank documents and pages made from images keep their pages, in order.
+    let doc = reopen(&blank(200.0, 300.0, 3).unwrap());
+    assert_eq!(pages(&doc).len(), 3);
+    let doc = reopen(&from_images(&[("a.png".into(), png_bytes(false)), ("b.png".into(), png_bytes(true))]).unwrap());
+    assert_eq!(pages(&doc).len(), 2);
+}
+
+#[test]
 fn text_keeps_leading_spaces_and_tabs() {
     let doc = reopen(&from_text("t", "    indented\n\ttabbed\nplain", LETTER, 11.0).unwrap());
     let p = pages(&doc);
@@ -462,6 +483,82 @@ fn bigtiff_images_become_pages() {
     let doc = reopen(&from_images(&[("scan.tif".into(), tif)]).unwrap());
     assert_eq!(pages(&doc).len(), 1);
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 1.0], "4×2 px at 144 dpi");
+}
+
+/// A PCX header for a `w` by `h` image at 72 dpi.
+fn pcx_header(version: u8, bits: u8, planes: u8, stride: u16, w: u16, h: u16) -> Vec<u8> {
+    let mut pcx = vec![0u8; 128];
+    pcx[..4].copy_from_slice(&[0x0A, version, 1, bits]);
+    pcx[8..10].copy_from_slice(&(w - 1).to_le_bytes());
+    pcx[10..12].copy_from_slice(&(h - 1).to_le_bytes());
+    pcx[12..14].copy_from_slice(&72u16.to_le_bytes());
+    pcx[14..16].copy_from_slice(&72u16.to_le_bytes());
+    pcx[65] = planes;
+    pcx[66..68].copy_from_slice(&stride.to_le_bytes());
+    pcx
+}
+
+/// A 24-bit PCX: each scanline holds a red, a green and a blue row.
+#[test]
+fn pcx_images_become_pages() {
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 2);
+    pcx.extend_from_slice(&[10, 11, 20, 21, 30, 31]);
+    pcx.extend_from_slice(&[40, 41, 50, 51, 60, 61]);
+    let embedded = super::pcx("a.pcx", &pcx).unwrap();
+    assert_eq!(embedded.data, [10, 20, 30, 11, 21, 31, 40, 50, 60, 41, 51, 61]);
+    let doc = reopen(&from_images(&[("a.pcx".into(), pcx)]).unwrap());
+    assert_eq!(pages(&doc).len(), 1);
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 2.0]);
+    assert_eq!(image_of(&doc, 0).name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+}
+
+#[test]
+fn a_pcx_run_may_cross_planes_but_not_scanlines() {
+    // 0xC4 repeats 7 four times: the red row and half of the green one
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 1);
+    pcx.extend_from_slice(&[0xC4, 7, 8, 9]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [7, 7, 8, 7, 7, 9]);
+    let mut pcx = pcx_header(5, 8, 3, 2, 2, 2);
+    pcx.extend_from_slice(&[0xC8, 7, 1, 2, 3, 4]);
+    assert!(super::pcx("a.pcx", &pcx).is_err(), "eight bytes in a six-byte scanline");
+}
+
+#[test]
+fn an_8_bit_pcx_uses_its_palette_and_is_grey_without_one() {
+    let mut pcx = pcx_header(5, 8, 1, 2, 2, 1);
+    pcx.extend_from_slice(&[1, 2]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [1, 1, 1, 2, 2, 2], "no palette: grey");
+    pcx.push(0x0C);
+    let mut palette = vec![0u8; 768];
+    palette[3..9].copy_from_slice(&[9, 8, 7, 6, 5, 4]);
+    pcx.extend_from_slice(&palette);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [9, 8, 7, 6, 5, 4]);
+}
+
+#[test]
+fn bit_plane_pcx_images_read_their_palette() {
+    // version 2, one plane: black and white
+    let mut pcx = pcx_header(2, 1, 1, 2, 2, 1);
+    pcx.extend_from_slice(&[0b1000_0000, 0]);
+    assert!(from_images(&[("a.pcx".into(), pcx.clone())]).is_ok(), "an old version is still a PCX");
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [255, 255, 255, 0, 0, 0]);
+    // two planes: colour 3 is at byte 16 + 9
+    let mut pcx = pcx_header(5, 1, 2, 1, 1, 1);
+    pcx[25..28].copy_from_slice(&[1, 2, 3]);
+    pcx.extend_from_slice(&[0x80, 0x80]);
+    assert_eq!(super::pcx("a.pcx", &pcx).unwrap().data[..], [1, 2, 3]);
+}
+
+#[test]
+fn damaged_pcx_headers_and_bodies_are_refused() {
+    let no_planes = pcx_header(5, 8, 0, 2, 2, 1);
+    let no_stride = pcx_header(5, 8, 3, 0, 2, 1);
+    let short_stride = pcx_header(5, 8, 3, 1, 2, 1);
+    let short_body = pcx_header(5, 8, 3, 2, 2, 1);
+    for bytes in [no_planes, no_stride, short_stride, short_body] {
+        assert!(super::pcx("a.pcx", &bytes).is_err());
+    }
+    assert!(super::pcx("a.pcx", &[0x0A, 5, 1, 8]).is_err(), "no header");
 }
 
 /// A synthetic ICC profile: a 128-byte header (size, device class, colour space, `acsp`) and
@@ -2310,6 +2407,98 @@ fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     let jpeg = doc.add(Object::Stream(image("DCTDecode", bytes)));
     assert!(crate::extract::image_file_within(&doc, jpeg, &mut budget).is_ok(), "nothing charged");
     assert_eq!(budget.refused(), 1);
+}
+
+/// An indexed image's lookup table, given as a stream, is read within the export's allowance as
+/// the image's samples are: each image reads it again, and its filters can do work that makes
+/// nothing (Flate over empty blocks). Past the allowance the image is left out with the reason.
+#[test]
+fn a_lookup_table_is_read_within_the_exports_allowance() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, PdfString, Stream};
+    let table = [255, 0, 0, 0, 0, 255];
+    let lookup = Stream::flate(Dict::new(), &table);
+    let exported = |as_stream: bool, work: u64| {
+        let mut doc = Document::new_empty();
+        let table = if as_stream { Object::Ref(doc.add(Object::Stream(lookup.clone()))) } else { Object::String(PdfString::literal(table.to_vec())) };
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(2));
+        dict.set(b"Height".to_vec(), Object::Int(1));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(1), table]));
+        let image = doc.add(Object::Stream(Stream::flate(dict, &[0, 1])));
+        let mut budget = ImageBudget::with_work(work);
+        let file = crate::extract::image_file_within(&doc, image, &mut budget);
+        (file, work - budget.work_left(), budget.refused())
+    };
+    let (direct, image_alone, _) = exported(false, u64::MAX);
+    let (streamed, both, _) = exported(true, u64::MAX);
+    assert_eq!(streamed.unwrap(), direct.unwrap(), "the same picture");
+    let read = (lookup.raw.len() + table.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * lookup.raw.len() as u64;
+    assert_eq!(both, image_alone + read, "the table is paid for as it is read");
+    let (refused, _, count) = exported(true, image_alone);
+    assert!(refused.unwrap_err().contains("more image decoding than"));
+    assert_eq!(count, 1);
+}
+
+/// A JPEG's colour space is read once for an export, its lookup table paid for once: whether it is
+/// CMYK (a negative as is) and what its samples are both come from that reading. An indexed JPEG
+/// isn't valid, and is written as it is, but its soft mask makes it go on past the first. With the
+/// mask, a table the allowance can't pay for leaves the image out, with the reason.
+#[test]
+fn a_jpegs_lookup_table_is_paid_for_once() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, PdfString, Stream};
+    let table = [255, 0, 0, 0, 0, 255];
+    let lookup = Stream::flate(Dict::new(), &table);
+    let mut jpeg = Vec::new();
+    image::GrayImage::from_pixel(2, 1, image::Luma([1])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    // `given`: None leaves the colour space out, Some(true) gives the table as a stream.
+    let exported = |given: Option<bool>, work: u64| {
+        let mut doc = Document::new_empty();
+        let table = given.map(|as_stream| {
+            if as_stream { Object::Ref(doc.add(Object::Stream(lookup.clone()))) } else { Object::String(PdfString::literal(table.to_vec())) }
+        });
+        let mut mask = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(2)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            mask.set(k.as_bytes().to_vec(), v);
+        }
+        mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let mask = doc.add(Object::Stream(Stream::flate(mask, &[255, 128])));
+        let mut dict = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(2)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            dict.set(k.as_bytes().to_vec(), v);
+        }
+        if let Some(table) = table {
+            dict.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(1), table]));
+        }
+        dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        dict.set(b"SMask".to_vec(), Object::Ref(mask));
+        let image = doc.add(Object::Stream(Stream::from_raw(dict, jpeg.clone())));
+        let mut budget = ImageBudget::with_work(work);
+        let file = crate::extract::image_file_within(&doc, image, &mut budget);
+        (file, work - budget.work_left(), budget.refused())
+    };
+    let (direct, direct_cost, _) = exported(Some(false), u64::MAX);
+    let (streamed, streamed_cost, _) = exported(Some(true), u64::MAX);
+    assert_eq!(direct, Ok(("jpg", jpeg.clone())), "written as it is");
+    assert_eq!(streamed, direct);
+    let read = (lookup.raw.len() + table.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * lookup.raw.len() as u64;
+    assert_eq!(streamed_cost, direct_cost + read, "one reading of the table");
+
+    // Without a colour space nothing is read after the soft mask, so this is what the mask costs.
+    let (none, mask, _) = exported(None, u64::MAX);
+    assert_eq!(none.unwrap_err(), "the image has no colour space");
+    // Read first, the table would be refused a step short of the mask too, and the mask after it.
+    assert!(read >= mask, "the table costs at least what the mask does");
+    assert_eq!(exported(Some(true), mask - 1).2, 1, "the mask is read first, and refused alone");
+    let (refused, _, count) = exported(Some(true), mask + read - 1);
+    let refused = refused.unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!(count, 1, "refused at the table, and nothing after it asks to be paid for");
 }
 
 /// A JPEG is written as it is, at no cost, unless something means decoding it, here a mask: that
