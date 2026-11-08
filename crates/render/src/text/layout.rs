@@ -509,7 +509,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             if has_rtl {
                 sc.logical.clear();
                 sc.logical.extend_from_slice(&sc.placed);
-                reverse_rtl(&glyphs, &mut sc.logical, &mut spaces);
+                reverse_rtl(&glyphs, &sc.anchor, &mut sc.logical, &mut spaces);
             }
             let idx: &[usize] = if has_rtl { &sc.logical } else { &sc.placed };
             order.extend_from_slice(idx);

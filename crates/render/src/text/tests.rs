@@ -2416,3 +2416,19 @@ fn a_mark_reaching_left_of_its_letter_does_not_reorder_overprinting_runs() {
     assert!(text.starts_with("ABCDEF"), "{text:?}");
     assert!(text.contains("c\u{301}d"), "{text:?}");
 }
+
+/// A right-to-left mark rides on no glyph, so it keeps its own class: one placed after a Latin
+/// letter, left of the Hebrew letter it belongs to, still reads with the Hebrew word, after its letter.
+#[test]
+fn a_hebrew_mark_after_a_latin_letter_stays_with_the_hebrew_word() {
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0)];
+    v.push(em_box("\u{5B8}", 11.9, 0.0, 11.9, 11.0));
+    let mut x = 12.0;
+    for c in ["ם", "ו", "ל", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    let text = layout(v).plain_text();
+    // The mark follows its letter, the last of "שלום", before the Latin text.
+    assert_eq!(text, "שלום\u{5B8}ab");
+}

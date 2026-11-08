@@ -593,19 +593,23 @@ fn bidi_class(text: &str) -> Bidi {
     }
 }
 
-/// UAX #9 W1: a nonspacing mark takes the class of the glyph before it, the letter it rides on, which placement keeps
-/// right in front of it. A mark after a word gap (`None`) rides on nothing and keeps its own class.
-fn resolve_marks(glyphs: &[&TextGlyph], items: &mut [(Option<usize>, Bidi)]) {
+/// UAX #9 W1: a nonspacing mark takes the class of the letter it rides on ([`Scratch::anchor`]), which placement keeps
+/// right in front of it. A mark that rides on nothing (one after a word gap, or a right-to-left mark, which placement
+/// puts by its own position) keeps its own class.
+fn resolve_marks(glyphs: &[&TextGlyph], anchor: &[usize], items: &mut [(Option<usize>, Bidi)]) {
     let nsm = |i: usize| {
         glyphs.get(i).is_some_and(|g| !g.text.is_empty() && g.text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM))
     };
     for k in 1..items.len() {
-        let base = match items.get(k - 1) {
-            Some(&(Some(_), base)) => base,
+        let (prev, base) = match items.get(k - 1) {
+            Some(&(Some(prev), base)) => (prev, base),
             _ => continue,
         };
         if let Some(it) = items.get_mut(k)
-            && it.0.is_some_and(nsm)
+            && let Some(mark) = it.0
+            && nsm(mark)
+            && anchor_of(anchor, mark) != mark
+            && anchor_of(anchor, mark) == anchor_of(anchor, prev)
         {
             it.1 = base;
         }
@@ -616,7 +620,7 @@ fn resolve_marks(glyphs: &[&TextGlyph], items: &mut [(Option<usize>, Bidi)]) {
 /// word gaps along: `spaces[w]` is a gap left of `idx[w]` (#1062). The paragraph is right-to-left when it has
 /// more right-to-left than left-to-right glyphs; numbers keep their left-to-right order, and neutrals
 /// (punctuation, gaps) take the direction of their neighbours, or the paragraph's between opposite ones.
-pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut [bool]) {
+pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], anchor: &[usize], idx: &mut [usize], spaces: &mut [bool]) {
     // Glyphs and word gaps (None) in visual order.
     let mut items: Vec<(Option<usize>, Bidi)> = Vec::with_capacity(idx.len() * 2);
     for (w, &i) in idx.iter().enumerate() {
@@ -627,9 +631,11 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut
     }
     let texts: Vec<&str> = items.iter().map(|it| it.0.map_or("", |i| glyphs[i].text.as_str())).collect();
     let text = |k: usize| texts.get(k).copied().unwrap_or("");
-    resolve_marks(glyphs, &mut items);
+    // The paragraph's direction counts letters as they are, before marks take their letter's class, as
+    // `keep_taken_back_blanks` counts them.
     let count = |b: Bidi| items.iter().filter(|it| it.1 == b).count();
     let para = if count(Bidi::R) > count(Bidi::L) { Bidi::R } else { Bidi::L };
+    resolve_marks(glyphs, anchor, &mut items);
     let n = items.len();
     // W4: a single separator between two digits belongs to the number.
     for k in 1..n.saturating_sub(1) {
