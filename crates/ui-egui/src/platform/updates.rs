@@ -47,7 +47,7 @@ impl PdfCraftApp {
     /// Whether the app asks for a newer release on its first frame (off until the desktop app turns it on).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
-        self.updates.startup_check = on;
+        self.updates.startup_check = on && pdfcraft_engine::build_info::startup_update_check();
     }
 
     /// Replaces the network with `source` (tests).
