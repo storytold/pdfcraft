@@ -225,6 +225,31 @@ fn a_name_spelled_with_escapes_is_one_name() {
     assert!(!in_literal(script, script.len()), "nothing doubtful: code stays code");
 }
 
+/// A name spelled with escapes is coloured as the name it spells. A keyword spelled so isn't one: the
+/// parser refuses it.
+#[test]
+fn a_name_spelled_with_escapes_is_coloured_as_the_name_it_spells() {
+    use TokenKind::*;
+    let script = "\\u0061pp.alert(1); x = \\u{75}ndefined; y = N\\u0061N; e\\u{0076}ent.value = 2;";
+    assert!(parses(script));
+    assert_eq!(
+        kinds(script),
+        vec![(Api, "\\u0061pp"), (Number, "1"), (Literal, "\\u{75}ndefined"), (Literal, "N\\u0061N"), (Api, "e\\u{0076}ent"), (Number, "2")]
+    );
+    assert!(!parses("\\u0076ar x = 1;"));
+    assert_eq!(kinds("\\u0076ar x = 1;"), vec![(Number, "1")]);
+}
+
+#[test]
+fn an_escape_that_spells_no_character_spells_no_name() {
+    assert_eq!(unescaped("app").as_deref(), Some("app"));
+    assert_eq!(unescaped("a\\u0062c\\u{64}").as_deref(), Some("abcd"));
+    assert_eq!(unescaped("\\u{0000000061}").as_deref(), Some("a"), "any number of leading zeros");
+    for word in ["\\u{110000}", "\\uD800", "\\u{FFFFFFFFFF}", "\\u{61", "\\u{}", "\\u006", "\\u00é", "\\u{+61}", "\\uzzzz", "\\x61", "\\"] {
+        assert_eq!(unescaped(word), None, "{word}");
+    }
+}
+
 /// The price of erring towards leaving the text alone: past a `/` that could go either way, nothing
 /// counts as code, so Enter and `}` add nothing in the rest of the script. Before it, they do.
 #[test]

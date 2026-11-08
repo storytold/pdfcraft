@@ -5,6 +5,7 @@
 //! A wrong colour is only that, but editing mustn't change what a script holds on a guess, so what
 //! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 /// What a stretch of script is, for colouring.
@@ -444,11 +445,14 @@ impl Lexer<'_> {
             self.after(false, false);
             return;
         }
+        // A name spelled with escapes is the name it spells (`\u0061pp` is `app`), but a keyword spelled
+        // so is none: the parser refuses it, and reads `of`, `yield` and `await` spelled so as names.
+        let name = unescaped(word).unwrap_or_default();
         let kind = if KEYWORDS.contains(&word) {
             Some(TokenKind::Keyword)
-        } else if LITERALS.contains(&word) {
+        } else if LITERALS.contains(&name.as_ref()) {
             Some(TokenKind::Literal)
-        } else if API.contains(&word) {
+        } else if API.contains(&name.as_ref()) {
             Some(TokenKind::Api)
         } else {
             None
@@ -462,6 +466,35 @@ impl Lexer<'_> {
         self.keyword_paren = matches!(word, "if" | "while" | "for" | "with");
         self.label_next = matches!(word, "break" | "continue");
     }
+}
+
+/// The name `word` spells, its `\u` escapes (`\u0061`, `\u{61}`) decoded, or `None` if one of them
+/// spells no character.
+fn unescaped(word: &str) -> Option<Cow<'_, str>> {
+    if !word.contains('\\') {
+        return Some(Cow::Borrowed(word));
+    }
+    let mut out = String::with_capacity(word.len());
+    let mut rest = word;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(rest.get(..at)?);
+        let escape = rest.get(at..)?.strip_prefix("\\u")?;
+        let (digits, after) = match escape.strip_prefix('{') {
+            Some(braced) => {
+                let end = braced.find('}')?;
+                (braced.get(..end)?, braced.get(end..)?.strip_prefix('}')?)
+            }
+            None => (escape.get(..4)?, escape.get(4..)?),
+        };
+        // `from_str_radix` would take a sign too.
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        out.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
+        rest = after;
+    }
+    out.push_str(rest);
+    Some(Cow::Owned(out))
 }
 
 /// Whether what comes after `c` starts a value, so that a `/` there can't be dividing. A `)` gets here
