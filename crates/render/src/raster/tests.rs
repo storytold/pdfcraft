@@ -5579,6 +5579,29 @@ trailer << /Root 1 0 R >>
     assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
 }
 
+/// The nearest ancestor's `/MediaBox` wins: an intermediate `/Pages` node's box over the root's,
+/// and a box whose origin isn't 0 0 keeps the content where the box puts it.
+#[test]
+fn a_page_inherits_its_nearest_ancestors_media_box_with_its_origin() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 612 792] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 /MediaBox [100 100 400 500] >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 27 >> stream
+0 0 1 rg 110 110 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "the intermediate box, not the root's");
+    // The square sits 10 pt in from the box's lower-left corner, at (100, 100).
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 400 - 30), [0, 0, 255], "placed by the box's origin");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]
