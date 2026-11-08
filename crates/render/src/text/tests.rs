@@ -2482,6 +2482,40 @@ fn a_ligature_counts_each_of_its_letters_toward_a_lines_direction() {
     assert_eq!(line(&["ffi"]), split);
 }
 
+/// Punctuation of a right-to-left script is not a letter and doesn't decide a line's direction: two Latin letters,
+/// a Hebrew letter and a maqaf and a sof pasuq after it read Latin first.
+#[test]
+fn right_to_left_punctuation_does_not_decide_a_lines_direction() {
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0)];
+    let mut x = 16.0;
+    for c in ["\u{5C3}", "\u{5BE}", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    let text = layout(v).plain_text();
+    assert!(text.starts_with("ab"), "{text:?}");
+}
+
+/// An alphabetic nonspacing mark (U+0345) gives the text around a taken-back neutral no direction: a question mark
+/// taken back over the space that starts a reverse-order show string reads as on the same line without the mark.
+#[test]
+fn an_alphabetic_mark_beside_a_taken_back_neutral_gives_it_no_direction() {
+    let line = |mark: bool| {
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("?", 9.9, 0.0, 15.0, 11.0)];
+        let mut x = 15.0;
+        for c in ["ף", "י", "ע", "ס"] {
+            v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+            x += 6.5;
+        }
+        if mark {
+            v.push(em_box("\u{345}", 14.0, 0.0, 14.0, 11.0));
+        }
+        layout(v).plain_text()
+    };
+    let without = line(false);
+    assert_eq!(line(true).replace('\u{345}', ""), without);
+}
+
 /// A mark of a left-to-right script that rides on no letter has no direction of its own: U+0345 (alphabetic, bidi
 /// class NSM) drawn on the last letter of a Hebrew word, left of it and right after a Latin word, reads with the
 /// Hebrew word, after that letter, as a Hebrew point drawn there does.

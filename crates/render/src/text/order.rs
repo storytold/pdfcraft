@@ -356,11 +356,13 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
     let mark = |g: &TextGlyph| !g.text.is_empty() && g.text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM);
     // The direction a glyph gives the text around it: Some(false) for left-to-right letters, Some(true) for
     // right-to-left letters and for numbers, which read as right-to-left beside neutrals (UAX #9 N1, as in
-    // `reverse_rtl`), None for a glyph without one.
+    // `reverse_rtl`), None for a glyph without one. Nonspacing marks give none, alphabetic ones (U+0345) included: a
+    // mark has the direction of the letter it sits on.
     let strong = |g: &TextGlyph| {
-        if g.text.chars().any(|c| c.is_alphabetic() && !is_rtl(c)) {
+        let spacing = || g.text.chars().filter(|&c| unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM);
+        if spacing().any(|c| c.is_alphabetic() && !is_rtl(c)) {
             Some(false)
-        } else if g.text.chars().any(char::is_alphanumeric) {
+        } else if spacing().any(char::is_alphanumeric) {
             Some(true)
         } else {
             None
@@ -597,13 +599,14 @@ fn bidi_class(text: &str) -> Bidi {
 }
 
 /// Whether a line of the glyphs `line` is right-to-left: it has more right-to-left letters than left-to-right ones.
-/// Letters are counted one by one, so a ligature glyph ("ffi") counts each of its letters, and nonspacing marks count
-/// toward neither direction: a mark has the direction of the letter it sits on.
+/// Letters are counted one by one, so a ligature glyph ("ffi") counts each of its letters. Punctuation of a
+/// right-to-left script (a maqaf, an Arabic comma) is not a letter and counts toward neither direction, nor do
+/// nonspacing marks: a mark has the direction of the letter it sits on.
 fn is_rtl_line(glyphs: &[&TextGlyph], line: impl Iterator<Item = usize>) -> bool {
     let (mut rtl, mut ltr) = (0usize, 0usize);
     for g in line.filter_map(|i| glyphs.get(i)) {
         for c in g.text.chars().filter(|&c| unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM) {
-            if is_rtl(c) && !c.is_numeric() {
+            if is_rtl(c) && c.is_alphabetic() {
                 rtl = rtl.saturating_add(1);
             } else if c.is_alphabetic() && !is_rtl(c) {
                 ltr = ltr.saturating_add(1);
