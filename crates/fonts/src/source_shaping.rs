@@ -71,43 +71,44 @@ fn gpos_has_mark_positioning(bytes: &[u8]) -> bool {
     fn u32_at(bytes: &[u8], offset: usize) -> Option<usize> {
         bytes.get(offset..offset.checked_add(4)?).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize)
     }
-    let result = (|| -> Option<bool> {
-    let Some(count) = u16_at(bytes, 4) else { return None };
-    let mut gpos = None;
-    for i in 0..count {
-        let record = 12usize.checked_add(i.saturating_mul(16))?;
-        if bytes.get(record..record.checked_add(4)?) == Some(b"GPOS".as_slice()) {
-            gpos = u32_at(bytes, record.checked_add(8)?);
-            break;
+    (|| -> Option<bool> {
+        let Some(count) = u16_at(bytes, 4) else { return None };
+        let mut gpos = None;
+        for i in 0..count {
+            let record = 12usize.checked_add(i.saturating_mul(16))?;
+            if bytes.get(record..record.checked_add(4)?) == Some(b"GPOS".as_slice()) {
+                gpos = u32_at(bytes, record.checked_add(8)?);
+                break;
+            }
         }
-    }
-    let Some(gpos) = gpos else { return None };
-    let Some(lookup_list) = u16_at(bytes, gpos.checked_add(8)?).and_then(|o| gpos.checked_add(o)) else { return None };
-    let Some(lookup_count) = u16_at(bytes, lookup_list) else { return None };
-    for i in 0..lookup_count {
-        let Some(lookup) = u16_at(bytes, lookup_list.checked_add(2)?.checked_add(i.saturating_mul(2))?).and_then(|o| lookup_list.checked_add(o))
-        else {
-            continue;
-        };
-        let Some(lookup_type) = u16_at(bytes, lookup) else { continue };
-        if matches!(lookup_type, 4 | 5 | 6) {
-            return Some(true);
-        }
-        if lookup_type == 9 {
-            let Some(sub_count) = u16_at(bytes, lookup.checked_add(4)?) else { continue };
-            for j in 0..sub_count {
-                let Some(subtable) = u16_at(bytes, lookup.checked_add(6)?.checked_add(j.saturating_mul(2))?).and_then(|o| lookup.checked_add(o))
-                else {
-                    continue;
-                };
-                if u16_at(bytes, subtable.checked_add(2)?).is_some_and(|t| matches!(t, 4 | 5 | 6)) {
-                    return Some(true);
+        let Some(gpos) = gpos else { return None };
+        let Some(lookup_list) = u16_at(bytes, gpos.checked_add(8)?).and_then(|o| gpos.checked_add(o)) else { return None };
+        let Some(lookup_count) = u16_at(bytes, lookup_list) else { return None };
+        for i in 0..lookup_count {
+            let Some(lookup) = u16_at(bytes, lookup_list.checked_add(2)?.checked_add(i.saturating_mul(2))?).and_then(|o| lookup_list.checked_add(o))
+            else {
+                continue;
+            };
+            let Some(lookup_type) = u16_at(bytes, lookup) else { continue };
+            if matches!(lookup_type, 4 | 5 | 6) {
+                return Some(true);
+            }
+            if lookup_type == 9 {
+                let Some(sub_count) = u16_at(bytes, lookup.checked_add(4)?) else { continue };
+                for j in 0..sub_count {
+                    let Some(subtable) = u16_at(bytes, lookup.checked_add(6)?.checked_add(j.saturating_mul(2))?).and_then(|o| lookup.checked_add(o))
+                    else {
+                        continue;
+                    };
+                    if u16_at(bytes, subtable.checked_add(2)?).is_some_and(|t| matches!(t, 4 | 5 | 6)) {
+                        return Some(true);
+                    }
                 }
             }
         }
-    }
-    Some(false)
-    })().unwrap_or(false)
+        Some(false)
+    })()
+    .unwrap_or(false)
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
