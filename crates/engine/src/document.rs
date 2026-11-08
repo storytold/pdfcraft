@@ -335,6 +335,11 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::tags(&e.cos)).unwrap_or_default()
     }
 
+    /// Resolve a structure tag name through the document's role map.
+    pub fn standard_tag_kind(&self, kind: &str) -> String {
+        self.editor.as_ref().map(|e| a11y::standard_tag_kind(&e.cos, kind)).unwrap_or_else(|| kind.to_owned())
+    }
+
     /// Marked-content items directly owned by one reachable indirect structure tag.
     pub fn tag_content(&self, object: pdfcraft_cos::ObjRef) -> Result<Vec<a11y::TagContentItem>, a11y::TagError> {
         self.editor.as_ref().map(|e| a11y::tag_content(&e.cos, object)).unwrap_or_else(|| Ok(Vec::new()))

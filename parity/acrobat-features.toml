@@ -9132,15 +9132,15 @@ notes = "The right-side Tags panel lists reachable indirect tags as a collapsibl
 
 [[feature]]
 id = "a11y.tag-properties"
-title = "Tag properties (type, title, actual text, alternate text, language)"
+title = "Tag properties (type, title, actual text, alternate text, language, table Summary and header Scope)"
 area = "M"
 tier = "P1"
 milestone = "M12"
 status = "partial"
 commands = ["a11y.tags"]
 tools = ["accessibility_tags", "accessibility_set_tag_property"]
-evidence = ["crates/a11y/src/tests.rs::reachable_tag_properties_round_trip_and_reject_unrelated_objects", "crates/a11y/src/tests.rs::a_table_summary_is_a_table_attribute", "crates/a11y/src/tests.rs::a_header_cell_scope_keeps_its_other_attributes", "crates/a11y/src/tests.rs::a_shared_attribute_object_is_not_changed_for_other_tags", "crates/automation/tests/it/automation.rs::table_summary_and_header_scope_through_automation", "crates/a11y/src/tests.rs::tag_hierarchy_keeps_indirect_parent_through_inline_tags", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_edits_a_tag_property_and_undoes_it"]
-notes = "The engine, headless tools and right-side editor list reachable indirect tags with parent and depth and edit type, title, actual text, alternate text and language with undo. accessibility_set_tag_property also sets a table's Summary and a header cell's Scope (Row, Column, Both) in the tag's Table attribute object, keeping its other attribute objects and revision numbers and leaving shared attribute objects unchanged for other tags; the Tags panel doesn't offer these two yet. Inline tag dictionaries and structural operations remain planned with the Tags Panel (#982)."
+evidence = ["crates/a11y/src/tests.rs::reachable_tag_properties_round_trip_and_reject_unrelated_objects", "crates/a11y/src/tests.rs::a_table_summary_is_a_table_attribute", "crates/a11y/src/tests.rs::a_header_cell_scope_keeps_its_other_attributes", "crates/a11y/src/tests.rs::a_shared_attribute_object_is_not_changed_for_other_tags", "crates/automation/tests/it/automation.rs::table_summary_and_header_scope_through_automation", "crates/a11y/src/tests.rs::tag_hierarchy_keeps_indirect_parent_through_inline_tags", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_edits_a_tag_property_and_undoes_it", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_edits_role_mapped_table_summary_and_header_scope"]
+notes = "The engine, headless tools and right-side editor list reachable indirect tags with parent and depth and edit type, title, actual text, alternate text and language with undo. The Tags panel also exposes Summary for Table tags and Scope (Row, Column, Both) for TH tags, including custom roles after the role map; the existing mutation preserves other attribute objects and revision numbers. Inline tag dictionaries and structural operations remain planned with the Tags Panel (#982)."
 
 [[feature]]
 id = "a11y.role-map"

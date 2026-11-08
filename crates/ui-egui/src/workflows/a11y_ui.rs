@@ -456,14 +456,15 @@ impl PdfCraftApp {
             PanelAction::GoTo(p, bbox) => self.a11y_show_on_page(index, p, bbox),
             PanelAction::GoToTag(object, page, bbox) => {
                 let Some((_, id)) = self.active_ids() else { return };
-                let Some(tags) = self.session.get(id).map(|doc| self.tags_state.tags(doc)) else { return };
+                let Some(doc) = self.session.get(id) else { return };
+                let tags = self.tags_state.tags(doc);
                 if !tags.iter().any(|tag| tag.object == object) {
                     if let Some(page) = page {
                         self.a11y_show_on_page(index, page, bbox);
                     }
                     return;
                 }
-                if self.tags_state.select(id, &tags, object) {
+                if self.tags_state.select(doc, &tags, object) {
                     self.right = Some(RightPanel::Tags);
                     if let Some(page) = page {
                         self.a11y_show_on_page(index, page, bbox);
