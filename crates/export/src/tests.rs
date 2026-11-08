@@ -1098,6 +1098,48 @@ fn a_paragraph_breaks_where_its_line_does_not_run_on() {
     }
 }
 
+/// Two columns of text, the right one set half a line lower: a full line in one column never runs
+/// on into the line of the other just below it, though the right column's lines reach the page's
+/// right edge and the left column's start at its left.
+#[test]
+fn a_line_never_runs_on_into_the_other_column() {
+    let left = ["The tenant keeps the rooms and the", "stairs clean and in good repair for", "the whole of the term of the lease"];
+    let right = ["The landlord keeps the roof and the", "outer walls sound and dry for the", "whole of the term of the lease too"];
+    let mut blocks = Vec::new();
+    for (n, (l, r)) in left.iter().zip(right).enumerate() {
+        let y = 700.0 - 14.0 * n as f64;
+        blocks.push(line(l, 72.0, 290.0, y));
+        blocks.push(line(r, 322.0, 540.0, y - 7.0));
+    }
+    let paragraphs = word_texts(blocks);
+    for line in left.iter().chain(&right) {
+        assert!(paragraphs.iter().any(|p| p.contains(line)), "{line}: {paragraphs:?}");
+    }
+    for p in &paragraphs {
+        assert!(!(left.iter().any(|l| p.contains(l)) && right.iter().any(|r| p.contains(r))), "{p:?} mixes the columns");
+    }
+}
+
+/// A poem quoted between paragraphs keeps its lines: they stop well short of the right edge the
+/// prose around it reaches, so none of them is a full line that wraps.
+#[test]
+fn a_poem_keeps_its_lines() {
+    let poem = [
+        "The kettle sings beside the door",
+        "the cat is curled upon the chair",
+        "and rain runs down the window glass",
+        "while evening settles on the stair",
+    ];
+    let prose = "The tenant may read aloud in the shared garden on summer evenings, as in the verse below";
+    let mut blocks = vec![line(prose, 72.0, 540.0, 720.0)];
+    for (n, (t, end)) in poem.iter().zip([236.0, 230.0, 248.0, 232.0]).enumerate() {
+        blocks.push(line(t, 90.0, end, 696.0 - 14.0 * n as f64));
+    }
+    let mut expected = vec![prose];
+    expected.extend(poem);
+    assert_eq!(word_texts(blocks), expected);
+}
+
 #[test]
 fn list_items_are_told_from_text() {
     for item in ["• item", "\u{F0B7} item", "- item", "\u{2013} item", "* item", "1. Term", "12) Rent", "3.", "a) rooms", "а) стаи"] {
