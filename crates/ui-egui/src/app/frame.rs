@@ -40,7 +40,7 @@ impl PdfCraftApp {
                         job.cancel.request();
                     }
                 }
-                widgets::ProgressOwner::Other => {}
+                widgets::ProgressOwner::Other => self.cancel_scan_clean(),
             }
         }
     }
