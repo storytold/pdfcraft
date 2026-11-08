@@ -9790,6 +9790,20 @@ fn page_with(build: impl FnOnce(&mut Document) -> (Object, Dict)) -> Document {
 }
 
 #[test]
+fn page_rules_join_decoded_streams_before_parsing_operators() {
+    let doc = page_with(|doc| {
+        let first = doc.add(Stream::flate(Dict::new(), b"q 2 0 0 2 0 0 cm 10 20 m 30"));
+        let second = doc.add(Stream::flate(Dict::new(), b"20 l S Q 40 50 1 30 re f"));
+        (Object::Array(vec![Object::Ref(first), Object::Null, Object::Ref(second)]), Dict::new())
+    });
+    assert_eq!(page_rules(&doc, 0).unwrap(), vec![[20.0, 40.0, 60.0, 40.0], [40.0, 50.0, 41.0, 80.0]]);
+    assert_eq!(page_rules(&doc, 1), Err(EditError::NoSuchPage(1)));
+
+    let empty = page_with(|_| (Object::Array(Vec::new()), Dict::new()));
+    assert!(page_rules(&empty, 0).unwrap().is_empty());
+}
+
+#[test]
 fn repeated_content_references_share_one_decode_budget() {
     // One 1 MiB stream (a kilobyte on disk) named 300 times by the page's /Contents.
     let doc = page_with(|doc| {
