@@ -843,10 +843,11 @@ fn arabic_ligature_actual_text_is_one_editable_word_through_save_reopen() {
 }
 
 /// Each of these writes to its required `path` and replaces an existing file there, so the MCP
-/// annotations must not tell clients the call is read-only or harmless (#130).
+/// annotations must not tell clients the call is read-only or harmless (#130). The OCR
+/// dictionary's updates rewrite the file in place (lower-cased and sorted), so it counts too.
 #[test]
 fn file_writing_tools_are_not_read_only() {
-    for name in ["doc_export_data", "accessibility_report", "image_save"] {
+    for name in ["doc_export_data", "accessibility_report", "image_save", "ocr_dictionary"] {
         let t = tools().into_iter().find(|t| t.name == name).unwrap();
         assert!(!t.read_only, "{name} writes a file but advertises read-only");
         assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
@@ -1717,6 +1718,25 @@ fn mcp_default_lists_every_tool_and_has_no_meta_tools() {
 
 #[cfg(feature = "mcp")]
 #[test]
+/// `tools/list` advertises exactly the Search & Redact patterns the registry supports, in `pattern`
+/// and by name in the description, so a schema-obeying client can select every one of them.
+fn the_advertised_redact_mark_schema_offers_every_pattern() {
+    use pdfcraft_engine::REDACT_PATTERNS;
+    let registry: Vec<&str> = REDACT_PATTERNS.iter().map(|p| p.id()).collect();
+    let mut s = McpServer::new(Automation::new());
+    let list = rpc(&mut s, 1, "tools/list", json!({}));
+    let mark = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "redact_mark").expect("redact_mark is listed");
+    let advertised: Vec<&str> =
+        mark["inputSchema"]["properties"]["pattern"]["enum"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(advertised, registry, "the advertised pattern enum must be the registry's ids");
+    let description = mark["description"].as_str().unwrap();
+    for id in &registry {
+        assert!(description.contains(id), "the description must name {id}: {description}");
+    }
+}
+
+#[cfg(feature = "mcp")]
+#[test]
 fn mcp_compact_lists_the_core_tools_and_two_meta_tools() {
     let mut s = McpServer::new(Automation::new()).with_compact(true);
     let list = rpc(&mut s, 1, "tools/list", json!({}));
@@ -2518,6 +2538,7 @@ fn protecting_through_tools() {
     // Copying wasn't allowed either (#568): no text or images come out, though search works.
     for (tool, args) in [
         ("text_extract", json!({ "doc": re })),
+        ("text_extract", json!({ "doc": re, "format": "html" })),
         ("text_word_count", json!({ "doc": re })),
         ("text_paragraphs", json!({ "doc": re, "page": 1 })),
         ("doc_export_text", json!({ "doc": re, "path": "out.txt" })),
@@ -2561,6 +2582,16 @@ fn copy_restricted_text_stays_in_the_document() {
     }
     let restyled = ok(&mut a, "text_edit", json!({ "doc": re, "page": 1, "paragraph": 1, "size": 30 }));
     assert!(!restyled.to_string().contains("Page"), "{restyled}");
+    // A path that would carry the page's words OUT of the document — the editable output, or
+    // the review word list — is refused on a copy-restricted document (no engines needed).
+    match a.call("ocr_recognize", &json!({ "doc": re, "output_mode": "editable", "out": "copy.pdf" })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{m}"),
+        other => panic!("the editable output is refused: {other:?}"),
+    }
+    match a.call("ocr_words", &json!({ "doc": re })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{m}"),
+        other => panic!("ocr_words is refused: {other:?}"),
+    }
     if ok(&mut a, "ocr_status", json!({}))["available"] != true {
         eprintln!("skipped the OCR part: OCR models not installed");
         return;
@@ -4788,6 +4819,34 @@ fn redacting_through_tools() {
 }
 
 #[test]
+fn redacting_with_a_caller_regex_through_tools() {
+    let dir = workdir("redact-regex");
+    std::fs::write(
+        dir.join("ids.txt"),
+        "Ref 1 85 05 78 006 084 36 end\nRef 2 91 12 34 567 890 12 end\nCard 4539 1488 0343 6467 and 4539 1488 0343 6468",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "ids.txt" }))["doc"].as_u64().unwrap();
+    let bad = |a: &mut Automation, args: Value| matches!(a.call("redact_mark", &args), Err(ToolError::InvalidArgs(_)));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "(unclosed" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "a*" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x".repeat(2000) })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x", "pattern": "ssn" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x", "validate": "crc" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "x", "validate": "luhn" })));
+    assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "regex": "Z{3}" })), Err(ToolError::Failed(_))));
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d \d\d \d\d \d\d \d{3} \d{3} \d\d" }));
+    assert_eq!(r["marked"].as_u64(), Some(2));
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d{4}( \d{4}){3}", "validate": "luhn" }));
+    assert_eq!(r["marked"].as_u64(), Some(1), "only the number with a valid checksum");
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("85 05") && !text.contains("91 12") && !text.contains("6467"), "{text}");
+    assert!(text.contains("6468"), "{text}");
+}
+
+#[test]
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
 fn redacting_italian_international_slash_numbers_through_tools() {
     let dir = workdir("redact-italian-international-slash");
@@ -4806,6 +4865,35 @@ fn redacting_italian_international_slash_numbers_through_tools() {
         assert!(text.lines().any(|line| line.trim() == label), "only the surrounding label remains: {text}");
     }
     assert!(text.contains("protocol 2024/123456") && text.contains("on 01/10/2026"), "unrelated digit runs remain: {text}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+/// A client obeying the advertised schema can select iban, and the mark made through the tool
+/// covers the spaced number and nothing else.
+fn redacting_an_iban_through_tools() {
+    let table = tools();
+    let advertised: Vec<&str> = table.iter().find(|t| t.name == "redact_mark").unwrap().input_schema["properties"]["pattern"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(advertised.contains(&"iban"), "the advertised redact_mark schema must offer iban: {advertised:?}");
+    let dir = workdir("redact-iban");
+    std::fs::write(dir.join("invoice.txt"), "Pay DE89 3704 0044 0532 0130 00 today\nAccount 12345678 is ours\nTotal due").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "invoice.txt" }))["doc"].as_u64().unwrap();
+    let marked = ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "iban" }));
+    assert_eq!(marked["marked"], 1, "the spaced German sample IBAN needs one mark");
+    assert!(page_text(&mut a, doc)[0].contains("DE89 3704 0044 0532 0130 00"), "marks alone remove nothing");
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": doc }))["applied"], 1);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "redacted.pdf" }))["doc"].as_u64().unwrap();
+    let text = &page_text(&mut a, reopened)[0];
+    assert!(!text.contains("DE89") && !text.contains("0532"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "Pay"), "only the label before the number remains: {text}");
+    assert!(text.contains("Account 12345678") && text.contains("Total due"), "text without an IBAN remains: {text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -5153,6 +5241,83 @@ fn adding_content_through_tools() {
     ok(&mut a, "content_delete", json!({ "doc": doc, "page": 1, "index": 2 }));
     assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 1);
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
+}
+
+/// #6440: `page_add_text` paints text in CMYK or gray for a print file, so its black is 100 K
+/// (`0 0 0 1 k`) rather than DeviceRGB; `content_update` restyles it either way.
+#[test]
+fn added_text_takes_a_cmyk_or_gray_ink_through_tools() {
+    let dir = workdir("content-ink");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "PROOF", "at": [20, 20], "cmyk": [0, 0, 0, 1] }));
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Note", "at": [20, 80], "gray": 0.5 }));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    assert_eq!((&items[0]["cmyk"], &items[1]["gray"]), (&json!([0.0, 0.0, 0.0, 1.0]), &json!(0.5)));
+    // The item streams of the saved file.
+    let saved_items = |a: &mut Automation, name: &str| -> Vec<String> {
+        ok(a, "doc_save", json!({ "doc": doc, "path": name }));
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let page = &pdfcraft_model::pages(&saved)[0];
+        let list = saved.resolve(page.dict.get(b"Contents").unwrap()).as_array().cloned().unwrap();
+        list.iter()
+            .filter_map(|c| match &*saved.resolve(c) {
+                pdfcraft_cos::Object::Stream(s) if s.dict.name(b"PCMark") == Some(&b"Added"[..]) => {
+                    Some(String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let streams = saved_items(&mut a, "ink.pdf");
+    assert!(streams[0].contains("0 0 0 1 k") && !streams[0].contains("rg"), "{}", streams[0]);
+    assert!(streams[1].contains("0.5 g") && !streams[1].contains("rg"), "{}", streams[1]);
+    // Restyled: to RGB with color, and back to CMYK.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "color": "#000000" }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "cmyk": [1, 0, 0, 0] }));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    assert_eq!((&items[0]["cmyk"], items[1].get("gray")), (&json!([1.0, 0.0, 0.0, 0.0]), None));
+    let streams = saved_items(&mut a, "restyled.pdf");
+    assert!(streams[0].contains("1 0 0 0 k") && streams[1].contains("0 0 0 rg"), "{streams:?}");
+    // One colour at a time, four numbers from 0 to 1.
+    for bad in [
+        json!({ "color": "red", "cmyk": [0, 0, 0, 1] }),
+        json!({ "gray": 0.5, "cmyk": [0, 0, 0, 1] }),
+        json!({ "gray": 1.5 }),
+        json!({ "cmyk": [0, 0, 1] }),
+        json!({ "cmyk": [0, 0, 0, 1, 0] }),
+        json!({ "cmyk": [0, "x", 0, 1] }),
+        json!({ "cmyk": [0, 0, 0, -0.1] }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "text": "x", "at": [20, 200] });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(matches!(a.call("page_add_text", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 2, "nothing refused was added");
+    // content_update refuses them too, an image takes no ink, and a refused update changes nothing.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    let before = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    for (index, bad) in [
+        (1, json!({ "gray": 0.5, "cmyk": [0, 0, 0, 1] })),
+        (2, json!({ "color": "red", "gray": 0.5 })),
+        (1, json!({ "size": 30, "cmyk": [0, 0, 0, 2] })),
+        (2, json!({ "bold": true, "gray": -1 })),
+        (3, json!({ "gray": 0.5 })),
+        (3, json!({ "cmyk": [0, 0, 0, 1] })),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "index": index });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(matches!(a.call("content_update", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"], before, "a refused update changed nothing");
 }
 
 /// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
@@ -6763,6 +6928,43 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
 }
 
 #[test]
+fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Lexer, ObjRef, Object, SaveOptions, Stream};
+    let dir = workdir("named-layer-verdict");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let dict = |text: &str| Lexer::new(text.as_bytes(), 0).object().unwrap().as_dict().unwrap().clone();
+    let form = |resources: Dict, ops: &str| {
+        let mut d = dict("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] >>");
+        d.set(b"Resources".to_vec(), resources);
+        Stream::from_raw(d, ops.as_bytes().to_vec())
+    };
+    let blank = cos.add(form(Dict::new(), ""));
+    let layers = dict(&format!("<< /XObject << /n1 {blank} /n3 {blank} >> >>"));
+    let layer_form = cos.add(form(layers, "/n1 Do /n3 Do"));
+    let normal = cos.add(form(dict(&format!("<< /XObject << /FRM {layer_form} >> >>")), "/FRM Do"));
+    // Deliberately malformed CMS: an invalid signature still gets the redrawn invalid state.
+    let value = cos.add(dict("<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 0 0 0] /Contents <00> >>"));
+    let widget = cos
+        .add(dict(&format!("<< /FT /Sig /T (Signature1) /Subtype /Widget /F 4 /Rect [50 50 150 150] /P 4 0 R /V {value} /AP << /N {normal} >> >>")));
+    cos.update_dict(ObjRef::new(4, 0), |p| p.set(b"Annots".to_vec(), vec![Object::Ref(widget)])).unwrap();
+    cos.update_dict(cos.root().unwrap(), |root| root.set(b"AcroForm".to_vec(), dict(&format!("<< /Fields [{widget}] >>")))).unwrap();
+    let original = pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap();
+    std::fs::write(dir.join("named.pdf"), &original).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "named.pdf"}))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "sign_list", json!({"doc": doc}));
+    assert_eq!(list["signatures"][0]["status"], "invalid");
+    assert_eq!(list["signatures"][0]["verdict_shown"], true);
+    let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
+    let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
+    let pixels = image::load_from_memory_with_format(data, image::ImageFormat::Png).unwrap().to_rgba8();
+    let red = pixels.pixels().filter(|p| p.0.iter().zip([0xD7, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
+    assert!(red > 100, "the invalid state is drawn: {red} red pixels");
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
+    assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
+}
+
+#[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
     let mut a = auto(&dir);
@@ -6820,6 +7022,8 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     assert_eq!(t["trusted"].as_array().unwrap().len(), 1);
     let list = ok(a, "sign_list", json!({ "doc": doc }));
     assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")));
+    // PdfCraft's own appearance has no status layers to draw into: only the page badge shows it.
+    assert_eq!(list["signatures"][0]["verdict_shown"], false);
     ok(a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "ok" }));
     let s = &ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0];
     assert_eq!((s["status"].as_str(), s["modification"].as_str()), (Some("valid"), Some("allowed")));
@@ -7429,6 +7633,63 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
 }
 
 #[test]
+fn optimizing_to_a_target_size() {
+    // Dropped at the end of the test, also when an assertion fails.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let (w, h) = (2400u32, 1600u32);
+    let px: Vec<u8> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [(x * 255 / w) as u8 ^ ((x * y) & 15) as u8, (y * 255 / h) as u8, ((x + y) & 255) as u8]
+        })
+        .collect();
+    let mut jpeg = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95);
+    enc.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(600));
+    enc.encode(&px, w, h, image::ExtendedColorType::Rgb8).unwrap();
+    std::fs::write(dir.join("photo.jpg"), &jpeg).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
+    // Without a target nothing changes: no target fields.
+    let base = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "base.pdf" }));
+    assert!(base.get("target_reached").is_none(), "{base}");
+    let base_len = base["bytes_after"].as_u64().unwrap();
+    // A target below the default result is met by a stronger step.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "fit.pdf", "target_bytes": base_len - 1 }));
+    assert_eq!(r["target_reached"], true, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < base_len, "{r}");
+    assert!(r["target_settings"]["step"].as_u64().unwrap() >= 1, "{r}");
+    assert_eq!(std::fs::metadata(dir.join("fit.pdf")).unwrap().len(), r["bytes_after"].as_u64().unwrap());
+    // A target already met by the first attempt tries nothing more.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "easy.pdf", "target_bytes": base_len }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(true), Some(1)), "{r}");
+    // An impossible target: bounded attempts, smallest copy written, said plainly.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "tiny.pdf", "target_bytes": 1 }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(false), Some(6)), "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < base_len, "{r}");
+    assert!(std::fs::metadata(dir.join("tiny.pdf")).is_ok());
+    // The open document is untouched by the failed attempts, and bad targets are refused.
+    let again = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "again.pdf" }));
+    assert_eq!(again["bytes_after"].as_u64().unwrap(), base_len);
+    assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "target_bytes": 0 })), Err(ToolError::InvalidArgs(_))));
+    // A caller who asked for lossless images keeps them: retries only tighten the ppi, no JPEG quality.
+    let lossless = json!({ "compression": "zip" });
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "zip.pdf", "color": lossless, "gray": lossless, "target_bytes": 1 }));
+    assert_eq!(r["attempts"].as_u64(), Some(6), "{r}");
+    assert!(r["target_settings"]["max_ppi"].is_number() && r["target_settings"]["max_jpeg_quality"].is_null(), "{r}");
+    // A JPEG caller gets the quality step.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jpg.pdf", "target_bytes": 1 }));
+    assert!(r["target_settings"]["max_jpeg_quality"].is_number(), "{r}");
+    // Settings already at the ladder's floor leave every rung equal to the first run: no retries.
+    let floor = json!({ "ppi": 9, "above_ppi": 9, "compression": "jpeg", "quality": 1 });
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "floor.pdf", "color": floor, "gray": floor, "target_bytes": 1 }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(false), Some(1)), "{r}");
+    // Confinement still applies.
+    assert!(a.call("doc_optimize", &json!({ "doc": doc, "path": "../out.pdf", "target_bytes": 1000 })).is_err());
+}
+
+#[test]
 fn initial_view_through_tools() {
     let dir = workdir("initial-view");
     let mut a = auto(&dir);
@@ -7454,6 +7715,8 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert_eq!(status["engines"][0]["id"], "ocrs", "{status}");
+    assert!(status["engines"][1]["id"] == "tesseract" && status["engines"][1]["available"].is_boolean(), "{status}");
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -7468,6 +7731,64 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    // An engine that cannot run is named up front, before anything is read.
+    if status["engines"][1]["available"] != true {
+        let why = a.call("ocr_recognize", &json!({ "doc": scan, "engine": "tesseract", "skip_text_pages": false })).unwrap_err();
+        assert!(matches!(why, ToolError::Failed(_)), "{why}");
+        assert!(why.to_string().contains("tesseract"), "{why}");
+    }
+    // ocr_words: the recognition's words with confidence, band and suspects, changing nothing.
+    // ocrs reports no confidences, so `auto` + a confidence merge is asked for when the second
+    // engine is there to supply them; without it confidence and band are honestly null.
+    ok(&mut a, "doc_close", json!({ "doc": scan, "discard_changes": true }));
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    let mut args = json!({ "doc": scan });
+    if status["engines"][1]["available"] == true {
+        args["engine"] = json!("auto");
+        args["strategy"] = json!("confidence");
+    }
+    let words = ok(&mut a, "ocr_words", args);
+    assert!(words["words"].as_u64().unwrap() >= 4, "{words}");
+    let first = &words["pages"][0]["words"][0];
+    assert!(first["text"].is_string() && first["box"].as_array().is_some_and(|b| b.len() == 4), "{words}");
+    if status["engines"][1]["available"] == true {
+        let with_confidence = words["pages"][0]["words"]
+            .as_array()
+            .expect("words")
+            .iter()
+            .filter(|w| w["confidence"].is_number() && w["band"].as_str().is_some())
+            .count();
+        assert!(with_confidence >= 4, "the second engine's confidences arrive: {words}");
+    } else {
+        assert!(first["confidence"].is_null() && first["band"].is_null() && first["suspect"] == false, "{words}");
+    }
+    assert!(a.call("edit_undo", &json!({ "doc": scan })).is_err(), "ocr_words changes nothing, so there is no undo");
+}
+
+/// An editable-text recognition writes a NEW file of visible text, never the source.
+#[test]
+fn ocr_recognize_editable_output_writes_visible_text() {
+    let dir = workdir("ocr-editable");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Editable output words" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "src/scan.pdf" }));
+    // The output never lands on the source.
+    let why = a.call("ocr_recognize", &json!({ "doc": scan, "pages": [1], "output_mode": "editable", "out": "src/scan.pdf" })).unwrap_err();
+    assert!(why.to_string().contains("source"), "{why}");
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1], "output_mode": "editable", "out": "out/ocr.pdf" }));
+    assert!(r["words"].as_u64().unwrap() >= 3, "{r}");
+    let ocr = ok(&mut a, "doc_open", json!({ "path": "out/ocr.pdf" }))["doc"].as_u64().unwrap();
+    // The text is visible (the engine may misread a letter at this dpi — look for a word that
+    // survives).
+    let found = ok(&mut a, "text_find", json!({ "doc": ocr, "query": "output" }));
+    assert!(found["count"].as_u64() >= Some(1), "the new file's text is visible: {found}");
 }
 
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
@@ -7510,6 +7831,46 @@ fn ocr_recognize_files_refuses_paths_outside_the_root() {
     assert!(!dir.join("out").exists(), "nothing was started");
 }
 
+/// Two inputs of one file name from different folders would write the same output in the
+/// batch folder: the batch is refused up front, with or without the OCR engines, naming the
+/// file, and nothing is written.
+#[test]
+fn ocr_recognize_files_refuses_inputs_that_share_a_file_name() {
+    let dir = workdir("ocr-files-same-name");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "one/scan.pdf" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "two/scan.pdf" }));
+    let r = a.call("ocr_recognize_files", &json!({ "paths": ["one/scan.pdf", "two/scan.pdf"], "folder": "out" }));
+    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("scan.pdf") && m.contains("overwrite")), "{r:?}");
+    assert!(std::fs::read_dir(dir.join("out")).map_or(true, |mut d| d.next().is_none()), "nothing was written");
+}
+
+/// `out` belongs to the editable output. A searchable run (the default) writes into the open
+/// document, so an `out` is refused rather than silently ignored, with or without the engines.
+#[test]
+fn ocr_recognize_refuses_an_out_that_nothing_would_use() {
+    let dir = workdir("ocr-out-ignored");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = a.call("ocr_recognize", &json!({ "doc": doc, "out": "../outside.pdf" }));
+    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("editable")), "{r:?}");
+    assert!(!dir.join("../outside.pdf").exists());
+}
+
+/// The editable output is a NEW file: an existing `out` is refused before anything runs (with
+/// or without the engines), and the file is left as it was.
+#[test]
+fn ocr_recognize_editable_output_never_replaces_an_existing_file() {
+    let dir = workdir("ocr-editable-exists");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    std::fs::write(dir.join("taken.pdf"), b"keep me").unwrap();
+    let r = a.call("ocr_recognize", &json!({ "doc": doc, "output_mode": "editable", "out": "taken.pdf" }));
+    assert!(matches!(&r, Err(e) if e.to_string().contains("already exists")), "{r:?}");
+    assert_eq!(std::fs::read(dir.join("taken.pdf")).unwrap(), b"keep me");
+}
+
 #[test]
 fn ocr_recognize_files_writes_searchable_copies() {
     let dir = workdir("ocr-files");
@@ -7523,9 +7884,22 @@ fn ocr_recognize_files_writes_searchable_copies() {
     let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
     let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_save", json!({ "doc": scan, "path": "in/scan.pdf" }));
+    // A file that already has text: the skip-files option passes it over as its own bucket.
+    let typed = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Already typed" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": typed, "path": "in/typed.pdf" }));
+    // Collision pre-flight: the existing out/scan.pdf (written below) stops a rerun.
     let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf", "missing.pdf"], "folder": "out" }));
     assert!(r["files"][0]["words"].as_u64().unwrap() >= 3, "{r}");
     assert!(r["files"][1]["error"].is_string(), "{r}");
+    let why = a.call("ocr_recognize_files", &json!({ "paths": ["in/scan.pdf"], "folder": "out" })).unwrap_err();
+    assert!(matches!(why, ToolError::Failed(_)), "{why}");
+    assert!(why.to_string().contains("scan.pdf"), "{why}");
+    // The skip-files bucket and the low-confidence note.
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/typed.pdf", "in/scan.pdf"], "folder": "out2", "skip_text_files": true }));
+    assert_eq!(r["skipped_files"].as_u64(), Some(1), "{r}");
+    assert!(r["files"][0]["skipped"].is_string(), "{r}");
+    assert_eq!(r["recognized"].as_u64(), Some(1), "{r}");
+    assert!(r["files"][1]["output"].is_string(), "{r}");
     let out = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();
     let found = ok(&mut a, "text_find", json!({ "doc": out, "query": "recognition" }));
     assert!(found.to_string().contains("\"page\""), "{found}");
@@ -7535,18 +7909,6 @@ fn ocr_recognize_files_writes_searchable_copies() {
 /// the second output replaces the first while both results report success. The batch is refused
 /// up front, naming the file, before the folder is created, anything is read or the OCR engines
 /// load, so the outcome is the same with or without the models installed.
-#[test]
-fn ocr_recognize_files_refuses_inputs_that_share_a_file_name() {
-    let dir = workdir("ocr-files-same-name");
-    let mut a = auto(&dir);
-    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "one/scan.pdf" }));
-    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "two/scan.pdf" }));
-    let r = a.call("ocr_recognize_files", &json!({ "paths": ["one/scan.pdf", "two/scan.pdf"], "folder": "out" }));
-    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("scan.pdf")), "{r:?}");
-    assert!(!dir.join("out").exists(), "nothing was started: the output folder was not created");
-}
-
 /// File names are compared without regard to case on Windows and macOS (`scan.pdf` and `Scan.PDF`
 /// are one file there), and exactly elsewhere, where they are two files and the batch is not
 /// refused.
@@ -8047,6 +8409,52 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     assert!(xml.contains("margin-left:20.000pt"), "invoice fields retain their left edge");
     let rendered = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
+}
+
+/// #5149: a two-column, two-row table drawn with ruled lines reaches Word as a table with its
+/// rules, not as four paragraphs one under another.
+#[test]
+fn exporting_a_ruled_two_by_two_table_to_word_keeps_the_table() {
+    let dir = workdir("ruled-table-word");
+    let content = "0.5 w 20 270 m 300 270 l S 20 245 m 300 245 l S 20 220 m 300 220 l S \
+20 220 m 20 270 l S 160 220 m 160 270 l S 300 220 m 300 270 l S \
+BT /F1 11 Tf 25 253 Td (Name) Tj 140 0 Td (Value) Tj -140 -25 Td (Alpha) Tj 140 0 Td (One) Tj ET \
+BT /F1 11 Tf 20 150 Td (A paragraph after the table.) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        stream.as_str(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    std::fs::write(dir.join("table.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "table.docx" }));
+    let zip = std::fs::read(dir.join("table.docx")).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    assert_eq!(xml.matches("<w:tbl>").count(), 1, "the ruled grid is a table: {xml}");
+    let table = xml.split_once("<w:tbl>").and_then(|(_, t)| t.split_once("</w:tbl>")).map(|(t, _)| t).unwrap();
+    assert_eq!(table.matches("<w:tr>").count(), 2, "{table}");
+    for word in ["Name", "Value", "Alpha", "One"] {
+        assert_eq!(table.matches(&format!(">{word}</w:t>")).count(), 1, "{word} is a cell: {xml}");
+        assert_eq!(xml.matches(&format!(">{word}</w:t>")).count(), 1, "{word} is written once");
+    }
+    assert!(table.contains("w:val=\"single\""), "the drawn rules become borders: {table}");
+    assert!(!table.contains("A paragraph after the table."));
+    assert_eq!(xml.matches(">A paragraph after the table.</w:t>").count(), 1);
 }
 
 /// #4158: a word set in italic inside a sentence ("Before *Chevron* after.") reaches Word as an
@@ -9151,27 +9559,15 @@ fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
 /// page is turned with /Rotate 90.
 fn table_pdf() -> Vec<u8> {
     let body = "BT /F1 12 Tf 20 250 Td (Name) Tj 130 0 Td (Qty) Tj -130 -20 Td (Apple) Tj 130 0 Td (12) Tj -130 -20 Td (Pear) Tj 130 0 Td (7) Tj ET";
-    let objs = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>".to_string(),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
-    ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        &stream,
+    ])
 }
 
 /// Issue #740: `text_extract` with `rect` takes what Column select takes, in the displayed-page
@@ -9210,6 +9606,56 @@ fn text_extract_with_a_rect_takes_one_column() {
         let e = a.call("text_extract", &json!({ "doc": doc, "rect": bad })).unwrap_err();
         assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
     }
+}
+
+/// Copy with formatting, headless: `format: "html"` adds each page's text as the HTML fragment
+/// Copy puts on the clipboard, for the whole page or only what `rect` takes.
+#[test]
+fn text_extract_as_html_keeps_the_formatting() {
+    let dir = workdir("rich-copy");
+    std::fs::write(dir.join("table.pdf"), table_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "format": "html" }))["pages"][0];
+    let html = page["html"].as_str().unwrap();
+    assert!(html.starts_with("<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:12pt\">Name"), "{html}");
+    assert!(html.contains("Pear") && html.contains("Qty"), "{html}");
+    assert_eq!(page["text"], "Name\nApple\nPear\nQty\n12\n7", "the plain text is unchanged");
+    assert_eq!(page["styles_incomplete"], false);
+    // Plain text by default: no html key.
+    assert!(ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1] }))["pages"][0].get("html").is_none());
+    // Only what the rect takes; nothing inside gives empty HTML.
+    let column = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [120, 0, 300, 300], "format": "html" }));
+    let html = column["pages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Qty") && !html.contains("Name"), "{html}");
+    let none = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [0, 0, 5, 5], "format": "html" }));
+    assert_eq!(none["pages"][0]["html"], "");
+    // An unknown format is refused.
+    for bad in [json!("rtf"), json!(1)] {
+        let e = a.call("text_extract", &json!({ "doc": doc, "format": bad })).unwrap_err();
+        assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
+    }
+    // Bold, italic, colour and size come through end to end.
+    let body = "BT /F1 18 Tf 20 250 Td (Big) Tj ET BT /F2 12 Tf 20 200 Td (Strong) Tj ET \
+        BT /F3 12 Tf 20 150 Td (Slanted) Tj ET BT 0 0 1 rg /F1 12 Tf 20 100 Td (Blue) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let styled = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>",
+        &stream,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+    ]);
+    std::fs::write(dir.join("styled.pdf"), styled).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }))["pages"][0];
+    let html = page["html"].as_str().unwrap();
+    assert!(html.contains("font-size:18pt\">Big"), "{html}");
+    assert!(html.contains("<strong>Strong</strong>"), "{html}");
+    assert!(html.contains("<em>Slanted</em>"), "{html}");
+    assert!(html.contains("color:#0000FF\">Blue"), "{html}");
 }
 
 #[test]
@@ -10720,6 +11166,162 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
         doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+/// Reviewing headlessly: corrections keep the boxes, a stale or foreign review is refused, and
+/// applying consumes the handle (the pages already accepted were applied once).
+#[test]
+fn ocr_review_corrections_keep_boxes_are_guarded_and_apply_once() {
+    fn render(a: &mut Automation, doc: u64) -> Vec<u8> {
+        let mut result = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+        match result.remove(0) {
+            Content::Png { data, .. } => data,
+            other => panic!("expected a rendered page, got {other:?}"),
+        }
+    }
+    let dir = workdir("ocr-review");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Review these original words" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    let before = render(&mut a, scan);
+    let found = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }));
+    assert!(found["words"].as_u64().unwrap() >= 3, "{found}");
+    let review = found["review"].as_u64().unwrap();
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    for args in [
+        json!({ "doc": text, "review": review }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":999999,"text":"bad"}] }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"bad","origin":[0,0]}] }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"a".repeat(4*1024*1024+1)}] }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"a"},{"page":1,"word":1,"text":"b"}] }),
+    ] {
+        assert!(a.call("ocr_review_apply", &args).is_err());
+        assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    }
+    let result = ok(
+        &mut a,
+        "ocr_review_apply",
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"日本語"},{"page":1,"word":2,"text":""}] }),
+    );
+    assert!(result["applied"].as_u64().unwrap() >= 2);
+    let extracted = page_text(&mut a, scan).join("\n");
+    assert!(extracted.contains("日本語"), "{extracted}");
+    assert_eq!(render(&mut a, scan), before, "corrected text remains invisible at its original geometry");
+    assert!(a.call("ocr_review_apply", &json!({ "doc": scan, "review": review })).is_err(), "consumed reviews cannot be replayed");
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    assert!(a.call("edit_undo", &json!({ "doc": scan })).is_err(), "review acceptance is one undo step");
+
+    let found = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }));
+    let stale = found["review"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": scan, "pages": [1], "degrees": 90 }));
+    let error = a.call("ocr_review_apply", &json!({ "doc": scan, "review": stale })).unwrap_err().to_string();
+    assert!(error.contains("changed since recognition"), "{error}");
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    ok(&mut a, "ocr_review_apply", json!({ "doc": scan, "review": stale, "discard": true }));
+    assert!(a.call("ocr_review_apply", &json!({ "doc": scan, "review": stale })).is_err());
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+
+    let first = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }))["review"].as_u64().unwrap();
+    let second = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }))["review"].as_u64().unwrap();
+    assert_ne!(first, second);
+    assert!(a.call("ocr_review_apply", &json!({ "doc": scan, "review": first })).is_err());
+    ok(
+        &mut a,
+        "ocr_review_apply",
+        json!({ "doc": scan, "review": second, "output_mode": "editable", "out": "reviewed.pdf", "corrections": [{"page":1,"word":1,"text":"Corrected"}] }),
+    );
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    let output = ok(&mut a, "doc_open", json!({ "path": "reviewed.pdf" }))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, output).join("\n").contains("Corrected"));
+    // The editable output is a new file: an existing one is refused and the review is kept.
+    let third = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }))["review"].as_u64().unwrap();
+    let again = a.call("ocr_review_apply", &json!({ "doc": scan, "review": third, "output_mode": "editable", "out": "reviewed.pdf" }));
+    assert!(matches!(&again, Err(e) if e.to_string().contains("already exists")), "{again:?}");
+    ok(&mut a, "ocr_review_apply", json!({ "doc": scan, "review": third, "discard": true }));
+}
+
+#[test]
+fn ocr_dictionary_updates_are_atomic_bounded_and_confined() {
+    let dir = workdir("ocr-dictionary");
+    let mut a = auto(&dir);
+    let path = "ocr-dictionary-en.txt";
+    let out = ok(&mut a, "ocr_dictionary", json!({ "path": path, "add": ["Quartz", "quartz", "日本語"] }));
+    assert_eq!(out["count"], 2);
+    assert_eq!(pdfcraft_engine::ocr::dictionary::words(&std::fs::read_to_string(dir.join(path)).unwrap()).unwrap().len(), 2);
+    let before = std::fs::read(dir.join(path)).unwrap();
+    for args in [
+        json!({ "path": path, "add": ["a\nb"] }),
+        json!({ "path": path, "add": ["x".repeat(1025)] }),
+        json!({ "path": path, "add": ["İ".repeat(512)] }),
+        json!({ "path": path, "add": vec!["x"; 65537] }),
+        json!({ "path": "../outside-ocr-dictionary.txt", "add": ["x"] }),
+    ] {
+        assert!(a.call("ocr_dictionary", &args).is_err());
+    }
+    assert_eq!(std::fs::read(dir.join(path)).unwrap(), before);
+    assert_eq!(ok(&mut a, "ocr_dictionary", json!({ "path": path, "remove": ["QUARTZ"] }))["words"], json!(["日本語"]));
+    assert_eq!(ok(&mut a, "ocr_dictionary", json!({ "path": path }))["count"], 1);
+    std::fs::write(dir.join("ocr-dictionary-large.txt"), vec![b'a'; 4 * 1024 * 1024 + 1]).unwrap();
+    let too_big = a.call("ocr_dictionary", &json!({ "path": "ocr-dictionary-large.txt", "add": ["x"] })).unwrap_err().to_string();
+    assert!(!too_big.contains("must name a dictionary file"), "refused for its size, not its name: {too_big}");
+    assert_eq!(std::fs::metadata(dir.join("ocr-dictionary-large.txt")).unwrap().len(), 4 * 1024 * 1024 + 1);
+}
+
+/// The tool rewrites what it is pointed at (lower-cased, sorted), so it only takes dictionary file
+/// names: another small text file under the root is neither read nor changed.
+#[test]
+fn ocr_dictionary_refuses_files_that_are_not_dictionaries() {
+    let dir = workdir("ocr-dictionary-names");
+    let mut a = auto(&dir);
+    let env = b"TOKEN=Zebra
+APPLE=1
+";
+    for name in [".env", "notes.txt", "ocr-dictionary-en.md", "ocr-dictionary-e n.txt", "sub/readme.txt"] {
+        if let Some(parent) = std::path::Path::new(name).parent() {
+            std::fs::create_dir_all(dir.join(parent)).unwrap();
+        }
+        std::fs::write(dir.join(name), env).unwrap();
+        for args in [json!({ "path": name }), json!({ "path": name, "add": [] }), json!({ "path": name, "add": ["x"] })] {
+            let err = a.call("ocr_dictionary", &args).unwrap_err().to_string();
+            assert!(err.contains("must name a dictionary file"), "{name} {args}: {err}");
+        }
+        assert_eq!(std::fs::read(dir.join(name)).unwrap(), env, "{name} is untouched");
+    }
+}
+
+#[test]
+fn ocr_retained_reviews_have_eight_document_cap_and_close_releases_slot() {
+    let dir = workdir("ocr-review-cap");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut docs = Vec::new();
+    let mut handles = Vec::new();
+    for _ in 0..9 {
+        let doc = ok(&mut a, "doc_create", json!({"from":"text", "text":"Already recognized text"}))["doc"].as_u64().unwrap();
+        docs.push(doc);
+    }
+    for doc in docs.iter().take(8) {
+        handles.push(ok(&mut a, "ocr_words", json!({"doc":doc,"retain_review":true}))["review"].as_u64().unwrap());
+    }
+    let error = a.call("ocr_words", &json!({"doc":docs[8],"retain_review":true})).unwrap_err().to_string();
+    assert!(error.contains("at most 8"), "{error}");
+    let replacement = ok(&mut a, "ocr_words", json!({"doc":docs[0],"retain_review":true}))["review"].as_u64().unwrap();
+    assert_ne!(replacement, handles[0]);
+    assert!(a.call("ocr_review_apply", &json!({"doc":docs[0],"review":handles[0],"discard":true})).is_err());
+    ok(&mut a, "doc_close", json!({"doc":docs[0],"discard_changes":true}));
+    assert!(a.call("ocr_review_apply", &json!({"doc":docs[0],"review":replacement})).is_err());
+    let final_handle = ok(&mut a, "ocr_words", json!({"doc":docs[8],"retain_review":true}))["review"].as_u64().unwrap();
+    ok(&mut a, "ocr_review_apply", json!({"doc":docs[8],"review":final_handle,"discard":true}));
 }
 
 #[test]

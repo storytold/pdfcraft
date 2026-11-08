@@ -17,6 +17,21 @@ pub(crate) fn with<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboa
     f(&mut clipboard)
 }
 
+/// [`with`] on the clipboard kept in `kept`, created on first use, instead of a fresh one. On
+/// X11 the copied data is served only while its `Clipboard` lives, so a copy made through a
+/// kept clipboard stays pasteable after the call returns.
+pub(crate) fn with_kept<T>(
+    kept: &mut Option<arboard::Clipboard>,
+    f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+) -> Result<T, arboard::Error> {
+    let _turn = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let clipboard = match kept {
+        Some(clipboard) => clipboard,
+        None => kept.insert(arboard::Clipboard::new()?),
+    };
+    f(clipboard)
+}
+
 /// Nonempty text supersedes the app's cached image, even if another clipboard format also exists.
 pub(crate) fn has_text() -> bool {
     with(|cb| cb.get_text()).is_ok_and(|text| !text.is_empty())
