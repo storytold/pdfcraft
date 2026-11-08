@@ -176,13 +176,24 @@ mod draft {
             if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
                 return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
             }
+            // A printer reported as not two-sided is sent no duplex ticket, so its default would
+            // decide instead. `Some(false)` does not prove that default is single-sided, so a
+            // layout that needs single-sided sheets cannot be treated as safe for it either.
+            let no_two_sided =
+                self.printer.as_deref().and_then(|name| self.printers.iter().find(|p| p.name == name)).and_then(|p| p.two_sided) == Some(false);
+            if self.cut_and_stack() && no_two_sided {
+                return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
+            }
             // A two-sided booklet needs the printer to flip sheets itself; a printer reported as
             // not two-sided is sent no duplex ticket, so its default would decide instead. Refuse
             // and tell the user to change the printer setting or print front-and-back manually.
-            let no_two_sided =
-                self.printer.as_deref().and_then(|name| self.printers.iter().find(|p| p.name == name)).and_then(|p| p.two_sided) == Some(false);
             if self.handling == Handling::Booklet && self.booklet_subset == BookletSubset::BothSides && no_two_sided {
                 return Err("This printer doesn't support two-sided printing. Change the printer setting to two-sided, or print the front and back separately.".into());
+            }
+            // A manual booklet pass needs single-sided sheets, which a dropped duplex ticket
+            // cannot guarantee for the same reason as cut and stack.
+            if self.handling == Handling::Booklet && self.booklet_subset != BookletSubset::BothSides && no_two_sided {
+                return Err("This printer doesn't take two-sided settings, so a single-sided booklet pass cannot be guaranteed. Change the printer setting to single-sided.".into());
             }
             let range = match self.which {
                 Which::All | Which::Selected | Which::Current => None,
@@ -963,6 +974,22 @@ mod tests {
             ..PrintDraft::default()
         };
         assert_eq!(off.job("report.pdf").duplex, None);
+    }
+
+    /// `two_sided: Some(false)` only says no duplex ticket can be sent; it does not prove the
+    /// printer's default is single-sided, so cut and stack must not be treated as safe.
+    #[test]
+    fn cut_and_stack_refused_for_printer_without_two_sided_ticket() {
+        let printer = spool::Printer { name: "Office PS".into(), default: true, two_sided: Some(false), description: String::new() };
+        let cut = PrintDraft {
+            printers: vec![printer.clone()],
+            printer: Some(printer.name.clone()),
+            handling: Handling::Multiple,
+            order: PageOrder::CutStack,
+            ..PrintDraft::default()
+        };
+        assert_eq!(cut.job("report.pdf").duplex, None);
+        assert!(cut.settings(4, &[]).is_err(), "cut and stack needs single-sided sheets, which a dropped duplex ticket cannot guarantee");
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
