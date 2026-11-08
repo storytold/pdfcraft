@@ -9445,6 +9445,50 @@ fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
     assert!(page_text(&mut a, reopened)[0].contains("แก้ไข น้ำ"));
 }
 
+/// Thai typed into Fill & Sign text, a text box, a form field, a footer and a watermark (#2354) is
+/// drawn from PdfCraft's Thai face, as Add text draws it: no tool warns of `?`, and after a save
+/// each one's text is found as typed and the page renders. A build without a Thai face refuses
+/// the text in each, saying what to do, rather than writing `?????`.
+#[test]
+fn thai_in_fill_sign_text_comments_fields_and_page_marks_is_drawn_and_found() {
+    let dir = workdir("thai-everywhere");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let thai = "บุญฤทธิ์ น้ำ ปั้น";
+    let field = ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "rect": [20, 120, 220, 142]}))["field"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let calls = [
+        ("fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": thai, "font_size": 14})),
+        ("comment_add", json!({"doc": doc, "page": 1, "type": "textbox", "rect": [20, 160, 200, 190], "contents": thai})),
+        ("form_fill", json!({"doc": doc, "values": {field.as_str(): thai}})),
+        ("doc_header_footer", json!({"doc": doc, "pages": [1], "footer_center": format!("{thai} <<1>>")})),
+        ("doc_watermark", json!({"doc": doc, "pages": [1], "text": thai})),
+    ];
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        for (tool, args) in calls {
+            let err = a.call(tool, &args).unwrap_err().to_string();
+            assert!(err.contains("Thai") && err.contains("CRAFT_FONTS_DIR"), "{tool}: {err}");
+        }
+        assert_eq!(ok(&mut a, "comment_list", json!({"doc": doc}))["comments"].as_array().map(Vec::len), Some(0));
+        return;
+    }
+    for (tool, args) in calls {
+        let r = ok(&mut a, tool, args);
+        assert!(r.get("warnings").is_none(), "{tool}: {r}");
+    }
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "thai-marks.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path": "thai-marks.pdf"}))["doc"].as_u64().unwrap();
+    let found = ok(&mut a, "text_find", json!({"doc": reopened, "query": "บุญฤทธิ์"}));
+    assert_eq!(found["count"], 5, "{found}");
+    let rendered = a.call("page_render", &json!({"doc": reopened, "page": 1, "dpi": 72})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, .. } if !data.is_empty())));
+    // Flattened, every one of them is page text, as typed.
+    ok(&mut a, "doc_flatten", json!({"doc": reopened}));
+    assert_eq!(page_text(&mut a, reopened)[0].matches(thai).count(), 5, "{:?}", page_text(&mut a, reopened));
+}
+
 #[test]
 fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     let dir = workdir("hebrew-content");
@@ -9501,6 +9545,75 @@ fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
     let reopened = ok(&mut a, "doc_open", json!({"path":"moved.pdf"}))["doc"].as_u64().unwrap();
     assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
     assert!(page_text(&mut a, reopened)[0].contains("Added label"));
+}
+
+/// Edit a PDF's ⌘A, ⌘C / ⌘X and ⌘V headlessly: every object of a page copied, pasted into
+/// another document and onto its own page (stepped down and right), and cut as one undo step.
+#[test]
+fn objects_copy_cut_and_paste_through_tools_within_and_across_documents() {
+    let dir = workdir("object-copy-paste");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let other = ok(&mut a, "doc_open", json!({"path":"b.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Added label","rect":[20,20,130,45]}));
+    assert!(matches!(a.call("object_paste", &json!({"doc":doc,"page":1})), Err(ToolError::Failed(_))), "nothing copied yet");
+    let listed = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(listed["count"], 2);
+    let copied = ok(&mut a, "object_copy", json!({"doc":doc,"page":1,"all":true,"generation":listed["generation"]}));
+    assert_eq!(copied["copied"], 2);
+    let text = copied["text"].as_str().unwrap();
+    assert!(text.contains("Added label") && text.contains("Page 1"), "{text}");
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), listed, "a copy changes nothing");
+
+    // Into another document: the same objects, where they were, as its own page text.
+    let before = ok(&mut a, "object_list", json!({"doc":other,"page":2}));
+    assert_eq!(ok(&mut a, "object_paste", json!({"doc":other,"page":2}))["pasted"], 2);
+    let pasted = ok(&mut a, "object_list", json!({"doc":other,"page":2}));
+    assert_eq!(pasted["count"], 3);
+    let rect_of =
+        |list: &Value, text: &str| list["objects"].as_array().unwrap().iter().find(|o| o["text"] == text).map(|o| o["rect"].clone()).unwrap();
+    assert_eq!(rect_of(&pasted, "Page 1"), rect_of(&listed, "Page 1"));
+    // The added text box comes as the page's own text, drawn inside the box it had.
+    let (label, box_) = (rect_of(&pasted, "Added label"), rect_of(&listed, "Added label"));
+    assert!((0..2).all(|i| label[i].as_f64() >= box_[i].as_f64()) && (2..4).all(|i| label[i].as_f64() <= box_[i].as_f64()), "{label} in {box_}");
+    assert!(page_text(&mut a, other)[1].contains("Added label"));
+    ok(&mut a, "doc_save", json!({"doc":other,"path":"pasted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"pasted.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, reopened)[1].contains("Page 1"));
+    ok(&mut a, "edit_undo", json!({"doc":other}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":other,"page":2}))["objects"], before["objects"], "one undo step");
+
+    // Onto its own page: 18 points down and to the right.
+    ok(&mut a, "object_paste", json!({"doc":doc,"page":1}));
+    let both = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(both["count"], 4);
+    let original = rect_of(&listed, "Page 1");
+    let moved =
+        both["objects"].as_array().unwrap().iter().filter(|o| o["text"] == "Page 1").map(|o| o["rect"].clone()).find(|r| *r != original).unwrap();
+    for i in 0..4 {
+        assert!((moved[i].as_f64().unwrap() - original[i].as_f64().unwrap() - 18.0).abs() < 0.02, "{moved} {original}");
+    }
+
+    // Cut: copied, then deleted as one undo step.
+    let cut = ok(&mut a, "object_copy", json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":1}],"cut":true}));
+    assert_eq!(cut["copied"], 1);
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["count"], 3);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], both["objects"]);
+
+    for args in [
+        json!({"doc":doc,"page":1,"all":true,"objects":[{"kind":"text","index":1}]}),
+        json!({"doc":doc,"page":1}),
+        json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":99}]}),
+        json!({"doc":doc,"page":9,"all":true}),
+    ] {
+        assert!(a.call("object_copy", &args).is_err(), "{args}");
+    }
+    assert!(
+        matches!(a.call("object_copy", &json!({"doc":doc,"page":1,"all":true,"generation":listed["generation"]})), Err(ToolError::Failed(_))),
+        "stale"
+    );
+    assert!(a.call("object_paste", &json!({"doc":doc,"page":9})).is_err());
 }
 
 #[test]

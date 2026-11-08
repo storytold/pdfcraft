@@ -25,6 +25,15 @@ pub(crate) fn refuse_foreign_text(doc: &Document, d: &Dict) -> Result<(), AnnotE
     Ok(())
 }
 
+/// Thai typed into a text box (`free_text`) that this build can't draw (it has no Thai face): refused
+/// with what to do, rather than drawn as `?`.
+pub(crate) fn refuse_undrawable_thai(free_text: bool, text: &str) -> Result<(), AnnotError> {
+    match free_text.then(|| pdfcraft_fonts::shaped_text::thai_refusal(text)).flatten() {
+        Some(why) => Err(AnnotError::Undrawable(why)),
+        None => Ok(()),
+    }
+}
+
 /// Format a number for content streams and DA strings.
 pub(crate) fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
@@ -165,6 +174,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     let (_, r) = annot_ref(doc, page, index)?;
     let d = annot_dict(doc, r);
     let free_text = d.name(b"Subtype") == Some(b"FreeText");
+    refuse_undrawable_thai(free_text, text)?;
     let snug = free_text && is_snug(&d);
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
@@ -224,8 +234,8 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let height = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size);
+    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -459,7 +469,7 @@ fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let (_, size) = appearance::parse_da(d);
     let lines = appearance::wrap(&text, size, wrap.max(1.0));
     let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    [widest, lines.len().max(1) as f64 * size * 1.2]
+    [widest, appearance::text_lines_height(&lines, size)]
 }
 
 /// The width and height of FreeText `d`'s text box `tb` as displayed: swapped on a page turned by

@@ -230,7 +230,9 @@ impl Built {
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, built: Built) -> Result<(), AnnotError> {
     // `missing`: characters the standard fonts can't draw came out as `?`; the annotation is
     // marked with the first.
-    let Built { stream, missing, rect } = built;
+    let Built { mut stream, missing, rect } = built;
+    // A text box's Thai glyphs are streams of their own.
+    pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.

@@ -9,12 +9,39 @@
 //! (`draw::with_direct_values`).
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! Helvetica font with WinAnsi encoding, and draw Thai from the craft-fonts Thai face as Type 3
+//! glyphs (`pdfcraft_fonts::shaped_text`, the writer Add text uses); line breaking uses
+//! [`text_width`], the standard-14 metrics and the Thai face's shaped advances.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+use pdfcraft_fonts::shaped_text;
+use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, win_ansi, wrap_with};
+
+/// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
+/// face that text boxes draw it with.
+pub fn text_width(text: &str, size: f64) -> f64 {
+    shaped_text::thai_width(text, size, helvetica_width)
+}
+
+/// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    wrap_with(text, size, width, text_width)
+}
+
+/// How far a text box's `lines` reach, in em: above the first baseline (0.9 of the 1.2 em line)
+/// and below the last (0.3), or further where Thai stacked marks or descenders reach, so the box
+/// is sized to their ink and doesn't clip them.
+fn reach(lines: &[String]) -> [f64; 2] {
+    let ink = |line: Option<&String>| line.and_then(|l| shaped_text::thai_reach(l));
+    [ink(lines.first()).map_or(0.9, |r| r[1].max(0.9)), ink(lines.last()).map_or(0.3, |r| (-r[0]).max(0.3))]
+}
+
+/// The height a text box's `lines` take at `size`, inside its padding: 1.2 em a line, and more
+/// for Thai that reaches further ([`reach`]).
+pub fn text_lines_height(lines: &[String], size: f64) -> f64 {
+    let [up, down] = reach(lines);
+    lines.len().max(1) as f64 * size * 1.2 + (up - 0.9 + down - 0.3) * size
+}
 
 use crate::{Document, NOTE_SIZE, Rgb, n};
 
@@ -394,13 +421,15 @@ pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
 
 /// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
 /// they can't, which would come out as `?`: what it is (for the message) and the character. The
-/// text of a text box, callout or Fill & Sign text, a line's caption, a measurement's label, a
+/// text of a text box, callout or Fill & Sign text (whose Thai the Thai face draws, where this
+/// build has one), a line's caption, a measurement's label, a
 /// dynamic stamp's "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
 /// it can be drawn.
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
+        // A text box draws Thai too.
+        b"FreeText" => return Some(("the comment's text", shaped_text::first_undrawable(&text(b"Contents")?)?)),
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
@@ -413,6 +442,11 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
 pub(crate) fn helvetica_resource() -> Object {
+    Object::Dict(helvetica_fonts())
+}
+
+/// [`helvetica_resource`]'s dictionary.
+fn helvetica_fonts() -> Dict {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
@@ -420,7 +454,7 @@ pub(crate) fn helvetica_resource() -> Object {
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let mut fonts = Dict::new();
     fonts.set(b"Helv".to_vec(), Object::Dict(font));
-    Object::Dict(fonts)
+    fonts
 }
 
 /// Where a caret and its paragraph symbol go within `rect`: the box the caret is drawn in, and for
@@ -1108,27 +1142,31 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     ));
     let mut out = c.into_bytes();
     let lines = wrap(&text, size, width);
-    let mut y = rect[3] - pad - size * 0.9;
+    let mut y = rect[3] - pad - size * reach(&lines)[0];
     if round {
-        y -= ((rect[3] - rect[1] - 2.0 * pad - lines.len() as f64 * size * 1.2) / 2.0).max(0.0);
+        y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
-    for line in lines {
+    // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
+    // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
+    // `?`, which `undrawable_text` reports), in Helvetica.
+    let mut fonts = helvetica_fonts();
+    let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
+    let mut current = None;
+    for pieces in &pieces {
         if y < rect[1] - size {
             break;
         }
-        let lw = text_width(&line, size);
+        let lw = shaped_text::pieces_width(pieces, size, 0.0, helvetica_width);
         let x = match q {
             1 => rect[0] + pad + (width - lw) / 2.0,
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        out.extend(literal(&win_ansi(&line)));
-        out.extend_from_slice(b" Tj\n");
+        shaped.show_line(&mut out, pieces, x, y, size, "Helv", win_ansi, |s| helvetica_width(s, size), &mut current);
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
-    res.set(b"Font".to_vec(), helvetica_resource());
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
