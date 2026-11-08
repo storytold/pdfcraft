@@ -344,7 +344,8 @@ const TAKEN_BACK_SCAN: usize = 8;
 /// stores it. Only a right-to-left letter or a neutral (punctuation, a symbol) after the blank counts: left-to-right
 /// text has no reverse-order show strings, and in scanned pages' invisible text layers its spaces overlap letters at
 /// random. A neutral counts only inside right-to-left text: the nearest letter or number before it, and the nearest
-/// after the blank, is right-to-left (numbers count as such beside neutrals) or the line's edge. A parenthesis that opens Latin text then stays
+/// after the blank, is right-to-left (numbers count as such beside neutrals), or the line's edge on a right-to-left
+/// line. A parenthesis that opens Latin text then stays
 /// where x order puts it, as on a line without right-to-left text. A glyph that only touches the blank's start was
 /// drawn beside it, as text set letter by letter leftwards is, and x order already reads it right. A blank that a
 /// glyph placed before them also reaches over sits inside a cluster (a letter and the marks drawn on it), where its
@@ -368,12 +369,16 @@ fn keep_taken_back_blanks(glyphs: &[&TextGlyph], placed: &mut [usize]) {
     if !placed.iter().any(|&i| glyphs.get(i).is_some_and(|g| g.text.chars().any(is_rtl))) {
         return;
     }
+    // The line's direction, as `reverse_rtl` takes it: right-to-left when it has more right-to-left letters than
+    // left-to-right ones. A line's edge has that direction (UAX #9 X10: sos and eos).
+    let count = |b: Bidi| placed.iter().filter(|&&i| glyphs.get(i).is_some_and(|g| bidi_class(&g.text) == b)).count();
+    let line_rtl = count(Bidi::R) > count(Bidi::L);
     // Whether the nearest glyph with a strong direction from position `from` on, stepping by `step`, is right-to-left,
-    // or there is none before the line's edge.
+    // or the line is when there is none before its edge.
     let rtl_side = |placed: &[usize], from: Option<usize>, step: fn(usize) -> Option<usize>| {
         let mut p = from;
         for _ in 0..TAKEN_BACK_SCAN {
-            let Some(g) = p.and_then(|p| glyph(placed, p)) else { return true };
+            let Some(g) = p.and_then(|p| glyph(placed, p)) else { return line_rtl };
             if let Some(rtl) = strong(g) {
                 return rtl;
             }
@@ -536,7 +541,9 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
             let start = sc.group.len();
             sc.group.extend(run.range());
             sc.group[start..].sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
-            let left = sc.group[start..].iter().map(|&i| x0(i)).fold(f32::INFINITY, f32::min);
+            // Ordered by where its clusters start: a mark riding on a glyph may reach left of it, but it has no place of
+            // its own, so it cannot put its run before one whose first letter stands further left.
+            let left = sc.group[start..].iter().map(|&i| x0(anchor_of(&sc.anchor, i))).fold(f32::INFINITY, f32::min);
             let right = sc.group[start..].iter().map(|&i| glyphs[i].rect[2]).fold(f32::NEG_INFINITY, f32::max);
             let lead = sc.group[start];
             sc.rows.push(Row { left, right, first: run.start, lead, glyphs: start..sc.group.len() });
@@ -586,6 +593,25 @@ fn bidi_class(text: &str) -> Bidi {
     }
 }
 
+/// UAX #9 W1: a nonspacing mark takes the class of the glyph before it, the letter it rides on, which placement keeps
+/// right in front of it. A mark after a word gap (`None`) rides on nothing and keeps its own class.
+fn resolve_marks(glyphs: &[&TextGlyph], items: &mut [(Option<usize>, Bidi)]) {
+    let nsm = |i: usize| {
+        glyphs.get(i).is_some_and(|g| !g.text.is_empty() && g.text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM))
+    };
+    for k in 1..items.len() {
+        let base = match items.get(k - 1) {
+            Some(&(Some(_), base)) => base,
+            _ => continue,
+        };
+        if let Some(it) = items.get_mut(k)
+            && it.0.is_some_and(nsm)
+        {
+            it.1 = base;
+        }
+    }
+}
+
 /// Reorders a line of `idx` from visual to logical order with a simplified bidi level pass (#2667), carrying the
 /// word gaps along: `spaces[w]` is a gap left of `idx[w]` (#1062). The paragraph is right-to-left when it has
 /// more right-to-left than left-to-right glyphs; numbers keep their left-to-right order, and neutrals
@@ -601,6 +627,7 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut
     }
     let texts: Vec<&str> = items.iter().map(|it| it.0.map_or("", |i| glyphs[i].text.as_str())).collect();
     let text = |k: usize| texts.get(k).copied().unwrap_or("");
+    resolve_marks(glyphs, &mut items);
     let count = |b: Bidi| items.iter().filter(|it| it.1 == b).count();
     let para = if count(Bidi::R) > count(Bidi::L) { Bidi::R } else { Bidi::L };
     let n = items.len();

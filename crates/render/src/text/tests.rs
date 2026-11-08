@@ -1347,7 +1347,8 @@ fn two_taken_back_spaces_on_a_line_each_stay_before_their_letter() {
         v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
         x += 6.5;
     }
-    assert_eq!(layout(v).plain_text().trim(), "המדינה");
+    // Untrimmed: both spaces follow the word, in drawing order.
+    assert_eq!(layout(v).plain_text(), "המדינה  ");
 }
 
 /// pdf.js issue 11656 (https://github.com/mozilla/pdf.js/issues/11656): its content stream rebuilt with the same
@@ -2358,4 +2359,60 @@ fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {
     assert_eq!(text.glyph_at(20.0, 10.0), Some(1), "an edge is in");
     assert_eq!(text.glyph_at(25.0, 5.0), None);
     assert_eq!(PageText::default().glyph_at(0.0, 0.0), None);
+}
+
+/// A combining mark takes the direction of the letter it rides on (UAX #9 W1, nonspacing marks): a Latin accent at the
+/// end of a Latin word on a right-to-left line stays after its letter, not on the far side of it.
+#[test]
+fn a_latin_mark_at_a_word_end_on_a_right_to_left_line_stays_after_its_letter() {
+    // Drawn left to right: "abé" (e and a combining acute riding on it), a space, then "שלום" right to left.
+    let mut v = vec![em_box("a", 0.0, 0.0, 6.0, 11.0), em_box("b", 6.0, 0.0, 12.0, 11.0), em_box("e", 12.0, 0.0, 18.0, 11.0)];
+    v.push(em_box("\u{301}", 14.0, 0.0, 14.0, 11.0));
+    v.push(em_box(" ", 18.0, 0.0, 21.5, 11.0));
+    let mut x = 21.5;
+    for c in ["ם", "ו", "ל", "ש", "ם", "ו", "ל", "ש"] {
+        v.push(em_box(c, x, 0.0, x + 6.5, 11.0));
+        x += 6.5;
+    }
+    assert_eq!(layout(v).plain_text().trim_end(), "שלוםשלום abe\u{301}");
+}
+
+/// A line's edge has the line's direction (UAX #9 X10): on a line of mostly left-to-right text, a neutral taken back
+/// over a space at the line's left edge is not inside right-to-left text, so it stays where its position puts it,
+/// however close a Hebrew word is on its other side.
+#[test]
+fn a_taken_back_neutral_at_the_edge_of_a_left_to_right_line_keeps_its_place() {
+    let line = |words: &[&str]| {
+        let mut v = vec![em_box(" ", 10.0, 0.0, 13.5, 11.0), em_box("(", 9.9, 0.0, 15.0, 11.0)];
+        let mut x = 15.0;
+        for word in words {
+            for c in word.chars() {
+                v.push(em_box(&c.to_string(), x, 0.0, x + 6.5, 11.0));
+                x += 6.5;
+            }
+            x += 3.5;
+        }
+        layout(v).plain_text()
+    };
+    // Mostly Latin: x order, "(" first.
+    assert_eq!(line(&["םולש", "Hello", "world", "again"]).trim(), "( שלום Hello world again");
+    // Mostly Hebrew: the line's edge is right-to-left, so "(" is taken back with the space, as "?" is in
+    // `a_space_taken_back_under_the_next_letter_stays_before_it`.
+    assert_eq!(line(&["םולש", "םלוע", "AB"]).trim_end(), "AB עולם שלום(");
+}
+
+/// Runs that overprint each other are placed by where their clusters start: a combining mark riding on the second
+/// run's first letter and reaching left of the first run's start does not put the second run first.
+#[test]
+fn a_mark_reaching_left_of_its_letter_does_not_reorder_overprinting_runs() {
+    // A first run "ABCDEF", then a second run drawn back over it, its "c" starting 1 pt right of "A" and the acute on
+    // that "c" reaching 1.5 pt left of "A".
+    let mut v: Vec<TextGlyph> =
+        "ABCDEF".chars().zip(0u8..).map(|(c, k)| em_box(&c.to_string(), 100.0 + 6.0 * f32::from(k), 0.0, 106.0 + 6.0 * f32::from(k), 11.0)).collect();
+    v.push(em_box("c", 101.0, 0.0, 107.0, 11.0));
+    v.push(em_box("\u{301}", 98.5, 0.0, 102.5, 11.0));
+    v.push(em_box("d", 107.0, 0.0, 113.0, 11.0));
+    let text = layout(v).plain_text();
+    assert!(text.starts_with("ABCDEF"), "{text:?}");
+    assert!(text.contains("c\u{301}d"), "{text:?}");
 }
