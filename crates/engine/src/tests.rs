@@ -3000,6 +3000,27 @@ fn setting_the_calculation_order_recalculates_and_undoes() {
     assert!(matches!(s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into()] }), Err(EditError::Form(_))));
 }
 
+/// A Calculate script that sets its own field through the field object, not `event.value`,
+/// gives the field that value, text included; when it sets `event.value` as well, that wins.
+#[test]
+fn a_calculate_script_setting_its_own_field_object_keeps_the_value() {
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["origin", "copy", "both"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    let script = |name: &str, js: &str| Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(js.into()) };
+    s.apply(id, script("copy", "var o = this.getField(\"origin\");\nthis.getField(\"copy\").value = o.value;")).unwrap();
+    s.apply(id, script("both", "this.getField(\"both\").value = \"field\";\nevent.value = this.getField(\"origin\").value + \"!\";")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("abc".into()) }).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
+    assert_eq!(value(&s, "copy").as_deref(), Some("abc"));
+    assert_eq!(value(&s, "both").as_deref(), Some("abc!"), "event.value decides when the script sets both");
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("12".into()) }).unwrap();
+    assert_eq!(value(&s, "copy").as_deref(), Some("12"));
+}
+
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {

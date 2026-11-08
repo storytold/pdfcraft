@@ -163,6 +163,10 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
             let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
+            // A script may set its own field through the field object (`getField("Total").value
+            // = …`) rather than through `event.value`. `apply_changes` leaves the event's own
+            // field to the event, so that value is the result unless `event.value` changed too.
+            let own = r.changes.iter().find(|c| c.name == f.name).and_then(|c| c.value.as_ref()).map(|v| v.first().cloned().unwrap_or_default());
             scripting::apply_changes(doc, &r.changes, &f.name)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
@@ -170,7 +174,10 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             if !r.rc {
                 continue;
             }
-            r.value
+            match own {
+                Some(v) if r.value == current => v,
+                _ => r.value,
+            }
         } else {
             let Some(v) = af::calculate(&f.actions.calculate, &lookup) else { continue };
             v
