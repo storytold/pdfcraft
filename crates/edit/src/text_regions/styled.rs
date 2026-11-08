@@ -1051,8 +1051,11 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
     // The bundled face is Regular and upright. A source its descriptor or name marks bold or
     // italic keeps that style, so completing it with these outlines would be a silent change:
     // it needs an explicit choice instead. (Variable-font instances often keep the family name.)
-    let style = fonts.get(source.font.as_bytes()).and_then(|f| doc.dict(f)).map(|f| FontStyle::of(doc, &f, &Metrics::from_dict(doc, &f)));
-    if style.map_or(source.bold || source.italic, |s| s.bold || s.italic) {
+    let style = fonts
+        .get(source.font.as_bytes())
+        .and_then(|f| doc.dict(f))
+        .map_or(FontStyle { bold: source.bold, italic: source.italic }, |f| FontStyle::of(doc, &f, &Metrics::from_dict(doc, &f)));
+    if style.bold || style.italic {
         return false;
     }
     if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
@@ -1063,9 +1066,12 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
     }
     // A registered complete matching program also completes the source subset.
     // Do not replace it with bundled outlines merely because the original resource is a subset.
+    // Only one in the source's style does (`program_candidates`), so only that one counts here.
     let family = pdfcraft_fonts::embedding::face_key(&source.base_font);
     !fonts.iter().filter_map(|(_, font)| doc.dict(font)).any(|font| {
-        pdfcraft_fonts::embedding::face_key(&Metrics::from_dict(doc, &font).base_font) == family
+        let metrics = Metrics::from_dict(doc, &font);
+        pdfcraft_fonts::embedding::face_key(&metrics.base_font) == family
+            && FontStyle::of(doc, &font, &metrics) == style
             && pdfcraft_fonts::pdf::embedded_sfnt(doc, &font).is_some_and(|bytes| {
                 pdfcraft_fonts::embedding::validate(&bytes).is_ok()
                     && pdfcraft_fonts::source_shaping::has_thai_layout(&bytes)

@@ -12692,6 +12692,38 @@ fn a_bold_thai_subset_is_not_completed_with_the_regular_bundled_face() {
     assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused edit changes nothing");
 }
 
+/// A complete program of the family in another style (bold, by its descriptor) can't complete a
+/// Regular subset, so it doesn't keep the bundled Regular outlines from doing so: the text is not
+/// drawn in the bold program instead.
+#[test]
+fn a_complete_program_in_another_style_does_not_keep_the_bundled_thai_face_out() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!(
+            "skipping a_complete_program_in_another_style_does_not_keep_the_bundled_thai_face_out: built without craft-fonts (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+    })
+    .unwrap();
+    let complete = with_legacy_thai_cmap(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec());
+    let mut bold = legacy_thai_font(&mut doc, "NotoSansThai", &complete, LEGACY_THAI_UNICODE);
+    let Some(Object::Array(mut descendants)) = bold.get(b"DescendantFonts").cloned() else { panic!("fixture") };
+    let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!("fixture") };
+    let Some(Object::Dict(mut descriptor)) = descendant.get(b"FontDescriptor").cloned() else { panic!("fixture") };
+    descriptor.set(b"FontWeight".to_vec(), Object::Int(700));
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    bold.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), Object::Dict(bold));
+    let edited = text::rewrite_block(&mut doc, 0, 0, Some("ผู้ใช้"), &text::BlockStyle::default()).expect("completed with the bundled face");
+    assert_eq!(edited.substituted.as_deref(), pdfcraft_fonts::document_thai_font().map(|f| f.family));
+}
+
 #[test]
 fn grouped_source_text_preparation_edits_original_operators_without_changing_shared_forms() {
     let mut doc = page_with_forms("q 1 0 0 1 12 20 cm /Body Do Q", &[("Body".into(), "BT /F1 14 Tf 40 500 Td (Original body) Tj ET".into())]);
