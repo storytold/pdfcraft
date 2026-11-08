@@ -387,15 +387,15 @@ fn picker_text_is_drawable(ui: &egui::Ui, text: &str) -> bool {
     }
 }
 
-/// Hide the pending Punjabi date entry without its UI catalog; keep existing date choices.
-fn date_language_is_offered(code: &str) -> bool {
-    code != "pa-guru" || crate::i18n::Lang::from_code(code).is_some()
+/// Date choices follow the engine, including English-name Punjabi without an interface catalog.
+fn date_language_options(drawable: impl Fn(&str) -> bool) -> Vec<(&'static pdfcraft_engine::dates::DateLanguage, &'static str)> {
+    pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, &drawable))).collect()
 }
 
 /// The date picker's displayed name.
 pub(crate) fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable: impl FnOnce(&str) -> bool) -> &'static str {
     if l.code == "pa-guru" {
-        return tl!("Punjabi (Gurmukhi; English date names)");
+        return tl!(l.display_name());
     }
     match crate::i18n::Lang::from_code(l.code) {
         Some(language) => language.picker_name(drawable),
@@ -899,11 +899,7 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut P
                 .iter()
                 .find(|l| current.as_deref() == Some(l.code))
                 .map_or_else(|| follow.clone(), |l| date_language_picker_name(l, drawable).to_string());
-            let names = DATE_LANGUAGES
-                .iter()
-                .filter(|l| date_language_is_offered(l.code))
-                .map(|l| (l, date_language_picker_name(l, drawable)))
-                .collect::<Vec<_>>();
+            let names = date_language_options(drawable);
             (follow, selected, current, names)
         };
         craft_ui::ComboBox::from_id_salt("date-language")
@@ -1050,11 +1046,25 @@ mod punjabi_date_tests {
     use super::*;
 
     #[test]
-    fn pending_dates_need_catalog_and_disclose_english_names() {
-        assert_eq!(date_language_is_offered("pa-guru"), crate::i18n::Lang::from_code("pa-guru").is_some());
-        assert!(date_language_is_offered("hi"));
-        assert!(date_language_is_offered("en"));
+    fn dates_follow_engine_and_disclose_english_names() {
+        let choices = date_language_options(|_| false);
+        assert_eq!(choices.len(), pdfcraft_engine::dates::DATE_LANGUAGES.len());
+        assert!(choices.iter().any(|(l, _)| l.code == "pa-guru"));
+        assert!(choices.iter().any(|(l, _)| l.code == "hi"));
+        assert!(choices.iter().any(|(l, _)| l.code == "en"));
         let pa = pdfcraft_engine::dates::date_language("pa-guru").expect("registered");
         assert_eq!(date_language_picker_name(pa, |_| false), "Punjabi (Gurmukhi; English date names)");
+    }
+    /// A restored automation-supported date language must remain an actual menu choice.
+    #[test]
+    fn punjabi_dates_remain_offered_without_interface_catalog() {
+        let mut app = crate::PdfCraftApp::default();
+        app.session.set_date_language(Some("pa-guru")).unwrap();
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.session.date_language(), Some("pa-guru"));
+        assert!(
+            super::date_language_options(|_| false).iter().any(|(l, name)| l.code == "pa-guru" && *name == "Punjabi (Gurmukhi; English date names)")
+        );
     }
 }

@@ -527,7 +527,7 @@ impl Automation {
             self.session.set_date_format(f).map_err(ToolError::InvalidArgs)?;
         }
         let today = self.session.today_text(None, None).map_err(ToolError::Failed)?;
-        let languages: Vec<Value> = dates::DATE_LANGUAGES.iter().map(|l| json!({ "code": l.code, "name": l.name })).collect();
+        let languages: Vec<Value> = dates::DATE_LANGUAGES.iter().map(|l| json!({ "code": l.code, "name": l.display_name() })).collect();
         Ok(json!({
             "format": self.session.date_format(),
             "language": self.session.date_language().unwrap_or("auto"),

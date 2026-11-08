@@ -1541,8 +1541,9 @@ fn translation_gaps_report() {
 const REPORT_START: &str = "=== translation gaps ===";
 const REPORT_END: &str = "=== end of translation gaps ===";
 
-/// Preferences ▸ Date format ▸ Language offers exactly the interface languages, in order, with
-/// the interface's names for them when the catalogs are embedded.
+/// Date and interface registries retain code/native-name parity; date availability is independent.
+/// Keep this historical test identifier stable for the parity evidence that cites it.
+/// Punjabi's English date vocabulary remains selectable even without its interface catalog.
 #[test]
 fn date_languages_are_the_interface_languages() {
     let interface: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();

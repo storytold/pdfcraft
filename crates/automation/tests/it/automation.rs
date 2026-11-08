@@ -4091,6 +4091,22 @@ fn fill_and_sign_through_tools() {
     assert!(matches!(a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [1, 1] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Punjabi dates stay available without UI catalogs, and the automation label discloses English names.
+#[test]
+fn punjabi_date_format_discloses_and_preserves_english_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = auto(dir.path());
+    let result = ok(&mut a, "fill_sign_date_format", json!({ "format": "dddd, d mmmm yyyy", "language": "PA-GURU" }));
+    assert_eq!(result["language"], "pa-guru");
+    assert_eq!(result["today"], "Tuesday, 14 November 2023");
+    let choice = result["languages"].as_array().unwrap().iter().find(|l| l["code"] == "pa-guru").unwrap();
+    assert_eq!(choice["name"], "Punjabi (Gurmukhi; English date names)");
+    let reread = ok(&mut a, "fill_sign_date_format", json!({}));
+    assert_eq!(reread["language"], "pa-guru");
+    assert_eq!(reread["today"], result["today"]);
+    assert_eq!(reread["unwritable"], "");
+}
+
 #[test]
 fn fill_sign_text_font_size_is_saved_and_validated() {
     let dir = workdir("fill-sign-text-size");

@@ -141,14 +141,40 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
 /// [`pill_button`] that, when `marked`, is the keyboard's choice: it takes egui focus (so
 /// assistive tech follows it) and shows a ring in the accent colour around the pill.
 pub fn pill_button_marked(ui: &mut egui::Ui, label: &str, primary: bool, marked: bool) -> Response {
+    pill_button_layout(ui, label, primary, marked, false)
+}
+
+/// A pill whose complete label wraps inside the available width, retaining focus and click semantics.
+pub(crate) fn pill_button_wrapped(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
+    let response = pill_button_layout(ui, label, primary, false, true);
+    if response.has_focus() {
+        response.scroll_to_me(None);
+    }
+    response
+}
+
+/// Share pill painting and accessibility; only explicitly wrapped pills change their dimensions.
+fn pill_button_layout(ui: &mut egui::Ui, label: &str, primary: bool, marked: bool, wrap: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(12.5);
     let text_color = if primary { Color32::WHITE } else { t.text };
     // Dialog buttons are translated UI text: an explicit RTL base keeps an Arabic label right
     // to left even when its first strong character is Latin or a placeholder.
-    let label_galley = crate::bidi::layout_ui(ui, label.to_owned(), font, text_color);
-    let w = label_galley.size().x;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 26.0, 28.0), Sense::click());
+    let available = ui.available_width().max(1.0);
+    let padding = if wrap { ((available - 1.0) * 0.5).min(13.0) } else { 13.0 };
+    let label_galley = if wrap {
+        let mut job = egui::text::LayoutJob::simple(label.to_owned(), font, text_color, (available - 2.0 * padding).max(1.0));
+        job.direction = crate::bidi::ui_direction();
+        ui.painter().layout_job(job)
+    } else {
+        crate::bidi::layout_ui(ui, label.to_owned(), font, text_color)
+    };
+    let size = if wrap {
+        vec2((label_galley.size().x + 2.0 * padding).min(available), (label_galley.size().y + 8.0).max(28.0))
+    } else {
+        vec2(label_galley.size().x + 26.0, 28.0)
+    };
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let press = theme::Press::track(ui, &resp);
     let (fill, stroke) = if primary {

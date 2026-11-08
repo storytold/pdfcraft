@@ -50,6 +50,13 @@ pub struct DateLanguage {
     pub days_short: [&'static str; 7],
 }
 
+impl DateLanguage {
+    /// Date-choice label, disclosing English month/weekday names independently of UI catalogs.
+    pub fn display_name(&self) -> &'static str {
+        if self.code == "pa-guru" { "Punjabi (Gurmukhi; English date names)" } else { self.name }
+    }
+}
+
 const CJK_MONTHS: [&str; 12] = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
 const ZH_MONTHS: [&str; 12] = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
 const ZH_DAYS: [&str; 7] = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
