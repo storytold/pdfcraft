@@ -65,6 +65,41 @@ impl Automation {
                 *flag = on;
             }
         }
+        // Correct scanned pages: what changes in the document itself, beside the words.
+        for (key, flag) in [
+            ("rotate_pages", &mut settings.rotate_pages),
+            ("straighten_pages", &mut settings.straighten_pages),
+            ("auto_crop", &mut settings.auto_crop),
+            ("recognize", &mut settings.recognize),
+        ] {
+            if let Some(on) = a.opt_bool(key)? {
+                *flag = on;
+            }
+        }
+        if let Some(v) = a.opt_num("crop_margin")? {
+            if !v.is_finite() || !(0.0..=20.0).contains(&v) {
+                return Err(ToolError::InvalidArgs("crop_margin must be between 0 and 20 pt".into()));
+            }
+            settings.crop_margin = v;
+        }
+        if let Some(v) = a.opt_bool("auto_rotate")? {
+            settings.auto_rotate = v;
+        }
+        if let Some(v) = a.opt_bool("deskew")? {
+            settings.deskew = v;
+        }
+        if let Some(v) = a.opt_bool("auto_crop")? {
+            settings.auto_crop = v;
+        }
+        if let Some(v) = a.opt_num("crop_margin")? {
+            if !v.is_finite() || !(0.0..=20.0).contains(&v) {
+                return Err(ToolError::InvalidArgs("crop_margin must be between 0 and 20 pt".into()));
+            }
+            settings.crop_margin = v;
+        }
+        if let Some(v) = a.opt_bool("recognize")? {
+            settings.recognize = v;
+        }
         Ok(settings)
     }
 
@@ -104,7 +139,15 @@ impl Automation {
             .map(|p| match &p.skipped {
                 Some(why) => json!({ "page": p.page + 1, "skipped": why }),
                 None => {
-                    let mut page = json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page });
+                    let mut page = json!({
+                        "page": p.page + 1,
+                        "words": p.words.len(),
+                        "already_on_page": p.already_on_page,
+                        "rotation": p.correction.rotation,
+                        "deskew": p.correction.deskew,
+                        "deskew_skipped": p.deskew_skipped,
+                        "crop_box": p.crop,
+                    });
                     // The editable output's substitution warnings (characters no font could
                     // show) are part of the result: reported per page, never dropped.
                     if !p.notes.is_empty() {
@@ -204,8 +247,23 @@ impl Automation {
     }
 
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
+        self.ocr_process(a, false)
+    }
+
+    /// Scan & OCR ▸ Correct scanned pages: the same run without recognition, with the paper
+    /// crop on unless asked otherwise, and pages that already have text corrected too.
+    pub(crate) fn ocr_enhance(&mut self, a: &Args) -> Result<Value> {
+        self.ocr_process(a, true)
+    }
+
+    fn ocr_process(&mut self, a: &Args, correction_only: bool) -> Result<Value> {
         use pdfcraft_engine::ocr::OutputMode;
         let mut settings = self.ocr_settings(a)?;
+        if correction_only {
+            settings.recognize = false;
+            settings.auto_crop = a.opt_bool("auto_crop")?.unwrap_or(true);
+            settings.skip_text_pages = a.opt_bool("skip_text_pages")?.unwrap_or(false);
+        }
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.

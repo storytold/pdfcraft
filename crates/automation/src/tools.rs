@@ -1384,7 +1384,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Needs the engines (ocr_status). Searchable output is undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Correct scanned pages runs with it: rotate_pages and straighten_pages (default true) turn and straighten the pages themselves (unlike auto_rotate and deskew, which only clean the picture that is read), and auto_crop crops detected scanner borders to the paper edge with crop_margin padding (0..20 pt, default 2); set the three to false for an exact image, or recognize to false for correction only. Each page reports its rotation, deskew and crop_box. Needs the engines (ocr_status). Searchable output is undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
@@ -1404,6 +1404,11 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
                     "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
                     "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },
+                    "rotate_pages": { "type": "boolean", "description": "Correct scanned pages: turn pages scanned sideways or upside down upright in the document (default true; needs the ocrs models' orientation classifier)." },
+                    "straighten_pages": { "type": "boolean", "description": "Correct scanned pages: straighten skewed pages in the document, up to 12 degrees (default true)." },
+                    "auto_crop": { "type": "boolean", "description": "Crop detected scanner borders to the paper edge (default false)." },
+                    "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "description": "Padding kept around the paper edge, in points (default 2)." },
+                    "recognize": { "type": "boolean", "description": "Add the recognised text (default true); false corrects the pages only." },
                 }),
                 &["doc"],
             )),
@@ -1453,9 +1458,17 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean" },
                     "denoise": { "type": "boolean" },
                     "binarize": { "type": "boolean" },
+                    "rotate_pages": { "type": "boolean", "description": "Correct scanned pages: turn pages scanned sideways or upside down upright in the document (default true; needs the ocrs models' orientation classifier)." },
+                    "straighten_pages": { "type": "boolean", "description": "Correct scanned pages: straighten skewed pages in the document, up to 12 degrees (default true)." },
+                    "auto_crop": { "type": "boolean", "description": "Crop detected scanner borders to the paper edge (default false)." },
+                    "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "description": "Padding kept around the paper edge, in points (default 2)." },
+                    "recognize": { "type": "boolean", "description": "Add the recognised text (default true); false corrects the pages only." },
                 }),
                 &["paths", "folder"],
             )),
+        t("ocr_enhance", "Correct scanned pages", "Crop clear black/white scanner borders to the paper edge, correct sideways/upside-down scans and straighten skew up to 12 degrees without adding text (rotate_pages, straighten_pages and auto_crop). auto_crop defaults to true, crop_margin to 2 pt (0..20). Uncertain paper edges are kept; crop_box reports the rectangle in original PDF user space. Existing text is preserved and processed unless skip_text_pages is true. Original image data is preserved. Low-confidence rotations are left unchanged. Pages with annotations keep their skew (deskew_skipped) so the annotations stay aligned. Undoable as one step.")
+            .cmd("ocr.correct_scan")
+            .with(schema(json!({"doc":doc(),"pages":pages("to correct (default all)"),"dpi":{"type":"number","minimum":72,"maximum":600},"rotate_pages":{"type":"boolean","default":true},"straighten_pages":{"type":"boolean","default":true},"auto_crop":{"type":"boolean","default":true},"crop_margin":{"type":"number","minimum":0,"maximum":20,"default":2},"skip_text_pages":{"type":"boolean","default":false}}), &["doc"])),
         t("ocr_status", "OCR status", "Whether text recognition is available, where it looks for models (release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), its languages, and the engines: ocrs (built in, models) and tesseract (an installed program, with its path).")
             .ro()
             .cmd("ocr.recognize")

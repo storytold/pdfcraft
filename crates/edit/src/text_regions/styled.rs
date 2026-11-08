@@ -1,5 +1,5 @@
 use super::super::interp::TextState;
-use super::grouping::{across, is_centred, row_rect};
+use super::grouping::{across, invisible, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
@@ -33,6 +33,36 @@ struct FontResolver<'a> {
     metrics: &'a mut std::collections::BTreeMap<String, Metrics>,
     full_faces: HashMap<String, String>,
     programs: HashMap<String, Option<std::sync::Arc<Vec<u8>>>>,
+    /// Type 3 resources whose glyphs are all empty: OCR's searchable placeholders.
+    blank_fonts: std::collections::HashSet<String>,
+}
+
+/// The page's Type 3 fonts whose char procedures only declare a width (`d0`/`d1`): searchable
+/// placeholders such as an OCR layer's, not usable visible glyphs. Only small, bounded programs
+/// are inspected; arbitrary Type 3 artwork is never treated as blank.
+fn blank_type3_fonts(doc: &Document, fonts: &Dict) -> std::collections::HashSet<String> {
+    fonts
+        .iter()
+        .take(256)
+        .filter_map(|(name, object)| {
+            let font = doc.dict(object)?;
+            if font.name(b"Subtype") != Some(b"Type3") {
+                return None;
+            }
+            let procs = font.get(b"CharProcs").and_then(|p| doc.dict(p))?;
+            if procs.is_empty() || procs.len() > 256 {
+                return None;
+            }
+            let blank = procs.iter().all(|(_, object)| {
+                let resolved = doc.resolve(object);
+                let Object::Stream(stream) = &*resolved else { return false };
+                let Ok(data) = stream.decoded_within(4096) else { return false };
+                let ops = pdfcraft_content::parse(&data).ops;
+                !ops.is_empty() && ops.iter().all(|op| op.is("d0") || op.is("d1"))
+            });
+            blank.then(|| String::from_utf8_lossy(name).into_owned())
+        })
+        .collect()
 }
 
 impl FontResolver<'_> {
@@ -46,11 +76,14 @@ impl FontResolver<'_> {
             }
             return Ok(Some(resource.to_owned()));
         }
-        if self.metrics.get(&source.font).is_some_and(|metrics| source_encodes(metrics, text)) {
+        // An OCR word's blank placeholder font can encode the text but shows nothing.
+        let usable = |name: &str| !(invisible(source) && self.blank_fonts.contains(name));
+        if usable(&source.font) && self.metrics.get(&source.font).is_some_and(|metrics| source_encodes(metrics, text)) {
             return Ok(Some(source.font.clone()));
         }
-        if let Some((name, _)) = self.metrics.iter().find(|(_, metrics)| {
-            pdfcraft_fonts::embedding::face_key(&metrics.base_font) == pdfcraft_fonts::embedding::face_key(&source.base_font)
+        if let Some((name, _)) = self.metrics.iter().find(|(name, metrics)| {
+            usable(name)
+                && pdfcraft_fonts::embedding::face_key(&metrics.base_font) == pdfcraft_fonts::embedding::face_key(&source.base_font)
                 && source_encodes(metrics, text)
         }) {
             return Ok(Some(name.clone()));
@@ -128,7 +161,8 @@ impl CharacterPreparation<'_> {
         let mut chars = Vec::new();
         let mut substituted = None;
         let mut fallback = FallbackBuilder::new(max_glyphs);
-        let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
+        let blank_fonts = blank_type3_fonts(doc, fonts);
+        let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new(), blank_fonts };
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
@@ -298,23 +332,36 @@ fn calibration_factors(
     metrics: &std::collections::BTreeMap<String, Metrics>,
     style: &BlockStyle,
     overrides: &HashMap<usize, &RangeStyle>,
+    chars: &[StyledChar],
     space_of: impl Fn(&str, &Metrics) -> f64,
 ) -> HashMap<usize, f64> {
+    let mut replacement_resources = HashMap::new();
+    for (_, index, resource) in chars {
+        replacement_resources.entry(*index).or_insert(resource.as_str());
+    }
     let mut calibration = HashMap::new();
     for (index, source) in lines.iter().enumerate() {
-        if let Some(metrics) = metrics.get(&source.font) {
+        // OCR's empty Type 3 glyphs have synthetic advances. Calibrate the visible
+        // replacement face against the source word's measured width, not those advances.
+        let resource = if invisible(source) { replacement_resources.get(&index).copied().unwrap_or(&source.font) } else { &source.font };
+        if let Some(metrics) = metrics.get(resource) {
             let nominal = source_width(
                 metrics,
                 &source.text,
                 source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size),
-                space_of(&source.font, metrics),
+                space_of(resource, metrics),
                 source.origin.state.char_spacing,
                 source.origin.state.word_spacing,
             ) * source.origin.state.scale
                 * across(source);
             let changed_face =
                 style.resource.is_some() || overrides.get(&index).is_some_and(|range| range.family.is_some() || range.resource.is_some());
-            let factor = if nominal > 0.0 && !changed_face { ((source.rect[2] - source.rect[0]) / nominal).clamp(0.5, 2.0) } else { 1.0 };
+            let factor = if nominal.is_finite() && nominal > 0.0 && !changed_face {
+                let ratio = (source.rect[2] - source.rect[0]) / nominal;
+                if invisible(source) { ratio.clamp(0.01, 100.0) } else { ratio.clamp(0.5, 2.0) }
+            } else {
+                1.0
+            };
             calibration.insert(index, factor);
         }
     }
@@ -910,7 +957,7 @@ pub(crate) fn rewrite_styled_block(
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
-    let calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
+    let calibration = calibration_factors(lines, &metrics, style, &overrides, &chars, space_of);
     let advance = |item: &(char, usize, String)| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);
         let Some(m) = metrics.get(&item.2) else { return 0.0 };

@@ -7630,6 +7630,15 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    for language in ["de", "ja", "fr", "es", "it", "nl", "da", "nb", "sv", "fi", "pt", "ca", "zh-Hant", "zh-Hans"] {
+        assert!(status["languages"].as_array().unwrap().iter().any(|l| l["code"] == language));
+    }
+    for name in ["ocr_recognize", "ocr_recognize_files"] {
+        let tool = tools().into_iter().find(|tool| tool.name == name).unwrap();
+        let advertised = &tool.input_schema["properties"]["language"]["enum"];
+        let available: Vec<_> = status["languages"].as_array().unwrap().iter().map(|language| language["code"].clone()).collect();
+        assert_eq!(advertised, &json!(available), "{name} schema must advertise the same languages as ocr_status");
+    }
     assert_eq!(status["engines"][0]["id"], "ocrs", "{status}");
     assert!(status["engines"][1]["id"] == "tesseract" && status["engines"][1]["available"].is_boolean(), "{status}");
     if status["available"] != true {
@@ -7640,12 +7649,19 @@ fn ocr_tools_make_a_scan_searchable() {
     ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
     let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
     let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
-    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan }));
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "it" }));
     assert!(r["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{r}");
     assert!(r["words"].as_u64().unwrap() >= 4);
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    // Chinese and Catalan choices must reach the real recognizer through the public tool.
+    // An ASCII fixture checks dispatch only, not language-specific scan accuracy.
+    for language in ["zh-Hant", "zh-Hans", "ca"] {
+        let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+        let result = ok(&mut a, "ocr_recognize", json!({ "doc": doc, "language": language, "rotate_pages": false, "straighten_pages": false }));
+        assert!(result["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{language}: {result}");
+    }
     // An engine that cannot run is named up front, before anything is read.
     if status["engines"][1]["available"] != true {
         let why = a.call("ocr_recognize", &json!({ "doc": scan, "engine": "tesseract", "skip_text_pages": false })).unwrap_err();
@@ -7735,6 +7751,54 @@ fn ocr_recognize_reads_pictures_on_pages_with_text() {
 }
 
 #[test]
+fn ocr_enhance_crops_paper_edges_with_margin_and_undo() {
+    let dir = workdir("ocr-crop");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        return;
+    }
+    let image = image::RgbImage::from_fn(800, 600, |x, y| image::Rgb(if (180..800).contains(&x) && y < 490 { [235; 3] } else { [25; 3] }));
+    image.save(dir.join("scan.png")).unwrap();
+    let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":["scan.png"]}))["doc"].as_u64().unwrap();
+    let no_crop = ok(&mut a, "ocr_enhance", json!({"doc":doc,"auto_crop":false,"rotate_pages":false,"straighten_pages":false}));
+    assert!(no_crop["pages"][0]["crop_box"].is_null());
+    let cropped = ok(&mut a, "ocr_enhance", json!({"doc":doc,"crop_margin":0,"rotate_pages":false,"straighten_pages":false}));
+    let rect = cropped["pages"][0]["crop_box"].as_array().unwrap();
+    assert!(rect[0].as_f64().unwrap() > 100.0);
+    assert_eq!(cropped["words"], 0);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"cropped.pdf"}));
+    assert_eq!(ok(&mut a, "edit_undo", json!({"doc":doc}))["undone"], "Correct scans");
+    let padded = ok(&mut a, "ocr_enhance", json!({"doc":doc,"crop_margin":10,"rotate_pages":false,"straighten_pages":false}));
+    let padded_rect = padded["pages"][0]["crop_box"].as_array().unwrap();
+    assert!((rect[0].as_f64().unwrap() - padded_rect[0].as_f64().unwrap() - 10.0).abs() < 1.0);
+    assert!((rect[1].as_f64().unwrap() - padded_rect[1].as_f64().unwrap() - 10.0).abs() < 1.0);
+    for margin in [-1, 21] {
+        assert!(matches!(a.call("ocr_enhance", &json!({"doc":doc,"crop_margin":margin})), Err(ToolError::InvalidArgs(_))));
+    }
+}
+
+#[test]
+fn ocr_enhance_corrects_rotation_without_adding_text() {
+    let dir = workdir("ocr-enhance");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        return;
+    }
+    let sentence =
+        (0..18).map(|_| "Please read this document with the page upright. The quick brown fox jumps over the lazy dog.\n").collect::<String>();
+    let doc = ok(&mut a, "doc_create", json!({"from":"text","text":sentence}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":180}));
+    ok(&mut a, "doc_export_images", json!({"doc":doc,"folder":"scan","dpi":150,"pages":[1]}));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({"from":"images","paths":[png.to_string_lossy()]}))["doc"].as_u64().unwrap();
+    let corrected = ok(&mut a, "ocr_enhance", json!({"doc":scan,"straighten_pages":false}));
+    assert_eq!(corrected["pages"][0]["rotation"], 180, "{corrected}");
+    assert_eq!(corrected["words"], 0);
+    let read = ok(&mut a, "ocr_recognize", json!({"doc":scan,"rotate_pages":false,"straighten_pages":false}));
+    assert!(read["pages"][0]["text"].as_str().unwrap().contains("Please"), "{read}");
+}
+
+#[test]
 fn ocr_recognize_files_refuses_paths_outside_the_root() {
     let dir = workdir("ocr-files-root");
     let mut a = auto(&dir);
@@ -7803,7 +7867,7 @@ fn ocr_recognize_files_writes_searchable_copies() {
     let typed = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Already typed" }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_save", json!({ "doc": typed, "path": "in/typed.pdf" }));
     // Collision pre-flight: the existing out/scan.pdf (written below) stops a rerun.
-    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf", "missing.pdf"], "folder": "out" }));
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf", "missing.pdf"], "folder": "out", "language": "it" }));
     assert!(r["files"][0]["words"].as_u64().unwrap() >= 3, "{r}");
     assert!(r["files"][1]["error"].is_string(), "{r}");
     let why = a.call("ocr_recognize_files", &json!({ "paths": ["in/scan.pdf"], "folder": "out" })).unwrap_err();

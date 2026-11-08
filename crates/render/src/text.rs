@@ -92,6 +92,16 @@ pub fn fold_case(s: &str) -> String {
     out
 }
 
+/// The apostrophe `'` for its typographic and modifier forms (`’` U+2019, `‘` U+2018, `ʼ` U+02BC,
+/// `＇` U+FF07). Typesetting and OCR use them interchangeably, so search treats them as one
+/// character in either case mode: `l'été` finds `l’été`, and the reverse.
+pub fn fold_apostrophe(c: char) -> char {
+    match c {
+        '\u{2019}' | '\u{2018}' | '\u{2BC}' | '\u{FF07}' => '\'',
+        _ => c,
+    }
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -131,7 +141,7 @@ impl PageText {
     }
 
     /// Case-insensitive search. Returns glyph ranges of every match (words may span line breaks,
-    /// which count as a single space).
+    /// which count as a single space; apostrophe forms are one, see [`fold_apostrophe`]).
     pub fn find(&self, needle: &str) -> Vec<std::ops::Range<usize>> {
         self.find_opts(needle, false, false)
     }
