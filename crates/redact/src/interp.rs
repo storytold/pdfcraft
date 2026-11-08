@@ -450,7 +450,10 @@ impl Walk {
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
         let strokes = matches!(op.op.as_slice(), b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
-        let bbox = self.path_box.take().map(|b| if strokes { self.stroke_box(b) } else { b });
+        // A `W`/`W*` makes the path as constructed the clip; the stroke expansion only describes
+        // what the painting itself covers.
+        let path_box = self.path_box.take();
+        let bbox = path_box.map(|b| if strokes { self.stroke_box(b) } else { b });
         let body = std::mem::take(&mut self.path);
         let clips = std::mem::replace(&mut self.clip, false);
         let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
@@ -462,7 +465,7 @@ impl Walk {
         let b = bbox.unwrap_or_default();
         piece.changed = true;
         scope.report.paths_removed += 1;
-        if scope.covered(b) && clips {
+        if scope.covered(path_box.unwrap_or(b)) && clips {
             // Keep the clipping, drop the painting.
             piece.ops.extend(body);
             piece.ops.push(Op::new("n", vec![]));
