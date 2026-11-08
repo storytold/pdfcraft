@@ -13,9 +13,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_annot::{AnnotationInput, WireError};
-use pdfcraft_collab_proto::{ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
-use pdfcraft_engine::{DocId, Document, Edit, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
+use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
+use pdfcraft_engine::{DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -89,6 +90,11 @@ pub fn set_contents_payload(text: &str) -> Value {
     json!({"action": "annotation.set_contents", "text": text})
 }
 
+/// The comment's text, refusing to apply unless it still is what the undo left.
+pub fn set_contents_payload_expecting(text: &str, expect: &str) -> Value {
+    json!({"action": "annotation.set_contents", "text": text, "expect": expect})
+}
+
 pub fn reply_payload(nm: &str, text: &str, author: &str) -> Value {
     json!({"action": "annotation.reply", "nm": nm, "text": text, "author": author})
 }
@@ -101,8 +107,18 @@ pub fn field_value_payload(value: &str) -> Value {
     json!({"action": "field.set_value", "value": value})
 }
 
+/// The field's value, refusing to apply unless it still is what the undo left.
+pub fn field_value_payload_expecting(value: &str, expect: &str) -> Value {
+    json!({"action": "field.set_value", "value": value, "expect": expect})
+}
+
 pub fn rotate_payload(degrees: i64) -> Value {
     json!({"action": "page.rotate", "degrees": degrees})
+}
+
+/// The page's rotation, refusing to apply unless the page still has `expect`.
+pub fn rotate_payload_expecting(degrees: i64, expect: i64) -> Value {
+    json!({"action": "page.rotate", "degrees": degrees, "expect": expect})
 }
 
 pub fn move_payload(to: usize) -> Value {
@@ -145,6 +161,14 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let index = annotation_index(document, page.index as usize, &name)?;
             Ok(Edit::DeleteAnnotation { page: page.index as usize, index })
         }
+        ("annotation.restore", ConflictClass::Merge) => {
+            // The accepted operation carries the comment's wire body; the copy
+            // token only means something to the server (RFC §6).
+            let (page, name) = annotation_target(op)?;
+            let body = op.payload.get("body").ok_or(ProjectionError::Missing("body"))?;
+            let input = AnnotationInput::from_payload(body)?;
+            Ok(Edit::AddAnnotationNamed(input.to_engine(page.index as usize), name))
+        }
         ("field.set_value", ConflictClass::Merge) => {
             let Target::Field { name } = &op.target else {
                 return Err(ProjectionError::Missing("field target"));
@@ -166,6 +190,20 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
         ("page.delete", ConflictClass::Structural) => {
             let page = page_target(op)?;
             Ok(Edit::DeletePages { pages: vec![page.index as usize] })
+        }
+        ("page.restore", ConflictClass::Structural) => {
+            // The page's content travels in the operation: a deleted page is out
+            // of every replica, so only the server's copy can put it back.
+            let at = op.payload.get("at").and_then(Value::as_u64).and_then(|at| usize::try_from(at).ok()).ok_or(ProjectionError::Missing("at"))?;
+            let encoded = op.payload.get("bytes").and_then(Value::as_str).ok_or(ProjectionError::Missing("bytes"))?;
+            let bytes = decode_base64(encoded)?;
+            Ok(Edit::InsertPagesFrom {
+                name: "restore-page.pdf".into(),
+                bytes: Arc::new(bytes),
+                pages: Some(vec![0]),
+                at,
+                field_conflicts: FieldConflicts::Rename,
+            })
         }
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
@@ -217,6 +255,11 @@ fn field_value(kind: FormFieldKind, text: &str) -> FieldValue {
         FormFieldKind::Combo | FormFieldKind::List => FieldValue::Choice(vec![text.to_owned()]),
         _ => FieldValue::Text(text.to_owned()),
     }
+}
+
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, ProjectionError> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| ProjectionError::Invalid(format!("the page copy is not base64: {e}")))
 }
 
 // ── Edit → operation (the interface's side of the wire) ─────────────────────────────────────
@@ -324,9 +367,12 @@ pub fn ops_for_edit(
 }
 
 /// The operation that undoes `op`, built from the document as it was *before*
-/// applying it. `None` where the change cannot be reverted: a deletion, a page
-/// removal or a form reset. Undo is a normal operation (ADR-0010), so a
-/// conflict with someone else's later edit is reported, not forced.
+/// applying it. Undo is a normal operation (ADR-0010), so a conflict with
+/// someone else's later edit is reported, not forced: each inverse names the
+/// value its original left (`expect`), and the server refuses if that value has
+/// changed since. The two deletions have no local inverse — the content is gone
+/// from the replica — so the server keeps a copy and the interface builds their
+/// inverse from the accepted operation's `copy` token (`inverse_after`).
 pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<Op>, ProjectionError> {
     let action = op.payload.get("action").and_then(Value::as_str).ok_or(ProjectionError::Missing("action"))?;
     let base = op.base_version;
@@ -352,7 +398,8 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
                 .find(|a| a.page == page.index as usize && a.name.as_deref() == Some(nm.as_str()))
                 .map(|a| a.contents.clone().unwrap_or_default())
                 .ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
-            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, set_contents_payload(&previous))
+            let expect = op.payload.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, set_contents_payload_expecting(&previous, &expect))
         }
         "annotation.delete" => return Ok(None),
         "field.set_value" => {
@@ -364,12 +411,14 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             } else {
                 previous
             };
-            merge_op(doc, op_id, base, epoch, Target::Field { name: name.clone() }, field_value_payload(&previous))
+            let expect = op.payload.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
+            merge_op(doc, op_id, base, epoch, Target::Field { name: name.clone() }, field_value_payload_expecting(&previous, &expect))
         }
         "page.rotate" => {
             let page = page_target(op)?;
             let previous = document.info.pages.get(page.index as usize).map(|p| i64::from(p.rotation)).ok_or(ProjectionError::Missing("page"))?;
-            structural_op(doc, op_id, base, epoch, Target::Page(page), rotate_payload(previous))
+            let expect = op.payload.get("degrees").and_then(Value::as_i64).unwrap_or_default();
+            structural_op(doc, op_id, base, epoch, Target::Page(page), rotate_payload_expecting(previous, expect))
         }
         "page.move" => {
             let page = page_target(op)?;
@@ -380,6 +429,41 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         other => return Err(ProjectionError::Unsupported(other.to_owned())),
     };
     Ok(Some(inverse))
+}
+
+/// The inverse of a deletion, once the server has answered how to undo it: the
+/// accepted operation carries the `copy` token of what it removed. `None` when
+/// the server kept no copy (the comment was not the room's, or the page was too
+/// large to travel back in one operation).
+pub fn inverse_after(applied: &Applied) -> Option<Op> {
+    let op = &applied.op;
+    let action = op.payload.get("action").and_then(Value::as_str)?;
+    let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
+    let doc = op.doc.clone();
+    let op_id = OpId::new(format!("undo-{}", op.op_id.as_str())).ok()?;
+    match action {
+        "annotation.delete" => {
+            let Target::Annotation { page, nm } = &op.target else { return None };
+            Some(merge_op(
+                doc,
+                op_id,
+                applied.version,
+                applied.epoch,
+                Target::Annotation { page: *page, nm: nm.clone() },
+                json!({"action": "annotation.restore", "copy": copy}),
+            ))
+        }
+        "page.delete" => {
+            // The target is the page that was deleted; it goes back at that
+            // index, addressed in the epoch the delete left.
+            let Target::Page(page) = &op.target else { return None };
+            let at = page.index;
+            let page = PageRef { index: at, epoch: applied.epoch };
+            let payload = json!({"action": "page.restore", "copy": copy, "at": at});
+            Some(structural_op(doc, op_id, applied.version, applied.epoch, Target::Page(page), payload))
+        }
+        _ => None,
+    }
 }
 
 fn next_id(client_id: &str, counter: &mut u64) -> Result<OpId, ProjectionError> {
@@ -593,11 +677,133 @@ mod tests {
         let inverse = super::inverse_for(document, &ops[0], OpId::new("inv-1")?)?;
         let inverse = inverse.ok_or("a text edit can be undone")?;
         assert_eq!(inverse.payload["text"], "hello");
+        assert_eq!(inverse.payload["expect"], "edited", "the undo names the text it leaves behind");
 
         let rotate = pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 };
         let ops = super::ops_for_edit(document, &rotate, doc()?, "client", 1, 0, &mut counter)?;
         let inverse = super::inverse_for(document, &ops[0], OpId::new("inv-2")?)?;
-        assert_eq!(inverse.ok_or("a rotation can be undone")?.payload["degrees"], 0);
+        let inverse = inverse.ok_or("a rotation can be undone")?;
+        assert_eq!(inverse.payload["degrees"], 0);
+        assert_eq!(inverse.payload["expect"], 90);
+        Ok(())
+    }
+
+    /// A deletion has no local inverse: the server keeps the copy and the
+    /// accepted operation names it. These are the two halves of RFC §6.
+    #[test]
+    fn a_deletion_is_undone_from_the_server_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("gone")?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let add = merge_op(doc()?, OpId::new("a1")?, 0, 0, Target::Page(page), add_note_payload("root", [40.0, 250.0], "hello", "Ada"));
+        assert!(super::inverse_for(document, &add, OpId::new("i1")?)?.is_some());
+        let delete = merge_op(doc()?, OpId::new("d1")?, 1, 0, Target::Annotation { page, nm: "root".into() }, super::delete_payload());
+        assert!(super::inverse_for(document, &delete, OpId::new("i2")?)?.is_none(), "the replica no longer has what was deleted");
+        Ok(())
+    }
+
+    #[test]
+    fn the_accepted_delete_answers_with_the_operation_that_undoes_it() -> Result<(), Box<dyn std::error::Error>> {
+        let page = PageRef { index: 1, epoch: 3 };
+        let mut delete = merge_op(doc()?, OpId::new("d1")?, 4, 3, Target::Annotation { page, nm: "root".into() }, super::delete_payload());
+        delete.payload["copy"] = serde_json::json!("c7");
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: delete.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 5,
+            epoch: 3,
+            op: delete,
+            result: serde_json::json!({"nm": "root", "copy": "c7"}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("a deletion with a copy can be undone")?;
+        assert_eq!(undo.payload["action"], "annotation.restore");
+        assert_eq!(undo.payload["copy"], "c7");
+        assert_eq!(undo.target, Target::Annotation { page, nm: "root".into() });
+        assert_eq!((undo.base_version, undo.epoch), (5, 3), "the undo is built on the head the delete left");
+
+        let mut page_delete = super::structural_op(
+            doc()?,
+            OpId::new("d2")?,
+            6,
+            3,
+            Target::Page(PageRef { index: 2, epoch: 3 }),
+            serde_json::json!({"action": "page.delete"}),
+        );
+        page_delete.payload["copy"] = serde_json::json!("c8");
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: page_delete.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 7,
+            epoch: 4,
+            op: page_delete,
+            result: serde_json::json!({"page": 2, "copy": "c8"}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("a page with a copy can be undone")?;
+        assert_eq!(undo.payload["action"], "page.restore");
+        assert_eq!(undo.payload["at"], 2);
+        assert_eq!(undo.class, pdfcraft_collab_proto::ConflictClass::Structural);
+        assert_eq!(undo.target, Target::Page(PageRef { index: 2, epoch: 4 }), "the restored page is addressed in the new epoch");
+
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: OpId::new("d3")?,
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 8,
+            epoch: 4,
+            op: merge_op(doc()?, OpId::new("d3")?, 7, 4, Target::Annotation { page, nm: "x".into() }, super::delete_payload()),
+            result: serde_json::json!({"nm": "x"}),
+        };
+        assert!(super::inverse_after(&applied).is_none(), "no copy, no undo: a comment the room did not add");
+        Ok(())
+    }
+
+    #[test]
+    fn a_restore_adds_the_comment_its_operation_carries() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let mut restore = merge_op(
+            doc()?,
+            OpId::new("u1")?,
+            1,
+            0,
+            Target::Annotation { page, nm: "root".into() },
+            serde_json::json!({"action": "annotation.restore", "copy": "c1"}),
+        );
+        restore.payload["body"] = add_note_payload("root", [40.0, 250.0], "hello", "Ada");
+        let edit = apply(&mut session, id, &restore)?;
+        assert!(matches!(edit, pdfcraft_engine::Edit::AddAnnotationNamed(_, _)));
+        let document = session.get(id).ok_or("gone")?;
+        let back = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("root")).ok_or("the comment did not come back")?;
+        assert_eq!(back.contents.as_deref(), Some("hello"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_page_restore_inserts_the_page_its_operation_carries() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        // A one-page PDF, base64-encoded as the server sends it: two pages of the
+        // fixture, copied with the rest deleted.
+        let mut scratch = Session::new();
+        let src = scratch.open("copy.pdf", None, fixture(2).into(), None)?;
+        let one = {
+            let count = scratch.get(src).ok_or("gone")?.info.pages.len();
+            if count > 1 {
+                scratch.apply(src, pdfcraft_engine::Edit::DeletePages { pages: (1..count).collect() })?;
+            }
+            scratch.save_bytes(src)?
+        };
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(one.as_slice());
+        let op = super::structural_op(
+            doc()?,
+            OpId::new("u1")?,
+            1,
+            1,
+            Target::Page(PageRef { index: 1, epoch: 1 }),
+            serde_json::json!({"action": "page.restore", "copy": "c1", "at": 1, "bytes": encoded}),
+        );
+        let edit = apply(&mut session, id, &op)?;
+        assert!(matches!(edit, pdfcraft_engine::Edit::InsertPagesFrom { .. }));
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 3, "the page landed at the position the delete left");
         Ok(())
     }
 

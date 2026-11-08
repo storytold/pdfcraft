@@ -378,3 +378,79 @@ fn a_commit_over_the_wire_produces_a_readable_pdf() -> Result<(), Box<dyn std::e
     assert!(result.bytes > 0);
     Ok(())
 }
+
+/// RFC §6 over the wire: a comment and a page are deleted by one client and
+/// undone by the other, and both replicas end up equal. The undo comes from the
+/// server's copy — neither replica has the deleted content any more.
+#[test]
+fn two_clients_undo_a_deleted_comment_and_a_deleted_page() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+
+    let doc = DocKey::new("file-1")?;
+    let add = merge_op(doc.clone(), OpId::new("op-add")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "kept", "ada"));
+    ada.send(add)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+
+    // Bo deletes Ada's comment; both replicas lose it.
+    let delete = merge_op(doc.clone(), OpId::new("op-delete")?, 1, 0, annotation("ada-1", 0), json!({"action": "annotation.delete"}));
+    bo.send(delete)?;
+    let mut deleted = None;
+    for peer in [&mut ada, &mut bo] {
+        match peer.settle()? {
+            ServerMessage::Applied(applied) => deleted = Some(applied),
+            other => return Err(format!("expected an applied delete, got {other:?}").into()),
+        }
+    }
+    let deleted = deleted.ok_or("no applied delete")?;
+    for peer in [&ada, &bo] {
+        assert!(peer.names().is_empty(), "the comment is gone on every replica");
+    }
+
+    // The undo is built from the accepted operation: it names the server's copy.
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&deleted).ok_or("the delete kept no copy")?;
+    assert_eq!(undo.payload["action"], "annotation.restore");
+    ada.send(undo)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.names(), vec!["ada-1".to_owned()], "the comment came back from the copy");
+        let document = peer.session.get(peer.id).expect("open");
+        let back = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("ada-1")).expect("the comment");
+        assert_eq!(back.contents.as_deref(), Some("kept"));
+    }
+
+    // The same for a page. The writer lease is Ada's (she joined first), and a
+    // structural operation needs it, so Ada both deletes and undoes here; Bo's
+    // replica is the proof that the page comes back from the server's copy.
+    let delete = structural_op(doc.clone(), OpId::new("op-page-delete")?, ada.version, 0, page(1, 0), json!({"action": "page.delete"}));
+    ada.send(delete)?;
+    let mut deleted = None;
+    for peer in [&mut ada, &mut bo] {
+        match peer.settle()? {
+            ServerMessage::Applied(applied) => deleted = Some(applied),
+            other => return Err(format!("expected an applied page delete, got {other:?}").into()),
+        }
+    }
+    let deleted = deleted.ok_or("no applied page delete")?;
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.session.get(peer.id).expect("open").info.pages.len(), 1);
+    }
+
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&deleted).ok_or("the page delete kept no copy")?;
+    assert_eq!(undo.payload["action"], "page.restore");
+    ada.send(pdfcraft_collab_proto::Op { op_id: OpId::new("op-page-undo")?, ..undo })?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        let document = peer.session.get(peer.id).expect("open");
+        assert_eq!(document.info.pages.len(), 2, "the page is back on every replica");
+    }
+    Ok(())
+}

@@ -13,10 +13,18 @@
 //! | `annotation.set_contents` | merge | annotation (`/NM`) |
 //! | `annotation.reply` | merge | annotation (`/NM`) |
 //! | `annotation.delete` | merge | annotation (`/NM`) |
+//! | `annotation.restore` | merge | annotation (`/NM`) |
 //! | `field.set_value` | merge | field (full name) |
 //! | `page.rotate` | structural | page |
 //! | `page.move` | structural | page |
 //! | `page.delete` | structural | page |
+//! | `page.restore` | structural | page |
+//!
+//! A delete keeps a copy of what it removed (RFC §6): the accepted operation
+//! answers with its `copy` token, and `annotation.restore` / `page.restore` put
+//! that copy back as an ordinary operation, so every replica and the journal see
+//! the same thing. The copies live in memory and are rebuilt by `replay`, not
+//! written next to the journal: replaying the delete rebuilds the copy.
 //!
 //! Structural operations bump the epoch; merge operations keep it. Annotations
 //! are addressed by `/NM` (ADR-0002), never by a client-side index. Commit
@@ -28,10 +36,10 @@
 use pdfcraft_collab_annot::{AnnotationInput, WireError};
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
-use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldValue, FormFieldKind, Session};
+use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldConflicts, FieldValue, FormFieldKind, Session};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 mod store;
@@ -49,7 +57,46 @@ pub struct PdfAdapter {
     /// The file as last written by `commit`, kept so a publisher can send it
     /// without saving the document a second time.
     last_commit: Option<Arc<Vec<u8>>>,
+    /// The wire body of every comment this room added, by `/NM`. The copy an
+    /// `annotation.delete` keeps for undo comes from here; a comment that was
+    /// in the file before the session has no wire body, so deleting it stays
+    /// irreversible.
+    known: HashMap<String, Value>,
+    /// What this room deleted, oldest first, bounded. Rebuilt by `replay` (the
+    /// journal holds the deletes, and the document is at the same state when
+    /// they are re-applied), so it is not written next to the journal.
+    copies: Vec<DeletedCopy>,
+    next_copy: u64,
 }
+
+/// What a delete kept so its inverse can put it back (RFC §6, ADR-0010). The
+/// token is what the operation carries; it is deterministic on replay, because
+/// the copies are made in journal order.
+struct DeletedCopy {
+    token: String,
+    kind: DeletedKind,
+    /// Roughly what the copy holds, for the total-size bound.
+    bytes: usize,
+}
+
+enum DeletedKind {
+    /// A comment this room added: the payload it arrived with, the page it was
+    /// on, and the `/NM` of the comment it replied to (`/IRT`), so a reply comes
+    /// back a reply.
+    Annotation { page: u32, nm: String, parent: Option<String>, payload: Value },
+    /// The deleted page as a one-page PDF: what `page.restore` inserts.
+    Page { index: u32, bytes: Arc<Vec<u8>> },
+}
+
+/// The largest one-page copy a restore can carry. The `applied` frame is
+/// 256 KiB and base64 is 4/3 of the copy, so the page itself is bounded well
+/// below the frame; a page over this is deleted without a copy and its undo is
+/// refused, which is the bound ADR-0010 asks for.
+pub const MAX_RESTORE_PAGE_BYTES: usize = 160 * 1024;
+
+/// How many deletions keep a copy, and how many bytes they may hold together.
+const MAX_COPIES: usize = 64;
+const MAX_COPY_BYTES: usize = 64 * 1024 * 1024;
 
 impl PdfAdapter {
     /// Open a PDF for a collaboration session. Encrypted and signed documents are
@@ -72,7 +119,7 @@ impl PdfAdapter {
                 false,
             ));
         }
-        Ok(Self { session, id, epoch: 0, store: None, last_commit: None })
+        Ok(Self { session, id, epoch: 0, store: None, last_commit: None, known: HashMap::new(), copies: Vec::new(), next_copy: 0 })
     }
 
     pub fn session(&self) -> &Session {
@@ -188,11 +235,29 @@ impl PdfAdapter {
             .find(|a| a.page == page && a.name.as_ref().is_some_and(|n| !before.contains(n)))
             .and_then(|a| a.name.clone())
             .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the annotation was added without a name", false))?;
+        // Remember the wire body: a delete of this comment keeps it for undo.
+        let mut body = payload.clone();
+        body["nm"] = json!(added);
+        self.known.insert(added.clone(), body);
         Ok(json!({ "nm": added }))
     }
 
     fn set_contents(&mut self, page: usize, name: &str, payload: &Value) -> Result<Value, AdapterError> {
         let text = payload.get("text").and_then(Value::as_str).ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "text is missing", false))?;
+        // An undo names the text it left: if someone wrote in between, putting
+        // the old text back would overwrite their edit (chair, ADR-0010 §3).
+        if let Some(expect) = payload.get("expect").and_then(Value::as_str) {
+            let current = self
+                .document_or_error()?
+                .info
+                .annotations
+                .iter()
+                .find(|a| a.page == page && a.name.as_deref() == Some(name))
+                .map(|a| a.contents.clone().unwrap_or_default());
+            if current.as_deref() != Some(expect) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the comment changed since; the undo would overwrite it", false));
+            }
+        }
         let index = self.annotation_index(page, name)?;
         self.apply_edit(Edit::SetAnnotationContents { page, index, text: text.to_owned() })?;
         Ok(json!({ "nm": name }))
@@ -219,24 +284,206 @@ impl PdfAdapter {
             .find(|a| a.page == page && a.name.as_ref().is_some_and(|n| !before.contains(n)))
             .and_then(|a| a.name.clone())
             .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the reply was added without a name", false))?;
+        let mut body = payload.clone();
+        body["nm"] = json!(added);
+        self.known.insert(added.clone(), body);
         Ok(json!({ "nm": added }))
     }
 
     fn delete(&mut self, page: usize, name: &str) -> Result<Value, AdapterError> {
         let index = self.annotation_index(page, name)?;
+        let parent = self
+            .document_or_error()?
+            .info
+            .annotations
+            .iter()
+            .find(|a| a.page == page && a.name.as_deref() == Some(name))
+            .and_then(|a| a.in_reply_to.clone());
+        let known = self.known.get(name).cloned();
         self.apply_edit(Edit::DeleteAnnotation { page, index })?;
-        Ok(json!({ "nm": name }))
+        self.known.remove(name);
+        let mut result = json!({ "nm": name });
+        if let Some(payload) = known {
+            let size = serde_json::to_vec(&payload).map_or(0, |bytes| bytes.len());
+            let token = self.push_copy(DeletedKind::Annotation { page: page as u32, nm: name.to_owned(), parent, payload }, size);
+            result["copy"] = json!(token);
+        }
+        Ok(result)
+    }
+
+    /// Put a deleted comment back, from the copy its delete kept. Returns the
+    /// wire body so the accepted operation carries it: every replica adds the
+    /// same shape, not just a name.
+    fn restore_annotation(&mut self, page: usize, name: &str, payload: &Value) -> Result<(Value, Option<String>), AdapterError> {
+        // An accepted restore carries the body (and the parent's `/NM`), so
+        // replaying the journal needs no copy; a client's request carries only
+        // the token.
+        let (body, parent) = match payload.get("body") {
+            Some(body) => {
+                let parent = payload.get("parent").and_then(Value::as_str).map(str::to_owned);
+                (body.clone(), parent)
+            }
+            None => {
+                let token = payload
+                    .get("copy")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the restore names no copy", false))?;
+                match &self.copy(token)?.kind {
+                    DeletedKind::Annotation { page: copied_page, nm, parent, payload } => {
+                        if nm != name || usize::try_from(*copied_page).ok() != Some(page) {
+                            return Err(AdapterError::new(ErrorCode::Invalid, "the copy belongs to another comment", false));
+                        }
+                        (payload.clone(), parent.clone())
+                    }
+                    DeletedKind::Page { .. } => {
+                        return Err(AdapterError::new(ErrorCode::Conflict, "the copy is a page, not a comment", false));
+                    }
+                }
+            }
+        };
+        // Someone re-created the comment under the same name: the undo would
+        // overwrite their copy, so it is a conflict rather than a merge.
+        self.ensure_free_name(name)?;
+        match &parent {
+            Some(parent) if !parent.is_empty() => {
+                let parent_index = self
+                    .annotation_index(page, parent)
+                    .map_err(|_| AdapterError::new(ErrorCode::Conflict, "the comment this reply answered is gone", false))?;
+                let text = body.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let author = body.get("author").and_then(Value::as_str).unwrap_or(DEFAULT_AUTHOR).to_owned();
+                self.apply_edit(Edit::ReplyToAnnotationNamed { page, index: parent_index, text, author, name: name.to_owned() })?;
+            }
+            _ => {
+                let input = AnnotationInput::from_payload(&body).map_err(map_wire)?;
+                self.apply_edit(Edit::AddAnnotationNamed(input.to_engine(page), name.to_owned()))?;
+            }
+        }
+        self.known.insert(name.to_owned(), body.clone());
+        Ok((body, parent))
+    }
+
+    /// A one-page PDF of `index` as the document stands, or `None` when it does
+    /// not fit the frame budget (the delete then has no copy to undo with).
+    fn page_copy(&self, index: usize) -> Option<(u32, Arc<Vec<u8>>)> {
+        let bytes = self.session.save_bytes(self.id).ok()?;
+        let mut scratch = Session::new();
+        let id = scratch.open("restore-page.pdf", None, bytes, None).ok()?;
+        let count = scratch.get(id)?.info.pages.len();
+        if index >= count {
+            return None;
+        }
+        if count > 1 {
+            let others: Vec<usize> = (0..count).filter(|i| *i != index).collect();
+            scratch.apply(id, Edit::DeletePages { pages: others }).ok()?;
+        }
+        let page = scratch.save_bytes(id).ok()?;
+        if page.len() > MAX_RESTORE_PAGE_BYTES {
+            return None;
+        }
+        Some((u32::try_from(index).ok()?, page))
+    }
+
+    fn delete_page(&mut self, page: usize) -> Result<Value, AdapterError> {
+        // The copy is made before the page goes: afterwards its content is out
+        // of the document (the engine frees the objects).
+        let copy = self.page_copy(page);
+        self.apply_edit(Edit::DeletePages { pages: vec![page] })?;
+        self.epoch = self.epoch.saturating_add(1);
+        let mut result = json!({ "page": page });
+        if let Some((index, bytes)) = copy {
+            let size = bytes.len();
+            let token = self.push_copy(DeletedKind::Page { index, bytes }, size);
+            result["copy"] = json!(token);
+        }
+        Ok(result)
+    }
+
+    /// Insert a deleted page back from its copy, at `at` (clamped to the page
+    /// count). The page travels in the operation itself so every replica and
+    /// the journal can insert it without a second channel.
+    fn restore_page(&mut self, payload: &mut Value) -> Result<Value, AdapterError> {
+        let at = payload
+            .get("at")
+            .and_then(Value::as_u64)
+            .and_then(|at| usize::try_from(at).ok())
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the restore names no position", false))?;
+        // An accepted restore carries the page, so replaying the journal needs
+        // no copy; a client's request carries only the token.
+        let bytes = match payload.get("bytes").and_then(Value::as_str) {
+            Some(encoded) => decode_base64(encoded)?,
+            None => {
+                let token = payload
+                    .get("copy")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the restore names no copy", false))?;
+                match &self.copy(token)?.kind {
+                    DeletedKind::Page { index, bytes } => {
+                        payload["copy_page"] = json!(index);
+                        bytes.as_slice().to_vec()
+                    }
+                    DeletedKind::Annotation { .. } => {
+                        return Err(AdapterError::new(ErrorCode::Conflict, "the copy is a comment, not a page", false));
+                    }
+                }
+            }
+        };
+        let at = at.min(self.document_or_error()?.info.pages.len());
+        payload["bytes"] = json!(base64_encode(bytes.as_slice()));
+        payload["at"] = json!(at);
+        // The operation is broadcast and journaled: it has to fit one frame.
+        if serde_json::to_vec(payload).map_or(usize::MAX, |bytes| bytes.len()) > MAX_RESTORE_PAGE_BYTES {
+            return Err(AdapterError::new(ErrorCode::Limit, "the deleted page is too large to restore in one operation", false));
+        }
+        self.apply_edit(Edit::InsertPagesFrom {
+            name: "restore-page.pdf".into(),
+            bytes: Arc::new(bytes),
+            pages: Some(vec![0]),
+            at,
+            field_conflicts: FieldConflicts::Rename,
+        })?;
+        self.epoch = self.epoch.saturating_add(1);
+        Ok(json!({ "page": at }))
+    }
+
+    /// Keep a copy and answer its token. The oldest copies go first, so a long
+    /// session cannot grow without bound (ADR-0010: no copy, no undo).
+    fn push_copy(&mut self, kind: DeletedKind, bytes: usize) -> String {
+        self.next_copy = self.next_copy.saturating_add(1);
+        let token = format!("c{}", self.next_copy);
+        self.copies.push(DeletedCopy { token: token.clone(), kind, bytes });
+        let mut total: usize = self.copies.iter().map(|copy| copy.bytes).sum();
+        while self.copies.len() > MAX_COPIES || (total > MAX_COPY_BYTES && self.copies.len() > 1) {
+            if let Some(old) = self.copies.first() {
+                total = total.saturating_sub(old.bytes);
+            }
+            self.copies.remove(0);
+        }
+        token
+    }
+
+    fn copy(&self, token: &str) -> Result<&DeletedCopy, AdapterError> {
+        self.copies
+            .iter()
+            .find(|copy| copy.token == token)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the deleted copy has expired; undo is no longer possible", false))
     }
 
     fn set_field(&mut self, name: &str, payload: &Value) -> Result<Value, AdapterError> {
         let text = payload.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let kind = self
+        let field = self
             .document_or_error()?
             .form
             .iter()
             .find(|f| f.name == name)
-            .map(|f| f.kind)
             .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the field does not exist", false))?;
+        let kind = field.kind;
+        // As for a comment: an undo names the value it left, and a value someone
+        // else typed in between is a conflict, not something to overwrite.
+        if let Some(expect) = payload.get("expect").and_then(Value::as_str)
+            && !field_matches(&field.value.first().cloned().unwrap_or_default(), expect)
+        {
+            return Err(AdapterError::new(ErrorCode::Conflict, "the field changed since; the undo would overwrite it", false));
+        }
         let value = match kind {
             FormFieldKind::CheckBox => FieldValue::Check(matches!(text.as_str(), "1" | "true" | "on" | "yes")),
             FormFieldKind::Radio => FieldValue::Radio((!text.is_empty()).then_some(text)),
@@ -281,6 +528,18 @@ impl Adapter for PdfAdapter {
                 let (page, name) = annotation_target(&effective)?;
                 self.delete(self.page_index(page)?, &name)?
             }
+            ("annotation.restore", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                let (body, parent) = self.restore_annotation(page, &name, &effective.payload)?;
+                // The accepted operation carries the body: every replica adds
+                // the same shape, and the journal can replay the restore.
+                effective.payload["body"] = body;
+                if let Some(parent) = parent {
+                    effective.payload["parent"] = json!(parent);
+                }
+                json!({ "nm": name })
+            }
             ("field.set_value", ConflictClass::Merge) => {
                 let Target::Field { name } = &effective.target else {
                     return Err(AdapterError::new(ErrorCode::Invalid, "a field operation needs a field target", false));
@@ -294,6 +553,12 @@ impl Adapter for PdfAdapter {
                     .get("degrees")
                     .and_then(Value::as_i64)
                     .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "degrees are missing", false))?;
+                if let Some(expect) = effective.payload.get("expect").and_then(Value::as_i64) {
+                    let current = self.document_or_error()?.info.pages.get(page).map_or(0, |p| i64::from(p.rotation));
+                    if current != expect {
+                        return Err(AdapterError::new(ErrorCode::Conflict, "the page was turned since; the undo would overwrite it", false));
+                    }
+                }
                 self.apply_edit(Edit::RotatePages { pages: vec![page], degrees })?;
                 self.epoch = self.epoch.saturating_add(1);
                 json!({ "page": page })
@@ -312,16 +577,21 @@ impl Adapter for PdfAdapter {
             }
             ("page.delete", ConflictClass::Structural) => {
                 let page = self.page_index(target_page(&effective)?)?;
-                self.apply_edit(Edit::DeletePages { pages: vec![page] })?;
-                self.epoch = self.epoch.saturating_add(1);
-                json!({ "page": page })
+                self.delete_page(page)?
             }
+            ("page.restore", ConflictClass::Structural) => self.restore_page(&mut effective.payload)?,
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
         };
         if names_something && let Some(nm) = result.get("nm").cloned() {
             effective.payload["nm"] = nm;
+        }
+        // A delete answers with the token of its copy; the accepted operation
+        // carries it too, so an undo can name it and the journal records what
+        // was kept (RFC §6).
+        if let Some(copy) = result.get("copy").cloned() {
+            effective.payload["copy"] = copy;
         }
         Ok(ApplyOutcome { result, op: effective, epoch: self.epoch })
     }
@@ -395,6 +665,30 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// A field value the way the wire carries it, for the undo's expected value.
+/// A document stores a check box as its wire text too, but `off` has more than
+/// one spelling, so the comparison is by meaning.
+fn field_matches(stored: &str, expect: &str) -> bool {
+    if stored == expect {
+        return true;
+    }
+    let off = |value: &str| matches!(value.to_ascii_lowercase().as_str(), "" | "0" | "false" | "off" | "no");
+    let on = |value: &str| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes");
+    (off(stored) && off(expect)) || (on(stored) && on(expect))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, AdapterError> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("the page copy is not base64: {e}"), false))
+}
+
 /// The author the adapter records when an operation names none.
 pub const DEFAULT_AUTHOR: &str = "PdfCraft";
 
@@ -431,7 +725,7 @@ pub(crate) fn fixture(n: usize) -> Vec<u8> {
 mod tests {
     use super::{DEFAULT_AUTHOR, PdfAdapter, fixture};
     use pdfcraft_collab_proto::{
-        ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
+        ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
     use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
     use serde_json::json;
@@ -670,6 +964,248 @@ mod tests {
         assert!(adapter.base().is_some());
         let room_commit: CommitResult = CommitResult { version: 0, sha256: outcome.sha256, bytes: outcome.bytes, conflict: false };
         assert_eq!(room_commit.bytes, outcome.bytes);
+        Ok(())
+    }
+
+    fn note(nm: &str, contents: &str, base: u64) -> Result<Op, Box<dyn std::error::Error>> {
+        op(
+            &format!("add-{nm}"),
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            base,
+            0,
+            json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": contents, "author": DEFAULT_AUTHOR, "nm": nm}),
+        )
+    }
+
+    fn room_with(editor: &ActorId) -> Result<Room<PdfAdapter>, Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        Ok(room)
+    }
+
+    /// The proof of RFC §6: a deleted comment comes back from the server's copy,
+    /// with its shape, its text and its `/NM`, as an ordinary operation.
+    #[test]
+    fn a_deleted_comment_comes_back_from_the_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let delete = op("del-1", ConflictClass::Merge, Target::Annotation { page, nm: "n1".into() }, 1, 0, json!({"action": "annotation.delete"}))?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        let copy = applied.result["copy"].as_str().ok_or("the delete kept no copy")?.to_owned();
+        assert!(!room.adapter().document().ok_or("gone")?.info.annotations.iter().any(|a| a.name.as_deref() == Some("n1")));
+
+        let expected_epoch = applied.epoch;
+        let restore = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page: PageRef { index: 0, epoch: expected_epoch }, nm: "n1".into() },
+            2,
+            expected_epoch,
+            json!({"action": "annotation.restore", "copy": copy}),
+        )?;
+        let restored = room.apply(&editor, &restore, 0)?;
+        // The accepted operation carries the body: every replica adds the shape,
+        // and the journal can re-apply the restore without the copy.
+        assert!(restored.op.payload.get("body").is_some(), "the restore carries the comment's wire body");
+        let document = room.adapter().document().ok_or("gone")?;
+        let back = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("n1")).ok_or("the comment did not come back")?;
+        assert_eq!(back.contents.as_deref(), Some("hello"));
+        assert_eq!(back.page, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_deleted_reply_comes_back_as_a_reply() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let reply = op(
+            "reply-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            1,
+            0,
+            json!({"action": "annotation.reply", "text": "agreed", "author": DEFAULT_AUTHOR, "nm": "r1"}),
+        )?;
+        room.apply(&editor, &reply, 0)?;
+        let delete = op("del-1", ConflictClass::Merge, Target::Annotation { page, nm: "r1".into() }, 2, 0, json!({"action": "annotation.delete"}))?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        let copy = applied.result["copy"].as_str().ok_or("the delete kept no copy")?.to_owned();
+        let restore = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            3,
+            0,
+            json!({"action": "annotation.restore", "copy": copy}),
+        )?;
+        room.apply(&editor, &restore, 0)?;
+        let document = room.adapter().document().ok_or("gone")?;
+        let back = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("r1")).ok_or("the reply did not come back")?;
+        assert_eq!(back.contents.as_deref(), Some("agreed"));
+        assert_eq!(back.in_reply_to.as_deref(), Some("n1"), "it is still a reply to the same comment");
+        Ok(())
+    }
+
+    #[test]
+    fn an_expired_or_foreign_copy_is_a_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let restore = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            1,
+            0,
+            json!({"action": "annotation.restore", "copy": "c99"}),
+        )?;
+        let rejected = room.apply(&editor, &restore, 0).err().ok_or("an unknown copy was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        assert!(!rejected.retryable);
+        Ok(())
+    }
+
+    /// Undo is compare-and-set: an inverse names the value its original left, and
+    /// a value someone else wrote since is a conflict, never an overwrite.
+    #[test]
+    fn an_undo_does_not_overwrite_someone_elses_edit() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let mine = op(
+            "set-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            1,
+            0,
+            json!({"action": "annotation.set_contents", "text": "mine"}),
+        )?;
+        room.apply(&editor, &mine, 0)?;
+        let theirs = op(
+            "set-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            2,
+            0,
+            json!({"action": "annotation.set_contents", "text": "theirs"}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        // The inverse of my edit: put the old text back, but only if my text is
+        // still there. It is not.
+        let undo = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            3,
+            0,
+            json!({"action": "annotation.set_contents", "text": "hello", "expect": "mine"}),
+        )?;
+        let rejected = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another edit")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        assert!(!rejected.retryable);
+        let document = room.adapter().document().ok_or("gone")?;
+        assert_eq!(document.info.annotations[0].contents.as_deref(), Some("theirs"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_turned_page_refuses_an_undo_that_would_overwrite_a_later_turn() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let turn = op("rot-1", ConflictClass::Structural, Target::Page(page), 0, 0, json!({"action": "page.rotate", "degrees": 90}))?;
+        let applied = room.apply(&editor, &turn, 0)?;
+        let again = op(
+            "rot-2",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.rotate", "degrees": 180}),
+        )?;
+        let applied = room.apply(&editor, &again, 0)?;
+        let undo = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.rotate", "degrees": 0, "expect": 90}),
+        )?;
+        let rejected = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote a later turn")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        Ok(())
+    }
+
+    /// A page is out of every replica once deleted, so only the server's copy can
+    /// put it back: the operation carries the page itself.
+    #[test]
+    fn a_deleted_page_comes_back_with_its_content() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let delete = op("del-1", ConflictClass::Structural, Target::Page(PageRef { index: 1, epoch: 0 }), 0, 0, json!({"action": "page.delete"}))?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        let copy = applied.result["copy"].as_str().ok_or("the delete kept no copy")?.to_owned();
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 2);
+
+        let restore = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.restore", "copy": copy, "at": 1}),
+        )?;
+        let restored = room.apply(&editor, &restore, 0)?;
+        assert!(restored.op.payload["bytes"].is_string(), "the accepted operation carries the page");
+        let document = room.adapter().document().ok_or("gone")?;
+        assert_eq!(document.info.pages.len(), 3, "the page is back where it was");
+        let committed = room.commit(&editor, room.version())?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert!(bytes.windows(6).any(|w| w == b"Page 2"), "the page's content came back");
+        assert!(committed.bytes > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_restore_replays_without_its_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let mut applied_ops = vec![room.apply(&editor, &note("n1", "hello", 0)?, 0)?.op];
+        let delete = op("del-1", ConflictClass::Merge, Target::Annotation { page, nm: "n1".into() }, 1, 0, json!({"action": "annotation.delete"}))?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        let copy = applied.result["copy"].as_str().ok_or("no copy")?.to_owned();
+        applied_ops.push(applied.op);
+        let restore = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            2,
+            0,
+            json!({"action": "annotation.restore", "copy": copy}),
+        )?;
+        applied_ops.push(room.apply(&editor, &restore, 0)?.op);
+
+        // A restart replays the journal on a fresh adapter: the accepted restore
+        // carries the comment's body, so it needs no in-memory copy.
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        for (version, op) in applied_ops.into_iter().enumerate() {
+            fresh.replay(editor.clone(), op, version as u64 + 1)?;
+        }
+        let document = fresh.adapter().document().ok_or("gone")?;
+        assert_eq!(document.info.annotations.len(), 1);
+        assert_eq!(document.info.annotations[0].contents.as_deref(), Some("hello"));
         Ok(())
     }
 }

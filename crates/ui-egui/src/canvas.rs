@@ -502,6 +502,43 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
     }
 }
 
+/// Another participant's pointer on a page, in PDF user space. Drawn by the canvas and
+/// filled from the collaboration session's presence; the canvas knows nothing else about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteCursor {
+    /// Who it belongs to, shown beside the pointer.
+    pub actor: String,
+    pub color: Color32,
+    pub page: usize,
+    pub point: [f64; 2],
+}
+
+/// Draw other participants' pointers on page `i`: an arrow with the actor's name beside
+/// it, in the colour the session gave them. A page with none draws nothing.
+pub(crate) fn paint_remote_cursors(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, cursors: &[RemoteCursor]) {
+    let Some(page_info) = info.pages.get(page) else { return };
+    for cursor in cursors.iter().filter(|cursor| cursor.page == page) {
+        if !cursor.point[0].is_finite() || !cursor.point[1].is_finite() {
+            continue;
+        }
+        let [vx, vy] = page_info.user_to_view(cursor.point[0] as f32, cursor.point[1] as f32);
+        let at = xf.norm_to_screen(vx / xf.pw, vy / xf.ph);
+        if !xf.rect.expand(8.0).contains(at) {
+            continue;
+        }
+        // A small arrow whose tip is the point, as a reader's pointer reads.
+        let tip = at;
+        let head = [tip, egui::pos2(tip.x + 10.0, tip.y + 3.5), egui::pos2(tip.x + 3.5, tip.y + 10.0), egui::pos2(tip.x + 2.6, tip.y + 2.6)];
+        painter.add(egui::Shape::convex_polygon(head.to_vec(), cursor.color, egui::Stroke::new(1.0, Color32::WHITE)));
+        let font = egui::FontId::proportional(11.0);
+        let label = painter.layout_no_wrap(cursor.actor.clone(), font, Color32::WHITE);
+        let label_pos = egui::pos2(tip.x + 12.0, tip.y + 10.0);
+        let bubble = egui::Rect::from_min_size(label_pos, label.size()).expand2(egui::vec2(3.0, 1.0));
+        painter.rect_filled(bubble, 3.0, cursor.color);
+        painter.galley(label_pos, label, Color32::WHITE);
+    }
+}
+
 pub struct DocView {
     /// Where the tab shows (split view's panes) and the key that tells two
     /// views of one document apart (`crate::panes`).
@@ -566,6 +603,12 @@ pub struct DocView {
     /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
     /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
     pub interface: crate::viewer_prefs::TabInterface,
+    /// Another participant's pointer, where the collaboration session last said it was. The
+    /// canvas draws what it is given; without the feature the list stays empty.
+    pub remote_cursors: Vec<RemoteCursor>,
+    /// Where this frame's pointer is on a page, in PDF user space (page, x, y): what the
+    /// collaboration session sends as presence. `None` when it is not over a page.
+    pub local_cursor: Option<(usize, [f64; 2])>,
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
@@ -1104,6 +1147,8 @@ impl DocView {
             page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
+            remote_cursors: Vec::new(),
+            local_cursor: None,
             screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
@@ -1742,6 +1787,13 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         frame.current = i;
     }
     let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
+    if let Some(pointer) = ptr.within(r)
+        && let Some(page) = info.pages.get(i)
+    {
+        let (vx, vy) = xf.screen_to_view(pointer);
+        let [x, y] = page.view_to_user(vx, vy);
+        view.local_cursor = Some((i, [f64::from(x), f64::from(y)]));
+    }
     paint_page_surface(ui, view, frame, &PageSlot { i, r, xf });
     let painter = ui.painter();
     view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
@@ -1797,6 +1849,9 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
     text_layer(ui, view, frame, &slot, &input);
     page_overlays(ui, view, frame, &slot, &input);
+    if !view.remote_cursors.is_empty() {
+        paint_remote_cursors(ui.painter(), &xf, i, info, &view.remote_cursors);
+    }
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -1879,6 +1934,7 @@ fn draw_pages(
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
+    view.local_cursor = None;
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);

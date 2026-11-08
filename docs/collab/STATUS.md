@@ -15,14 +15,14 @@
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete; durable `Store` (versioned bases, journal, `CABINET` marker) |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | Background worker: socket, reconnect with backoff, heartbeat ping, resend of unconfirmed merges after a snapshot |
 | `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet, `/health`, `/metrics` |
-| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`: start from env, apply events, send edits, participants window, presence, commit, inverse undo |
+| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`: start from env, apply events, send edits, participants window, presence with cursors and TTL, commit, inverse undo |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
 
 The feature is native-only for now. `collab-ws` and `collab-session` compile to
@@ -45,11 +45,15 @@ are wasm-safe (`cargo check --target wasm32-unknown-unknown` was run for
    engine generates a name and the adapter puts it back into
    `applied.op.payload.nm`. DeckCraft answered that server-generated ids are
    their own choice and had no objection to A for PDF.
-4. **Lease gates structural writes, not joining.** A second editor joins with
-   `lease.ttl_secs = 0`, may comment, and gets `rejected{code:"lease",
-   retryable:true}` on a page operation while someone else holds the lease.
-   `ping` renews the lease; disconnect releases it. Before this fix the lease was
-   only checked at join and never on write.
+4. **The lease is the liveness of one writer, not a permission.** A second
+   editor joins with `lease.ttl_secs = 0`, may comment, and gets
+   `rejected{code:"lease", retryable:true}` on a page operation while someone
+   else holds the lease; `ping` renews the lease (every 30 s), disconnect
+   releases it. Roles decide what a client may do (ADR-0008 §2–3); the lease only
+   serialises the exclusive structural stream, so a `lease` rejection is retried,
+   never reported as a refusal. Same wording as DeckCraft §7 and CADCraft
+   ADR-0008. Before this fix the lease was only checked at join and never on
+   write.
 5. **Retryable rejection waits for the resync.** The client must not resend the
    operation immediately: the worker captures the pending operation, the server
    answers `resync` with the current base/tail, and the operation is re-addressed
@@ -191,7 +195,9 @@ cargo test -p pdfcraft-collab-proto -p pdfcraft-collab-server \
   -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-annot \
   -p pdfcraft-collab-daemon
 cargo clippy -p pdfcraft-collab-daemon -p pdfcraft-collab-pdf \
-  -p pdfcraft-collab-server -p pdfcraft-collab-ws --all-targets -- -D warnings
+  -p pdfcraft-collab-server -p pdfcraft-collab-ws \
+  -p pdfcraft-collab-client -p pdfcraft-collab-client-pdf -p pdfcraft-collab-annot \
+  --all-targets -- -D warnings
 cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings
 cargo fmt --all --check
 cargo xtask layers
@@ -199,12 +205,19 @@ cargo check -p pdfcraft --features collab
 cargo test -p pdfcraft-ui-egui --features collab
 ```
 
-(The UI suite was last run before the control-plane change; the change touches
-neither `ui-egui` nor the client crates, and `cargo check -p pdfcraft
---features collab` is green.)
+- UI suite after §6.5 (§6.5 touched `ui-egui`): 1492 passed, 2 failed. One is
+  the known font glyph failure from above (`editing::a_custom_property_…`, fails
+  without the feature too). The other,
+  `fill_sign::fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels`,
+  passes when run alone (`cargo test -p pdfcraft-ui-egui --features collab
+  --test it fill_sign::…`), so it is a parallel-run flake, not a regression; the
+  test touches neither `collab.rs` nor the canvas presence path.
+- The UI suite before §6.5 was last run before the control-plane change, which
+  touched neither `ui-egui` nor the client crates (`cargo check -p pdfcraft
+  --features collab` was green then, as now).
 
-Counts: proto 12, server 16, hub 4, client 11, client-pdf 9, session 2,
-ws 6 unit + 4 e2e, pdf 13, annot 10, daemon 27.
+Counts: proto 12, server 16, hub 4, client 12, client-pdf 13, session 2,
+ws 6 unit + 5 e2e, pdf 20, annot 10, daemon 27.
 
 - `apps/pdfcraft-collab-server` tests (27) cover the cabinet contract end to
   end over real sockets:
@@ -309,10 +322,14 @@ Ordered by the risk they pose to production.
 4. **Structural coverage.** Only page rotate, move and delete. Insert,
    duplicate, replace, split/combine, bookmarks, layers, attachments, form
    structure and content edits are not shared.
-5. **Presence is a list.** Page and zoom are sent; other participants' cursors
-   and selections are not drawn.
-6. **Undo is partial.** Comments, text/field values, rotation and move are
-   reversible; deleting a comment or a page is not. Redo is basic.
+5. **Presence has cursors, not selections.** The pointer over a page is sent and
+   drawn (ADR-0006); a text selection, `/NM` or rect selection is not sent yet.
+6. **Undo of a deletion is best effort.** A comment the room added comes back
+   exactly; a comment that came from the file has no wire body, so its delete
+   carries no copy and cannot be undone. A page comes back while its one-page
+   copy fits `MAX_RESTORE_PAGE_BYTES` (160 KiB); a larger page is deleted without
+   a copy. Copies are memory-bounded (64 / 64 MiB) and are rebuilt by replay, not
+   persisted on their own.
 7. **The cabinet contract is implemented, the production loop is not closed.**
    `POST /v1/sessions`, the commit callback and `409` exist (RFC §8.2). What is
    still missing: an idempotent retry/queue for a failed publication (today the
@@ -441,12 +458,70 @@ would need the blob channel).
 - Still open here: publication retry/queue, an endpoint to resolve a conflict
   room, `https` without a proxy (limitations 7–8, 12).
 
-### 6.5 Presence cursors and undo
+### 6.5 Presence cursors and undo — done in this branch
 
-- Send the cursor/selection from the page pointer (≤10 Hz); draw remote cursors
-  with the stored colour. The protocol fields already exist.
-- Keep server-side copies of deleted annotations/pages for inverse operations
-  (ADR-0010) so delete can be undone.
+Presence:
+
+- `DocView.local_cursor` is filled by `draw_page` from `PagePointer` (the page
+  module resolves the pointer to PDF user space with `PageInfo::view_to_user`),
+  so the app never reads egui's raw pointer state and the pointer-over-a-dialog
+  rules keep working.
+- `collab_presence` sends at most 10 frames/s (`PRESENCE_INTERVAL` 100 ms),
+  coalesced (only the last state), only when something changed, plus a 1 s
+  heartbeat so a reader is not shown as inactive. The server's `presence_hz`
+  limit stays as the backstop.
+- Remote cursors are drawn by the canvas (`paint_remote_cursors`, arrow + name
+  in the actor's colour) on their page only; a presence whose `page.epoch` is
+  not the current epoch is not drawn (its index means another page).
+- TTL 30 s is client-side (`PRESENCE_TTL`), because presence is never journaled
+  or replayed: a participant that goes quiet for 30 s is shown as `inactive` and
+  its cursor is dropped; a disconnect or `leave` clears it at once.
+- The canvas knows nothing about collaboration: it draws `remote_cursors` and
+  reports `local_cursor`, both empty without the feature.
+
+Undo of deletions (RFC §6.1, ADR-0010):
+
+- `PdfAdapter` keeps `known` (the wire body of every comment the room added, by
+  `/NM`) and `copies` (bounded: 64 copies / 64 MiB, oldest evicted). A delete
+  answers with `copy`, the accepted operation carries it, and the client builds
+  the inverse from the accepted operation (`inverse_after`), because a replica
+  no longer has the content.
+- `annotation.restore`: the copy's body is put back under the same `/NM`
+  (`AddAnnotationNamed`); a reply comes back a reply (`ReplyToAnnotationNamed`
+  with the parent's `/NM`). The accepted operation carries the body
+  (`payload.body`), so every replica and the journal apply the same edit.
+- `page.restore`: the delete snapshots the page as a one-page PDF *before* the
+  page goes; the restore inserts it with `InsertPagesFrom` at the old index and
+  the accepted operation carries the page in `payload.bytes` (base64). Cap:
+  `MAX_RESTORE_PAGE_BYTES` = 160 KiB so base64 fits the 256 KiB frame.
+- Copies are not on disk: `replay` re-applies the journal in order and rebuilds
+  the same tokens (deterministic counter). A comment that came from the file,
+  not from the room, has no wire body and is deleted without a copy; its undo is
+  refused.
+- Undo is compare-and-set (chair's review, point 3): `expect` on
+  `annotation.set_contents`, `field.set_value` and `page.rotate`; the adapter
+  answers `conflict` when the value changed since, never overwriting someone
+  else's edit. Structural inverses are CAS through `baseVersion == head`.
+- The client re-addresses a merge intent's target to the current epoch when it
+  is re-queued after a resync (`with_epoch`); before this a retried comment was
+  stale for ever.
+
+Tests added: `collab-pdf` `a_deleted_comment_comes_back_from_the_copy`,
+`a_deleted_reply_comes_back_as_a_reply`, `a_deleted_page_comes_back_with_its_content`,
+`a_restore_replays_without_its_copy`, `an_expired_or_foreign_copy_is_a_conflict`,
+`an_undo_does_not_overwrite_someone_elses_edit`,
+`a_turned_page_refuses_an_undo_that_would_overwrite_a_later_turn`;
+`collab-client-pdf` `the_accepted_delete_answers_with_the_operation_that_undoes_it`,
+`a_restore_adds_the_comment_its_operation_carries`,
+`a_page_restore_inserts_the_page_its_operation_carries`,
+`a_deletion_is_undone_from_the_server_copy`; `collab-client`
+`a_readdressed_merge_intent_takes_the_new_epoch`; `collab-ws` e2e
+`two_clients_undo_a_deleted_comment_and_a_deleted_page` (two clients, one
+comment delete undone by the other, one page delete undone from the copy, both
+replicas equal).
+
+Still open here: drawing remote *selections*, and the blob channel that would
+lift the 160 KiB page cap and make a page restore independent of one frame.
 
 ### 6.6 Cleanup and submission
 
@@ -499,3 +574,19 @@ would need the blob channel).
   check the PID before killing.
 - The smoke-test keys and JWT live under `/tmp` and are disposable; never commit
   a token or a private key.
+- The copy store (`PdfAdapter::copies`) is memory-only on purpose: `replay`
+  re-applies the journal in order and rebuilds the same tokens, so nothing is
+  written next to `CURRENT`. Changing the order in which copies are made (or
+  resetting `next_copy` elsewhere) breaks that; the tokens are the keys the
+  client's undo still holds.
+- A page restore puts base64 page bytes inside the operation, which is why it is
+  capped at `MAX_RESTORE_PAGE_BYTES` (160 KiB). Do not raise the constant: a
+  larger page needs the blob channel (the RFC §16 gap), not a bigger frame.
+- `inverse_for` returns `None` for the two deletes on purpose; the UI patches the
+  inverse from `applied` with `inverse_after`. An inverse for a delete built on
+  the client would need the content the replica no longer has.
+- Presence TTL is a client-side clock (`PRESENCE_TTL` in `ui-egui/src/collab.rs`):
+  the server stores only the last state per participant and does not evict it, so
+  "inactive" is drawn where presence is read. A merge intent re-addressed after a
+  resync takes the new target epoch (`collab-client::with_epoch`); without it a
+  retried comment was stale for ever.

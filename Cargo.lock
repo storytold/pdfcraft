@@ -4622,6 +4622,7 @@ dependencies = [
 name = "pdfcraft-collab-client-pdf"
 version = "0.18.1"
 dependencies = [
+ "base64 0.23.1",
  "pdfcraft-collab-annot",
  "pdfcraft-collab-proto",
  "pdfcraft-engine",
@@ -4657,6 +4658,7 @@ dependencies = [
 name = "pdfcraft-collab-pdf"
 version = "0.18.1"
 dependencies = [
+ "base64 0.23.1",
  "pdfcraft-collab-annot",
  "pdfcraft-collab-proto",
  "pdfcraft-collab-server",

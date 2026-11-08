@@ -15,10 +15,22 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_proto::{
-    ActorId, Applied, ClientInfo, ClientMessage, CommitRequest, CommitResult, DocKey, ErrorCode, Hello, Limits, Op, PROTOCOL_VERSION, Presence,
-    Rejected, Resync, Role, ServerError, ServerMessage, Snapshot, Welcome,
+    ActorId, Applied, ClientInfo, ClientMessage, CommitRequest, CommitResult, DocKey, ErrorCode, Hello, Limits, Op, PROTOCOL_VERSION, PageRef,
+    Presence, Rejected, Resync, Role, ServerError, ServerMessage, Snapshot, Target, Welcome,
 };
 use std::collections::{BTreeMap, VecDeque};
+
+/// The same address in another page epoch. Merge intents are identified by name
+/// (`/NM`, a field's full name), so only the epoch that framed the address
+/// changes; structural intents keep the address they were built on.
+fn with_epoch(target: Target, epoch: u64) -> Target {
+    match target {
+        Target::Page(page) => Target::Page(PageRef { index: page.index, epoch }),
+        Target::Annotation { page, nm } => Target::Annotation { page: PageRef { index: page.index, epoch }, nm },
+        Target::Bookmark { path, .. } => Target::Bookmark { path, epoch },
+        other => other,
+    }
+}
 
 /// How many operations may wait for confirmation at once. Beyond this the
 /// interface must wait for the server instead of growing a hidden queue.
@@ -166,6 +178,13 @@ impl ClientSession {
 
     /// Queue a local operation. `base_version` and `epoch` are taken from the
     /// client's current view: an intent is always built on what the user saw.
+    ///
+    /// A merge intent re-addressed after a resync keeps its target but takes the
+    /// new epoch: a comment, a field and a reply are identified by `/NM` or by a
+    /// name, so the address is still the same thing, and leaving the old epoch
+    /// on it would make the retry stale for ever. A structural intent is not
+    /// re-addressed at all (the page order it was built on may be gone), which
+    /// is why `enqueue` rejects one whose `base_version` is not the head.
     pub fn enqueue(&mut self, mut op: Op) -> Result<Op, ClientError> {
         if !self.joined {
             return Err(ClientError::NotJoined);
@@ -184,6 +203,9 @@ impl ClientSession {
         }
         op.base_version = self.version;
         op.epoch = self.epoch;
+        if op.class == pdfcraft_collab_proto::ConflictClass::Merge {
+            op.target = with_epoch(op.target, self.epoch);
+        }
         op.validate().map_err(|e| ClientError::Invalid(e.to_string()))?;
         self.pending.push_back(Pending { op: op.clone(), applied_locally: true });
         self.outgoing.push_back(ClientMessage::Op(op.clone()));
@@ -509,6 +531,41 @@ mod tests {
         assert!(matches!(client.receive(ServerMessage::Snapshot(snapshot))?, Some(Effect::Snapshot(_))));
         assert_eq!((client.version(), client.epoch()), (5, 2));
         assert_eq!(client.pending_len(), 0);
+        Ok(())
+    }
+
+    /// A merge intent re-addressed after a resync must carry the new epoch, or
+    /// the server refuses it as stale for ever; a structural one keeps the page
+    /// order it was built on.
+    #[test]
+    fn a_readdressed_merge_intent_takes_the_new_epoch() -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = joined(Role::Editor)?;
+        let _ = client.take_outgoing();
+        let mut add = op("add")?;
+        add.epoch = 0;
+        add.target = Target::Page(PageRef { index: 1, epoch: 0 });
+        let queued = client.enqueue(add)?;
+        assert_eq!(queued.target, Target::Page(PageRef { index: 1, epoch: 0 }), "nothing changes on the head it was built on");
+
+        let _ = client.receive(ServerMessage::Snapshot(Snapshot {
+            mode: SnapshotMode::BaseAndTail,
+            version: 4,
+            epoch: 3,
+            base: None,
+            tail: Vec::new(),
+        }))?;
+        let mut again = op("add-2")?;
+        again.target = Target::Annotation { page: PageRef { index: 2, epoch: 0 }, nm: "n1".into() };
+        let queued = client.enqueue(again)?;
+        assert_eq!(queued.target, Target::Annotation { page: PageRef { index: 2, epoch: 3 }, nm: "n1".into() });
+        assert_eq!(queued.epoch, 3);
+
+        let mut structural = op("rotate")?;
+        structural.kind = OpKind::Structural;
+        structural.class = ConflictClass::Structural;
+        structural.target = Target::Page(PageRef { index: 0, epoch: 0 });
+        let queued = client.enqueue(structural)?;
+        assert_eq!(queued.target, Target::Page(PageRef { index: 0, epoch: 0 }), "a page edit is not re-addressed onto a new page order");
         Ok(())
     }
 

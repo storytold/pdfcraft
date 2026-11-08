@@ -8,12 +8,19 @@
 //! the module does nothing.
 
 use crate::PdfCraftApp;
-use pdfcraft_collab_client_pdf::{apply, inverse_for, ops_for_edit};
+use pdfcraft_collab_client_pdf::{apply, inverse_after, inverse_for, ops_for_edit};
 use pdfcraft_collab_proto::{ActorId, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Viewport};
 use pdfcraft_collab_session::{Config as WireConfig, Event, Handle, spawn};
 use pdfcraft_engine::{DocId, Edit};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
+
+/// How long another participant's presence counts as current (ADR-0006).
+const PRESENCE_TTL: Duration = Duration::from_secs(30);
+/// The most presence frames per second one client sends (ADR-0006).
+const PRESENCE_INTERVAL: Duration = Duration::from_millis(100);
+/// A heartbeat while nothing moves, so a reader is not "inactive" (well under the TTL).
+const PRESENCE_HEARTBEAT: Duration = Duration::from_secs(1);
 
 pub(crate) struct CollabUi {
     handle: Handle,
@@ -27,7 +34,9 @@ pub(crate) struct CollabUi {
     connected: bool,
     version: u64,
     epoch: u64,
-    participants: BTreeMap<String, Presence>,
+    /// Recent presence per actor, with when it arrived: the TTL is local, since
+    /// presence is never journaled or replayed.
+    participants: BTreeMap<String, Seen>,
     color: String,
     status: String,
     error: Option<String>,
@@ -35,7 +44,14 @@ pub(crate) struct CollabUi {
     redo: Vec<HistoryGroup>,
     counter: u64,
     last_presence: Instant,
+    /// What was last sent, so only a change (or the heartbeat) is sent again.
+    sent_presence: Option<Presence>,
     committed: Option<(String, u64)>,
+}
+
+struct Seen {
+    presence: Presence,
+    at: Instant,
 }
 
 struct HistoryGroup {
@@ -78,6 +94,7 @@ impl CollabUi {
                     redo: Vec::new(),
                     counter: 0,
                     last_presence: Instant::now(),
+                    sent_presence: None,
                     committed: None,
                 });
             }
@@ -88,6 +105,37 @@ impl CollabUi {
     fn next_op_id(&mut self) -> Option<OpId> {
         self.counter = self.counter.saturating_add(1);
         OpId::new(format!("{}-{}", self.client_id, self.counter)).ok()
+    }
+
+    /// Replace the inverse of `op` once the server has answered. A deletion has
+    /// no local inverse (the content is gone from this replica), so its undo is
+    /// built from the accepted operation's copy token (RFC §6).
+    fn patch_inverse(&mut self, op_id: &OpId, inverse: Op) {
+        for group in self.history.iter_mut().chain(self.redo.iter_mut()) {
+            let Some(index) = group.originals.iter().position(|op| op.op_id == *op_id) else { continue };
+            if let Some(slot) = group.inverses.get_mut(index) {
+                *slot = Some(inverse.clone());
+            }
+            return;
+        }
+    }
+
+    /// Other participants' pointers this replica may draw: fresh (ADR-0006 TTL),
+    /// on the page tree this replica is showing, with a position.
+    fn cursors(&self, now: Instant) -> Vec<crate::canvas::RemoteCursor> {
+        self.participants
+            .values()
+            .filter(|seen| now.duration_since(seen.at) < PRESENCE_TTL && seen.presence.page.epoch == self.epoch)
+            .filter_map(|seen| {
+                let cursor = seen.presence.cursor?;
+                Some(crate::canvas::RemoteCursor {
+                    actor: seen.presence.actor_id.as_str().to_owned(),
+                    color: color_of_hex(&seen.presence.color),
+                    page: usize::try_from(seen.presence.page.index).ok()?,
+                    point: [cursor[0] as f64, cursor[1] as f64],
+                })
+            })
+            .collect()
     }
 }
 
@@ -133,6 +181,9 @@ impl PdfCraftApp {
             Event::Applied { applied, .. } => {
                 collab.version = applied.version;
                 collab.epoch = applied.epoch;
+                if let Some(inverse) = inverse_after(&applied) {
+                    collab.patch_inverse(&applied.op.op_id, inverse);
+                }
                 match apply(&mut self.session, doc, &applied.op) {
                     Ok(_) => {
                         if let Some(document) = self.session.get(doc)
@@ -178,7 +229,7 @@ impl PdfCraftApp {
             }
             Event::Presence(presence) => {
                 if collab.actor.as_ref() != Some(&presence.actor_id) {
-                    collab.participants.insert(presence.actor_id.as_str().to_owned(), presence);
+                    collab.participants.insert(presence.actor_id.as_str().to_owned(), Seen { presence, at: Instant::now() });
                 }
             }
             Event::Committed(result) => {
@@ -200,24 +251,52 @@ impl PdfCraftApp {
     fn collab_presence(&mut self, ctx: &egui::Context) {
         let Some((index, doc)) = self.active_ids() else { return };
         let Some(collab) = self.collab.as_mut() else { return };
-        if !collab.connected || collab.doc != doc || collab.last_presence.elapsed() < Duration::from_millis(100) {
+        if !collab.connected || collab.doc != doc {
+            // No session, no cursors: nothing must stay on the page from before.
+            if let Some(view) = self.views.get_mut(index) {
+                view.remote_cursors.clear();
+            }
             return;
+        }
+        let now = Instant::now();
+        // What the others show: fresh presence only, and only addresses that
+        // still name a page in this replica's page tree.
+        if let Some(view) = self.views.get_mut(index) {
+            view.remote_cursors = collab.cursors(now);
         }
         let Some(actor) = collab.actor.clone() else { return };
         let Some(view) = self.views.get(index) else { return };
+        // The pointer over the page in PDF user space: the page module resolved
+        // it this frame, so this is the same point the user sees.
+        let cursor = view.local_cursor.filter(|(page, _)| *page == view.current).map(|(_, point)| [point[0].round() as i64, point[1].round() as i64]);
         let presence = Presence {
             actor_id: actor,
             role: collab.role,
             page: PageRef { index: view.current.min(u32::MAX as usize) as u32, epoch: collab.epoch },
             viewport: Viewport { x: 0.0, y: 0.0, zoom: f64::from(view.zoom) },
-            cursor: None,
+            cursor,
             selection: None,
             color: collab.color.clone(),
         };
-        collab.last_presence = Instant::now();
+        let moved = collab.sent_presence.as_ref().is_none_or(|sent| {
+            sent.page != presence.page || sent.cursor != presence.cursor || sent.role != presence.role || sent.viewport.zoom != presence.viewport.zoom
+        });
+        let elapsed = collab.last_presence.elapsed();
+        if !moved && elapsed < PRESENCE_HEARTBEAT {
+            // Nothing to say; the next frame keeps the cursor clock running.
+            ctx.request_repaint_after(Duration::from_millis(50));
+            return;
+        }
+        if elapsed < PRESENCE_INTERVAL {
+            // Coalesce: only the last state is sent, when the interval is over.
+            ctx.request_repaint_after(PRESENCE_INTERVAL - elapsed);
+            return;
+        }
+        collab.last_presence = now;
+        collab.sent_presence = Some(presence.clone());
         collab.handle.presence(presence);
         // Presence is ephemeral; keep the clock moving without redrawing pages.
-        ctx.request_repaint_after(Duration::from_millis(200));
+        ctx.request_repaint_after(PRESENCE_INTERVAL);
     }
 
     /// Send a user edit to the server instead of applying it locally. `None`
@@ -346,8 +425,16 @@ impl PdfCraftApp {
             if collab.participants.is_empty() {
                 ui.weak("Only you");
             }
-            for (actor, presence) in &collab.participants {
-                ui.label(format!("{actor} · {} · page {}", role_name(presence.role), presence.page.index + 1));
+            let now = Instant::now();
+            for (actor, seen) in &collab.participants {
+                let active = now.duration_since(seen.at) < PRESENCE_TTL;
+                let where_ = if seen.presence.page.epoch == collab.epoch {
+                    format!("page {}", seen.presence.page.index + 1)
+                } else {
+                    "another page set".to_owned()
+                };
+                let state = if active { "" } else { " · inactive" };
+                ui.label(format!("{actor} · {} · {where_}{state}", role_name(seen.presence.role)));
             }
             ui.separator();
             if collab.role.can_structural() && ui.button("Commit to the cabinet").clicked() {
@@ -393,4 +480,16 @@ fn color_of(actor: &str) -> String {
         hash = hash.wrapping_mul(16_777_619);
     }
     format!("#{:06x}", hash & 0x00ff_ffff)
+}
+
+/// A presence colour (`#RRGGBB`) as egui draws it. A malformed token is the
+/// fallback colour, never a crash: the token comes from another client.
+fn color_of_hex(color: &str) -> egui::Color32 {
+    let hex = color.strip_prefix('#').unwrap_or(color);
+    if hex.len() == 6
+        && let Ok(value) = u32::from_str_radix(hex, 16)
+    {
+        return egui::Color32::from_rgb(((value >> 16) & 0xff) as u8, ((value >> 8) & 0xff) as u8, (value & 0xff) as u8);
+    }
+    egui::Color32::from_rgb(0x33, 0x66, 0xcc)
 }
