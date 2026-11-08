@@ -2523,3 +2523,29 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
     assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
+
+/// Delete and Escape over the Pages panel with a menu of the menu bar open are the menu's: no page
+/// is deleted, and the page selection stays. Delete deleted the selected page.
+#[test]
+fn delete_and_escape_with_a_menu_open_leave_the_pages_panel() {
+    let mut h = harness(&[("panel", "pages")]);
+    h.run_steps(2);
+    // The first ⌘-click on another page picks it and the current page.
+    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    let selected = h.state().views[0].selected.clone();
+    assert_eq!(selected.iter().copied().collect::<Vec<_>>(), [0, 1], "⌘-click picked pages 1 and 2");
+    crate::support::open_menu(&mut h, "View");
+    let thumb = h.get_by_label("Page 2").rect().center();
+    h.hover_at(thumb);
+    h.run_steps(1);
+    // Delete leaves the menu open; Escape closes it.
+    for key in [Key::Delete, Key::Escape] {
+        assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+        h.key_press(key);
+        h.run_steps(3);
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 3, "{key:?} with a menu open deleted a page");
+        assert_eq!(s.views[0].selected, selected, "{key:?} with a menu open dropped the page selection");
+    }
+}

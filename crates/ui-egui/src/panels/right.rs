@@ -27,6 +27,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let bm_can_paste = app.bookmark_clipboard.is_some();
     // Prepare a form is open: the Fields panel orders tabs.
     let preparing = app.is_preparing();
+    // The Pages panel's Escape and Delete act on the pages: not while something is over them.
+    let keys = app.page_keys.also(app.covers_pages());
     {
         let Some(doc) = app.session.get(id) else { return };
         let info = &doc.info;
@@ -216,7 +218,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));
                         }
                     }
-                    RightPanel::Pages => pages(ui, &t, info, view, modal, bm_editable, &mut nav),
+                    RightPanel::Pages => pages(ui, &t, info, view, modal, keys, bm_editable, &mut nav),
                     RightPanel::Fields => {
                         field_properties = fields(
                             ui,

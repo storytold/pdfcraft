@@ -630,6 +630,9 @@ pub struct PdfCraftApp {
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
     /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
     pub(crate) menu_input: Vec<egui::Event>,
+    /// The pass a menu command that stands for input (Edit ▸ Copy, Cut, Paste, Select all,
+    /// Delete) last ran on (see [`Self::menu_input_due`]).
+    pub(crate) menu_input_pass: Option<u64>,
     /// This frame's keys as the pages see them: none while something is over them.
     pub(crate) page_keys: page_keys::PageKeys,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see

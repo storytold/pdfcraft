@@ -4430,3 +4430,55 @@ fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     h.run_steps(4);
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
+
+/// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
+/// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
+/// which held every page key, H included.
+#[test]
+fn undo_with_a_card_menu_open_leaves_the_page_keys() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    drag_pt(&mut h, (170.0, 180.0), (270.0, 120.0));
+    assert_eq!(comments(&h).len(), 2);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().right = Some(pdfcraft_ui_egui::RightPanel::Comments);
+    h.run_steps(3);
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Set status").is_some(), "the card's menu is shown");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Undo took the second square back");
+    assert_eq!(h.state().views[0].comments.selected, None, "and deselected the first");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "the menu closed with its card's button");
+    h.key_press(egui::Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "H picks the Hand tool");
+}
+
+/// ⌘C with a menu of the menu bar open is the menu's: the selected comment isn't copied.
+#[test]
+fn copy_with_a_menu_open_copies_no_comment() {
+    let mut h = selected_square();
+    support::open_menu(&mut h, "View");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::C);
+    h.run_steps(3);
+    assert!(h.state().comment_clipboard.is_none(), "⌘C with a menu open copied the comment");
+}
+
+/// The OCR Verify screen takes the window: an arrow there leaves the comment selected on the
+/// hidden page where it is. It moved it.
+#[test]
+fn an_arrow_on_the_ocr_verify_screen_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    assert_eq!(comments(&h)[0].rect, before, "the hidden comment moved");
+}

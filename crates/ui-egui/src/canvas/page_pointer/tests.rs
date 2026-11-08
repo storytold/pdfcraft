@@ -784,12 +784,17 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert_eq!(aliased_hit_tests(source), aliases);
 }
 
-/// egui's raw key state: a key pressed, held, let go or taken, and the key and clipboard events
-/// themselves.
-const RAW_KEY_READS: [&str; 12] = [
+/// egui's raw key state: a key pressed, held, let go or taken, and the key, text and clipboard
+/// events themselves, however they are imported.
+const RAW_KEY_READS: [&str; 17] = [
     "Event::Copy",
     "Event::Cut",
     "Event::Paste",
+    "Event::Text",
+    "Event::{",
+    "Event::*",
+    "Event as ",
+    "InputState::",
     "key_pressed(",
     "key_released(",
     "key_down(",
@@ -801,13 +806,15 @@ const RAW_KEY_READS: [&str; 12] = [
     "Event::Key",
 ];
 
-/// Functions under `canvas/` and `tools/`, and in `app/keys.rs`, that read egui's keys themselves
-/// because the keys are not the pages': (file, function, why).
+/// Functions in the files the key guard scans ([`key_files`]) that read egui's keys themselves:
+/// a window's or a field's own keys, which `PageKeys` would hide, and the pages' reads that
+/// `PageKeys` can't make (chords that wait for the menu bar instead, Escape ending what the pages
+/// hold, any key stopping a glide): (file, function, why).
 const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
     (
         "app/clipboard.rs",
         "clipboard_keys",
-        "the pages' clipboard, behind its `page_keys.over()` check: Paste's text and images, and ⌘V read as a chord",
+        "the pages' clipboard: Copy, Cut and Paste (events and chords), which act only when `page_keys.over()` is false",
     ),
     ("app/keys.rs", "select_all_keys", "Select all, a chord that waits for a menu of the menu bar as the registered commands' do"),
     ("canvas/area.rs", "glide_interrupted", "any key stops the touchpad's glide"),
@@ -828,11 +835,12 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
 ];
 
 /// The files whose key reads the key guard checks, relative to `src`: every file under `canvas/`
-/// and `tools/` and the canvas's root, whether or not it is a page module yet, and the app's own
-/// keys and clipboard; not their tests, and not `PageKeys` itself.
+/// and `tools/` and the canvas's root, whether or not it is a page module yet, the app's own keys
+/// and clipboard, and the Pages panel's thumbnails; not their tests, and not `PageKeys` itself. A
+/// helper in another file that page code hands egui's input to isn't seen.
 fn key_files() -> Vec<String> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = vec!["canvas.rs".to_owned(), "app/keys.rs".to_owned(), "app/clipboard.rs".to_owned()];
+    let mut files = ["canvas.rs", "app/keys.rs", "app/clipboard.rs", "panels/pages.rs"].map(str::to_owned).to_vec();
     let mut dirs = vec![src.join("canvas"), src.join("tools")];
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(dir).expect("source directory") {

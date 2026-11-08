@@ -10797,3 +10797,39 @@ fn escape_closing_a_dialog_over_a_paragraph_being_typed_keeps_the_typing() {
     let applied = s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().any(|b| b.text.contains("typed"));
     assert!(open || applied, "the typing stays");
 }
+
+/// Edit ▸ Select all from the in-window menu bar selects every page in Organize. Its ⌘A comes on
+/// the next pass, while the bar still reads as open, and waited with the chords: nothing was
+/// selected.
+#[test]
+fn edit_select_all_from_the_menu_bar_selects_every_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Select all").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2], "Edit ▸ Select all selected every page");
+}
+
+/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The platform
+/// answers the menu's paste request on the next pass (kittest doesn't, so the test does), while
+/// the bar still reads as open, and the pages' clipboard dropped it.
+#[test]
+fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    assert_eq!(pages(&h), 3);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Paste").click();
+    h.run_steps(1);
+    assert!(craft_menu::bar::is_open(&h.ctx), "the bar still reads as open as the paste comes");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");
+}

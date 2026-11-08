@@ -264,6 +264,7 @@ impl PdfCraftApp {
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
+            menu_input_pass: None,
             page_keys: Default::default(),
             dialog_seen: None,
             dialog_epoch: 0,
@@ -340,21 +341,29 @@ impl PdfCraftApp {
     }
 
     /// Whether something over the pages has the keyboard: a dialog or prompt, the palette, the
-    /// hotbar's tools window, a popup or a menu of the menu bar. `menu_keys`: this frame carries the
-    /// keys a menu click stands for (Edit ▸ Delete), which are the pages' whatever popup is open (a
-    /// click in a native menu bar leaves one open) and though the menu bar still counts as open on
-    /// that frame.
-    pub(crate) fn over_pages(&self, ctx: &egui::Context, menu_keys: bool) -> bool {
+    /// OCR Verify screen, the hotbar's tools window, a popup or a menu of the menu bar. While the
+    /// input a menu click stands for is due ([`Self::menu_input_due`]), popups and the menu bar
+    /// don't count: that input is the pages'.
+    pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
         self.covers_pages()
             || self.hotbar.picker_over_pages(ctx)
-            || !menu_keys && (egui::Popup::is_any_open(ctx) || craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx))
+            || !self.menu_input_due(ctx) && (egui::Popup::is_any_open(ctx) || craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx))
     }
 
-    /// A dialog, a prompt or the palette is drawn over the pages.
+    /// The input a menu click stands for (Edit ▸ Copy, Cut, Paste, Select all, Delete) is due:
+    /// the command ran on this pass or one of the two before it. The keys come on the next pass
+    /// (`menu_input`), and the paste a pass after the platform is asked for the clipboard; the
+    /// in-window menu bar still reads as open meanwhile, two passes after it was last drawn open,
+    /// and a native menu bar's click leaves egui's popups open.
+    pub(crate) fn menu_input_due(&self, ctx: &egui::Context) -> bool {
+        self.menu_input_pass.is_some_and(|pass| pass.saturating_add(2) >= ctx.cumulative_pass_nr())
+    }
+
+    /// A dialog, a prompt, the palette or the OCR Verify screen is drawn over the pages.
     pub(crate) fn covers_pages(&self) -> bool {
         // The palette isn't drawn in full screen.
         let palette = self.palette_open && !(self.full_screen && self.active.is_some());
-        self.modal_open() || self.pending_full_screen.is_some() || palette
+        self.modal_open() || self.pending_full_screen.is_some() || palette || self.ocr_verify.open
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
@@ -618,15 +627,14 @@ impl eframe::App for PdfCraftApp {
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);
         // The keys a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
-        let menu_keys = !self.menu_input.is_empty();
-        if menu_keys {
+        if !self.menu_input.is_empty() {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
         // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
         // bar, so the chord runs in the same press, the pages' as well as the registry's.
         craft_menu::bar::leave_for_shortcut(ctx);
-        self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx, menu_keys));
+        self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx));
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.

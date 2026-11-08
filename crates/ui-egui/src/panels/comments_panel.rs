@@ -582,6 +582,11 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
     let menu_id = ui.scope_id().with(("card-menu", key));
     if open_menu {
         egui::Popup::open_id(ui.ctx(), menu_id);
+    } else if more_rect.is_none() {
+        // The button is drawn on the selected card alone. Without it (Undo deselected the card
+        // with its menu open), egui would keep the menu open with nowhere to show it, and an
+        // open popup holds every page key (`PageKeys`).
+        egui::Popup::close_id(ui.ctx(), menu_id);
     }
     // Hang the menu from the "…" button (a pointer anchor would follow the mouse to the items).
     let anchor = more_rect.map_or(egui::PopupAnchor::PointerFixed, egui::PopupAnchor::ParentRect);
