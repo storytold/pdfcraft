@@ -3369,3 +3369,23 @@ fn a_wrapped_appearance_still_validates_once_trusted() {
         assert_eq!(s.modification, Modification::None, "{file}: the appearance is part of what is signed");
     }
 }
+
+#[test]
+fn a_column_with_no_text_is_left_out_so_the_details_start_at_the_padding() {
+    // 12 pt wide: no word of the name fits the column, so the details take the box from the padding.
+    let (w, h) = (12.0, 25.0);
+    let (signed, _) = signed_in_box("rsa-aes.p12", w, h, Appearance::default(), None);
+    let (content, _) = appearance_of(&signed, "Signature1");
+    let runs = runs_of(&content);
+    assert_inside(&runs, w, h, "12x25");
+    let pad = (h * 0.06).clamp(1.0, 6.0);
+    assert!(runs.iter().all(|r| (r.x - pad).abs() < 1e-9), "every line starts at the padding");
+}
+
+#[test]
+fn a_box_too_small_for_any_of_its_text_is_refused_without_a_graphic() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let options = SignOptions { rect: Some([20.0, 100.0, 24.0, 120.0]), ..opts() };
+    let refused = pdfcraft_sign::sign(&open(&fixture()), &id, &options);
+    assert!(matches!(refused, Err(SignError::Unsupported(_))), "a 4 x 20 pt box cannot show its text");
+}

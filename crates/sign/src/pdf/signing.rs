@@ -570,7 +570,8 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         });
         // Beside the name the details keep at least half the box. Narrower, the name's column is left
         // out: the details show the whole name, and take the full width.
-        let name_column = name_column.filter(|(_, _, width)| w - 4.0 * pad - width >= w * 0.5);
+        let name_column = name_column.filter(|(_, words, width)| !words.is_empty() && w - 4.0 * pad - width >= w * 0.5);
+        let has_name_column = name_column.is_some();
         // The details start a gap after the name's column, so no empty space sits between them.
         let name_w = name_column.as_ref().map_or(0.0, |(_, _, width)| *width);
         let (left_w, right_x) = match (&opts.graphic, a.name) {
@@ -598,6 +599,12 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         }
         // The details, shrunk to fit the right side.
         let (size, wrapped) = fit_text(&lines, 12.0, right_w, h - 2.0 * pad, 1.15);
+        // Without a graphic, a box that shows none of its text would carry a blank signature: refused.
+        if opts.graphic.is_none() && !has_name_column && !lines.is_empty() && wrapped.is_empty() {
+            return Err(SignError::Unsupported(
+                "the visible signature box is too small for its text; make it larger, or sign without a visible appearance".into(),
+            ));
+        }
         let mut y = h - pad - size * 0.9;
         for l in &wrapped {
             out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
