@@ -135,6 +135,7 @@ impl PdfCraftApp {
             quit_session: None,
             reload_changed_files: true,
             update_check_at_start: true,
+            updates_managed_externally: false,
             show_secured_notice: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]

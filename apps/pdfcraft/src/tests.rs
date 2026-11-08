@@ -707,3 +707,10 @@ fn start_up_and_the_panic_hook_never_use_eprintln() {
         offenders.join("\n")
     );
 }
+
+#[test]
+fn updates_are_managed_externally_only_when_the_build_says_so() {
+    assert!(!super::updates_managed_externally(None));
+    assert!(super::updates_managed_externally(Some("1")));
+    assert!(super::updates_managed_externally(Some("")), "set to anything, even empty");
+}

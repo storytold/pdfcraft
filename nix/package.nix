@@ -107,7 +107,7 @@ rustPlatform.buildRustPackage {
   env = {
     CRAFT_I18N_DIR = "${craftI18n}";
     CRAFT_I18N_REQUIRED = "1";
-    PDFCRAFT_NO_STARTUP_UPDATE_CHECK = "1";
+    PDFCRAFT_UPDATES_MANAGED_EXTERNALLY = "1";
   };
 
   postInstall = ''

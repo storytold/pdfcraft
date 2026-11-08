@@ -181,6 +181,37 @@ fn preferences_turn_the_check_at_start_off() {
 }
 
 #[test]
+fn a_package_managed_build_never_asks_and_hides_the_choice() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_startup_update_check(true);
+        app.updates_managed_externally = true;
+        let counted = counted.clone();
+        app.set_update_source(Arc::new(move || {
+            counted.fetch_add(1, SeqCst);
+            Ok(Some(release("v99.0.0")))
+        }));
+        app
+    });
+    assert!(h.state().update_check_at_start, "the preference itself is untouched");
+    run_until_asked(&mut h, &calls, std::time::Duration::from_millis(500));
+    assert_eq!(calls.load(SeqCst), 0, "nothing is asked at start");
+
+    h.state_mut().execute("help.check_updates");
+    h.run_steps(3);
+    assert_eq!(calls.load(SeqCst), 0, "Help ▸ Check for updates is disabled");
+    h.get_by_label_contains("Updates for this build come from your package manager");
+
+    h.state_mut().execute("app.preferences");
+    h.run_steps(3);
+    assert!(h.query_by_label("Check for updates when PdfCraft starts").is_none(), "Preferences hides the check at start");
+}
+
+#[test]
 fn settings_from_the_old_opt_in_leave_the_check_at_start_on() {
     let mut app = PdfCraftApp::new();
     app.restore(r#"{"check_updates_at_start": false}"#);

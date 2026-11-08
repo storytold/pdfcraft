@@ -75,7 +75,7 @@ impl PdfCraftApp {
         {
             let Some(ctx) = self.ctx.clone() else { return };
             // Settled on the first frame: a preference turned on later waits for the next start.
-            let at_start = std::mem::take(&mut self.updates.startup_check) && self.update_check_at_start;
+            let at_start = std::mem::take(&mut self.updates.startup_check) && self.update_check_at_start && !self.updates_managed_externally;
             let updates = &mut self.updates;
             if std::mem::take(&mut updates.check_requested) {
                 updates.updater.check_now(&ctx);

@@ -100,6 +100,7 @@ impl PdfCraftApp {
                 "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
+                "help.check_updates" => !self.updates_managed_externally,
                 _ => true,
             }
     }
@@ -121,6 +122,9 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if spec.id == "help.check_updates" {
+            return tl!("Updates for this build come from your package manager").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),

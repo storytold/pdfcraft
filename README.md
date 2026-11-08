@@ -436,8 +436,9 @@ emerge --ask app-text/pdfcraft-bin
 
 ### Nix and NixOS
 
-The repository is a flake (x86_64-linux). It builds the desktop app and `pdfcraft-cli` from source,
-with the OCR models and interface translations, and installs the desktop entry, MIME type and icons:
+The repository is a flake for x86_64-linux and aarch64-linux. It builds the desktop app and
+`pdfcraft-cli` from source, with the OCR models and interface translations, and installs the desktop
+entry, MIME type and icons:
 
 ```sh
 nix run github:storytold/pdfcraft -- some.pdf   # try it without installing
@@ -445,38 +446,70 @@ nix build github:storytold/pdfcraft             # ./result/bin/pdfcraft and ./re
 nix develop                                     # Rust toolchain and system libraries; x-craft runs the checkout
 ```
 
-With Home Manager, add the flake as an input, import its module and turn it on:
+The dev shell also brings `just`, `cargo-deny` and the wasm target for the pull-request checks:
+`just pr-check <crates…>` runs `cargo fmt --check`, clippy with `-D warnings` and the tests for the
+crates you name, then `cargo xtask layers` and `cargo xtask assets`; `just ci` runs the full
+`cargo xtask ci`.
+
+To install it with Home Manager on NixOS, add the flake as an input, hand its module to Home
+Manager and turn it on. A complete system flake (`alice` and `./configuration.nix` are yours):
 
 ```nix
-# flake.nix
-inputs.pdfcraft.url = "github:storytold/pdfcraft";
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pdfcraft.url = "github:storytold/pdfcraft";
+  };
 
-# a Home Manager module
-imports = [ inputs.pdfcraft.homeModules.default ];
-
-programs.pdfcraft = {
-  enable = true;
-  defaultPdfHandler = true;   # PDFs open in PdfCraft (xdg.mimeApps)
-};
+  outputs = { nixpkgs, home-manager, pdfcraft, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        home-manager.nixosModules.home-manager
+        {
+          home-manager.sharedModules = [ pdfcraft.homeModules.default ];
+          home-manager.users.alice.programs.pdfcraft = {
+            enable = true;
+            defaultPdfHandler = true;   # PDFs open in PdfCraft (xdg.mimeApps)
+          };
+        }
+      ];
+    };
+  };
+}
 ```
 
-`inputs` stands for however your configuration passes flake inputs to Home Manager modules
-(`extraSpecialArgs`, or put `inputs.pdfcraft.homeModules.default` straight into the module list).
-`programs.pdfcraft.package` picks another build. Without Home Manager, install the package
-directly, or apply `overlays.default` and use `pkgs.pdfcraft`:
+With standalone Home Manager, put `pdfcraft.homeModules.default` into the `modules` of
+`home-manager.lib.homeManagerConfiguration` and set `programs.pdfcraft` the same way.
+`programs.pdfcraft.package` picks another build. Without Home Manager, add the package to a NixOS
+module in the same flake, or apply `overlays.default` and use `pkgs.pdfcraft`:
 
 ```nix
-environment.systemPackages = [ inputs.pdfcraft.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+{ pkgs, ... }: {
+  environment.systemPackages = [ pdfcraft.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+}
 ```
 
 Notes on the Nix build:
 
-- It never checks for updates at start (it is built with `PDFCRAFT_NO_STARTUP_UPDATE_CHECK`);
-  updates come with `nix flake update pdfcraft`. **Help → Check for updates** still asks GitHub when
-  chosen, but can't replace a binary in the Nix store.
+- Updates come with `nix flake update pdfcraft`. The package is built with
+  `PDFCRAFT_UPDATES_MANAGED_EXTERNALLY`, so it never checks for updates at start, **Help → Check for
+  updates** is disabled, and Preferences doesn't offer the check at start.
 - It compiles with the official Rust toolchain from [rust-overlay](https://github.com/oxalica/rust-overlay):
   nixpkgs' `rustc` links a newer system LLVM that rejects the AVX-512 code in the OCR engine.
-- The Japanese fonts from craft-fonts are not included.
+- The Japanese fonts from craft-fonts are not included; they are what the Japanese interface and
+  Japanese text you add to a PDF use (see above). To build with them, pass a craft-fonts checkout:
+
+  ```nix
+  pdfcraft.packages.${system}.default.overrideAttrs (old: {
+    env = old.env // { CRAFT_FONTS_DIR = "${craft-fonts}"; };   # e.g. a flake input with flake = false
+  })
+  ```
 
 Logs, environment variables and other development notes are in [docs/development.md](docs/development.md).
 

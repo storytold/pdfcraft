@@ -395,6 +395,9 @@ pub struct PdfCraftApp {
     /// Preferences: ask for a newer release when the desktop app starts (#5737). Off, the app
     /// asks only from Help ▸ Check for updates.
     pub update_check_at_start: bool,
+    /// Set by a build whose updates come from a package manager (Nix, a distribution): Help ▸
+    /// Check for updates is disabled and Preferences hides the check at start.
+    pub updates_managed_externally: bool,
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,

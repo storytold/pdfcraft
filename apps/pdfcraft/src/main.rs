@@ -386,6 +386,12 @@ fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+/// Whether this build gets its updates from a package manager: `PDFCRAFT_UPDATES_MANAGED_EXTERNALLY`
+/// set to anything when it was compiled.
+fn updates_managed_externally(build_setting: Option<&str>) -> bool {
+    build_setting.is_some()
+}
+
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
@@ -415,7 +421,8 @@ fn app_creator<'a>(
         {
             app.motion.source = Some(motion::source());
         }
-        app.set_startup_update_check(option_env!("PDFCRAFT_NO_STARTUP_UPDATE_CHECK").is_none());
+        app.set_startup_update_check(true);
+        app.updates_managed_externally = updates_managed_externally(option_env!("PDFCRAFT_UPDATES_MANAGED_EXTERNALLY"));
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]
