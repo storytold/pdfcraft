@@ -101,7 +101,8 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         if seen.len() > 64 || !seen.insert(c) {
             break;
         }
-        let obj = doc.get(c);
+        // An object that is only a reference to another is followed, as `Document::resolve` does.
+        let obj = doc.resolve(&Object::Ref(c));
         let d = obj.as_dict()?;
         if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
             parts.push(t);

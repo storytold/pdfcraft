@@ -2492,6 +2492,23 @@ fn a_named_kid_whose_parent_is_another_field_is_named_under_it() {
     assert_eq!(names, ["Other.k"]);
 }
 
+/// A `/Parent` naming an object that is only a reference to the parent field is followed to it,
+/// as document inspection follows it, so both name the kid the same.
+#[test]
+fn a_parent_given_through_an_object_that_is_a_reference_names_the_kid() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /FT /Tx /T (Listing) /Kids [5 0 R] >>".into(),                          // 4
+        "<< /Type /Annot /Subtype /Widget /T (k) /Parent 6 0 R /Rect [50 700 150 715] /P 3 0 R >>".into(), // 5
+        "7 0 R".into(),                                                             // 6
+        "<< /T (Other) /Kids [5 0 R] >>".into(),                                    // 7
+    ];
+    let names: Vec<String> = fields(&document(&objs)).into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["Other.k"]);
+}
+
 /// The two kids of [`radio_kids_with_names`] (`Group1`, no `/Parent`), with the one drawing
 /// `Choice2` (6, read first) or the one drawing `Choice1` (5) read-only.
 fn radio_kids_one_read_only(read_only: u32) -> Document {
