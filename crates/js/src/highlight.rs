@@ -3,7 +3,8 @@
 //! the script nor the engine's parser, so showing a script from any document reaches neither.
 //!
 //! A wrong colour is only that, but editing mustn't change what a script holds on a guess, so what
-//! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of.
+//! it asks ([`in_literal`]) stops trusting the colouring past a `/` it can't be sure of, or a reserved
+//! word spelled with escapes.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -78,6 +79,10 @@ const KEYWORDS: &[&str] = &[
 
 const LITERALS: &[&str] = &["true", "false", "null", "undefined", "NaN", "Infinity"];
 
+/// The words of [`KEYWORDS`] that a script may also use as names, and so spell with escapes. The parser
+/// refuses the rest spelled so, and `true`, `false` and `null` too: they are reserved words.
+const NOT_RESERVED: &[&str] = &["async", "await", "let", "static", "yield"];
+
 /// Globals PdfCraft provides from Acrobat's object model (see the crate documentation).
 pub(crate) const API: &[&str] = &["app", "color", "console", "display", "event", "getField", "util"];
 
@@ -123,7 +128,9 @@ pub fn highlight(source: &str) -> Vec<Token> {
 /// expression or divide: `{ valueOf() { return 6; } } / 2` is valid. Read the wrong way, it hides what
 /// follows on its line, a template's opening `` ` `` among them, or turns a `/*` in a regular
 /// expression into a comment to the end. So past the first such `/`, this is always true: it errs
-/// towards leaving the text alone rather than guess.
+/// towards leaving the text alone rather than guess. So it is past a reserved word spelled with
+/// escapes (`\u0072eturn`): the parser refuses it, so whether it was meant as the keyword, and what a
+/// `/` after it is, is a guess too.
 pub fn in_literal(source: &str, at: usize) -> bool {
     let (tokens, doubt) = lex(source);
     doubt.is_some_and(|slash| slash < at)
@@ -143,8 +150,8 @@ fn closed_by(token: &str, end: &str) -> bool {
     token.strip_suffix(end).is_some_and(|rest| !rest.is_empty() && rest.chars().rev().take_while(|c| *c == '\\').count().is_multiple_of(2))
 }
 
-/// The tokens of `source`, and where the first `/` is that is read as starting a regular expression
-/// but could be dividing.
+/// The tokens of `source`, and where the lexer first stops being sure of them: a `/` read as starting
+/// a regular expression that could be dividing, or a reserved word spelled with escapes.
 fn lex(source: &str) -> (Vec<Token>, Option<usize>) {
     let mut lexer = Lexer {
         s: source,
@@ -189,7 +196,7 @@ struct Lexer<'a> {
     /// Whether a `/` here, read as starting a regular expression, could instead be dividing what
     /// came last: an object's `}` rather than a block's, or `of` as a name.
     may_be_value: bool,
-    /// Where the first such `/` is.
+    /// Where the first such `/` is, or a reserved word spelled with escapes if one comes first.
     doubt: Option<usize>,
 }
 
@@ -445,11 +452,20 @@ impl Lexer<'_> {
             self.after(false, false);
             return;
         }
-        // A name spelled with escapes is the name it spells (`\u0061pp` is `app`), but a keyword spelled
-        // so is none: the parser refuses it, and reads `of`, `yield` and `await` spelled so as names.
+        // A name spelled with escapes is the name it spells (`\u0061pp` is `app`), but a reserved word
+        // spelled so is neither keyword nor name: the parser refuses it. It reads `of`, `yield`, `let`
+        // and the like spelled so as names.
         let name = unescaped(word).unwrap_or_default();
+        let refused = word.contains('\\') && reserved(&name);
+        if refused {
+            // The parser takes one as a key (`{ \u0074his: 1 }`), which this can't tell: there, it costs
+            // only the indentation.
+            self.doubt = self.doubt.or(Some(start));
+        }
         let kind = if KEYWORDS.contains(&word) {
             Some(TokenKind::Keyword)
+        } else if refused {
+            None
         } else if LITERALS.contains(&name.as_ref()) {
             Some(TokenKind::Literal)
         } else if API.contains(&name.as_ref()) {
@@ -466,6 +482,11 @@ impl Lexer<'_> {
         self.keyword_paren = matches!(word, "if" | "while" | "for" | "with");
         self.label_next = matches!(word, "break" | "continue");
     }
+}
+
+/// Whether `name` is a reserved word, which a script can't spell with escapes.
+fn reserved(name: &str) -> bool {
+    (KEYWORDS.contains(&name) && !NOT_RESERVED.contains(&name)) || matches!(name, "true" | "false" | "null")
 }
 
 /// The name `word` spells, its `\u` escapes (`\u0061`, `\u{61}`) decoded, or `None` if one of them

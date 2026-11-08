@@ -250,6 +250,48 @@ fn an_escape_that_spells_no_character_spells_no_name() {
     }
 }
 
+/// `\u0072eturn` read as a name made the `/` after it divide, and the `` ` `` in the regular expression
+/// open a template that hid the next one, so Enter and `}` changed its white space.
+#[test]
+fn past_a_reserved_word_spelled_with_escapes_nothing_counts_as_code() {
+    for script in ["function f() { \\u0072eturn /`/; }\nx = `a  b`;", "\\u{74}ypeof /`/;\nx = `a  b`;", "\\u0069f (x) /`/.test(x);\nx = `a  b`;"] {
+        assert!(!parses(script), "{script}");
+        let at = script.find("a  b").expect("the template") + 2;
+        assert!(in_literal(script, at), "{script}");
+    }
+    let script = "x = 1;\n\\u0072eturn;";
+    assert!(!in_literal(script, 3), "before it, code is code");
+    assert!(in_literal(script, script.len()));
+
+    // Names the parser takes spelled with escapes leave code as code, as does a property's name.
+    for script in ["var \\u{61}sync = 1, \\u0061wait = 2, l\\u0065t = 3, st\\u0061tic = 4, yi\\u0065ld = 5;", "x.\\u0074his = 1;"] {
+        assert!(parses(script), "{script}");
+        assert!(!in_literal(script, script.len()), "{script}");
+    }
+    // The price of not telling a key: Enter and `}` add nothing past it.
+    let script = "x = { \\u0074his: 1 };";
+    assert!(parses(script));
+    assert!(in_literal(script, script.len()));
+}
+
+/// Which words are reserved is the parser's to say: spelled with escapes, each one it refuses makes
+/// the lexer unsure and is coloured as nothing, and the others are what they spell.
+#[test]
+fn the_reserved_words_are_the_ones_the_parser_refuses_spelled_with_escapes() {
+    for word in KEYWORDS.iter().chain(LITERALS) {
+        assert_eq!(lex(&format!("var {word} = 1;")).1, None, "{word} spelled plainly");
+        let first = word.chars().next().map_or(0, u32::from);
+        let rest = word.get(1..).unwrap_or_default();
+        for escaped in [format!("\\u{first:04x}{rest}"), format!("\\u{{{first:x}}}{rest}")] {
+            let script = format!("var {escaped} = 1;");
+            let refused = !parses(&script);
+            assert_eq!(lex(&script).1.is_some(), refused, "{script}");
+            let colour = if !refused && LITERALS.contains(word) { vec![(TokenKind::Literal, escaped.as_str())] } else { vec![] };
+            assert_eq!(kinds(&format!("x = {escaped};")), colour, "{escaped}");
+        }
+    }
+}
+
 /// The price of erring towards leaving the text alone: past a `/` that could go either way, nothing
 /// counts as code, so Enter and `}` add nothing in the rest of the script. Before it, they do.
 #[test]
