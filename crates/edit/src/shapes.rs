@@ -10,7 +10,7 @@
 //! a bounding box: a path wholly outside the clip is left out, one partly inside is kept whole.
 //! Shadings (`sh`), images and text are not paths and are read elsewhere.
 
-use pdfcraft_content::{Matrix, Op, Pieces, parse};
+use pdfcraft_content::{Matrix, Op, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::{EditError, Rgb};
@@ -496,8 +496,15 @@ pub fn reading_shapes(doc: &Document, page: usize) -> Result<ReadingShapes, Edit
     let mut decode = pdfcraft_cos::DecodeBudget::page();
     let streams = crate::text::content_streams_within(doc, &p.dict, &mut decode)?;
     // The page's streams are one stream in pieces: an operator may span two of them.
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
-    let mut walk = Walk { doc, out: ReadingShapes::default(), points: 0, forms: Vec::new(), budget: crate::text::FormBudget::new(decode) };
+    let pieces = crate::text::joined(&streams);
+    let truncated = streams.iter().any(|s| s.read != crate::text::Read::Whole);
+    let mut walk = Walk {
+        doc,
+        out: ReadingShapes { truncated, ..Default::default() },
+        points: 0,
+        forms: Vec::new(),
+        budget: crate::text::FormBudget::new(decode),
+    };
     let mut st = State::new(Matrix::IDENTITY, p.crop(doc));
     walk.ops(&pieces.parse().ops, &resources, &mut st);
     Ok(walk.out)

@@ -42,6 +42,19 @@ fn close(a: [f64; 2], b: [f64; 2]) -> bool {
     (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01
 }
 
+#[test]
+fn reading_shapes_reports_unread_content() {
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+        stream("/Filter /UnknownFilter", "0 0 10 10 re S"),
+    ]);
+    let read = reading_shapes(&doc, 0).unwrap();
+    assert!(read.shapes.is_empty());
+    assert!(read.truncated, "unread artwork must not be silently treated as an empty page");
+}
+
 /// The rules, boxes and fills of a form, with their paint, through `cm`, `q`/`Q`, colour spaces,
 /// dashes, curves, clips and a form XObject.
 #[test]

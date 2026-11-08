@@ -4,8 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pdfcraft_content::{Matrix, Op, Pieces};
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
+use crate::text::ContentStream;
 use crate::{Content, EditError};
 
 pub const MAX_MOVE_OBJECTS: usize = 1_000;
@@ -152,7 +153,7 @@ fn added_geometry(doc: &Document, page: usize) -> Result<(Pieces, Vec<AddedGeome
         return Ok((Pieces::default(), Vec::new()));
     }
     let streams = checked_streams(doc, page)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, bytes)| bytes.as_slice()).collect::<Vec<_>>());
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     let owned: BTreeSet<_> = added.iter().map(|a| a.obj).collect();
     let mut geometry = BTreeMap::new();
@@ -161,7 +162,7 @@ fn added_geometry(doc: &Document, page: usize) -> Result<(Pieces, Vec<AddedGeome
     let mut stack = Vec::new();
     for (index, op) in ops.iter().enumerate() {
         let (stream, end) = pieces.pieces_of(op);
-        let object = streams.get(stream).and_then(|(r, _)| r.as_ref());
+        let object = streams.get(stream).and_then(|s| s.entry.as_ref());
         if object.is_some_and(|r| owned.contains(&r)) {
             if let std::collections::btree_map::Entry::Vacant(entry) = first.entry(stream) {
                 if stream != end || !op.is("q") {
@@ -275,7 +276,7 @@ fn translate_added(doc: &mut Document, page: usize, indexes: &[usize], offset: [
         })
         .collect::<Result<Vec<_>, EditError>>()?;
     let data = pieces.splice(edits);
-    let contents = crate::text::rewritten_contents(doc, &streams, data);
+    let contents = crate::text::rewritten_contents(doc, &streams, data)?;
     let refs = match &contents {
         Object::Array(a) => a.clone(),
         one => vec![one.clone()],
@@ -288,9 +289,9 @@ fn translate_added(doc: &mut Document, page: usize, indexes: &[usize], offset: [
     Ok(())
 }
 
-/// A missing or undecodable preceding stream can hide graphics state that affects every
+/// A missing, undecodable or damaged preceding stream can hide graphics state that affects every
 /// later item. Refuse group editing rather than inventing an inventory from partial data.
-fn checked_streams(doc: &Document, page: usize) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
+fn checked_streams(doc: &Document, page: usize) -> Result<Vec<ContentStream>, EditError> {
     let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
     let contents = match p.dict.get(b"Contents") {
         None => Vec::new(),
@@ -305,6 +306,7 @@ fn checked_streams(doc: &Document, page: usize) -> Result<Vec<(Object, Vec<u8>)>
         },
     };
     let mut remaining = MAX_CONTENT_BYTES;
+    let mut decode = DecodeBudget::new(usize::MAX, 0);
     let mut depth = 0usize;
     let mut operations = 0usize;
     let mut streams = Vec::with_capacity(contents.len());
@@ -313,9 +315,12 @@ fn checked_streams(doc: &Document, page: usize) -> Result<Vec<(Object, Vec<u8>)>
         let Object::Stream(stream) = &*resolved else {
             return Err(EditError::Invalid("a page content stream is missing".into()));
         };
-        let bytes = stream
-            .decoded_within(remaining.min(64 * 1024 * 1024))
+        let (bytes, damaged) = decode
+            .decode_with_damage(doc, stream, remaining.min(64 * 1024 * 1024))
             .map_err(|_| EditError::Invalid("the page content cannot be decoded within its size limit".into()))?;
+        if damaged {
+            return Err(EditError::Invalid("a page content stream is damaged partway".into()));
+        }
         remaining =
             remaining.checked_sub(bytes.len()).ok_or_else(|| EditError::Invalid("the page content is too large for group selection".into()))?;
         let parsed = pdfcraft_content::parse(&bytes);
@@ -333,7 +338,7 @@ fn checked_streams(doc: &Document, page: usize) -> Result<Vec<(Object, Vec<u8>)>
                 return Err(EditError::Invalid("the page graphics state is nested too deeply".into()));
             }
         }
-        streams.push((object, bytes));
+        streams.push(ContentStream { entry: object, data: bytes, read: crate::text::Read::Whole });
     }
     Ok(streams)
 }

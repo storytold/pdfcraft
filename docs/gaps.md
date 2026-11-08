@@ -198,7 +198,7 @@ update the numbers.
   export recognizes as one (fields, or text framed by rules or boxes; a flattened form with few
   boxes still flows and loses them): vector rules and boxes become shapes behind the text, text
   is placed line by line in its PDF font's family, and AcroForm text, check box, radio, combo
-  and list fields become content controls (push buttons and signature fields are left out),
+  and list fields become content controls (password fields are omitted and reported in `truncated_pages`; push buttons and signature fields are also left out),
   filled in without protecting the document (checked
   in LibreOffice, WordCraft and Word on a 7-page claim form); Word doesn't limit a control's
   length, so a text field's `/MaxLen` is only named in its title.

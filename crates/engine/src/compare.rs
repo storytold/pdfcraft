@@ -17,6 +17,14 @@ use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Sh
 /// (the Word and PowerPoint writers keep at most 512 MiB of them as well).
 pub const MAX_EXPORT_IMAGE_BYTES: usize = 512 << 20;
 
+/// Most vector points retained across one Word export, in addition to the bounded page being
+/// read. Shared content streams must not multiply retained artwork by the document's page count.
+pub const MAX_EXPORT_SHAPE_POINTS: usize = 2_000_000;
+
+/// Most estimated bytes retained in prepared Word fields across the whole export. Repeated
+/// widgets can share one large PDF value or option list; charge each copy before allocating it.
+const MAX_EXPORT_FIELD_BYTES: usize = 16 << 20;
+
 /// Acrobat's compare colours: replaced blue, inserted green, deleted red.
 pub fn colour(kind: Kind) -> crate::Rgb {
     match kind {
@@ -199,7 +207,9 @@ pub struct OfficeExport {
     /// [`MAX_FORM_DEPTH`] or more of them than [`MAX_FORM_VISITS`] (their text and images are
     /// missing), pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what
     /// one export may decode (those pictures are missing), or, on a page whose layout Word keeps,
-    /// paths past [`pdfcraft_edit::MAX_PAGE_SHAPES`] or that couldn't be read, and shapes, points,
+    /// paths past [`pdfcraft_edit::MAX_PAGE_SHAPES`] or that couldn't be read, points past the
+    /// document-wide [`MAX_EXPORT_SHAPE_POINTS`] limit, prepared field payloads past 16 MiB
+    /// across the document, and shapes, points,
     /// fields or list items past what a Word page holds ([`pdfcraft_export::docx_checked`]: only
     /// those are missing; the page's text and images stay).
     pub truncated_pages: Vec<usize>,
@@ -259,7 +269,12 @@ fn export_field(
     // as it scales the page's text and strokes (a page with `/UserUnit` 2 draws them twice as big).
     let (border, background) = widget_look(cos, w, looks);
     let border = border.map(|b| pdfcraft_export::Stroke { width: b.width * unit, ..b });
-    let da = pdfcraft_forms::appearance::parse_da(&f.da);
+    // A widget may override its field's default appearance, as the PDF appearance writer does.
+    let widget_da = cos
+        .dict(&pdfcraft_cos::Object::Ref(w.obj))
+        .and_then(|d| d.get(b"DA").cloned())
+        .and_then(|o| cos.resolve(&o).as_string().map(|s| s.to_text()));
+    let da = pdfcraft_forms::appearance::parse_da(widget_da.as_deref().unwrap_or(&f.da));
     Some(pdfcraft_export::Field {
         name: f.name.clone(),
         rect: visible(w.rect),
@@ -270,6 +285,29 @@ fn export_field(
         border,
         background,
     })
+}
+
+/// A conservative size for a prepared widget, without cloning its strings. Count storage for
+/// option strings as well as their contents, so many empty choices cannot bypass the bound.
+fn prepared_field_bytes(f: &pdfcraft_forms::Field) -> Option<usize> {
+    use pdfcraft_forms::FieldKind;
+    let mut bytes = std::mem::size_of::<pdfcraft_export::Field>().checked_add(f.name.len())?.checked_add(MAX_FONT_NAME_CHARS * 4)?;
+    match f.kind {
+        FieldKind::Text => {
+            bytes = f.value.iter().try_fold(bytes, |n, value| n.checked_add(value.len()))?;
+        }
+        FieldKind::Combo | FieldKind::List => {
+            bytes = f.options.iter().try_fold(bytes, |n, (_, shown)| n.checked_add(std::mem::size_of::<String>())?.checked_add(shown.len()))?;
+            // This is display_value's selected text, measured without its temporary clones.
+            for value in &f.value {
+                let shown = f.options.iter().find(|(export, _)| export == value).map_or(value, |(_, shown)| shown);
+                bytes = bytes.checked_add(shown.len())?;
+            }
+            bytes = bytes.checked_add(f.value.len().saturating_sub(1).checked_mul(2)?)?;
+        }
+        _ => {}
+    }
+    Some(bytes)
 }
 
 /// Whether a check box or radio button `w` of `f` is on as the page shows it: its widget's
@@ -387,7 +425,7 @@ fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget, looks: 
         _ => None,
     };
     let shown = d.get(b"AP").and_then(|o| cos.dict(o)).and_then(|ap| ap.get(b"N").cloned()).and_then(|n| match &*cos.resolve(&n) {
-        pdfcraft_cos::Object::Dict(states) => w.state.as_ref().and_then(|state| states.get(state.as_bytes())).and_then(stream_ref),
+        pdfcraft_cos::Object::Dict(states) => w.state.as_ref().and_then(|state| states.get(&pdfcraft_forms::name_bytes(state))).and_then(stream_ref),
         _ => stream_ref(&n),
     });
     let round = shown.and_then(|r| looks.shape(cos, r)).unwrap_or(w.round);
@@ -424,7 +462,7 @@ impl crate::Document {
         image_budget: usize,
         image_work: &mut pdfcraft_cos::ImageBudget,
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
-        self.export_pages_with(images, image_budget, image_work, true)
+        self.export_pages_with(images, image_budget, image_work, true, MAX_EXPORT_SHAPE_POINTS, MAX_EXPORT_FIELD_BYTES)
     }
 
     /// [`Self::export_pages_within`]; with `art` also the vector paths and form fields, which
@@ -435,6 +473,8 @@ impl crate::Document {
         image_budget: usize,
         image_work: &mut pdfcraft_cos::ImageBudget,
         art: bool,
+        mut shape_points: usize,
+        mut field_bytes: usize,
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
@@ -557,17 +597,36 @@ impl crate::Document {
                     .collect();
                 // A Word page holds at most MAX_DOCX_PAGE_SHAPES fields: the rest aren't prepared
                 // (nor their appearances read), and the page is listed as cut short.
+                let mut fields_truncated = false;
                 let fields = fields_by_page.get(&i).map_or_else(Vec::new, |on_page| {
                     if on_page.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES {
-                        truncated.push(i);
+                        fields_truncated = true;
                     }
                     on_page
                         .iter()
                         .take(pdfcraft_export::MAX_DOCX_PAGE_SHAPES)
-                        .filter_map(|(f, w)| export_field(cos, f, w, &visible_rect, unit, &mut looks))
+                        .filter_map(|(f, w)| {
+                            // Word plain-text controls cannot mask password input. Omitting the
+                            // control avoids disclosing /V or inviting unmasked replacement input.
+                            if f.kind == pdfcraft_forms::FieldKind::Text && f.has(pdfcraft_forms::flags::PASSWORD) {
+                                fields_truncated = true;
+                                return None;
+                            }
+                            let Some(remaining) = prepared_field_bytes(f).and_then(|bytes| field_bytes.checked_sub(bytes)) else {
+                                fields_truncated = true;
+                                return None;
+                            };
+                            field_bytes = remaining;
+                            export_field(cos, f, w, &visible_rect, unit, &mut looks)
+                        })
                         .collect()
                 });
-                pdfcraft_export::Page {
+                if fields_truncated {
+                    truncated.push(i);
+                }
+                // The ruled lines tell a drawn table from text that merely lines up (#5149).
+                let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
+                let mut page = pdfcraft_export::Page {
                     width: info.width as f64,
                     height: info.height as f64,
                     blocks,
@@ -575,9 +634,16 @@ impl crate::Document {
                     background,
                     shapes,
                     fields,
+                    fields_truncated,
                     lines,
                     art_truncated,
-                }
+                    art_framed: false,
+                    rules,
+                };
+                // Drop excess artwork before accumulating another page. The reader bounds this
+                // page separately; the shared limit bounds all pages retained for the writer.
+                page.limit_shape_points(&mut shape_points);
+                page
             })
             .collect();
         (pages, truncated)
@@ -598,22 +664,26 @@ impl crate::Document {
                 MAX_EXPORT_IMAGE_BYTES,
                 &mut pdfcraft_cos::ImageBudget::new(&editor.cos),
                 matches!(format, OfficeFormat::Docx),
+                MAX_EXPORT_SHAPE_POINTS,
+                MAX_EXPORT_FIELD_BYTES,
             ),
             None => (Vec::new(), Vec::new()),
         };
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
+        // Word and HTML name the document's language (`/Lang`), so spelling is checked in it.
+        let language = self.initial_view().language;
         let bytes = match format {
             OfficeFormat::Docx => {
                 // The Word writer says which pages it had to cut short (shapes, points, fields, list items).
-                let (bytes, dropped) = pdfcraft_export::docx_checked(&pages, &title);
+                let (bytes, dropped) = pdfcraft_export::docx_checked_with_language(&pages, &title, language.as_deref());
                 truncated_pages.extend(dropped);
                 truncated_pages.sort_unstable();
                 truncated_pages.dedup();
                 bytes
             }
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
-            OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
-            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),
+            OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };

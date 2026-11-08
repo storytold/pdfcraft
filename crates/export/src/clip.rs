@@ -138,7 +138,7 @@ impl ClipBuilder {
 /// differs, is the name as spelt (`SimSun`). A hyphen ends the family only before a style word
 /// (`Arial-BoldMT`). Only letters, digits, spaces, `-`, `_` and `.` are kept, so a name cannot
 /// leave its CSS string. Empty when nothing is left. Copy with formatting tries them all;
-/// Export ▸ Word takes the first.
+/// Export ▸ Word uses the first, with known joined family words restored.
 pub fn font_family(base_font: &str) -> Vec<String> {
     let name = match base_font.split_once('+') {
         Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,

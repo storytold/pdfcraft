@@ -28,11 +28,11 @@ mod layout;
 pub(crate) use as_docx::hex;
 #[cfg(test)]
 use as_docx::{FRAMING_SHAPES, MAX_DOCX_LIST_ITEMS, MAX_FIELD_NAME_CHARS, MAX_MEDIA, docx_table, word_font};
-pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked};
+pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked, docx_checked_with_language, docx_with_language};
 pub(crate) use as_html::esc;
 #[cfg(test)]
 use as_html::{allowed, base64};
-pub use as_html::{html, html_simple};
+pub use as_html::{html, html_simple, html_simple_with_language, html_with_language};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
