@@ -565,3 +565,29 @@ fn a_long_run_of_variation_selectors_is_searched_quickly() {
     assert!(text.find("飾").is_empty());
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }
+
+/// A variation selector drawn as a glyph of its own with no height at a line end stays in the
+/// searchable text, and the line still runs on: the break is measured on the letter it follows.
+#[test]
+fn a_line_end_after_a_zero_height_variation_selector_glyph_still_joins() {
+    let mut text = laid_out(&[(10.0, 10.0, "葛\u{E0100}"), (10.0, 25.0, "飾区")], 10.0);
+    if let Some(g) = text.glyphs.get_mut(1) {
+        g.rect = [20.0, 15.0, 20.0, 15.0];
+        g.quad = [[20.0, 15.0]; 4];
+    }
+    assert_eq!(text.find("葛\u{E0100}飾区"), vec![0..4]);
+}
+
+/// The visible glyphs either side of a break are found however many invisible glyphs stand
+/// between them and the break.
+#[test]
+fn a_line_end_after_many_invisible_glyphs_still_joins() {
+    let line: String = std::iter::once('検').chain(std::iter::once('知')).chain(std::iter::repeat_n('\u{200B}', 40)).collect();
+    let mut text = laid_out(&[(10.0, 10.0, &line), (10.0, 25.0, "機構")], 10.0);
+    for g in text.glyphs.iter_mut().skip(2).take(40) {
+        let [x, y] = [g.rect[0], g.rect[1]];
+        g.rect = [x, y, x, y];
+        g.quad = [[x, y]; 4];
+    }
+    assert_eq!(text.find("検知機構"), vec![0..44]);
+}

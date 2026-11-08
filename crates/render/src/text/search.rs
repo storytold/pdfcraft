@@ -122,13 +122,12 @@ fn is_variation_selector(c: char) -> bool {
 
 /// The last character before glyph `i` on the line that glyph `i - 1` ends, other than the
 /// invisible characters find skips; a soft hyphen counts, since it marks a divided word. Looks
-/// back at most 16 glyphs.
+/// back no further than that line's start, so each line is read once.
 fn last_kept(page: &PageText, i: usize) -> Option<char> {
     let end = i.checked_sub(1)?;
     let line = page.line_of.get(end)?;
     (0..=end)
         .rev()
-        .take(16)
         .take_while(|&k| page.line_of.get(k) == Some(line))
         .filter_map(|k| page.glyphs.get(k))
         .flat_map(|g| g.text.chars().rev())
@@ -170,12 +169,13 @@ fn unspaced(c: char) -> bool {
 /// keep their word break.
 fn wraps(page: &PageText, i: usize) -> bool {
     // Measured on the glyphs that own the visible characters either side of the break: an
-    // invisible glyph (a zero width space drawn with no height) says nothing about the lines.
+    // invisible glyph or a variation selector of its own (drawn with no height) says nothing about
+    // the lines. Each search stays within one line.
     let Some(end) = i.checked_sub(1) else { return false };
-    let visible = |k: &usize| page.glyphs.get(*k).is_some_and(|g| g.text.chars().any(|c| !is_invisible(c)));
+    let visible = |k: &usize| page.glyphs.get(*k).is_some_and(|g| g.text.chars().any(|c| !is_invisible(c) && !is_variation_selector(c)));
     let same_line = |k: &usize, of: usize| page.line_of.get(*k).is_some() && page.line_of.get(*k) == page.line_of.get(of);
-    let before = (0..=end).rev().take(16).take_while(|k| same_line(k, end)).find(visible).unwrap_or(end);
-    let after = (i..page.glyphs.len()).take(16).take_while(|k| same_line(k, i)).find(visible).unwrap_or(i);
+    let before = (0..=end).rev().take_while(|k| same_line(k, end)).find(visible).unwrap_or(end);
+    let after = (i..page.glyphs.len()).take_while(|k| same_line(k, i)).find(visible).unwrap_or(i);
     let Some((before, after)) = page.glyphs.get(before).zip(page.glyphs.get(after)) else { return false };
     // Unit directions: the same flow has a dot product of 1.
     let same_flow = before.direction[0] * after.direction[0] + before.direction[1] * after.direction[1] > 0.99;
