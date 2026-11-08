@@ -51,7 +51,7 @@ fn style_color(color: [f64; 3], simple: bool) -> String {
 }
 
 fn wrap_inline(mut text: String, bold: bool, italic: bool) -> String {
-    if text.is_empty() {
+    if text.trim().is_empty() {
         return text;
     }
     if italic {
@@ -64,21 +64,22 @@ fn wrap_inline(mut text: String, bold: bool, italic: bool) -> String {
 }
 
 fn para_html(runs: &[Run<'_>], lvl: u8, simple: bool) -> Option<String> {
-    let mut non_empty = runs.iter().map(|r| (r.block, esc(&r.text))).filter(|(_, text)| !text.is_empty()).peekable();
-    let &(first, _) = non_empty.peek()?;
+    let non_empty: Vec<_> = runs.iter().map(|r| (r.block, esc(&r.text))).filter(|(_, text)| !text.is_empty()).collect();
+    let &(first, _) = non_empty.iter().find(|(_, text)| !text.trim().is_empty())?;
     let mut t = String::new();
     for (block, text) in non_empty {
+        if text.trim().is_empty() {
+            t.push_str(&text);
+            continue;
+        }
         let mut run = wrap_inline(text, block.bold && lvl == 0, block.italic);
-        // The paragraph has its first run's colour; a run in another colour says so.
+        // The paragraph has its first visible run's colour; a run in another colour says so.
         let colour = rgb8(block.color);
         if !simple && colour != rgb8(first.color) {
             let [red, green, blue] = colour;
             run = format!("<span style=\"color:#{red:02X}{green:02X}{blue:02X}\">{run}</span>");
         }
         t.push_str(&run);
-    }
-    if t.trim().is_empty() {
-        return None;
     }
     let style = style_color(first.color, simple);
     Some(match lvl.min(6) {
@@ -168,6 +169,16 @@ mod tests {
         assert!(!out.contains("<strong></strong>"), "{out}");
         assert!(!out.contains("<em></em>"), "{out}");
         assert_eq!(out.matches("<p").count(), 1, "{out}");
+
+        // Styled whitespace-only paragraphs are omitted, and leading whitespace runs do not set
+        // the paragraph colour or emit emphasis/colour wrappers.
+        let ws_block = Block { bold: true, italic: true, color: [1.0, 0.0, 0.0], ..block("   ", 72.0, 700.0, 80.0, 712.0) };
+        let vis_block = Block { color: [0.0, 0.5, 0.0], ..block("Visible", 80.0, 700.0, 120.0, 712.0) };
+        assert_eq!(para_html(&[Run { text: "   \t\n".into(), block: &ws_block }], 0, false), None);
+        assert_eq!(
+            para_html(&[Run { text: " ".into(), block: &ws_block }, Run { text: "Visible".into(), block: &vis_block }], 0, false).as_deref(),
+            Some("<p style=\"color:#008000\"> Visible</p>\n")
+        );
     }
 
     #[test]
