@@ -387,13 +387,15 @@ fn cmap_streams_read_their_parameters_given_by_reference() {
 
 /// A Type 0 subset over Inter with `/DW` alone, whose CIDs 1 to 7 draw "A B C D" (ToUnicode
 /// gives CIDs 1 and 2), its program and its `/CIDToGIDMap` each behind a predictor whose
-/// `/DecodeParms` is a reference, or behind Flate alone.
-fn inter_subset(program_by_reference: bool, map_by_reference: bool) -> Metrics {
+/// `/DecodeParms` is a reference, or behind Flate alone. The map is padded with `.notdef` to
+/// `map_entries` CIDs, if that is more than the seven it needs.
+fn inter_subset(program_by_reference: bool, map_by_reference: bool, map_entries: usize) -> Metrics {
     use skrifa::MetadataProvider as _;
     let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
     let face = skrifa::FontRef::new(bytes).unwrap();
     let gid = |c: char| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
-    let gids: Vec<u8> = std::iter::once(0).chain("A B C D".chars().map(gid)).flat_map(u16::to_be_bytes).collect();
+    let mut gids: Vec<u8> = std::iter::once(0).chain("A B C D".chars().map(gid)).flat_map(u16::to_be_bytes).collect();
+    gids.resize(gids.len().max(map_entries * 2), 0);
     let stream = |doc: &mut Document, data: &[u8], by_reference: bool| {
         if by_reference { behind_parms_by_reference(doc, data) } else { Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), data)))) }
     };
@@ -428,15 +430,26 @@ fn inter_subset(program_by_reference: bool, map_by_reference: bool) -> Metrics {
 /// which glyphs are empty, or the map points the CIDs at other glyphs.
 #[test]
 fn a_subsets_program_and_cid_map_read_their_parameters_given_by_reference() {
-    let direct = inter_subset(false, false);
+    let direct = inter_subset(false, false, 0);
     assert!(!direct.outlined_cids.is_empty());
     assert_eq!(direct.encode("A").as_deref(), Some(&[0, 1][..]));
     assert_eq!(direct.encode(" "), None, "the space's glyph is empty");
     for (program, map) in [(true, false), (false, true)] {
-        let m = inter_subset(program, map);
+        let m = inter_subset(program, map, 0);
         assert_eq!(m.outlined_cids, direct.outlined_cids, "program by reference: {program}, map: {map}");
         assert_eq!(m.encode(" "), None, "program by reference: {program}, map: {map}");
     }
+}
+
+/// A `/CIDToGIDMap` for all 65 536 CIDs is 128 KiB, and behind a PNG predictor Flate gives one
+/// tag byte more for every row, so a limit on what Flate gives would refuse a map of that size
+/// and leave the width-based check to accept the glyphs the subset dropped.
+#[test]
+fn a_full_size_cid_map_behind_a_png_predictor_is_still_read() {
+    let m = inter_subset(false, true, 0x1_0000);
+    assert!(!m.outlined_cids.is_empty(), "the map was not read");
+    assert_eq!(m.encode("A").as_deref(), Some(&[0, 1][..]));
+    assert_eq!(m.encode(" "), None, "the space's glyph is empty");
 }
 
 #[test]

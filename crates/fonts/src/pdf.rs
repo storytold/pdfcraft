@@ -163,7 +163,9 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
         None | Some(Object::Name(_)) => read_bits(bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid)))),
         Some(Object::Stream(map)) => {
-            let Ok(map) = doc.with_direct_parms(map).decoded_within(1 << 17) else { return Vec::new() };
+            // 128 KiB holds a map for every CID below 65 536; a PNG predictor adds a tag byte to each row, and
+            // Flate's output is what the limit counts, so a row of one byte (`/Columns 1`) doubles it.
+            let Ok(map) = doc.with_direct_parms(map).decoded_within(2 << 17) else { return Vec::new() };
             read_bits(bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
