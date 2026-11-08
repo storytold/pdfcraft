@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M12 #5899: cover Drawing scale label and ratio-field clipping alongside Common scales in every UI language; sizing and estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M12 #5899: the Measure panel reserves enough width for the translated Common scales row; scale semantics and tool placement unchanged; estimates unchanged)
 
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
