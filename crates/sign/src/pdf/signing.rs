@@ -1,4 +1,4 @@
-use super::listing::{mk_rotation, nums, sig_fields};
+use super::listing::{mk_rotation, nums, sig_fields, text, walk_sig_fields};
 use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, ObjRef, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
@@ -269,6 +269,10 @@ fn sign_inner(
             let mut field = Dict::new();
             field.set(b"FT".to_vec(), Object::name("Sig"));
             field.set(b"T".to_vec(), PdfString::text(&fname));
+            // The walk lists no field without a usable name, and counts a signed one as unread.
+            if text(&doc, &field, b"T").is_none() {
+                return Err(SignError::Pdf("a signature field needs a name that isn't blank".into()));
+            }
             field.set(b"V".to_vec(), Object::Ref(sig));
             let (field_ref, widgets) = if placed.len() == 1 {
                 // One page: the field and its widget are one dictionary, as Acrobat writes it.
@@ -327,6 +331,14 @@ fn sign_inner(
                 Some(r) => doc.set(r, Object::Dict(af)),
                 // Inline (or new) AcroForms stay in the catalog.
                 None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
+            }
+            // The walk has to read the whole form, the new field included: past its caps the
+            // signature would be listed as unread fields, and its name could repeat an unread one.
+            if !walk_sig_fields(&doc).1 {
+                return Err(SignError::Pdf(
+                    "this form has too many fields, or a field name too long, for PdfCraft to read them all, so it can't add a signature field"
+                        .into(),
+                ));
             }
             (widgets.into_iter().map(|(_, w, t)| (w, t)).collect::<Vec<_>>(), rect)
         }
