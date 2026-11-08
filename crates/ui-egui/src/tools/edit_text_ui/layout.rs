@@ -77,7 +77,7 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
     let mut families = BTreeMap::new();
     for (index, program) in programs.iter().enumerate() {
         let name = format!("pdf-source-{index}");
-        definitions.font_data.insert(name.clone(), Arc::new(egui::FontData::from_owned(program.bytes.clone())));
+        definitions.font_data.insert(name.clone(), Arc::new(egui::FontData::from_owned(program.bytes.clone()).tweak(page_text_tweak())));
         families.insert(program.resource.clone(), name);
     }
     for program in &programs {
@@ -180,6 +180,13 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
         );
     }
     job
+}
+
+/// How a document face rasterizes in the editor: with the raw antialiasing coverage the page
+/// renderer uses, not the interface text's darkening curve (`theme.rs`). On that curve, a
+/// paragraph darkened the moment it was edited and lightened back once applied.
+pub(crate) fn page_text_tweak() -> egui::epaint::text::FontTweak {
+    egui::epaint::text::FontTweak { color_transfer_function: Some(egui::epaint::FontColorTransferFunction::Off), ..Default::default() }
 }
 
 /// `galley` drawn in no colour: its rows still place the caret and the selection.

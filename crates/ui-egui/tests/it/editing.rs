@@ -6363,15 +6363,12 @@ fn private_document_regions_open_as_one_editor() {
     assert_eq!(std::fs::read(path).unwrap(), original);
 }
 
-#[test]
-fn inline_editor_preserves_source_font_and_previews_live_bounds() {
+/// `fixture` with its `/F1` (object 3) replaced by Inter-Regular embedded as a TrueType program,
+/// so the inline editor installs the document's own face (`pdf-source-*`).
+fn with_inter_embedded_as_f1(fixture: Vec<u8>) -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
     use skrifa::MetadataProvider as _;
-    let _gpu = gpu();
-    let mut cos = Document::open(std::sync::Arc::new(source_font_fixture_with_text(
-        "BT /F1 18 Tf 20 220 Td (Stable source text) Tj ET BT /F1 12 Tf 20 194 Td (The second row stays here) Tj ET",
-    )))
-    .unwrap();
+    let mut cos = Document::open(std::sync::Arc::new(fixture)).unwrap();
     let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
     let face = skrifa::FontRef::new(bytes).unwrap();
     let metrics = face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
@@ -6402,7 +6399,82 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     );
     font.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
     cos.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| *d = font).unwrap();
-    let bytes = write_incremental(&cos, &Default::default()).unwrap();
+    write_incremental(&cos, &Default::default()).unwrap()
+}
+
+/// The paragraph being edited is egui text over the page. Its document face must rasterize with
+/// the raw antialiasing coverage the page renderer uses, not the interface text's darkening gamma
+/// (`theme.rs`): on that curve the text darkened the moment it was edited and lightened back once
+/// applied. The ink of the live text is compared with the page's own rendering of the paragraph:
+/// 1.073× before the fix (an 8 pt face at this zoom; smaller text darkens more), 1.006× with it.
+#[test]
+fn the_inline_editors_text_is_as_dark_as_the_pages() {
+    let _gpu = gpu();
+    let bytes = with_inter_embedded_as_f1(source_font_fixture_with_text(
+        "BT /F1 8 Tf 16 200 Td (The quick brown fox jumps over the lazy dog, again and again) Tj ET",
+    ));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("ink.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = page.width() / 300.0;
+    let block = h.state().session.get(h.state().views[0].id).unwrap().text_blocks(0)[0].rect;
+    let r = egui::Rect::from_min_max(
+        egui::pos2(page.left() + block[0] as f32 * k, page.top() + (300.0 - block[3] as f32) * k),
+        egui::pos2(page.left() + block[2] as f32 * k, page.top() + (300.0 - block[1] as f32) * k),
+    )
+    .expand2(egui::vec2(2.0, 3.0));
+    // Anything coloured (the editor's blue frame) is left out of both measurements: only grey
+    // ink counts.
+    let ink = |img: &image::RgbaImage| -> u64 {
+        (r.top() as u32..r.bottom() as u32)
+            .flat_map(|y| (r.left() as u32..r.right() as u32).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let [red, green, blue, _] = img.get_pixel(x, y).0;
+                let (hi, lo) = (red.max(green).max(blue), red.min(green).min(blue));
+                if hi - lo > 40 { 0 } else { 765 - u64::from(red) - u64::from(green) - u64::from(blue) }
+            })
+            .sum()
+    };
+    let page_ink = ink(&h.render().unwrap());
+    assert!(page_ink > 0, "the page shows the paragraph");
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    click_at(&mut h, egui::pos2(r.left() + 4.0, r.center().y));
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].line_editor.is_some(), "the click opens the paragraph");
+    // A trailing space is a change without ink: the editor now shows its own text over the
+    // textless page instead of leaving the page's copy visible.
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text.push(' ');
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    // The caret blinks, so the live text's ink is the least seen over a blink period.
+    let live_ink = (0..12)
+        .map(|_| {
+            let seen = ink(&h.render().unwrap());
+            h.run_steps(2);
+            seen
+        })
+        .min()
+        .unwrap();
+    let ratio = live_ink as f64 / page_ink as f64;
+    eprintln!("ink: page {page_ink}, live {live_ink}, ratio {ratio:.3}");
+    assert!((0.92..=1.04).contains(&ratio), "the live text has {ratio:.3}× the page text's ink");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+}
+
+#[test]
+fn inline_editor_preserves_source_font_and_previews_live_bounds() {
+    let _gpu = gpu();
+    let bytes = with_inter_embedded_as_f1(source_font_fixture_with_text(
+        "BT /F1 18 Tf 20 220 Td (Stable source text) Tj ET BT /F1 12 Tf 20 194 Td (The second row stays here) Tj ET",
+    ));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();

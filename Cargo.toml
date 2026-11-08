@@ -146,18 +146,21 @@ vello_cpu = { path = "vendor/vello_cpu" }
 # Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
 # earlier patches and their source guards, not path patches; the other `vendor/` entries above
 # remain real path patches. See vendor/README.md and the migration plan.
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+# TEMPORARY, until storytold/egui takes the `FontTweak::color_transfer_function` patch on
+# `migration/egui-037-20261024` (its tip 8269f7c4 plus that one commit): the same checkout from the
+# contributor's fork. Returns to storytold/egui at the merged revision before this merges.
+ecolor = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+emath = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+epaint = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+epaint_default_fonts = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui-winit = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui-wgpu = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui_glow = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui_extras = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui_kittest = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui_system_font_provider = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+eframe = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui_demo_lib = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
+egui_inspection = { git = "https://github.com/sunsetenterprisellc/egui.git", rev = "3b8289ee3f967246467cd9847fac2dde30b25fa7" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
