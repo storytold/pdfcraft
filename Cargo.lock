@@ -4598,6 +4598,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-collab-annot"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-annot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfcraft-collab-client"
 version = "0.18.1"
 dependencies = [
@@ -4612,6 +4622,7 @@ dependencies = [
 name = "pdfcraft-collab-client-pdf"
 version = "0.18.1"
 dependencies = [
+ "pdfcraft-collab-annot",
  "pdfcraft-collab-proto",
  "pdfcraft-engine",
  "serde_json",
@@ -4644,6 +4655,7 @@ dependencies = [
 name = "pdfcraft-collab-pdf"
 version = "0.18.1"
 dependencies = [
+ "pdfcraft-collab-annot",
  "pdfcraft-collab-proto",
  "pdfcraft-collab-server",
  "pdfcraft-engine",

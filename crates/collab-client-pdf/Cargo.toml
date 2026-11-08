@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-collab-annot = { workspace = true }
 pdfcraft-collab-proto = { workspace = true }
 pdfcraft-engine = { workspace = true }
 serde_json = { workspace = true }

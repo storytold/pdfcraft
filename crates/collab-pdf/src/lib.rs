@@ -25,9 +25,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use pdfcraft_collab_annot::{AnnotationInput, WireError};
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome};
-use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldValue, FormFieldKind, NewAnnotation, NoteIcon, Session, Shape, Style};
+use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldValue, FormFieldKind, Session};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -145,16 +146,13 @@ impl PdfAdapter {
     }
 
     fn add_annotation(&mut self, page: usize, payload: &Value) -> Result<Value, AdapterError> {
-        let at = point(payload.get("at"))?;
-        let contents = payload.get("contents").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let author = payload.get("author").and_then(Value::as_str).unwrap_or(DEFAULT_AUTHOR).to_owned();
+        let input = AnnotationInput::from_payload(payload).map_err(map_wire)?;
         let name = Self::requested_name(payload)?;
         if let Some(name) = &name {
             self.ensure_free_name(name)?;
         }
         let before: HashSet<String> = self.document_or_error()?.info.annotations.iter().filter_map(|a| a.name.clone()).collect();
-        let shape = Shape::Note { at, icon: NoteIcon::Comment };
-        let new = NewAnnotation { page, style: Style::default_for(&shape), shape, contents, author };
+        let new = input.to_engine(page);
         match name {
             Some(name) => self.apply_edit(Edit::AddAnnotationNamed(new, name))?,
             None => self.apply_edit(Edit::AddAnnotation(new))?,
@@ -341,17 +339,14 @@ fn annotation_target(op: &Op) -> Result<(PageRef, String), AdapterError> {
     }
 }
 
-fn point(value: Option<&Value>) -> Result<[f64; 2], AdapterError> {
-    let array = value
-        .and_then(Value::as_array)
-        .filter(|a| a.len() == 2)
-        .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the point must be [x, y]", false))?;
-    let x = array[0].as_f64().ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the point is not numeric", false))?;
-    let y = array[1].as_f64().ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the point is not numeric", false))?;
-    if !x.is_finite() || !y.is_finite() {
-        return Err(AdapterError::new(ErrorCode::Invalid, "the point must be finite", false));
-    }
-    Ok([x, y])
+/// A payload the shared annotation schema refuses: an unsupported shape is
+/// `Unsupported`, malformed data is `Invalid`. Neither is retryable.
+fn map_wire(error: WireError) -> AdapterError {
+    let code = match &error {
+        WireError::UnsupportedShape(_) => ErrorCode::Unsupported,
+        WireError::Malformed(_) | WireError::Invalid { .. } | WireError::TooMany { .. } => ErrorCode::Invalid,
+    };
+    AdapterError::new(code, error.to_string(), false)
 }
 
 fn map_edit(error: EditError) -> AdapterError {
@@ -493,6 +488,72 @@ mod tests {
         let committed = room.commit(&editor, version)?;
         assert!(!committed.sha256.is_empty());
         assert!(committed.bytes > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn typed_annotations_apply_and_unshared_ones_are_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let mut adapter = PdfAdapter::open("fixture.pdf", fixture(2).into())?;
+        let editor = ActorId::new("editor")?;
+
+        let highlight = op(
+            "hl-1",
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({
+                "action": "annotation.add",
+                "nm": "ada-hl-1",
+                "shape": {"kind": "text_markup", "markup": "highlight", "quads": [[20.0, 200.0, 120.0, 200.0, 20.0, 190.0, 120.0, 190.0]]},
+                "style": {"color": [0.1, 0.7, 0.3], "opacity": 0.4, "width": 1.0},
+                "contents": "look here",
+                "author": "ignored"
+            }),
+        )?;
+        let applied = Adapter::apply(&mut adapter, &editor, &highlight)?;
+        assert_eq!(applied.op.payload["shape"]["kind"], "text_markup");
+        assert_eq!(applied.op.payload["author"], "editor", "the token names the author");
+        assert_eq!(applied.result["nm"], "ada-hl-1");
+        {
+            let document = adapter.document().ok_or("the document is open")?;
+            let annotation =
+                document.info.annotations.iter().find(|a| a.name.as_deref() == Some("ada-hl-1")).ok_or("the highlight is in the document")?;
+            assert_eq!(annotation.subtype, "Highlight");
+            assert_eq!(annotation.contents.as_deref(), Some("look here"));
+            assert_eq!(annotation.quads.len(), 1);
+            let color = annotation.color.ok_or("the highlight carries its colour")?;
+            assert!((f64::from(color[0]) - 0.1).abs() < 0.01);
+        }
+
+        let stamp = op(
+            "st-1",
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            1,
+            0,
+            json!({
+                "action": "annotation.add",
+                "nm": "ada-stamp-1",
+                "shape": {"kind": "stamp", "rect": [20.0, 20.0, 120.0, 60.0], "stamp": "draft"},
+                "contents": "draft"
+            }),
+        )?;
+        Adapter::apply(&mut adapter, &editor, &stamp)?;
+        let document = adapter.document().ok_or("the document is open")?;
+        let stored = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("ada-stamp-1")).ok_or("the stamp is in the document")?;
+        assert_eq!(stored.subtype, "Stamp");
+
+        let signature = op(
+            "sig-1",
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            2,
+            0,
+            json!({"action": "annotation.add", "nm": "sig", "shape": {"kind": "signature", "strokes": [[[0.0, 0.0], [1.0, 1.0]]]}}),
+        )?;
+        let refused = Adapter::apply(&mut adapter, &editor, &signature);
+        assert!(matches!(refused, Err(e) if e.code == pdfcraft_collab_proto::ErrorCode::Unsupported), "a drawn signature is not shared");
         Ok(())
     }
 

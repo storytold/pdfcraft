@@ -12,8 +12,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use pdfcraft_collab_annot::{AnnotationInput, WireError};
 use pdfcraft_collab_proto::{ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
-use pdfcraft_engine::{DocId, Document, Edit, FieldValue, FormFieldKind, NewAnnotation, NoteIcon, Session, Shape, Style};
+use pdfcraft_engine::{DocId, Document, Edit, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,6 +34,15 @@ pub enum ProjectionError {
     Edit(String),
     #[error("the operation could not be named: {0}")]
     Invalid(String),
+}
+
+impl From<WireError> for ProjectionError {
+    fn from(error: WireError) -> Self {
+        match error {
+            WireError::UnsupportedShape(_) | WireError::TooMany { .. } => Self::Unsupported(error.to_string()),
+            WireError::Malformed(_) | WireError::Invalid { .. } => Self::Invalid(error.to_string()),
+        }
+    }
 }
 
 /// A client-chosen `/NM` in the ADR-0002 shape: the client id, a millisecond
@@ -57,8 +67,22 @@ pub fn structural_op(doc: DocKey, op_id: OpId, base_version: u64, epoch: u64, ta
     Op { op_id, doc, base_version, epoch, kind: OpKind::Structural, class: ConflictClass::Structural, target, payload, preview: None }
 }
 
+/// The typed body of an `annotation.add`: the shape, its style and the text,
+/// addressed to `nm`. The server validates the same JSON (ADR-0002).
+pub fn add_annotation_payload(new: &pdfcraft_engine::NewAnnotation, nm: &str) -> Result<Value, ProjectionError> {
+    AnnotationInput::try_from(new)?.to_payload(nm).map_err(ProjectionError::from)
+}
+
+/// A sticky note, kept as a named helper: the most common annotation.
 pub fn add_note_payload(nm: &str, at: [f64; 2], contents: &str, author: &str) -> Value {
-    json!({"action": "annotation.add", "nm": nm, "at": at, "contents": contents, "author": author})
+    let mut input = AnnotationInput::new(Shape::Note { at, icon: NoteIcon::Comment });
+    input.contents = contents.to_owned();
+    input.author = author.to_owned();
+    input.to_payload(nm).unwrap_or_else(|_| {
+        // The note shape is always encodable; keep a payload the server can
+        // still read if the wire form ever rejects it.
+        json!({"action": "annotation.add", "nm": nm, "at": at, "contents": contents, "author": author})
+    })
 }
 
 pub fn set_contents_payload(text: &str) -> Value {
@@ -97,11 +121,8 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
         ("annotation.add", ConflictClass::Merge) => {
             let page = page_target(op)?;
             let nm = text(op, "nm")?.to_owned();
-            let at = point(op.payload.get("at"))?;
-            let contents = op.payload.get("contents").and_then(Value::as_str).unwrap_or_default().to_owned();
-            let author = op.payload.get("author").and_then(Value::as_str).unwrap_or_default().to_owned();
-            let shape = Shape::Note { at, icon: NoteIcon::Comment };
-            Ok(Edit::AddAnnotationNamed(NewAnnotation { page: page.index as usize, style: Style::default_for(&shape), shape, contents, author }, nm))
+            let input = AnnotationInput::from_payload(&op.payload)?;
+            Ok(Edit::AddAnnotationNamed(input.to_engine(page.index as usize), nm))
         }
         ("annotation.set_contents", ConflictClass::Merge) => {
             let (page, name) = annotation_target(op)?;
@@ -180,16 +201,6 @@ fn text<'a>(op: &'a Op, field: &'static str) -> Result<&'a str, ProjectionError>
     op.payload.get(field).and_then(Value::as_str).ok_or(ProjectionError::Missing(field))
 }
 
-fn point(value: Option<&Value>) -> Result<[f64; 2], ProjectionError> {
-    let array = value.and_then(Value::as_array).filter(|a| a.len() == 2).ok_or(ProjectionError::Missing("point"))?;
-    let x = array[0].as_f64().ok_or(ProjectionError::Missing("point"))?;
-    let y = array[1].as_f64().ok_or(ProjectionError::Missing("point"))?;
-    if !x.is_finite() || !y.is_finite() {
-        return Err(ProjectionError::Missing("a finite point"));
-    }
-    Ok([x, y])
-}
-
 fn annotation_index(document: &Document, page: usize, name: &str) -> Result<usize, ProjectionError> {
     let mut named = document.info.annotations.iter().filter(|a| a.page == page && a.name.as_deref() == Some(name));
     let first = named.next().ok_or_else(|| ProjectionError::AnnotationGone(name.to_owned(), page))?;
@@ -224,12 +235,9 @@ pub fn ops_for_edit(
 ) -> Result<Vec<Op>, ProjectionError> {
     match edit {
         Edit::AddAnnotation(new) => {
-            let Shape::Note { at, .. } = &new.shape else {
-                return Err(ProjectionError::Unsupported("only sticky notes are shared in this version".into()));
-            };
             let nm = new_annotation_name(client_id);
             let target = Target::Page(PageRef { index: new.page as u32, epoch });
-            let payload = add_note_payload(&nm, *at, &new.contents, &new.author);
+            let payload = add_annotation_payload(new, &nm)?;
             Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, payload)])
         }
         Edit::SetAnnotationContents { page, index, text } => {
@@ -600,5 +608,110 @@ mod tests {
         assert!(first.starts_with("client-7-"));
         assert_ne!(first, second);
         assert!(first.len() <= pdfcraft_collab_proto::MAX_ANNOTATION_NAME);
+    }
+
+    /// engine → operation → engine: every shared shape survives the wire with
+    /// its subtype, geometry, colour, opacity and text. The second document is
+    /// built from the same bytes, so this is the path two replicas take.
+    #[test]
+    fn every_shared_shape_round_trips_between_documents() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_engine as engine;
+
+        let quads = vec![[72.0f64, 700.0, 220.0, 700.0, 72.0, 686.0, 220.0, 686.0], [72.0, 680.0, 220.0, 680.0, 72.0, 668.0, 220.0, 668.0]];
+        let shapes = vec![
+            engine::Shape::Note { at: [40.0, 250.0], icon: engine::NoteIcon::Comment },
+            engine::Shape::TextMarkup { kind: engine::Markup::Highlight, quads: quads.clone() },
+            engine::Shape::TextMarkup { kind: engine::Markup::Squiggly, quads: vec![quads[0]] },
+            engine::Shape::Rectangle { rect: [30.0, 30.0, 120.0, 90.0] },
+            engine::Shape::Oval { rect: [30.0, 30.0, 120.0, 90.0] },
+            engine::Shape::Line { from: [20.0, 20.0], to: [150.0, 100.0], start: engine::LineEnding::None, end: engine::LineEnding::OpenArrow },
+            engine::Shape::Ink { strokes: vec![vec![[20.0, 20.0], [40.0, 60.0], [80.0, 30.0]]] },
+            engine::Shape::FreehandHighlight { strokes: vec![vec![[20.0, 20.0], [90.0, 30.0]]] },
+            engine::Shape::TextBox { rect: [20.0, 30.0, 180.0, 90.0], font_size: 12.0 },
+            engine::Shape::Typewriter { rect: [20.0, 120.0, 180.0, 150.0], font_size: 14.0 },
+            engine::Shape::Stamp { rect: [40.0, 40.0, 160.0, 100.0], stamp: engine::StampKind::Draft, by: None },
+            engine::Shape::Mark { rect: [60.0, 60.0, 90.0, 90.0], mark: engine::FillMark::Check },
+        ];
+
+        for shape in shapes {
+            let (first, first_id) = open()?;
+            let mut counter = 0;
+            let annotation = engine::NewAnnotation {
+                page: 0,
+                style: engine::Style::default_for(&shape),
+                shape: shape.clone(),
+                contents: "shared text".into(),
+                author: "ada".into(),
+            };
+            let document = first.get(first_id).ok_or("the source document is open")?;
+            let ops = super::ops_for_edit(document, &engine::Edit::AddAnnotation(annotation.clone()), doc()?, "ada", 0, 0, &mut counter)?;
+            assert_eq!(ops.len(), 1);
+            assert!(ops[0].payload["shape"]["kind"].is_string(), "{shape:?} travels as a tagged object");
+            assert!(ops[0].payload.get("at").is_none(), "the position lives in the shape, not at the top level");
+
+            let (mut second, second_id) = open()?;
+            let remote = {
+                let document = second.get(second_id).ok_or("the second document is open")?;
+                super::edit_for(document, &ops[0])?
+            };
+            match &remote {
+                engine::Edit::AddAnnotationNamed(parsed, nm) => {
+                    assert_eq!(nm, ops[0].payload["nm"].as_str().ok_or("the operation names the annotation")?);
+                    assert_eq!(parsed.shape, shape, "the shape survives the wire");
+                    assert_eq!(parsed.style, annotation.style, "the style survives the wire");
+                    assert_eq!(parsed.contents, "shared text");
+                    assert_eq!(parsed.author, "ada");
+                }
+                other => return Err(format!("expected a named annotation, got {}", other.label()).into()),
+            }
+            super::apply(&mut second, second_id, &ops[0])?;
+
+            let document = second.get(second_id).ok_or("the target document is open")?;
+            let name = ops[0].payload["nm"].as_str().ok_or("the name is in the payload")?;
+            let stored = document.info.annotations.iter().find(|a| a.name.as_deref() == Some(name)).ok_or("the annotation is in the document")?;
+            assert_eq!(stored.subtype, shape.subtype(), "subtype of {shape:?}");
+            assert_eq!(stored.contents.as_deref(), Some("shared text"), "text of {shape:?}");
+            assert_eq!(stored.page, 0);
+            if let engine::Shape::TextMarkup { quads, .. } = &shape {
+                let stored: Vec<[f32; 8]> = stored.quads.clone();
+                assert_eq!(stored.len(), quads.len());
+                for (got, want) in stored.iter().zip(quads) {
+                    for (g, w) in got.iter().zip(want) {
+                        assert!((f64::from(*g) - w).abs() < 0.01, "quad {got:?} != {want:?}");
+                    }
+                }
+            }
+            if let Some(color) = stored.color {
+                for (got, want) in color.iter().zip(annotation.style.color) {
+                    assert!((f64::from(*got) - want).abs() < 0.01, "colour {color:?} != {:?}", annotation.style.color);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_unshared_shape_is_refused_with_a_reason() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("gone")?;
+        let new = engine_new(&pdfcraft_engine::Shape::Redact {
+            quads: vec![[0.0; 8]],
+            overlay: String::new(),
+            look: pdfcraft_engine::OverlayLook::default(),
+        });
+        let mut counter = 0;
+        let error = super::ops_for_edit(document, &pdfcraft_engine::Edit::AddAnnotation(new), doc()?, "ada", 0, 0, &mut counter);
+        assert!(matches!(error, Err(ProjectionError::Unsupported(message)) if message.contains("redaction")));
+        Ok(())
+    }
+
+    fn engine_new(shape: &pdfcraft_engine::Shape) -> pdfcraft_engine::NewAnnotation {
+        pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(shape),
+            shape: shape.clone(),
+            contents: String::new(),
+            author: "ada".into(),
+        }
     }
 }

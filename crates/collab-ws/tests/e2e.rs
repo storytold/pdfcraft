@@ -6,7 +6,9 @@
 //! a viewer cannot write, that an old epoch is refused, and that a late joiner
 //! catches up from a snapshot tail.
 
-use pdfcraft_collab_client_pdf::{add_note_payload, apply, merge_op, reply_payload, rotate_payload, set_contents_payload, structural_op};
+use pdfcraft_collab_client_pdf::{
+    add_annotation_payload, add_note_payload, apply, merge_op, reply_payload, rotate_payload, set_contents_payload, structural_op,
+};
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
 use pdfcraft_collab_proto::{ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Role, ServerMessage, Target};
@@ -247,6 +249,58 @@ fn three_clients_converge_and_a_late_joiner_catches_up() -> Result<(), Box<dyn s
     assert_eq!(late.rotation(), 90);
     let document = late.session.get(late.id).expect("open");
     assert_eq!(document.info.annotations.len(), 2);
+    Ok(())
+}
+
+/// A typed annotation (a highlight) is not a special case: two clients that
+/// never share memory see the same subtype, quads, colour and text.
+#[test]
+fn two_clients_share_a_typed_highlight() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+
+    let quads = vec![[20.0, 200.0, 120.0, 200.0, 20.0, 190.0, 120.0, 190.0]];
+    let shape = pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads: quads.clone() };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.color = [0.1, 0.7, 0.3];
+    style.opacity = 0.4;
+    let new = pdfcraft_engine::NewAnnotation { page: 0, style: style.clone(), shape, contents: "look here".into(), author: "ada".into() };
+
+    let doc = DocKey::new("file-1")?;
+    let payload = add_annotation_payload(&new, "ada-hl-1")?;
+    let op = merge_op(doc, OpId::new("op-highlight")?, 0, 0, page(0, 0), payload);
+    ada.send(op)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+
+    let check = |peer: &Peer| {
+        let document = peer.session.get(peer.id).expect("the peer document is open");
+        let annotation = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("ada-hl-1")).expect("the highlight reached the replica");
+        assert_eq!(annotation.subtype, "Highlight");
+        assert_eq!(annotation.contents.as_deref(), Some("look here"));
+        assert_eq!(annotation.quads.len(), 1);
+        for (got, want) in annotation.quads[0].iter().zip(&quads[0]) {
+            assert!((f64::from(*got) - want).abs() < 0.01);
+        }
+        let color = annotation.color.expect("the highlight carries its colour");
+        for (got, want) in color.iter().zip(style.color) {
+            assert!((f64::from(*got) - want).abs() < 0.01);
+        }
+    };
+    check(&ada);
+    check(&bo);
+
+    // The typed payload is journaled, so a late joiner replays it.
+    let mut late = Peer::join(addr, "viewer:di", "di")?;
+    let tail = late.resync(0)?;
+    assert_eq!(tail.len(), 1, "the highlight is the only accepted operation");
+    for op in tail {
+        apply(&mut late.session, late.id, &op)?;
+    }
+    check(&late);
     Ok(())
 }
 

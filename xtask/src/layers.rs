@@ -54,6 +54,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("xfa", Class::Layer(3)),
     ("ml", Class::Layer(3)),
     // L4 features
+    ("collab-annot", Class::Layer(4)),
     ("edit", Class::Layer(4)),
     ("organize", Class::Layer(4)),
     ("security", Class::Layer(4)),

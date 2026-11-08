@@ -16,6 +16,7 @@
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only state |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect |
 | `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete; durable `Store` (versioned bases + journal) |
+| `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
@@ -25,7 +26,9 @@
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
 
 The feature is native-only for now. `collab-ws` and `collab-session` compile to
-an empty crate on wasm; `collab-client` and `collab-client-pdf` are wasm-safe.
+an empty crate on wasm; `collab-client`, `collab-client-pdf` and `collab-annot`
+are wasm-safe (`cargo check --target wasm32-unknown-unknown` was run for
+`collab-client-pdf` after adding the typed payload).
 
 ## 2. Decisions that are easy to undo wrongly
 
@@ -86,6 +89,15 @@ an empty crate on wasm; `collab-client` and `collab-client-pdf` are wasm-safe.
     than half-applying. `epoch` is persisted in `CURRENT`, otherwise merged
     comments addressed to a post-rotation page would be replayed into the
     wrong epoch.
+13. **An annotation travels as a typed shape, not as tool-specific fields.**
+    `collab-annot` owns the JSON (`shape.kind` + `style` + `contents`), and both
+    the server adapter and the client projection go through it. Adding a tool
+    means one variant in that crate, not a new branch in two adapters. Shapes
+    that reference data outside the operation (drawn/typed signatures, custom
+    stamps, redaction, attachments) are refused with `unsupported`; the server
+    never silently turns them into something else, and the client does not apply
+    them locally. A payload without `shape` is still read as a sticky note for
+    the unwritten v1 clients.
 
 ## 3. Running it
 
@@ -133,7 +145,8 @@ Commands that were run:
 cargo test -p pdfcraft-collab-proto -p pdfcraft-collab-server \
   -p pdfcraft-collab-hub -p pdfcraft-collab-client \
   -p pdfcraft-collab-client-pdf -p pdfcraft-collab-session \
-  -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-daemon
+  -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-annot \
+  -p pdfcraft-collab-daemon
 cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings
 cargo fmt --all --check
 cargo xtask layers
@@ -141,9 +154,24 @@ cargo check -p pdfcraft --features collab
 cargo test -p pdfcraft-ui-egui --features collab
 ```
 
-Counts: proto 12, server 15, hub 4, client 11, client-pdf 7, session 2,
-ws 6 unit + 3 e2e, pdf 12 (including a 500-page document and the store), daemon
-5.
+Counts: proto 12, server 15, hub 4, client 11, client-pdf 9, session 2,
+ws 6 unit + 4 e2e, pdf 13, annot 10, daemon 5.
+
+- `crates/collab-annot` unit tests cover every supported shape, the shape
+  defaults for a partial style, the legacy note payload, unknown/unsupported
+  kinds and the size limits.
+- `crates/collab-client-pdf` `every_shared_shape_round_trips_between_documents`
+  is the engine → operation → engine proof: for each of the 12 shapes it builds
+  the operation with `ops_for_edit`, reconstructs the edit on a second document
+  and compares shape, style (colour, opacity, width, fill), text; then applies
+  it and checks `/Subtype`, `/QuadPoints`, `/C` and `/Contents` in the second
+  document. `an_unshared_shape_is_refused_with_a_reason` covers the redaction.
+- `crates/collab-pdf` `typed_annotations_apply_and_unshared_ones_are_refused`
+  checks the server side: a highlight and a stamp are applied with the client's
+  `/NM`, a drawn signature gets `unsupported`.
+- `crates/collab-ws/tests/e2e.rs` `two_clients_share_a_typed_highlight` is the
+  two-client scenario over a real socket: subtype, quads, colour and text match
+  on both replicas.
 
 - `crates/collab-ws/tests/e2e.rs` is the end-to-end proof: three clients over a
   real socket and one PDF; comment + reply converge under the same `/NM`; a
@@ -174,10 +202,14 @@ Ordered by the risk they pose to production.
    and the app wiring are native-only. The host bridge
    (`pdfcraft:session`, `session-state`, `presence`, `commit`, `committed`) is
    not implemented.
-3. **Annotation coverage.** Only sticky notes (`Shape::Note`) are shared through
-   `annotation.add`. Highlights, underlines, strikeouts, shapes, lines, ink,
-   stamps, text boxes and typewriter edits answer “not shared yet” and are not
-   applied locally in a collaborative session.
+3. **Annotation coverage beyond the typed set.** `annotation.add` shares
+   `TextMarkup` (kind/quads/colour), `Rectangle`, `Oval`, `Line`, `Ink`,
+   `FreehandHighlight`, `TextBox`, `Typewriter`, palette `Stamp`, `Mark` and
+   `Note` with their style (colour, opacity, width, fill, border). Drawn and
+   typed signatures, custom stamps, redaction marks and attachments are refused
+   with `unsupported` (RFC §3.1.1). Comment replies that carry a status
+   (`/State`) and edits that only change an annotation's style are not shared
+   yet.
 4. **Structural coverage.** Only page rotate, move and delete. Insert,
    duplicate, replace, split/combine, bookmarks, layers, attachments, form
    structure and content edits are not shared.
@@ -228,19 +260,38 @@ Still open here: a fault-injection test that kills the *real* daemon between
 the base write and the `CURRENT` rename (the windows are covered at the `Store`
 level), and a size-based forced commit (limitation 11).
 
-### 6.2 Shared annotation shapes
-### 6.2 Shared annotation shapes
+### 6.2 Shared annotation shapes — done in this branch
 
-- Add a typed shape/style payload (a small `collab-annot` crate depending on
-  `pdfcraft-annot`, used by both the adapter and the projection) or an equivalent
-  serde representation. Support at least `TextMarkup` (kind, quads, colour),
-  `Rectangle`, `Oval`, `Line`, `Ink`, `FreehandHighlight`, `TextBox`,
-  `Typewriter`, palette `Stamp`, `Mark`.
-- Keep blobs, signatures, custom stamps, redaction and attachments out of v1.
-- Round-trip test: engine document → operation → another engine document; compare
-  subtype, rect/quads, colour, opacity and text.
-- Replace the “only sticky notes” error in `ops_for_edit` and the note-only arm
-  in `collab-pdf`.
+A new leaf crate `crates/collab-annot` (package `pdfcraft-collab-annot`,
+layer L4 in `xtask/src/layers.rs`) owns the wire form:
+
+- `ShapeWire` — `kind`-tagged JSON for `note`, `text_markup` (markup kind +
+  quads), `rectangle`, `oval`, `line` (ends, arrowheads), `ink`,
+  `freehand_highlight`, `text_box`, `typewriter`, `stamp` (palette kind, `by`),
+  `mark` (fill-and-sign). `ShapeWire::try_from(&Shape)` refuses the rest with a
+  readable label (`a drawn signature`, `a redaction mark`, …).
+- `StyleWire` — colour, opacity, width, fill, border colour/shape, fill and text
+  opacity; missing fields fall back to `Style::default_for(shape)`, so a partial
+  style still draws identically on every replica.
+- `AnnotationInput` — shape + style + contents + author; `to_payload(nm)` builds
+  `annotation.add`, `from_payload` parses/validates it (legacy `at` payloads are
+  read as a sticky note).
+- Limits: ≤4096 quads, ≤1024 strokes, ≤4096 points across strokes (fits the
+  256 KiB frame), ≤64 KiB text, ≤256 B author; non-finite geometry and opacity
+  outside 0–1 are refused.
+
+Both adapters use it: `collab-pdf::PdfAdapter::add_annotation` builds
+`NewAnnotation` from `AnnotationInput` and maps `WireError` to
+`unsupported`/`invalid`; `collab-client-pdf` `edit_for` does the same on the
+client, and `ops_for_edit(Edit::AddAnnotation)` (no more note-only branch) sends
+`add_annotation_payload`. UI code needed no change: it already forwards
+`Edit::AddAnnotation` through `ops_for_edit`.
+
+Tests: the round-trip and two-client scenarios are listed in §4. What is still
+open here: sharing `annotation.set_style` (recolour/width/opacity of an existing
+comment), status replies (`/State`), and the same typed envelope for
+`AddCustomStamp` if the cabinet ever needs it (it references an XObject, so it
+would need the blob channel).
 
 ### 6.3 Web host bridge
 
@@ -283,6 +334,13 @@ level), and a size-based forced commit (limitation 11).
   `history_step`; anything that calls `session.apply` directly (OCR, camera,
   some tools) bypasses collaboration and will produce unsupported edits. Gate
   those tools if they become reachable.
+- A new annotation shape is a variant in `crates/collab-annot` plus the engine
+  type it maps to; do not add a branch in `collab-pdf` and another in
+  `collab-client-pdf`. The wire names are asserted in that crate's
+  `the_wire_names_are_stable`, so renaming one is a protocol break.
+- The frame budget is 256 KiB. `MAX_TOTAL_POINTS` (4096) is chosen so a full ink
+  operation still fits; raising it needs the batching/blob channel, not a bigger
+  constant alone.
 - Mutex poisoning is treated as “hub unavailable” (`TransportError::Hub`); there
   is no panic path in the transport.
 - Never use `pkill -f` with a pattern that appears in your own command line on
