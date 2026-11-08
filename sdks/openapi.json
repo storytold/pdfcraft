@@ -11,6 +11,12 @@
       "description": "Default local loopback daemon"
     }
   ],
+  "security": [
+    {
+      "bearerAuth": []
+    },
+    {}
+  ],
   "paths": {
     "/v1/merged-pdf": {
       "post": {
@@ -234,6 +240,12 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
     "responses": {
       "ProblemResponse": {
         "description": "RFC 7807 Problem Details response",
@@ -336,8 +348,7 @@
           "pages": {
             "type": "array",
             "items": {
-              "type": "string",
-              "nullable": true
+              "type": ["string", "null"]
             }
           }
         }

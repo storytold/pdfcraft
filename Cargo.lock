@@ -4672,7 +4672,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-pyo3"
-version = "0.9.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-sdk",
  "pyo3",
@@ -4723,7 +4723,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-rest"
-version = "0.9.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-automation",
  "pdfcraft-sdk",
@@ -4735,7 +4735,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-sdk"
-version = "0.9.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-automation",
  "pdfcraft-engine",
