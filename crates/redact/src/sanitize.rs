@@ -423,8 +423,21 @@ fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
 /// The pages that hold a thumbnail (`/Thumb`), a picture of the page as it was whatever was removed
 /// from it since (#6749). Only a page's own entry is one: elsewhere `/Thumb` can be a name a
 /// producer chose (a collection item's field), so it is not swept like an [`OWNED`] key.
+///
+/// The page tree's leaves come from the page walk, which also finds leaves without `/Type /Page`.
+/// That walk stops at its limits and skips pages outside the tree, and a full save still keeps
+/// such a page when something else names it (a destination), so every object of the file that
+/// says it is a page is looked at as well.
 fn page_thumbnails(doc: &Document) -> Vec<ObjRef> {
-    pdfcraft_model::pages(doc).into_iter().filter(|p| p.dict.contains(b"Thumb")).map(|p| p.obj).collect()
+    let mut found: std::collections::BTreeSet<ObjRef> =
+        pdfcraft_model::pages(doc).into_iter().filter(|p| p.dict.contains(b"Thumb")).map(|p| p.obj).collect();
+    for num in doc.object_numbers() {
+        let r = ObjRef::new(num, doc.generation(num));
+        if doc.get(r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page") && d.contains(b"Thumb")) {
+            found.insert(r);
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// Every value of `key` held outside a name map, as [`owners`] finds them: with the indirect

@@ -3132,6 +3132,29 @@ fn page_thumbnails_go_with_private_data_and_sanitize() {
     assert!(!holds(&doc), "Sanitize leaves no thumbnail in the saved file");
 }
 
+/// A page the page walk does not reach (outside the tree, named only by the open action's
+/// destination) is still written by a full save, and so is its thumbnail: private data takes that
+/// one too (#6749).
+#[test]
+fn a_page_outside_the_page_tree_loses_its_thumbnail() {
+    use crate::sanitize::{Hidden, remove_hidden, scan_only};
+    const MARKER: &[u8; 16] = b"F5-ORPHAN-THUMB!";
+    let thumb = stream("/Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", MARKER);
+    let orphan = b"<< /Type /Page /MediaBox [0 0 300 300] /Thumb 7 0 R >>".to_vec();
+    let mut doc = one_page(b"BT /F1 10 Tf 10 10 Td (Visible) Tj ET", "", vec![thumb, orphan]);
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"OpenAction".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0)), Object::name("Fit")])))
+        .unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 1, "the walk does not reach the orphan");
+    let holds = |doc: &Document| {
+        let bytes = write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        bytes.windows(MARKER.len()).any(|w| w == MARKER)
+    };
+    assert!(holds(&doc), "the control: a full save keeps the orphan page and its thumbnail");
+    assert_eq!(scan_only(&doc, &[Hidden::PrivateData]), [(Hidden::PrivateData, 1)]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 1)]);
+    assert!(!holds(&doc), "private data leaves no thumbnail in the saved file");
+}
+
 /// A one-page document whose catalog names an outline root (object 5). `items` are the outline
 /// items, objects 6 onward.
 fn outlined_document(items: Vec<Vec<u8>>) -> Document {
