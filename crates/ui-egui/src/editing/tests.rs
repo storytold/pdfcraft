@@ -402,3 +402,66 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     assert!(app.save_active(SaveTarget::InPlace));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #6440: recolouring gray or CMYK text in its open box drops the ink at once. Finishing the box
+/// then adds no empty Undo step (the draft equals the item the page reads back), picking the
+/// ink's own look again in the same box paints RGB rather than bringing the ink back, and new
+/// boxes don't take the ink.
+#[test]
+fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
+    // 100 K text, open in its box.
+    let open = || {
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        let mut text = pdfcraft_engine::AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), ..Default::default() };
+        text.set_ink(Some(pdfcraft_engine::TextInk::Cmyk([0.0, 0.0, 0.0, 1.0])));
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        let stored = item(&app);
+        assert!(stored.painted_ink().is_some());
+        app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+            page: 0,
+            index: Some(0),
+            rect: stored.rect,
+            text: stored.text.clone(),
+            style: stored,
+            focus: true,
+            selection: None,
+            typing_from: None,
+        });
+        app
+    };
+    fn item(app: &crate::PdfCraftApp) -> pdfcraft_engine::AddedText {
+        match &app.session.get(app.views[0].id).unwrap().added()[0].content {
+            pdfcraft_engine::AddedContent::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+    // The box's style with another colour, set as the Format panel hands it over.
+    let recolour = |app: &mut crate::PdfCraftApp, color: [f64; 3]| {
+        let style = app.views[0].content.draft.as_ref().map(|d| d.style.clone()).unwrap();
+        app.restyle_draft(0, pdfcraft_engine::AddedText { color, ..style });
+    };
+    let finish = |app: &mut crate::PdfCraftApp| {
+        let added = app.session.get(app.views[0].id).unwrap().added().to_vec();
+        app.views[0].content.finish_draft(&added)
+    };
+
+    // Red, then Done.
+    let mut app = open();
+    recolour(&mut app, [1.0, 0.0, 0.0]);
+    assert_eq!(item(&app).ink, None, "the page paints red in RGB");
+    let finished = finish(&mut app);
+    assert!(finished.is_none(), "an empty Undo step: {finished:?}");
+    assert_eq!(app.text_style.ink, None, "new boxes don't take the ink");
+
+    // Red, then black in the same box: RGB black, not the 100 K back.
+    let mut app = open();
+    recolour(&mut app, [1.0, 0.0, 0.0]);
+    recolour(&mut app, [0.0; 3]);
+    let now = item(&app);
+    assert_eq!((now.ink, now.color), (None, [0.0; 3]));
+    assert_eq!(app.text_style.ink, None);
+    let finished = finish(&mut app);
+    assert!(finished.is_none(), "an empty Undo step: {finished:?}");
+}
