@@ -437,7 +437,7 @@ pub(crate) type EndstreamIndex = std::sync::OnceLock<Vec<usize>>;
 fn endstream_offsets(data: &[u8]) -> Vec<usize> {
     #[cfg(test)]
     ENDSTREAM_SCAN.with(|c| c.set(c.get() + data.len()));
-    data.windows(9).enumerate().filter(|(_, w)| *w == b"endstream").map(|(i, _)| i).collect()
+    data.windows(9).enumerate().filter(|(i, w)| *w == b"endstream" && endstream_at(data, *i)).map(|(i, _)| i).collect()
 }
 
 fn parse_indirect_in(
@@ -528,14 +528,42 @@ fn parse_indirect_in(
 }
 
 /// Whether `rest`, what follows a stream's /Length bytes with white space skipped, is where the
-/// stream ends: the end of the data, or a whole `endstream`, `endstrea` or `endobj` token. A token
-/// must end there (ISO 32000-2 §7.2.3), so payload bytes such as `endobject` or `endstreak`,
-/// where a wrong /Length stops, are not taken for one and the search for `endstream` runs instead.
+/// stream ends. A whole `endstream` token is: a token runs on through regular characters (ISO
+/// 32000-2 §7.2.3), so payload such as `endstreamer` is not one. A misspelt `endstream`
+/// (`endstrea`), an `endobj` with the `endstream` left out, or both, end it only where the object
+/// ends as well, before the end of the data, another object's `N G obj` header, or `xref`,
+/// `trailer` or `startxref`: payload such as `endobj more` or `endobject`, where a wrong /Length
+/// stops, is not, and the search for `endstream` runs instead. So does anything else but the end
+/// of the data.
 fn at_stream_end(rest: &[u8]) -> bool {
-    rest.is_empty()
-        || [&b"endstream"[..], b"endstrea", b"endobj"]
-            .iter()
-            .any(|kw| rest.strip_prefix(*kw).is_some_and(|tail| tail.first().is_none_or(|b| !is_regular(*b))))
+    let mut lx = Lexer::new(rest, 0);
+    if lx.eat_keyword(b"endstream") {
+        return true;
+    }
+    let misspelt = lx.eat_keyword(b"endstrea");
+    let endobj = lx.eat_keyword(b"endobj");
+    lx.skip_ws();
+    if lx.pos >= rest.len() {
+        return true;
+    }
+    if !(misspelt || endobj) {
+        return false;
+    }
+    if [&b"xref"[..], b"trailer", b"startxref"].iter().any(|kw| Lexer::new(rest, lx.pos).eat_keyword(kw)) {
+        return true;
+    }
+    let number = |lx: &mut Lexer| {
+        lx.skip_ws();
+        let t = lx.token();
+        !t.is_empty() && t.iter().all(u8::is_ascii_digit)
+    };
+    number(&mut lx) && number(&mut lx) && lx.eat_keyword(b"obj")
+}
+
+/// Whether a whole `endstream` token starts at `at` in `data`: one followed by a regular
+/// character (`endstreamer`) is payload (ISO 32000-2 §7.2.3).
+fn endstream_at(data: &[u8], at: usize) -> bool {
+    data.get(at..).is_some_and(|d| d.starts_with(b"endstream")) && !data.get(at.saturating_add(9)).copied().is_some_and(is_regular)
 }
 
 /// Offset where stream data ends (before the EOL preceding "endstream").
@@ -547,7 +575,7 @@ fn find_endstream(data: &[u8], from: usize, endstreams: Option<&EndstreamIndex>)
         }
         None => {
             let hay = data.get(from..)?;
-            let found = hay.windows(9).position(|w| w == b"endstream");
+            let found = hay.windows(9).enumerate().position(|(i, w)| w == b"endstream" && endstream_at(hay, i));
             #[cfg(test)]
             ENDSTREAM_SCAN.with(|c| c.set(c.get() + found.map_or(hay.len(), |p| p + 9)));
             found? + from
@@ -722,15 +750,20 @@ mod tests {
     }
 
     /// A wrong /Length that stops before payload bytes beginning like an end marker (`endobject`,
-    /// `endstreak`) is not taken for the stream's end: a token runs on through regular
-    /// characters (ISO 32000-2 §7.2.3), so the search for `endstream` finds the whole payload.
+    /// `endstreak`, `endstreamer`) is not taken for the stream's end: a token runs on through
+    /// regular characters (ISO 32000-2 §7.2.3), so the search for `endstream` finds the whole
+    /// payload, and skips `endstreamer` too, by itself and through the loader's shared index.
     #[test]
     fn a_length_ending_inside_a_longer_word_is_not_an_end_marker() {
-        for word in ["endobject", "endstreak"] {
+        for word in ["endobject", "endstreak", "endstreamer"] {
             let pdf = format!("7 0 obj\n<< /Length 5 >>\nstream\nHELLO {word} more\nendstream\nendobj\n");
             let (_, o) = parse_indirect(pdf.as_bytes(), 0, &|_| None).unwrap();
             let Object::Stream(s) = o else { panic!("stream expected") };
             assert_eq!(s.raw[..], *format!("HELLO {word} more").as_bytes(), "{word}");
+            let index = EndstreamIndex::new();
+            let (_, o) = parse_indirect_in(pdf.as_bytes(), None, 0, &|_| None, Some(&index)).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(s.raw[..], *format!("HELLO {word} more").as_bytes(), "{word}, indexed");
         }
         // Whole markers still end it, followed by white space, a delimiter or the end of the data.
         for tail in ["endobj\n", "endstrea%", "endobj"] {
@@ -741,6 +774,28 @@ mod tests {
         }
     }
 
+    /// A whole `endobj` or `endstrea` token where a wrong /Length stops is payload, not the
+    /// stream's end, unless the object ends there too: what follows is the end of the data,
+    /// another object's header, or `xref`, `trailer` or `startxref`. Otherwise the search for
+    /// `endstream` finds the whole payload.
+    #[test]
+    fn an_end_marker_inside_the_payload_does_not_end_the_stream() {
+        for payload in ["endobj more", "endstrea more", "endstrea endobj more", "endobj 12 more"] {
+            let pdf = format!("7 0 obj\n<< /Length 5 >>\nstream\nHELLO {payload}\nendstream\nendobj\n");
+            let (_, o) = parse_indirect(pdf.as_bytes(), 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(s.raw[..], *format!("HELLO {payload}").as_bytes(), "{payload}");
+        }
+        // Where the object does end, the /Length is the stream, also with an `endstream` later.
+        for next in ["8 0 obj\n<< >>", "%c\n12 0 obj", "xref", "trailer", "startxref"] {
+            for marker in ["endobj", "endstrea\nendobj", "endstrea"] {
+                let pdf = format!("7 0 obj\n<< /Length 5 >>\nstream\nHELLO\n{marker}\n{next}\nstream\nWORLD\nendstream\nendobj\n");
+                let (_, o) = parse_indirect(pdf.as_bytes(), 0, &|_| None).unwrap();
+                let Object::Stream(s) = o else { panic!("stream expected") };
+                assert_eq!(&s.raw[..], b"HELLO", "{marker:?} then {next:?}");
+            }
+        }
+    }
     /// Without an `endstream`, the /Length is trusted as written when it fits, also when it is
     /// wrong, and an indirect one is resolved first; one that doesn't fit, a negative one and one
     /// too large for any file are errors rather than wrapped into a short read.

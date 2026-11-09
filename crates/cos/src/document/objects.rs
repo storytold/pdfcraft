@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use super::reader::find;
 use super::state::{
-    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read, objstm_member, overlay_reads,
+    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read, objstm_member,
+    overlay_reads,
 };
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
@@ -812,6 +813,8 @@ impl Document {
         super::tests::FILE_SCANS.with(|scans| scans.set(scans.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
+        let budget = ScanLengths::enter();
+        let resolve = |r: ObjRef| if budget.take() { self.stream_length(r) } else { None };
         let mut found = None;
         let mut i = 0;
         while let Some(p) = find(data, needle.as_bytes(), i, data.len()) {
@@ -821,8 +824,9 @@ impl Document {
             }
             // An indirect `/Length` is resolved, as at the object's offset, or a stream that ends
             // in a misspelt `endstream` is searched on into a later object's. A header that parses
-            // as far as the `/Length` starts with `num` itself, after white space.
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|r| self.stream_length(r), &self.endstreams)
+            // as far as the `/Length` starts with `num` itself, after white space. A budget shared
+            // with the scans this leads to bounds how often the file is read again ([`ScanLengths`]).
+            if let Ok((id, o)) = parse_indirect_shared(data, p, &resolve, &self.endstreams)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition

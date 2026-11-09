@@ -10,7 +10,7 @@ use crate::object::{Array, ObjectIdentifier};
 use crate::object::{Object, ObjectLike, ObjectRefLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::trivia::{is_regular_character, is_white_space_character};
+use crate::trivia::{is_eol_character, is_regular_character, is_white_space_character};
 use crate::util::{OptionLog, find_needle};
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
@@ -419,6 +419,11 @@ fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
     let data = r.read_bytes(length as usize)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;
+    // PdfCraft patch (36): a whole token (ISO 32000-2 7.2.3), so a wrong `/Length` that stops
+    // before payload such as `endstreamer` does not end the stream there.
+    if r.tail().and_then(|t| t.first().copied()).is_some_and(is_regular_character) {
+        return None;
+    }
 
     Some(Stream::new(data, dict.clone()))
 }
@@ -434,7 +439,7 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     forward_stream_eol(r)?;
 
     let tail = r.tail()?;
-    let endstream_offset = find_needle(tail, b"endstream")?;
+    let endstream_offset = find_endstream_token(tail)?;
     let data_end = trim_trailing_ascii_whitespace(&tail[..endstream_offset]);
     let data = tail.get(..data_end)?;
 
@@ -452,8 +457,8 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
 /// was lost and its pages drew blank. Only a `/Length` the data holds is read.
 ///
 /// With `at_an_end`, tried before [`parse_fallback`], the `/Length` must also end where the
-/// stream would: before a whole `endstream`, a misspelt one (`endstrea`) or `endobj`, or at the
-/// end of the data. Otherwise the search for `endstream` would run on into a later object and take its
+/// stream would ([`at_stream_end`]): before a whole `endstream`, before a misspelt one
+/// (`endstrea`) or `endobj` where the object ends too, or at the end of the data. Otherwise the search for `endstream` would run on into a later object and take its
 /// header and data as this stream's. Without it, tried last, after the search found no
 /// `endstream` in the rest of the data, so it doesn't search again.
 fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> Option<Stream<'a>> {
@@ -463,20 +468,73 @@ fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> O
     r.forward_tag(b"stream")?;
     forward_stream_eol(r)?;
     let data = r.read_bytes(usize::try_from(length).ok()?)?;
-    if at_an_end {
-        r.skip_white_spaces_and_comments();
-        let rest = r.tail().unwrap_or_default();
-        // A whole token (ISO 32000-2 7.2.3): payload bytes such as `endobject`, where a wrong
-        // `/Length` stops, are not one.
-        let ends = [&b"endstream"[..], b"endstrea", b"endobj"]
-            .iter()
-            .any(|kw| rest.strip_prefix(*kw).is_some_and(|tail| tail.first().is_none_or(|b| !is_regular_character(*b))));
-        if !(rest.is_empty() || ends) {
-            return None;
-        }
+    if at_an_end && !at_stream_end(r.tail().unwrap_or_default()) {
+        return None;
     }
 
     Some(Stream::new(data, dict.clone()))
+}
+
+/// PdfCraft patch (36): the first `endstream` in `data` that is a whole token (ISO 32000-2
+/// 7.2.3), not the start of payload bytes such as `endstreamer`.
+fn find_endstream_token(data: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    loop {
+        let at = from + find_needle(data.get(from..)?, b"endstream")?;
+        let end = at + b"endstream".len();
+        if !data.get(end).copied().is_some_and(is_regular_character) {
+            return Some(at);
+        }
+        from = end;
+    }
+}
+
+/// PdfCraft patch (36): whether `rest`, the data after a stream's `/Length` bytes, is where the
+/// stream ends. A whole `endstream` token is. A misspelt one (`endstrea`), an `endobj` with the
+/// `endstream` left out, or both, are only where the object ends as well, before the end of the
+/// data, another object's `N G obj` header, or `xref`, `trailer` or `startxref`: payload such as
+/// `endobj more`, where a wrong `/Length` stops, is not, and the search for `endstream` runs on.
+fn at_stream_end(rest: &[u8]) -> bool {
+    let rest = skip_trivia(rest);
+    if keyword(rest, b"endstream").is_some() {
+        return true;
+    }
+    let (rest, misspelt) = keyword(rest, b"endstrea").map_or((rest, false), |r| (skip_trivia(r), true));
+    let (rest, endobj) = keyword(rest, b"endobj").map_or((rest, false), |r| (skip_trivia(r), true));
+    if !(misspelt || endobj) {
+        return rest.is_empty();
+    }
+    rest.is_empty()
+        || [&b"xref"[..], b"trailer", b"startxref"].iter().any(|kw| keyword(rest, kw).is_some())
+        || object_header(rest)
+}
+
+/// Whether `rest` starts with an indirect object's `N G obj` header.
+fn object_header(rest: &[u8]) -> bool {
+    fn number(r: &[u8]) -> Option<&[u8]> {
+        let digits = r.iter().take_while(|b| b.is_ascii_digit()).count();
+        (digits > 0).then(|| skip_trivia(r.get(digits..).unwrap_or_default()))
+    }
+    number(rest).and_then(number).is_some_and(|r| keyword(r, b"obj").is_some())
+}
+
+/// What follows `kw` at the start of `data` when it is a whole token there.
+fn keyword<'a>(data: &'a [u8], kw: &[u8]) -> Option<&'a [u8]> {
+    data.strip_prefix(kw).filter(|tail| !tail.first().copied().is_some_and(is_regular_character))
+}
+
+/// `data` with leading white space and comments skipped.
+fn skip_trivia(mut data: &[u8]) -> &[u8] {
+    loop {
+        match data.first() {
+            Some(b) if is_white_space_character(*b) => data = data.get(1..).unwrap_or_default(),
+            Some(b'%') => {
+                let eol = data.iter().position(|b| is_eol_character(*b)).unwrap_or(data.len());
+                data = data.get(eol..).unwrap_or_default();
+            }
+            _ => return data,
+        }
+    }
 }
 
 fn trim_trailing_ascii_whitespace(data: &[u8]) -> usize {

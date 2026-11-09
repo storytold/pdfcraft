@@ -10314,13 +10314,19 @@ fn hayro_reads_a_stream_without_endstream_to_its_length_before_a_later_one() {
 }
 
 /// A wrong `/Length` that stops before payload bytes beginning like an end marker (`endobject`,
-/// `endstreak`) does not end the stream there: a token runs on through regular characters (ISO
-/// 32000-2 7.2.3), and the search for `endstream` finds the whole payload.
+/// `endstreak`, `endstreamer`) does not end the stream there: a token runs on through regular
+/// characters (ISO 32000-2 7.2.3), and the search for `endstream` finds the whole payload, past
+/// `endstreamer` too. Neither does a whole `endobj` or `endstrea` that the object does not end
+/// after (`endobj more`); one followed by another object's header, by `trailer` or by the end of
+/// the data still does.
 #[test]
 fn hayro_does_not_end_a_stream_inside_a_longer_word() {
-    for word in ["endobject", "endstreak"] {
+    for word in ["endobject", "endstreak", "endstreamer", "endobj more", "endstrea more", "endstrea endobj more"] {
         let objects = format!("4 0 obj << /Length 5 >> stream\nHELLO {word} more\nendstream\nendobj\n");
         assert_eq!(hayro_stream_4(&objects), format!("HELLO {word} more").as_bytes(), "{word}");
+    }
+    for end in ["endobj\n", "endstrea\n", "endstrea\nendobj\n%c\n"] {
+        assert_eq!(hayro_stream_4(&format!("4 0 obj << /Length 5 >> stream\nHELLO\n{end}")), b"HELLO", "{end:?} then trailer");
     }
 }
 
