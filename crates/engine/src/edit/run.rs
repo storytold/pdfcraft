@@ -92,6 +92,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changing security"))
             }
         }
+        // Converting the appearances of comments and form fields changes them too, which
+        // content changes alone do not allow.
+        Edit::ConvertColours { settings, .. } if settings.annotations && !(p.modify() && p.annotate()) => {
+            Err(EditError::NotPermitted(if p.modify() { "comments" } else { "changes to the document" }))
+        }
         // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
         // document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
@@ -103,6 +108,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::SetInfo { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::AddPrinterMarks { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
@@ -138,6 +144,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::FixHairlines { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
+        | Edit::ConvertColours { .. }
+        | Edit::EditAttachmentDescription { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -244,6 +252,11 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What the edit's applied redactions left as it was that still holds the removed text.
+    pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
+    /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
+    /// removed the catalog's XMP packet.
+    pub(crate) redaction_identification: pdfcraft_redact::Identification,
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
@@ -295,6 +308,8 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_elsewhere: None,
+            redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
         }
     }
@@ -637,6 +652,23 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
+        Edit::ConvertColours { pages, settings } => {
+            let mut recolour = |doc: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, t: pdfcraft_edit::ColourTarget| {
+                let target = match t {
+                    pdfcraft_edit::ColourTarget::Gray => pdfcraft_optimize::ImageTarget::Gray,
+                    pdfcraft_edit::ColourTarget::Rgb => pdfcraft_optimize::ImageTarget::Rgb,
+                    pdfcraft_edit::ColourTarget::Cmyk => pdfcraft_optimize::ImageTarget::Cmyk,
+                };
+                pdfcraft_optimize::recolour_image(doc, s, target)
+            };
+            let done = pdfcraft_edit::convert_colours(doc, pages, settings, &mut recolour)?;
+            if done.colours == 0 && done.images == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("nothing on those pages needed converting".into())));
+            }
+        }
+        Edit::EditAttachmentDescription { key, description } => {
+            pdfcraft_organize::set_attachment_description(doc, key, description.as_deref())?;
+        }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
             // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
             // the caret's `/NM` (#2666).
@@ -845,6 +877,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::LayoutTableToBlocks { object } => {
             a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
+        Edit::AddPrinterMarks { pages, settings, replace } => {
+            pdfcraft_edit::add_printer_marks(doc, pages, settings, *replace)?;
+        }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
             pdfcraft_edit::add_header_footer(doc, pages, settings, *replace, &pdfcraft_edit::Context { date })?;
@@ -919,7 +954,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
+            let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
+            cx.redaction_overlays = report.overlays;
+            cx.redaction_elsewhere = Some(report.still_holding);
+            cx.redaction_identification = report.identification;
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;

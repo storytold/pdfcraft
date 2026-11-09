@@ -10,6 +10,7 @@ mod close;
 mod save;
 
 pub use close::CloseRequest;
+pub use save::PendingLock;
 #[cfg(not(target_arch = "wasm32"))]
 pub use save::PendingOverwrite;
 #[cfg(target_arch = "wasm32")]
@@ -246,12 +247,17 @@ impl PdfCraftApp {
                     self.quick_tool = crate::QuickTool::Select;
                 }
                 // Text saved as typed but drawn with `?` (its font can't draw it), or pages whose
-                // own backdrop stays off: said, not silent. Before the scripts' output, so an alert
-                // they raise still shows.
+                // own backdrop stays off, or places applied redactions left holding the removed text
+                // (the Apply redactions dialog then says it after its count): said, not silent.
+                // Before the scripts' output, so an alert they raise still shows.
                 if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
                     self.notify(match &n {
                         pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
                         pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                        pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
+                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
+                        }
                     });
                 }
                 let out = self.session.take_js_output(id);
@@ -547,6 +553,11 @@ impl PdfCraftApp {
                 }
             }
             Some(crate::canvas::ViewAction::CameraLevel) => self.camera_level(i),
+            Some(crate::canvas::ViewAction::LockSignatures) => {
+                if let Some(id) = self.views.get(i).map(|v| v.id) {
+                    self.lock_signatures_now(id);
+                }
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);
@@ -840,12 +851,22 @@ impl PdfCraftApp {
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
+        let doc_id = self.views.get(i).map(|v| v.id);
         let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
         let typed = match (&edit, &committed) {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
         if self.apply_edit(edit) {
+            if signature_page.is_some()
+                && let Some(id) = doc_id
+            {
+                self.placed_signatures.insert(id);
+                // A new signature shows the Lock now notice again, even if the last was dismissed.
+                if let Some(view) = self.views.get_mut(i) {
+                    view.lock_offer_dismissed = false;
+                }
+            }
             // Tab can wrap to the same field (including another widget of that field).
             // Its new editor was opened before this edit ran, so it still holds the old
             // value. Refresh from the accepted form before Save can commit that stale draft.

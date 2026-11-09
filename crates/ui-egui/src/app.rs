@@ -88,6 +88,11 @@ impl PdfCraftApp {
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
+            portfolio_initial: None,
+            portfolio_seen: None,
+            #[cfg(target_arch = "wasm32")]
+            web_reads: Default::default(),
+            portfolio_panel: None,
             quick_tool: QuickTool::Select,
             space_hand: None,
             full_screen_tool: None,
@@ -111,6 +116,11 @@ impl PdfCraftApp {
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
+            ask_to_lock_signatures: true,
+            placed_signatures: Default::default(),
+            pending_lock: None,
+            lock_answered: None,
+            lock_remember: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
@@ -123,6 +133,7 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
+            spooler: None,
             print_tasks: print_ui::PrintTasks::default(),
             palette_open: false,
             palette_query: String::new(),
@@ -193,6 +204,7 @@ impl PdfCraftApp {
             pending_overwrite: None,
             save_override: None,
             props_draft: None,
+            attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
             requests: Default::default(),
@@ -302,6 +314,7 @@ impl PdfCraftApp {
             community_card_closed: false,
             pending_link: None,
             pending_full_screen: None,
+            pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
             text_style_draft: Default::default(),
@@ -335,6 +348,8 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
+            printer_marks_draft: Default::default(),
+            convert_colours_draft: Default::default(),
             hairlines_draft: Default::default(),
         }
     }
@@ -630,6 +645,7 @@ impl PdfCraftApp {
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
+        self.present_portfolios();
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
@@ -778,7 +794,12 @@ impl PdfCraftApp {
             window_controls::resize_edges(&ctx);
         }
         chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
+        // A document can hide the toolbars, the menu and the panels around it in its tab (ISO
+        // 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
+        let hidden = self.hidden_interface();
+        if !hidden.mode_bar(self.native_menu.is_some()) {
+            chrome::mode_bar(self, ui);
+        }
         // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
         // recognized text brings it back with its review as it was.
         if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
@@ -805,15 +826,19 @@ impl PdfCraftApp {
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
         }
-        side_panels::show(self, ui);
+        if !hidden.window_ui {
+            side_panels::show(self, ui);
+        }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::AllTools && self.all_tools_full {
+            if self.mode == Mode::AllTools && self.all_tools_full && !hidden.window_ui {
                 all_tools_ui::show(self, ui);
             } else {
                 panes::page_area(self, ui);
             }
         });
+        // FitWindow and CenterWindow, once the document just opened is laid out.
+        self.window_preferences_frame(&ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
