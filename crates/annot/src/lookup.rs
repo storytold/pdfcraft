@@ -108,11 +108,30 @@ pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result
 
 /// The annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
 pub(crate) fn annot_ref(doc: &mut Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
+    annot_ref_checked(doc, page, index, |_, _| Ok(()))
+}
+
+/// Validate the annotation before promoting an inline dictionary or changing its page.
+pub(crate) fn annot_ref_checked(
+    doc: &mut Document,
+    page: usize,
+    index: usize,
+    check: impl FnOnce(&Document, &Dict) -> Result<(), AnnotError>,
+) -> Result<(ObjRef, ObjRef), AnnotError> {
     let p = page_ref(doc, page)?;
     let mut list = annots(doc, p);
     let entry = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    match &entry {
+        Object::Ref(r) => {
+            let object = doc.get(*r);
+            let d = object.as_dict().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+            check(doc, d)?;
+        }
+        Object::Dict(d) => check(doc, d)?,
+        _ => return Err(AnnotError::NoSuchAnnotation { page, index }),
+    }
     let r = match entry {
-        Object::Ref(r) if doc.get(r).as_dict().is_some() => r,
+        Object::Ref(r) => r,
         Object::Dict(d) => {
             let r = doc.add(Object::Dict(d));
             list[index] = Object::Ref(r);

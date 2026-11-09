@@ -4,7 +4,7 @@ use super::create::{
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own_popup, popup_info, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annot_ref_checked, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
 use super::types::{
     BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
@@ -1071,7 +1071,28 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 /// annotation has no border) and neither part has line endings. All or nothing: if one member
 /// can't be restyled, none is.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let (_, r) = annot_ref(doc, page, index)?;
+    let StyleChange { color, opacity, width, ref endings } = change;
+    let (_, r) = annot_ref_checked(doc, page, index, |doc, d| {
+        if annotation_flags(doc, d) & FLAG_LOCKED != 0 {
+            return Err(AnnotError::Invalid("the comment is locked".into()));
+        }
+        let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+        // Check before changing anything: a stale appearance would contradict the new style.
+        if !crate::draw::can_draw(doc, d) {
+            return Err(AnnotError::Unsupported(subtype.clone()));
+        }
+        if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
+            return Err(AnnotError::Invalid("invalid style".into()));
+        }
+        if let Some(ends) = &endings {
+            let callout = subtype == "FreeText" && d.contains(b"CL");
+            let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
+            if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
+                return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
+            }
+        }
+        refuse_foreign_text(doc, d)
+    })?;
     let others = replace_text_partners(doc, page, r)?;
     // Check every partner before changing anything.
     for &o in &others {
