@@ -201,6 +201,32 @@ impl StandardFont {
     }
 }
 
+/// PdfCraft patch (98): the style names that may follow `Symbol` or `SymbolMT` after a `,` or
+/// `-` and still name the Symbol font (any case).
+const SYMBOL_STYLES: [&str; 9] = [
+    "Bold",
+    "Italic",
+    "BoldItalic",
+    "Oblique",
+    "BoldOblique",
+    "Regular",
+    "Roman",
+    "Normal",
+    "Plain",
+];
+
+/// PdfCraft patch (98): whether `name` (without a subset prefix) is `Symbol` or `SymbolMT`, alone
+/// or followed by `,` or `-` and a style from [`SYMBOL_STYLES`]. Another name after the
+/// separator (`Symbol-Helvetica`) is a different font.
+fn is_symbol_name(name: &str) -> bool {
+    let (family, style) = match name.split_once([',', '-']) {
+        Some((family, style)) => (family, Some(style)),
+        None => (name, None),
+    };
+    matches!(family, "Symbol" | "SymbolMT")
+        && style.is_none_or(|style| SYMBOL_STYLES.iter().any(|s| s.eq_ignore_ascii_case(style)))
+}
+
 enum StandardFontFamily {
     Helvetica,
     Courier,
@@ -231,6 +257,13 @@ pub(crate) fn select_standard_font(
         "Symbol" => return Some((StandardFont::Symbol, true)),
         "ZapfDingbats" => return Some((StandardFont::ZapfDingBats, true)),
         _ => {}
+    }
+
+    // PdfCraft patch (98): `SymbolMT` (the name Symbol has as a TrueType font) and the style
+    // variants `Symbol,Bold`, `SymbolMT,Italic` or `Symbol-Bold` are the Symbol font, drawn with
+    // its built-in encoding like `Symbol` itself, whatever `/Encoding` and flags they declare.
+    if is_symbol_name(name) {
+        return Some((StandardFont::Symbol, true));
     }
 
     // Now, we bruteforce, trying to determine a suitable font based on the
