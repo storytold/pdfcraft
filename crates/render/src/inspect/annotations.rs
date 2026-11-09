@@ -15,11 +15,11 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text the link listing, and name, description and embedded-file key text the
-/// attachment listing, keep together. Many links or attachments can share one long string, which
-/// each would otherwise copy. Past it, a link to a web address lists as a URI action without its
-/// address, an attachment under its generic name without a description, and an embedded file whose
-/// key does not fit is not listed.
+/// Web-address text the bookmark and link listings, and name, description and embedded-file key
+/// text the attachment listing, keep together. Many bookmarks, links or attachments can share one
+/// long string, which each would otherwise copy. Past it, a bookmark or link to a web address lists
+/// as a URI action without its address, an attachment under its generic name without a
+/// description, and an embedded file whose key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
@@ -234,33 +234,42 @@ impl<'a> Inspector<'a> {
         link_replies(&mut info.annotations);
     }
 
+    /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
+    /// goes, else what its action `/A` does ([`Self::action_target`]). `None` when it has no
+    /// rectangle, or a destination or action that leads nowhere.
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
             LinkTarget::Page(page, view)
         } else {
-            let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
-            match self.name(a, b"S").as_deref() {
-                Some("GoTo") => {
-                    let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
-                    LinkTarget::Page(page, view)
-                }
-                Some("URI") => {
-                    let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
-                    match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
-                        Some(uri) => LinkTarget::Uri(uri),
-                        None => LinkTarget::Other("URI".into()),
-                    }
-                }
-                Some("SetOCGState") => self.layer_state(a),
-                Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
-                Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-                Some(other) => LinkTarget::Other(other.to_string()),
-                None => return None,
-            }
+            self.action_target(d.get(b"A").ok().and_then(|a| self.dict(a))?, text_budget)?
         };
         Some(Link { page, index, rect, target })
+    }
+
+    /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
+    /// this document; a remote go-to's names a page or destination of another file (ISO 32000-2
+    /// §12.6.4.3). `None` for an action without a type, or a go-to whose destination is not here.
+    /// A web address is spent from `text_budget` (see [`MAX_LINK_ATTACHMENT_TEXT_BYTES`]).
+    pub(super) fn action_target(&self, a: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        Some(match self.name(a, b"S").as_deref()? {
+            "GoTo" => {
+                let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
+                LinkTarget::Page(page, view)
+            }
+            "URI" => {
+                let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                    Some(uri) => LinkTarget::Uri(uri),
+                    None => LinkTarget::Other("URI".into()),
+                }
+            }
+            "SetOCGState" => self.layer_state(a),
+            "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+            "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+            other => LinkTarget::Other(other.to_string()),
+        })
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
@@ -402,22 +411,44 @@ impl<'a> Inspector<'a> {
         let ft = self.name(d, b"FT").or(parent_ft);
         let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
-        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
-            Ok(Object::Array(k)) => k.as_slice(),
-            _ => &[],
+        let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k.clone(),
+            _ => Vec::new(),
         };
-        let (field_kids, widget_kids): (Vec<&Object>, Vec<&Object>) = kids.iter().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
-        let field_kids: Vec<_> = field_kids.into_iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
+        let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
+            kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
         if !field_kids.is_empty() {
-            let id = if let Object::Reference(id) = o { Some(*id) } else { None };
-            walk.path.extend(id);
+            let here = match o {
+                Object::Reference(id) => Some(*id),
+                _ => None,
+            };
+            walk.path.extend(here);
             for k in field_kids {
-                self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+                // §12.7.4.2): a kid that doesn't name this field as its `/Parent` is named from its
+                // own chain, as the form reader names it.
+                let parent = match self.dict(k).map(|kd| kd.get(b"Parent")) {
+                    Some(Ok(Object::Reference(p))) => Some(*p),
+                    _ => None,
+                };
+                if parent == here {
+                    self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                } else {
+                    let own = parent.map(|p| self.qualified_name(p)).unwrap_or_default();
+                    self.field(k, Some((&own, ft.clone(), ff)), out, walk, depth + 1);
+                }
             }
-            if id.is_some() {
+            if here.is_some() {
                 walk.path.pop();
             }
-            return;
+            // "A field's children in the hierarchy may also include widget annotations" (ISO
+            // 32000-2 §12.7.4): widget annotations listed beside named kids are still this
+            // field's widgets, listed as a field of this name, as the form reader reads them.
+            kids.retain(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_err() && self.name(kd, b"Subtype").as_deref() == Some("Widget")));
+            if kids.is_empty() {
+                return;
+            }
         }
         let flags = ff.unwrap_or(0);
         let kind = match ft.as_deref() {
@@ -445,20 +476,23 @@ impl<'a> Inspector<'a> {
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
-        // The widget is either this dict (merged field/widget) or its first kid. With no widget
-        // among its kids, it is the first page widget naming this field as its `/Parent`: a child
-        // names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and PDFium read it.
+        // The widget is this dict (merged field/widget) or its first kid. A merged dict that also
+        // lists widget kids has them as its widgets (ISO 32000-2 §12.7.4), as the form reader has
+        // it. With no widget among its kids, it is the first page widget naming this field as its
+        // `/Parent`: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and
+        // PDFium read it.
         let merged = d.get(b"Rect").is_ok();
         let named = if merged || !widget_kids.is_empty() { None } else { self.widget_naming(o) };
-        let widget = if merged {
-            Some(d)
-        } else {
-            widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok()))
+        let widget_kid = widget_kids.iter().filter_map(|k| self.dict(k)).find(|kd| self.name(kd, b"Subtype").as_deref() == Some("Widget"));
+        let widget = match widget_kid {
+            Some(w) => Some(w),
+            None if merged => Some(d),
+            None => widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok())),
         };
         let page = widget
             .and_then(|w| w.get(b"P").ok())
             .and_then(|p| self.page_of(p))
-            .or_else(|| self.find_widget_page(o, kids))
+            .or_else(|| self.find_widget_page(o, &kids))
             .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
@@ -525,6 +559,29 @@ impl<'a> Inspector<'a> {
             }
         }
         pages
+    }
+
+    /// The fully qualified name of the field `id`: the partial names (`/T`) up its `/Parent`
+    /// chain, joined with periods; empty when none has one or the chain reaches an object that
+    /// isn't a dictionary, as the form reader has it. A `/Parent` loop ends the walk.
+    fn qualified_name(&self, id: ObjectId) -> String {
+        let mut parts = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if visited.len() > 64 || !visited.insert(c) {
+                break;
+            }
+            let o = Object::Reference(c);
+            let Some(d) = self.dict(&o) else { return String::new() };
+            parts.extend(self.text(d, b"T"));
+            cur = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) => Some(*p),
+                _ => None,
+            };
+        }
+        parts.reverse();
+        parts.join(".")
     }
 
     /// The topmost field above widget `id` (itself without a `/Parent` that is a field), or `None` when it or an
