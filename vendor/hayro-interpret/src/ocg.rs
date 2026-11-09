@@ -34,7 +34,7 @@ impl OcgState {
     }
 
     /// The groups' states as the document opens: the default configuration (`/BaseState`, then
-    /// `/ON` and `/OFF`), then, when `view_auto_state` is set (PdfCraft patch (76)), the auto
+    /// `/ON` and `/OFF`), then, when `view_auto_state` is set (PdfCraft patch (103)), the auto
     /// state its `/AS` array gives for the View event ([`apply_view_auto_state`]).
     pub(crate) fn from_catalog(catalog: &Dict<'_>, xref: &XRef, view_auto_state: bool) -> Self {
         let Some(oc_properties) = catalog.get::<Dict<'_>>(OCPROPERTIES) else {
@@ -223,15 +223,15 @@ impl Default for OcgState {
     }
 }
 
-/// PdfCraft patch (76): at most this many usage application dictionaries of an `/AS` array are
+/// PdfCraft patch (103): at most this many usage application dictionaries of an `/AS` array are
 /// read; the rest are ignored.
 const MAX_AUTO_STATE_APPLICATIONS: usize = 256;
-/// PdfCraft patch (76): at most this many `/OCGs` entries are read across all of them.
+/// PdfCraft patch (103): at most this many `/OCGs` entries are read across all of them.
 const MAX_AUTO_STATE_GROUPS: usize = 4096;
-/// PdfCraft patch (76): at most this many `/Category` names are read per application.
+/// PdfCraft patch (103): at most this many `/Category` names are read per application.
 const MAX_AUTO_STATE_CATEGORIES: usize = 16;
 
-/// PdfCraft patch (76): apply the configuration's auto state for the View event (ISO 32000-2
+/// PdfCraft patch (103): apply the configuration's auto state for the View event (ISO 32000-2
 /// §8.11.4.4, Tables 99 and 101). For each usage application dictionary in `/AS` whose `/Event`
 /// is `/View`, each group in its `/OCGs` gets a recommended state from each category in its
 /// `/Category` that the group's `/Usage` gives one for. A group is ON only if every

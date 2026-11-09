@@ -14,7 +14,7 @@ const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
 /// The configuration's auto state (`/AS`): at most this many usage application dictionaries,
 /// `/OCGs` entries across them, and `/Category` names in each are read. The renderer's
-/// (vendored hayro-interpret patch (76)) have the same values.
+/// (vendored hayro-interpret patch (103)) have the same values.
 const MAX_AUTO_STATE_APPLICATIONS: usize = 256;
 const MAX_AUTO_STATE_GROUPS: usize = 4096;
 const MAX_AUTO_STATE_CATEGORIES: usize = 16;
@@ -139,7 +139,7 @@ impl<'a> Inspector<'a> {
     /// The state the configuration's auto state (`/AS`) gives each group it manages for the View
     /// event (ISO 32000-2 §8.11.4.4, Table 101), which overrides `/BaseState`, `/ON` and `/OFF`
     /// as the document opens. Keep in step with the renderer's (vendored hayro-interpret patch
-    /// (76), `apply_view_auto_state`): each usage application with `/Event /View` and `/View` in
+    /// (103), `apply_view_auto_state`): each usage application with `/Event /View` and `/View` in
     /// its `/Category` recommends the `/ViewState` of each group in its `/OCGs` whose `/Usage`
     /// gives one; a group is on only if all its recommendations are. Groups with none are absent.
     /// Other categories (`/Zoom`, `/User`, `/Language`) give no recommendation here.
