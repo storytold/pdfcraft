@@ -1,12 +1,14 @@
-use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template};
+use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
 
 fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
     let children: Vec<DataNode> =
         if depth < MAX_DEPTH { n.children().filter(|c| c.is_element()).map(|c| to_node(c, depth + 1)).collect() } else { Vec::new() };
-    // The text of a leaf is its value; a container's own text is whitespace.
-    let text = if children.is_empty() { n.children().filter_map(|c| c.text()).collect::<String>() } else { String::new() };
-    DataNode { name, text, children }
+    // The text of a leaf is its value (its text nodes: a comment is not part of it); a
+    // container's own text is whitespace.
+    let text = if children.is_empty() { n.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect::<String>() } else { String::new() };
+    let group = n.attribute((XFA_DATA_NS, "dataNode")) == Some("dataGroup");
+    DataNode { name, text, children, group }
 }
 
 /// The `xfa:data` element of the datasets packet in `xdp` (or a bare datasets document), as a

@@ -2853,6 +2853,73 @@ fn a_remove_hidden_copy_gets_a_new_identifier() {
     assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
 }
 
+/// Links, actions and JavaScripts takes the scripts out of bookmarks that stay: an item that runs
+/// JavaScript loses its action, a jump with a script chained after it keeps only the jump, and a
+/// plain jump is left alone.
+#[test]
+fn bookmarks_that_stay_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>".to_vec(),
+        // 6 runs a script, 7 jumps and then runs one, 8 only jumps; 9 the script
+        b"<< /Title (Runs) /Parent 5 0 R /Next 7 0 R /A 9 0 R >>".to_vec(),
+        b"<< /Title (Jumps then runs) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [3 0 R /Fit] /Next 9 0 R >> >>".to_vec(),
+        b"<< /Title (Jumps) /Parent 5 0 R /Prev 7 0 R /A << /S /GoTo /D [3 0 R /Fit] >> >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 2)]);
+    let item = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    assert!(!item(6).contains(b"A"), "{:?}", item(6));
+    let jump = |n: u32| item(n).get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    assert_eq!((jump(7).name(b"S"), jump(7).contains(b"D"), jump(7).contains(b"Next")), (Some(&b"GoTo"[..]), true, false));
+    assert_eq!(jump(8).name(b"S"), Some(&b"GoTo"[..]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(7).any(|w| w == b"(Jumps)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "the bookmark's script survived the save");
+}
+
+/// A damaged outline may reach an item only backwards (`/Last`, `/Prev`, `/Parent`). The full save
+/// keeps that item all the same, so its script goes too.
+#[test]
+fn bookmarks_reached_only_backwards_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    // /First and /Next reach only 6; 7, 8 and 9 hang off its /Last, /Prev and /Parent and share script 10
+    let mut doc = outlined_document(vec![
+        b"<< /Title (Reached) /Last 7 0 R /Prev 8 0 R /Parent 9 0 R >>".to_vec(),
+        b"<< /Title (Last) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Prev) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Parent) /A 10 0 R >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 3)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 3)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"(Parent)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "a script reached only backwards survived the save");
+}
+
+/// Outline items written in place count towards the outline budget too: 60,000 items with an inline
+/// child each are 120,000 items, so the outline is refused rather than walked past the budget.
+#[test]
+fn an_outline_past_the_budget_with_inline_items_is_refused() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let siblings = 60_000;
+    let mut items = Vec::with_capacity(siblings);
+    for i in 0..siblings {
+        let next = if i + 1 < siblings { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        items.push(format!("<< /Title (a){next} /First << /Title (c) >> >>").into_bytes());
+    }
+    let mut doc = outlined_document(items);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 1)));
+    let out = remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]);
+    assert!(matches!(out, Err(RedactError::TooDeep)), "{out:?}");
+}
+
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
 /// (`/OBJR`). Removing them must drop those references too, or the full rewrite keeps the
 /// annotations, the URL and the comment text included, while the page no longer lists them.
@@ -4512,4 +4579,30 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+/// Private data takes an image's prepress data too: its OPI link to the original file and its
+/// alternate images, which can be the unedited original.
+#[test]
+fn private_data_takes_opi_links_and_alternate_images() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R /Fm 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q /Fm Do"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Alternates [<< /Image 7 0 R /DefaultForPrinting true >>]",
+            b"SHOWNIMAGE!",
+        ),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /OPI << /1.3 << /Type /OPI /Version 1.3 /F (OPISERVERPATH.tif) >> >>", b""),
+        stream("/Type /XObject /Subtype /Image /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"ALTERNATEORIGINAL"),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::PrivateData), Some((Hidden::PrivateData, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 2)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"SHOWNIMAGE!"), "the image the page shows stays");
+    assert!(!has(b"ALTERNATEORIGINAL"), "the alternate image survived the save");
+    assert!(!has(b"OPISERVERPATH"), "the OPI link survived the save");
 }

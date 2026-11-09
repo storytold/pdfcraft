@@ -278,6 +278,8 @@ pub struct Outcome {
     pub rc: bool,
     /// `event.value` after the script.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
