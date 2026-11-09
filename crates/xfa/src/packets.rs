@@ -7,6 +7,8 @@ use crate::XfaError;
 
 /// Most decoded packet bytes read in total.
 const MAX_XDP: usize = 64 << 20;
+/// Most bytes all filter stages of all packets may decode together.
+const MAX_DECODE_WORK: usize = 4 * MAX_XDP;
 
 /// What was found in the XFA entry.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -116,13 +118,17 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     // A stream listed again adds nothing but another decode, which may cost far more than the
     // bytes it yields (a Flate stream of hex whitespace).
     let mut seen = std::collections::HashSet::new();
+    // One decoding allowance for every packet, charged for what each filter stage produced (a
+    // stage a later one shrinks included): a fresh MAX_XDP per stream let many packets of
+    // compressed bulk that decode to little cost far more than the packets kept.
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_DECODE_WORK, 0);
     let mut read = |o: &Object| -> Result<Option<String>, XfaError> {
         if o.as_ref().is_some_and(|r| !seen.insert(r)) {
             return Ok(None);
         }
         let s = doc.resolve(o);
         let Object::Stream(s) = &*s else { return Ok(None) };
-        let bytes = s.decoded_within(MAX_XDP)?;
+        let bytes = budget.decode_within(s, MAX_XDP)?;
         total = total.saturating_add(bytes.len());
         if total > MAX_XDP {
             return Err(XfaError::TooLarge("the XFA packets are larger than 64 MB".into()));

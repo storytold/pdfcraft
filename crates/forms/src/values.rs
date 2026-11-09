@@ -1,5 +1,5 @@
 use super::appearances::{declares_pdfa, need_appearances};
-use super::read::{acroform, field_flags, fields, page_refs};
+use super::read::{acroform, field_flags, fields, listed_indices, listing_fields_named, page_refs, selected_options};
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
     author, calc_order, flags, invalid, name_obj, scripting,
@@ -89,8 +89,23 @@ impl NamedFields {
 /// Write `value` into the field `name`, without recalculating: `named` are the positions in
 /// `all` (the form as read before this write) of the fields with that name, in field order.
 fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    let f = named.first().and_then(|&i| all.get(i)).ok_or_else(|| FormError::NoSuchField(name.into()))?;
-    if f.read_only() {
+    let mut same = named.iter().filter_map(|&i| all.get(i));
+    let first = same.clone().next().ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    // Fields with the same fully qualified name are one field (ISO 32000-2 §12.7.4.2), so a radio
+    // option any of them draws is an option of the name: it is written through the first one
+    // that draws it, and the others turn off below.
+    let choice = match value {
+        FieldValue::Radio(Some(c)) | FieldValue::Text(c) => Some(c.as_str()),
+        _ => None,
+    };
+    let f = match choice {
+        Some(c) if first.kind == FieldKind::Radio => same.find(|t| t.kind == FieldKind::Radio && t.state_for(c).is_some()).unwrap_or(first),
+        _ => first,
+    };
+    // The name is read-only when the first field of it is, whichever field draws the choice; and
+    // a radio choice reaches every radio field of the name, so none of them may be read-only.
+    let radio_locked = f.kind == FieldKind::Radio && named.iter().filter_map(|&i| all.get(i)).any(|t| t.kind == FieldKind::Radio && t.read_only());
+    if f.read_only() || first.read_only() || radio_locked {
         return Err(FormError::ReadOnly(name.into()));
     }
     write_value(doc, f, value, scripts)?;
@@ -102,38 +117,79 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     if !twins.is_empty() {
         let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
         for t in twins {
-            share_value(doc, f.obj, t, &taken, scripts)?;
+            share_value(doc, (f.obj, &f.options), t, &taken, scripts)?;
+        }
+    }
+    // A field whose `/Kids` lists radio fields that don't name it as their `/Parent` has their
+    // name too, so it takes the same value (§12.7.4.2) rather than keep a stale choice.
+    if f.kind == FieldKind::Radio {
+        let objs: Vec<ObjRef> = named.iter().filter_map(|&i| all.get(i)).map(|t| t.obj).collect();
+        if let Some(v) = doc.get(f.obj).as_dict().and_then(|d| d.get(b"V").cloned()) {
+            for p in listing_fields_named(doc, name, &objs) {
+                doc.update_dict(p, |d| d.set(b"V".to_vec(), v.clone()))?;
+            }
         }
     }
     Ok(())
 }
 
-/// Give `twin` the value `source` holds: its `/V` (and a choice's `/I`), drawn in the twin's own
-/// widgets.
-fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+/// Give `twin` the value `source` (a field and its options) holds: its `/V`, and a choice's `/I`
+/// mapped to the twin's own options, drawn in the twin's own widgets.
+fn share_value(
+    doc: &mut Document,
+    (source, source_options): (ObjRef, &[(String, String)]),
+    twin: &Field,
+    value: &[String],
+    scripts: &mut dyn Scripts,
+) -> Result<(), FormError> {
     match twin.kind {
         FieldKind::CheckBox => {
             let state = twin.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
-            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()))
+            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()), None)
         }
         FieldKind::Radio => {
             let choice = value.first().filter(|c| twin.widgets.iter().any(|w| w.on_state.as_deref() == Some(c.as_str())));
-            set_states(doc, twin, choice.map(String::as_str))
+            set_states(doc, twin, choice.map(String::as_str), None)?;
+            // The same value (§12.7.4.2), even when none of the twin's buttons draws it: they all
+            // stay off, and only the field that draws the choice shows it.
+            match value.first() {
+                Some(v) if choice.is_none() => Ok(doc.update_dict(twin.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?),
+                _ => Ok(()),
+            }
         }
         FieldKind::Text | FieldKind::Combo | FieldKind::List => {
             let src = doc.get(source).as_dict().cloned().unwrap_or_default();
+            // `/I` holds positions in the source's options: each goes to the twin's first unused option
+            // with the same export value and text, its options perhaps in another order. One with no
+            // match leaves the twin no `/I` (its `/V` picks), never part of one.
+            let positions = match twin.kind {
+                FieldKind::Combo | FieldKind::List => {
+                    listed_indices(doc, &src, source_options.len()).and_then(|picked| twin_positions(&picked, source_options, &twin.options))
+                }
+                _ => None,
+            };
             doc.update_dict(twin.obj, |d| {
-                for key in [&b"V"[..], b"I"] {
-                    match src.get(key) {
-                        Some(v) => d.set(key.to_vec(), v.clone()),
-                        None => {
-                            d.remove(key);
-                        }
+                match src.get(b"V") {
+                    Some(v) => d.set(b"V".to_vec(), v.clone()),
+                    None => {
+                        d.remove(b"V");
+                    }
+                }
+                match &positions {
+                    Some(p) => d.set(b"I".to_vec(), Object::Array(p.iter().map(|&i| Object::Int(i64::try_from(i).unwrap_or(i64::MAX))).collect())),
+                    None => {
+                        d.remove(b"I");
                     }
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, twin, value, scripts)
+            // Drawn with the options that `/I` selects, not only the export values.
+            let mut shown = twin.clone();
+            shown.value = value.to_vec();
+            if matches!(twin.kind, FieldKind::Combo | FieldKind::List) {
+                shown.selected = selected_options(&twin.options, value, positions.as_deref());
+            }
+            redraw(doc, &shown, value, scripts)
         }
         FieldKind::PushButton | FieldKind::Signature => Ok(()),
     }
@@ -163,6 +219,11 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
             let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
+            // A script may set its own field through the field object (`getField("Total").value
+            // = …`) rather than through `event.value`. `apply_changes` leaves the event's own
+            // field to the event, so that value is the result unless the script also assigned
+            // `event.value`, even the value it already had.
+            let own = r.changes.iter().find(|c| c.name == f.name).and_then(|c| c.value.as_ref()).map(|v| v.first().cloned().unwrap_or_default());
             scripting::apply_changes(doc, &r.changes, &f.name)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
@@ -170,13 +231,37 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             if !r.rc {
                 continue;
             }
-            r.value
+            match own {
+                Some(v) if !r.value_set => v,
+                _ => r.value,
+            }
         } else {
             let Some(v) = af::calculate(&f.actions.calculate, &lookup) else { continue };
             v
         };
+        // A combo box result naming an option, by export value or display text, is stored as that
+        // option's export value (the first element of an /Opt pair, ISO 32000-2 Table 234), as
+        // `write_value` stores a choice, so /V, /I and exported form data agree.
+        let combo = f.kind == FieldKind::Combo;
+        let matched = if combo { option_named(&f, &v) } else { None };
+        let v = match matched.and_then(|i| f.options.get(i)) {
+            Some((export, _)) => export.clone(),
+            None => v,
+        };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
+            // A combo box's /I (its option indices, ISO 32000-2 Table 234) follows the value, as
+            // `write_value` keeps it, so the selection kept never disagrees with the value.
+            let picked = matched.and_then(|i| i64::try_from(i).ok());
+            doc.update_dict(f.obj, |d| {
+                d.set(b"V".to_vec(), PdfString::text(&v));
+                match picked {
+                    Some(i) if combo => d.set(b"I".to_vec(), Object::Array(vec![Object::Int(i)])),
+                    _ if combo => {
+                        d.remove(b"I");
+                    }
+                    _ => {}
+                }
+            })?;
             redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
@@ -185,6 +270,12 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         }
     }
     Ok(changed)
+}
+
+/// The index of the choice option `v` names: the option whose export value it is, else the first
+/// whose display text it is, so a display text never shadows a later option's export value.
+fn option_named(f: &Field, v: &str) -> Option<usize> {
+    f.options.iter().position(|(e, _)| e == v).or_else(|| f.options.iter().position(|(_, d)| d == v))
 }
 
 /// The fields whose calculation differs between two readings of a form, matched by field object
@@ -206,8 +297,13 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
             }
+            // Thai this build can't draw is refused (before any script runs), rather than stored
+            // and drawn as `?`.
+            if let Some(why) = appearance::thai_refusal(doc, f, t) {
+                return invalid(format!("{:?} can't take this text: {why}", f.name));
+            }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
-            let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Format)?;
+            let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let t = &scripting::accept(doc, f, t, scripts)?;
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
@@ -221,25 +317,44 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             })?;
             redraw(doc, f, std::slice::from_ref(t), scripts)
         }
+        (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
+            // A button can be read-only on its own (its own `/Ff`), though the field isn't.
+            if f.widgets.get(*i).is_some_and(|w| w.read_only) {
+                return Err(FormError::ReadOnly(f.name.clone()));
+            }
+            let Some(state) = f.widgets.get(*i).and_then(|w| w.on_state.clone()) else {
+                return invalid(format!("{:?} has no button {} with an on state", f.name, i.saturating_add(1)));
+            };
+            set_states(doc, f, Some(&state), Some(*i))
+        }
         (FieldKind::CheckBox, v) => {
-            let state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
-            let on = match v {
-                FieldValue::Check(on) => *on,
-                // The on-state name or a yes/no word also work (agents, FDF-style data).
+            // The kids of one check box field can have different on states, and the field's
+            // value is the on state of the kid that is on (ISO 32000-2 §12.7.5.2.3, Table 230).
+            // "Checked" keeps the state that is on, else takes the first kid's.
+            let first = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
+            let checked = || (0..f.widgets.len()).find(|&i| f.widget_on(i)).and_then(|i| f.widgets.get(i)?.on_state.clone()).unwrap_or(first.clone());
+            let state = match v {
+                FieldValue::Check(on) => on.then(checked),
+                // An on-state name (or `/Opt` export value) turns on the kids that have it; a
+                // yes/no word also works (agents, FDF-style data).
                 FieldValue::Text(t) | FieldValue::Radio(Some(t)) => {
                     let t = t.trim();
-                    if t == state || f.state_for(t).is_some() || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
-                        true
+                    if let Some(s) = f.state_for(t) {
+                        Some(s.to_owned())
+                    } else if t == first || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
+                        Some(checked())
                     } else if t.is_empty() || ["no", "false", "off", "0", "unchecked"].contains(&t.to_lowercase().as_str()) {
-                        false
+                        None
                     } else {
                         return invalid(format!("{:?} is a check box: use true or false", f.name));
                     }
                 }
-                FieldValue::Radio(None) => false,
-                FieldValue::Choice(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
+                FieldValue::Radio(None) => None,
+                FieldValue::Choice(_) | FieldValue::ChoiceIndices(_) | FieldValue::Widget(_) => {
+                    return invalid(format!("{:?} is a check box: use true or false", f.name));
+                }
             };
-            set_states(doc, f, on.then_some(state.as_str()))
+            set_states(doc, f, state.as_deref(), None)
         }
         (FieldKind::Radio, v) => {
             let choice = match v {
@@ -260,39 +375,69 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
             }
-            set_states(doc, f, choice.as_deref())
+            set_states(doc, f, choice.as_deref(), None)
         }
-        (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_)) => {
-            let vals: Vec<String> = match value {
-                FieldValue::Choice(v) => v.clone(),
-                FieldValue::Text(t) if t.is_empty() => Vec::new(),
-                FieldValue::Text(t) => vec![t.clone()],
-                other => return invalid(format!("{:?} can't take {other:?}", f.name)),
+        (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_) | FieldValue::ChoiceIndices(_)) => {
+            let count = match value {
+                FieldValue::Choice(v) => v.len(),
+                FieldValue::ChoiceIndices(v) => v.len(),
+                _ => 1,
             };
-            if vals.len() > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
+            if count > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
                 return invalid(format!("{:?} takes a single value", f.name));
             }
-            // Accept export values or display texts; free text only in editable combo boxes.
+            // Each value as its export value and, when it is one of the options, that option's
+            // position: two options can share an export value, and the position (`/I`) says
+            // which one is picked (ISO 32000-2 Table 234).
             let mut exports = Vec::new();
-            for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
-                    Some((e, _)) => exports.push(e.clone()),
-                    None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
-                    None if f.options.is_empty() => exports.push(v.clone()),
-                    None => {
-                        let opts: Vec<&str> = f.options.iter().map(|(_, d)| d.as_str()).collect();
-                        return invalid(format!("{:?} has no option {v:?} (options: {})", f.name, opts.join(", ")));
+            let mut picked: Vec<usize> = Vec::new();
+            // Each option once in both `/V` and `/I`: a reader that finds them differ (a repeat in one)
+            // goes by the export values alone and may pick another option sharing one.
+            let mut seen = vec![false; f.options.len()];
+            match value {
+                FieldValue::ChoiceIndices(positions) => {
+                    for &i in positions {
+                        let Some((e, _)) = f.options.get(i) else {
+                            return invalid(format!("{:?} has no option {} (it has {})", f.name, i.saturating_add(1), f.options.len()));
+                        };
+                        if first_pick(&mut seen, i) {
+                            exports.push(e.clone());
+                            picked.push(i);
+                        }
+                    }
+                }
+                _ => {
+                    let vals: Vec<String> = match value {
+                        FieldValue::Choice(v) => v.clone(),
+                        FieldValue::Text(t) if t.is_empty() => Vec::new(),
+                        FieldValue::Text(t) => vec![t.clone()],
+                        other => return invalid(format!("{:?} can't take {other:?}", f.name)),
+                    };
+                    // Accept export values or display texts; free text only in editable combo boxes.
+                    for v in &vals {
+                        match option_named(f, v) {
+                            Some(i) => {
+                                if first_pick(&mut seen, i) {
+                                    exports.push(f.options.get(i).map(|(e, _)| e.clone()).unwrap_or_else(|| v.clone()));
+                                    picked.push(i);
+                                }
+                            }
+                            None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
+                            None if f.options.is_empty() => exports.push(v.clone()),
+                            None => {
+                                let opts: Vec<&str> = f.options.iter().map(|(_, d)| d.as_str()).collect();
+                                return invalid(format!("{:?} has no option {v:?} (options: {})", f.name, opts.join(", ")));
+                            }
+                        }
                     }
                 }
             }
-            let mut indices: Vec<Object> =
-                exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
-            // /I lists option indices in ascending order; /V keeps the caller's value order.
-            // Every entry above is an integer, so this sorts by its numeric option index.
-            indices.sort_unstable_by_key(Object::as_int);
+            // /I lists option indices in ascending order, each once; /V keeps the caller's order.
+            picked.sort_unstable();
+            picked.dedup();
+            let indices: Vec<Object> = picked.iter().map(|&i| Object::Int(i64::try_from(i).unwrap_or(i64::MAX))).collect();
             // A list box scrolls (`/TI`) so the picked options are among the rows it draws, as
             // in other viewers: a pick below the last visible row would otherwise not show (#1524).
-            let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
             let top = list_scroll(f, &picked, f.options.len());
             // An empty value of its own keeps a parent field's /V from showing through.
             let shadow = exports.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
@@ -317,7 +462,10 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                 }
             })?;
             scroll_widgets(doc, f, &picked, f.options.len())?;
-            redraw(doc, f, &exports, scripts)
+            let mut shown = f.clone();
+            shown.value = exports.clone();
+            shown.selected = picked;
+            redraw(doc, &shown, &exports, scripts)
         }
         (FieldKind::PushButton, _) => invalid(format!("{:?} is a button; it has no value", f.name)),
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
@@ -354,13 +502,24 @@ pub(crate) fn scroll_widgets(doc: &mut Document, f: &Field, picked: &[usize], co
     Ok(())
 }
 
-/// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.
-fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), FormError> {
+/// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget. The widgets whose on
+/// state is `on` turn on together in a check box (ISO 32000-2 §12.7.5.2.3, EXAMPLE 2) and in a
+/// radio group with RadiosInUnison. Without it, at most one radio button is on (Table 229,
+/// §12.7.5.2.3): widget `pick` when it has that state, else the one already on, else the first.
+fn set_states(doc: &mut Document, f: &Field, on: Option<&str>, pick: Option<usize>) -> Result<(), FormError> {
+    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
+    let chosen = on.filter(|_| exclusive).and_then(|c| {
+        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
+        let n = f.widgets.len();
+        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
+    });
+    // `/V` names the on state, the same for every widget that has it: which of them is on is
+    // their `/AS` alone (§12.7.5.2.4).
     let v = on.unwrap_or("Off");
     doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?;
-    for w in &f.widgets {
+    for (i, w) in f.widgets.iter().enumerate() {
         let state = match (on, w.on_state.as_deref()) {
-            (Some(c), Some(s)) if c == s => s,
+            (Some(c), Some(s)) if c == s && chosen.is_none_or(|k| k == i) => s,
             _ => "Off",
         };
         // A widget without appearances for its states gets PdfCraft's own.
@@ -430,7 +589,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     // fonts can't draw the date language's (#5303).
     let mut english: Option<Option<String>> = None;
     for w in &f.widgets {
-        let (stream, missing) = match &shown {
+        let (mut stream, missing) = match &shown {
             Some(s) => {
                 let drawn = appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false);
                 // Taken when the English run happened and draws whole, even where it is the
@@ -447,6 +606,8 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
+        // Thai glyphs are streams of their own.
+        pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
         let existing_ap = in_place
             .then(|| {
                 doc.get(w.obj)
@@ -680,7 +841,7 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         }
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(f.default.first().cloned().unwrap_or_default()),
-            FieldKind::CheckBox => FieldValue::Check(!f.default.is_empty()),
+            FieldKind::CheckBox => f.check_box_value(f.default.first().map(String::as_str)),
             FieldKind::Radio => FieldValue::Radio(f.default.first().cloned()),
             FieldKind::Combo | FieldKind::List => FieldValue::Choice(f.default.clone()),
             FieldKind::PushButton | FieldKind::Signature => continue,
@@ -693,4 +854,23 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     }
     recalculate(doc)?;
     Ok(changed)
+}
+
+/// Marks option `i` picked; false when it already was, or there is no such option.
+fn first_pick(seen: &mut [bool], i: usize) -> bool {
+    match seen.get_mut(i) {
+        Some(taken) if !*taken => {
+            *taken = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The twin's positions for the source's picked positions `picked`, as
+/// [`crate::option_positions_in`] maps them, in ascending order, as `/I` lists them.
+fn twin_positions(picked: &[usize], source: &[(String, String)], twin: &[(String, String)]) -> Option<Vec<usize>> {
+    let mut out = crate::option_positions_in(picked, source, twin)?;
+    out.sort_unstable();
+    Some(out)
 }

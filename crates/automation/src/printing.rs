@@ -134,6 +134,18 @@ impl Automation {
             "shrink" => Layout::Size(SizeMode::Shrink),
             "custom" => Layout::Size(SizeMode::Custom(a.opt_num("scale")?.ok_or_else(|| bad("custom needs scale (percent)"))?)),
             "multiple" => {
+                // Custom pages per sheet: `cols` across by `rows` down, both or neither.
+                let grid = match (a.opt_int("cols")?, a.opt_int("rows")?) {
+                    (None, None) => None,
+                    (Some(cols), Some(rows)) => {
+                        if a.opt_int("per_sheet")?.is_some() {
+                            return Err(bad("give per_sheet, or cols and rows, not both"));
+                        }
+                        let grid = usize::try_from(cols).ok().zip(usize::try_from(rows).ok()).and_then(|(cols, rows)| Layout::grid(cols, rows));
+                        Some(grid.ok_or_else(|| bad(format!("cols and rows must each be 1 to {}", print::MAX_GRID)))?)
+                    }
+                    _ => return Err(bad("a custom grid needs both cols and rows")),
+                };
                 let per = a.opt_int("per_sheet")?.unwrap_or(2).clamp(1, 256) as usize;
                 let order = match a.opt_str("order")?.unwrap_or("horizontal") {
                     "horizontal" => PageOrder::Horizontal,
@@ -143,14 +155,15 @@ impl Automation {
                     "cut-stack" => PageOrder::CutStack,
                     o => return Err(bad(format!("unknown order {o:?}"))),
                 };
-                match Layout::multiple(per) {
-                    Layout::Multiple { cols, rows, per_sheet, .. } => Layout::Multiple {
+                match grid.unwrap_or_else(|| Layout::multiple(per)) {
+                    Layout::Multiple { cols, rows, per_sheet, custom, .. } => Layout::Multiple {
                         cols,
                         rows,
                         per_sheet,
                         order,
                         border: a.opt_bool("border")?.unwrap_or(false),
                         auto_rotate: a.opt_bool("auto_rotate")?.unwrap_or(true),
+                        custom,
                     },
                     l => l,
                 }
@@ -172,6 +185,9 @@ impl Automation {
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
         let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout)?;
+        if (a.opt_int("cols")?.is_some() || a.opt_int("rows")?.is_some()) && !matches!(layout, Layout::Multiple { .. }) {
+            return Err(bad("cols and rows need layout multiple"));
+        }
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
             return Err(bad("cut-stack order needs layout multiple"));
         }
