@@ -39,7 +39,8 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
     // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
     // or Chinese letters) must not get ASCII bytes appended to it.
     if uniquify {
-        let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
+        let reserved: std::collections::HashSet<String> =
+            entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
         let mut seen = std::collections::HashSet::new();
         for (k, _) in entries.iter_mut() {
             let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
