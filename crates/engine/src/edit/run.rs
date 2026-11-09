@@ -220,6 +220,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     pub(crate) xfa_ran_away: bool,
+    /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
+    pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
@@ -280,6 +282,7 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_unchanged: false,
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
@@ -699,13 +702,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 highlight,
                 time_scale: cx.xfa_time_scale,
             };
-            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            let ran = if matches!(activity.as_str(), "enter" | "exit") {
+                xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
+            } else {
+                xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
+            };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
             // The next edit of a batch reads the highlight this one's scripts set.
             let on = run.highlight;
             cx.set_highlight(on);
-            ran.map_err(EditError::Invalid)?;
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
             let (img, _) = embed_image(doc, name, image)?;
@@ -1024,6 +1031,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => {
+            // A form-script event runs on its own: in a batch, its scripts and those the batch's
+            // value edits run afterwards (change, exit) would interleave, an exit running twice.
+            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+            }
             for e in edits {
                 run_edit(doc, e, cx)?;
             }
