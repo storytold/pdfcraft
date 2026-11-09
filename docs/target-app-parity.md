@@ -48,7 +48,7 @@ for *exists*, but much of it is shallower than Acrobat's, rendering is still bor
 never been measured side by side with Acrobat, and the first public releases (0.4.0, 0.5.0) drew
 245 open issues in two days, including one that made our encrypted files unreadable in Acrobat
 ([#774](https://github.com/storytold/pdfcraft/issues/774), fixed by #836). By 2026-11-09, after
-releases up to v0.19.0, 1,774 issues are open, 74 of them marked `priority: critical`.
+releases up to v0.20.0, 1,774 issues are open, 74 of them marked `priority: critical`.
 
 ## How this was measured
 
