@@ -22,6 +22,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         .add(crate::widgets::line(&mut find.query).id(egui::Id::unique("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY))
         .accessible_name(tl!("Search"))
         .labelled_by(l.id);
+    find.field_focused = r.has_focus();
     if find.focus {
         r.request_focus();
         find.focus = false;

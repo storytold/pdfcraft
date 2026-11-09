@@ -20,6 +20,9 @@ pub struct Find {
     /// being revealed by scrolling, even when the reader moved before the first match arrived.
     pub follow_ended: bool,
     pub focus: bool,
+    /// The query field had keyboard focus when it was last drawn: ⌘F then only refocuses it, and
+    /// keeps what the reader typed.
+    pub field_focused: bool,
     pub case_query: String,
     /// Find options (Acrobat's: case-sensitive, whole words only).
     pub case_sensitive: bool,
@@ -118,8 +121,9 @@ impl DocView {
         // The page of the selection, which in a two-page view or a scroll that shows two is not
         // always the one the view counts as current.
         let (current, anchor) = (self.current, self.selection.map_or(self.current, |s| s.page));
+        let typing = self.find.as_ref().is_some_and(|f| f.field_focused);
         self.open_find();
-        if let (Some(phrase), Some(f)) = (phrase, self.find.as_mut()) {
+        if let (false, Some(phrase), Some(f)) = (typing, phrase, self.find.as_mut()) {
             // The same search again keeps its matches and the match the reader is on.
             if f.query != phrase || f.case_query != phrase {
                 f.query = phrase;
@@ -335,6 +339,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
+                        find.field_focused = r.has_focus();
                         if find.focus {
                             r.request_focus();
                             find.focus = false;
