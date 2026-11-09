@@ -11,10 +11,20 @@
   the only reported check, CodeRabbit, is `SUCCESS` (2026-11-09T00:01:35Z).
   `mergeStateStatus` is `UNSTABLE` with that single green check and no required
   review. The PR body is the text of `pdfcraft/PR-DRAFT.md` from `## What` on
-  (§6.6). This STATUS update is local only, not pushed.
+  (§6.6). This STATUS update is local only, not pushed. **Observed at
+  2026-11-09T02:59Z:** `storytold/pdfcraft` `main` moved on to `cde331fb` (286
+  commits, 339 files), so `gh pr view 6622` now reports
+  `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` for the pushed head
+  `81035bf2`, and the `MERGEABLE` above is the state at the force-push. The
+  rebase onto the new `main` and the §6.6 gate re-run stay a separate session;
+  the local work below sits on `8d5d39ef`.
   **§6.3 (web host bridge) is done locally in `81a92f32f`** — the transport trait,
   the browser transport and the five host messages (§4, §6.3) — and is not
   pushed either: the fork, PR #6622 and its body still describe `81035bf2`.
+  **§6.1 limitation 10 (forced journal commit) is done locally in `8fc898bae`**
+  (§4, §6.1): a live room compacts its journal at an operation or byte
+  threshold, with the base under the hub lock and the cabinet POST outside it;
+  `pdfcraft_collab_forced_commits_total` counts the compactions.
   Limitation 1 (crash recovery against the real process) is closed in
   `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
   limitation 11 (commit publication outside the hub lock) in `a47641fb`. After
@@ -29,15 +39,15 @@
 | Path | Role |
 |---|---|
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
-| `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state |
-| `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect |
+| `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`) |
+| `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
 | `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet, `/health`, `/metrics` |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors and TTL, commit, inverse undo, host reports. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
@@ -89,9 +99,17 @@ build enables the feature with `trunk build --release --features collab`.
 8. **Undo is an inverse operation.** `inverse_for` is computed from the document
    *before* the edit and sent as a normal operation; a conflict with a later edit
    is reported rather than forced. Deletions and page removal are not reversible.
-9. **A dirty room commits when its last participant leaves.** `Room::commit_now`
-   has no actor/version check; it is the server-initiated commit of RFC §8.
-   `commit_if_dirty` is called by the transport after the last sink is removed.
+9. **A dirty room commits when its last participant leaves — and compacts
+   itself while they stay.** `Room::commit_now` has no actor/version check; it
+   is the server-initiated commit of RFC §8. `commit_if_dirty` is called by the
+   transport after the last sink is removed. A room that never empties used to
+   keep every operation on disk; now `Room::forced_commit_due` (operations or
+   journal bytes since the last base, `RoomConfig::forced_commit_ops` /
+   `forced_commit_bytes`) makes the transport call `Hub::forced_commit` after
+   each client message and on a join. The same `commit_now` writes the base
+   under the hub lock; the publication still runs outside it. Do not turn this
+   into a timer without deciding what "idle" means: the threshold is state, so
+   it survives a reconnect and a restart (replayed entries count).
 10. **The control plane is the production path; a directory is dev mode.**
     `POST /v1/sessions` (`--control ADDR`, off by default) creates or resumes a
     room from inline base64 bytes or an `http://` URL after verifying the JWT
@@ -210,6 +228,86 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Forced journal commit — §6.1 limitation 10 (2026-11-09, local; not pushed)
+
+`8fc898bae` on `a4c852fc6`. A room with connected clients used to grow its
+journal until the last one left; the last-leave commit and the manual button
+were the only compaction (limitation 10). Now:
+
+- `Room` keeps `base_version` (the base the journal sits on) and
+  `journal_bytes` (the serialised size of the records `Adapter::record` wrote,
+  the same fields the durable `JournalRecord` has, so the sum matches the file)
+  and exposes `Room::forced_commit_due`. `RoomConfig` gains
+  `forced_commit_ops` (default 2000) and `forced_commit_bytes` (default 8 MiB);
+  `0` disables either threshold. `replay` counts the entries it restores, so a
+  restart with a large journal is due immediately; a refreshed base resets both
+  counters in `write_commit`.
+- The transport (`collab-ws`) calls `Shared::queue_forced` after every client
+  message and after a join. It calls `Hub::forced_commit`, which writes the base
+  with `Room::commit_now` **under the hub lock** and returns a `Pending`; the
+  cabinet POST runs in `run_pending` **outside** the lock, like any commit. A
+  second commit while one publishes is `busy` (retryable) and queues nothing:
+  the threshold stays crossed, so the next message or the end of that
+  publication (`Hub::finish` → `queue_forced`) retries it. If the last client
+  left while a publication ran, `finish` now runs the last-leave
+  `commit_if_dirty`, so that commit is not lost either.
+- A forced commit refused by the cabinet as `409` sets the room's `conflict`
+  flag through `Room::finish`, exactly like a manual commit; `forced_commit_due`
+  is then false and the room keeps the journal for an operator. Retrying the
+  same `expectedVersion` cannot succeed, so this is not a retry loop.
+- The connection loop flushes the outbox before it runs a publication: the
+  author sees its operation acknowledged before the cabinet call the operation
+  triggered, and only that connection waits for the cabinet. Other rooms and
+  other clients in the same room are unaffected.
+- `/metrics` gains `pdfcraft_collab_forced_commits_total`
+  (`Metrics::forced_commits`, a process counter incremented when a compaction
+  writes its base). `/health` is unchanged.
+- A publication that fails leaves the room dirty and is **not** retried by the
+  transport in a loop: the next commit (including the last-leave one) retries
+  it, which is the rule of limitation 6.
+
+What is not covered: a time-based threshold. A room that becomes dirty when a
+publication fails and then sees no further edit waits for the next edit, a
+join, or the last-client-leave commit (limitation 6). The base write itself
+(serialising the PDF) is under the hub lock, like a client commit; only the
+cabinet POST is outside.
+
+Gates at `8fc898bae` (host `agents`, toolchain 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **142** (134 without the e2e suite): proto 12, **server 22**, **hub 5**, client 12, client-pdf 13, session 5, ws 6 unit, pdf 20, annot 10, **daemon 28** + 1 (`tests/crash_recovery.rs`) |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **8/8** |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| wasm, session + typed client | `cargo check --target wasm32-unknown-unknown -p pdfcraft-collab-session -p pdfcraft-collab-client-pdf` | pass |
+
+New tests:
+
+- `collab-server` — `the_journal_threshold_turns_into_a_server_commit_and_resets`
+  (two operations cross the threshold, `commit_now` clears it, the next two
+  cross it again), `the_byte_threshold_counts_what_the_adapter_writes`,
+  `a_room_in_conflict_does_not_force_commits_but_keeps_the_journal`,
+  `a_commit_in_flight_makes_the_threshold_wait_for_the_next_call` (the `busy`
+  answer is retried and succeeds after the publication is reported).
+- `collab-hub` — `an_accepted_operation_compacts_the_journal_at_the_threshold`
+  (the pending commit names the document; a second `forced_commit` while it is
+  publishing queues nothing; after `finish` the room is clean).
+- `collab-ws` e2e — `a_forced_commit_does_not_block_another_room_and_is_counted`:
+  room A crosses the threshold on one edit, its cabinet POST blocks on a gate,
+  the author's `applied` still arrives, room B accepts an edit, and
+  `metrics().forced_commits` is 1; after the gate opens room A keeps editing.
+- `collab-ws` e2e — `a_failed_forced_publication_is_not_retried_in_a_loop`: a
+  cabinet that never answers fails the forced commit and the last-leave retry
+  exactly once each (two publications), and the transport does not spin.
+- daemon — `a_forced_commit_stops_the_journal_from_growing`: a seeded room with
+  `forced_commit_ops: 3` accepts ten operations; the journal is truncated after
+  each forced commit, never grows past three records (compared with the size of
+  one remaining line), and one record (version 10) is left after the base at
+  version 9. The production thresholds are larger; the test uses three.
 
 ### Web host bridge — §6.3 (2026-11-09, local; not pushed)
 
@@ -609,11 +707,19 @@ Ordered by the risk they pose to production.
    plane caps a file at `--max-source-bytes` (256 MiB) but nothing else.
 9. **No automation tool/parity entry yet.** The feature is behind a flag; when
    it becomes user-facing, `crates/automation` and `parity/` need an entry.
-10. **Journal growth is bounded only by commits.** A room that never commits
-    keeps every accepted operation on disk; the last-client-leave commit and the
-    manual button are the only compaction. A size-based forced commit is not
-    implemented. Bases are pruned to the one `CURRENT` names, so disk is one
-    PDF plus the journal, not one PDF per commit.
+10. ~~**Journal growth is bounded only by commits.**~~ Closed in `8fc898bae`
+    (§4, §6.1): a live room compacts its journal after
+    `RoomConfig::forced_commit_ops` (default 2000) accepted operations or
+    `forced_commit_bytes` (default 8 MiB) of records, with the base written
+    under the hub lock and the cabinet POST outside it; a `busy` room is retried
+    by the next message or by the end of the publication, and
+    `pdfcraft_collab_forced_commits_total` counts the compactions. What is still
+    open: a time-based threshold (a room that is dirty with no further edits
+    waits for a join or the last leave), and a `409` from the cabinet stops
+    forced commits (the room is flagged `conflict`, an operator re-seeds) —
+    retrying the same `expectedVersion` cannot succeed. Bases are pruned to the
+    one `CURRENT` names, so disk is one PDF plus the journal, not one PDF per
+    commit.
 11. ~~The callback is synchronous inside the hub lock~~ — the base is written
     under the lock and the cabinet POST runs after it is released (§8.2): a
     cabinet that does not answer delays the committer's connection, not the
@@ -651,11 +757,26 @@ replay rebuilds head/epoch/dedup, gap/foreign document), `collab-daemon`
 *after* the commit; `tests/crash_recovery.rs` SIGKILLs the real process between
 the journal record and the base write and replays it, §4).
 
-Still open here: a size-based forced commit (limitation 10). The fault
+The journal is also bounded while clients stay connected (limitation 10,
+`8fc898bae`, §4). `Room` counts the operations and the bytes of journal records
+since the last base (`journal_bytes`, mirrored from
+`collab_pdf::store::JournalRecord`; `replay` counts what it restores) and
+`RoomConfig::forced_commit_ops` / `forced_commit_bytes` (defaults 2000 / 8 MiB,
+`0` disables each) declare the threshold. The transport calls
+`Hub::forced_commit` after every client message and on a join, so a live room
+compacts itself: `Room::commit_now` writes the base under the hub lock, the
+`Pending` publication runs after the lock is released, and `Hub::finish` queues
+another compaction if edits arrived while it ran. A `busy` answer (a publication
+in flight) is retried by the next message or by that publication's completion; a
+`409` sets the room's `conflict` flag and stops further forced commits, the same
+rule as a manual commit. `/metrics` gains
+`pdfcraft_collab_forced_commits_total`. What is still open here: a time-based
+threshold, so a room that is dirty after a failed publication and then sees no
+edit waits for a join or the last leave; and a kill between the base write and
+the `CURRENT` rename is still covered at the `Store` level only. The fault
 injection limitation 1 asked for is done for the real process in the
 journal→base window (`apps/pdfcraft-collab-server/tests/crash_recovery.rs`,
-`999da5ec`, §4); a kill between the base write and the `CURRENT` rename is still
-covered at the `Store` level only.
+`999da5ec`, §4).
 
 ### 6.2 Shared annotation shapes — done in this branch
 
