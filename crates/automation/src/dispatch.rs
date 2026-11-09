@@ -887,6 +887,7 @@ impl Automation {
             "ocr_words" => self.ocr_words(&a)?,
             "ocr_review_apply" => self.ocr_review_apply(&a)?,
             "ocr_dictionary" => self.ocr_dictionary(&a)?,
+            "ocr_adaptive_compress" => self.ocr_adaptive_compress(&a)?,
             "accessibility_report" => self.a11y_report(&a)?,
             "accessibility_review_record" => self.a11y_review_record(&a)?,
             "accessibility_review_save" => self.a11y_review_save(&a)?,

@@ -541,6 +541,26 @@ impl Automation {
             .collect();
         Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
     }
+
+    /// `ocr_adaptive_compress`: adaptive compression of scanned documents (Acrobat Scan & OCR ▸ Adaptive compression).
+    pub(crate) fn ocr_adaptive_compress(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let before_bytes = doc.bytes.len();
+        let path = self.resolve(a.str("path")?, true)?;
+        let binarize = a.opt_bool("binarize_scans")?.unwrap_or(true);
+        let max_pixels = a.opt_int("max_pixels")?.and_then(|v| u64::try_from(v).ok()).unwrap_or(80_000_000);
+        let options = pdfcraft_engine::ocr::AdaptiveCompressOptions { binarize_scans: binarize, max_pixels };
+        let (bytes, report) = self.session.adaptive_compress_scans(id, &options).map_err(failed)?;
+        write_atomic(&path, &bytes)?;
+        Ok(json!({
+            "path": path.to_string_lossy(),
+            "compressed": report.compressed,
+            "skipped": report.skipped,
+            "bytes_before": before_bytes,
+            "bytes_after": bytes.len(),
+        }))
+    }
 }
 
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.

@@ -119,6 +119,14 @@ pub(crate) const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--report", takes_value: false },
 ];
 
+pub(crate) const ADAPTIVE_COMPRESS_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--no-binarize", takes_value: false },
+    OptionSpec { name: "--max-pixels", takes_value: true },
+    OptionSpec { name: "--json", takes_value: false },
+];
+
 pub(crate) const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
 
 #[cfg(feature = "mcp")]

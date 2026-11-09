@@ -60,7 +60,7 @@ mod run;
 mod ui;
 
 use check::{audit, check, check_one};
-use commands::{combine, edit, extract, info, render, split, text};
+use commands::{adaptive_compress, combine, edit, extract, info, render, split, text};
 use options::{OptionSpec, flag, validate_options};
 #[cfg(feature = "mcp")]
 use run::mcp;
@@ -82,6 +82,8 @@ pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
+pdfcraft-cli adaptive-compress <in.pdf> --out out.pdf [--password PW]
+                      [--no-binarize] [--max-pixels N] [--json]
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
                       [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
@@ -143,6 +145,7 @@ fn main() -> ExitCode {
         Some("audit") => audit(&args[1..]),
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),
+        Some("adaptive-compress") => adaptive_compress(&args[1..]),
         Some("batch") => batch::run(&args[1..]),
         Some("ui") => ui(&args[1..]),
         #[cfg(feature = "mcp")]
