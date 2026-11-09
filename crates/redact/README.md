@@ -148,8 +148,10 @@ used by surviving pages or forms are kept.
 A redacted page that inherits `/Resources` from the page tree gets them pinned (by reference;
 a direct inherited dictionary is made one shared object first) before it is rewritten. The parent's
 `/Resources` is then retired unless another page still inherits it, so it cannot keep a removed
-XObject reachable. Surviving form XObjects lose the resource entries for removed XObjects their own
-content doesn't draw, for the same reason. Pages that aren't redacted are left untouched.
+XObject reachable. Surviving form XObjects lose the resource entries for removed XObjects that
+neither their own content nor a form without resources of its own drawn through them still draws,
+for the same reason, and a redacted page keeps a name under that rule too. Pages that aren't
+redacted are left untouched.
 
 ## Remove hidden information / Sanitize
 
