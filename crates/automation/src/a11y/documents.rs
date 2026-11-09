@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
 impl Automation {
     pub(crate) fn doc_export_office(&self, a: &Args) -> Result<Value> {
@@ -117,8 +117,8 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
-        self.pdfa_verify(a)
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
+        Ok(with_warnings(self.pdfa_verify(a)?, warnings))
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
@@ -223,7 +223,7 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let n = self.session.mark_differences(old, new).map_err(failed)?;
-        Ok(json!({ "comments": n }))
+        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
+        Ok(with_warnings(json!({ "comments": n }), out.errors))
     }
 }

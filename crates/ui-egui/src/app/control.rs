@@ -143,6 +143,12 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "fix-hairlines" => {
+                        // Through the command, so it is refused with no document or none that
+                        // can be modified, as the menu is.
+                        self.execute("prepress.hairlines");
+                        return Ok(());
+                    }
                     "page-properties" => {
                         // Same path as the panel, so the selected pages and their order are seeded.
                         self.execute("page.properties");
@@ -364,6 +370,13 @@ impl PdfCraftApp {
                     "true" => true,
                     "false" => false,
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
+                };
+            }
+            ("text-links", _) => {
+                self.text_links = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("text-links must be true or false".into()),
                 };
             }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
