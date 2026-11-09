@@ -9399,6 +9399,113 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// Printer marks: drawn outside the trim box as a removable page mark; the page
+/// is widened to make room when asked and the trim box stays; running again replaces them.
+#[test]
+fn printer_marks_are_drawn_outside_the_trim_box_and_removable() {
+    use crate::printer_marks::PrinterMarks;
+    let mut doc = fixture();
+    let page_content_text = |doc: &Document, page: usize| String::from_utf8_lossy(&page_content_bytes(doc, page)).into_owned();
+    let page = page_list(&doc)[0].clone();
+    // A trim box inside a letter-size page, 36 pt in: room for the marks, bleed marks included
+    // (the bleed box is 9 pt out, so they reach 33 pt beyond the trim box), without widening.
+    doc.update_dict(page.obj, |d| {
+        d.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 612.0, 792.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"TrimBox".to_vec(), Object::Array([36.0, 36.0, 576.0, 756.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"BleedBox".to_vec(), Object::Array([27.0, 27.0, 585.0, 765.0].iter().map(|v| Object::Real(*v)).collect()));
+    })
+    .unwrap();
+    let marks = PrinterMarks { label: "Quote 1042.pdf".into(), date: "2026-10-13".into(), ..PrinterMarks::default() };
+    let widened = add_printer_marks(&mut doc, &[0, 1], &marks, false).unwrap();
+    assert_eq!(widened, vec![1], "page 2 has no trim box inside its media box, so it was widened");
+    assert_eq!(marks_present(&doc), vec![MarkKind::PrinterMarks]);
+    let text = page_content_text(&doc, 0);
+    assert!(text.contains("/PCMark /PrinterMarks"), "{text}");
+    // A trim mark at the lower-left corner: vertical below the box, horizontal to its left.
+    assert!(text.contains("36 30 m 36 12 l S") && text.contains("30 36 m 12 36 l S"), "{text}");
+    assert!(text.contains("/PCReg CS 1 SCN /PCReg cs 1 scn"), "registration colour: {text}");
+    assert!(!text.contains("1 1 1 1 K"), "not four process inks alone: {text}");
+    assert!(text.contains("[1 1] 0 d") && text.contains("27 21 m 27 3 l S"), "dashed bleed marks: {text}");
+    assert!(text.contains("1 0 0 0 k") && text.contains("0 0 0 0.25 k"), "colour bars: {text}");
+    assert!(text.contains("(Quote 1042.pdf  1 of 3  2026-10-13) Tj"), "page information: {text}");
+    // Page 2: the media box grew by 36 pt a side around its (whole-page) trim box.
+    let p2 = page_list(&doc)[1].clone();
+    let media: Vec<f64> = p2.dict.get(b"MediaBox").and_then(|m| m.as_array()).unwrap().iter().filter_map(|v| v.as_f64()).collect();
+    assert_eq!(media, vec![-36.0, -36.0, 636.0, 836.0]);
+    // Again with replace: still one set of marks per page; without replace, two.
+    add_printer_marks(&mut doc, &[0], &marks, true).unwrap();
+    assert_eq!(page_content_text(&doc, 0).matches("/PCMark /PrinterMarks").count(), 1);
+    add_printer_marks(&mut doc, &[0], &marks, false).unwrap();
+    assert_eq!(page_content_text(&doc, 0).matches("/PCMark /PrinterMarks").count(), 2);
+    assert_eq!(remove_marks(&mut doc, &[0, 1], MarkKind::PrinterMarks).unwrap(), 3);
+    assert!(marks_present(&doc).is_empty());
+    // Nothing chosen, or a bad weight, is refused.
+    let none = PrinterMarks { trim: false, bleed: false, registration: false, color_bars: false, page_info: false, ..PrinterMarks::default() };
+    assert!(add_printer_marks(&mut doc, &[0], &none, false).is_err());
+    assert!(add_printer_marks(&mut doc, &[0], &PrinterMarks { line_weight: 0.0, ..PrinterMarks::default() }, false).is_err());
+}
+
+/// Convert colours: device, ICC-based and separation colours in page content
+/// and forms become the target's operators; black is preserved; patterns stay; a second run
+/// finds nothing.
+#[test]
+fn colours_are_converted_to_gray_rgb_and_cmyk() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    // An ICCBased RGB space and a spot colour (Separation to CMYK, Type 2 tint).
+    let mut icc = Dict::new();
+    icc.set(b"N".to_vec(), Object::Int(3));
+    let icc_ref = doc.add(Object::Stream(Stream::flate(icc, b"not a real profile")));
+    let mut fun = Dict::new();
+    fun.set(b"FunctionType".to_vec(), Object::Int(2));
+    fun.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    fun.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+    fun.set(b"C1".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(1), Object::Int(0)]));
+    fun.set(b"N".to_vec(), Object::Int(1));
+    let mut cs = Dict::new();
+    cs.set(b"CS0".to_vec(), Object::Array(vec![Object::name("ICCBased"), Object::Ref(icc_ref)]));
+    cs.set(b"Spot".to_vec(), Object::Array(vec![Object::name("Separation"), Object::name("Red"), Object::name("DeviceCMYK"), Object::Dict(fun)]));
+    let mut res = Dict::new();
+    res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+    let content = b"1 0 0 rg 10 10 50 50 re f 0 0 1 RG 0 0 m 100 100 l S /CS0 cs 0 1 0 scn 0 0 20 20 re f /Spot cs 1 scn 30 30 20 20 re f 0 g 60 60 10 10 re f 0.5 g 70 70 5 5 re f";
+    let c = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(c));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    // Grayscale.
+    let mut gray = doc.clone();
+    let done = convert_colours(&mut gray, &[0], &ConvertColours::default(), &mut no_images).unwrap();
+    assert_eq!((done.colours, done.pages), (6, 1), "{done:?}");
+    let t = flat(&page_content_bytes(&gray, 0));
+    assert!(t.contains("0.299 g 10 10 50 50 re f"), "red → its luma: {t}");
+    assert!(t.contains("0.114 G 0 0 m 100 100 l S"), "blue stroke: {t}");
+    assert!(t.contains("0 g 0 1 0 scn") || t.contains("0.587 g 0 0 20 20 re f"), "ICC green through its space: {t}");
+    assert!(t.contains("0.587 g 0 0 20 20 re f"), "{t}");
+    assert!(t.contains("0.299 g 30 30 20 20 re f"), "the spot's tint through its CMYK alternate (0 1 1 0 = red): {t}");
+    assert!(t.contains("0 g 60 60 10 10 re f") && t.contains("0.5 g 70 70 5 5 re f"), "gray stays gray: {t}");
+    assert!(!t.contains("/CS0 cs") && !t.contains("/Spot cs"), "named spaces are gone: {t}");
+    assert_eq!(convert_colours(&mut gray, &[0], &ConvertColours::default(), &mut no_images).unwrap().colours, 0, "nothing left");
+    // CMYK with black preserved; without, black is still 100% K by the formula.
+    let mut cmyk = doc.clone();
+    let s = ConvertColours { target: ColourTarget::Cmyk, ..ConvertColours::default() };
+    convert_colours(&mut cmyk, &[0], &s, &mut no_images).unwrap();
+    let t = flat(&page_content_bytes(&cmyk, 0));
+    assert!(t.contains("0 1 1 0 k 10 10 50 50 re f"), "red: {t}");
+    assert!(t.contains("0 0 0 1 k 60 60 10 10 re f"), "black preserved: {t}");
+    assert!(t.contains("0 0 0 0.5 k 70 70 5 5 re f"), "gray 0.5 → 50% K: {t}");
+    // RGB: the spot becomes its red.
+    let mut rgbd = doc.clone();
+    convert_colours(&mut rgbd, &[0], &ConvertColours { target: ColourTarget::Rgb, ..ConvertColours::default() }, &mut no_images).unwrap();
+    let t = flat(&page_content_bytes(&rgbd, 0));
+    assert!(t.contains("1 0 0 rg 30 30 20 20 re f"), "{t}");
+    assert!(t.contains("1 0 0 rg 10 10 50 50 re f"), "already RGB, kept: {t}");
+}
+
 /// Fix hairlines: zero-width strokes and strokes thinner than the threshold on
 /// the page (after the CTM) get the chosen width, in page content and the forms it draws; wider
 /// lines, and glyphs and patterns unless asked, are left alone.

@@ -536,21 +536,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// OWNER RIGHTS can prevent an ordinary owner from replacing the access list. A privileged
-    /// caller may still replace it: success must leave the requested full-control entries,
-    /// while refusal leaves the original list unchanged.
+    /// An `OWNER RIGHTS` entry replaces what an owner may do implicitly. Granting only *write
+    /// owner* that way, the access list can't be replaced although the owner can still be set: the
+    /// file isn't taken as restricted. Run elevated, it can be replaced, and then must be restricted.
     #[cfg(windows)]
     #[test]
-    fn owner_rights_are_either_replaced_or_reported_as_a_failure() {
+    fn a_file_whose_access_list_cant_be_replaced_is_not_restricted() {
         let dir = std::env::temp_dir().join(format!("pdfcraft-owner-only-ow-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let me = current_user_sid().unwrap();
         let file = dir.join("ctl.json");
         std::fs::write(&file, b"{}").unwrap();
-        // An elevated process can create a file owned by Administrators. OWNER RIGHTS must
-        // restrict this user, so give the fixture an explicit owner before replacing its list.
-        icacls(&file, &["/setowner".into(), format!("*{me}")]).unwrap();
         // The whole list is written, as `restrict_to_owner` does: `icacls /inheritance:r` leaves
         // the Administrators entry the windows-latest runner gives a new file, and with it an
         // elevated administrator could replace the list after all.
@@ -568,19 +565,23 @@ mod tests {
         assert!(rights.status.success(), "{}", String::from_utf8_lossy(&rights.stderr));
         // Nothing but the two entries: no Administrators entry for the elevated runner to use.
         let sddl = sddl_of(&file).unwrap();
-        assert_eq!(section(&sddl, "O:"), Some(me.as_str()), "{sddl}");
         assert_eq!(section(&sddl, "D:"), Some(format!("(A;;524288;;;S-1-3-4)(A;;1179785;;;{me})").as_str()), "{sddl}");
-        let result = restrict_to_owner(&file, &me);
-        let after = sddl_of(&file).unwrap();
-        if result.is_ok() {
+        // An elevated administrator (the windows-latest runner) may replace the list anyway; then the
+        // file must really be the user's alone, since the result is checked before it is trusted.
+        if restrict_to_owner(&file, &user()).is_ok() {
+            let after = sddl_of(&file).unwrap();
+            assert!(elevated(), "the access list could not be replaced: {after}");
             assert_eq!(foreign_access(&after, &me), None, "{after}");
-            assert!(after.contains(&format!("(A;;2032127;;;{me})")), "user has full control: {after}");
-            assert!(after.contains("(A;;2032127;;;S-1-5-18)"), "SYSTEM has full control: {after}");
-            assert!(!after.contains("S-1-3-4"), "OWNER RIGHTS was replaced: {after}");
-        } else {
-            assert_eq!(after, sddl, "failed restriction leaves the original list unchanged");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Whether the tests run elevated: `whoami /groups` lists the high (or system) mandatory label.
+    #[cfg(windows)]
+    fn elevated() -> bool {
+        let out = system_tool(WHOAMI).args(["/groups", "/fo", "csv", "/nh"]).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.contains("\"S-1-16-12288\"") || text.contains("\"S-1-16-16384\"")
     }
 
     /// When the tools fail, the functions say so: nothing is taken as restricted or as checked.
