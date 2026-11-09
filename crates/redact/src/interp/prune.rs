@@ -195,7 +195,7 @@ fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<Obj
         if !budget.enter_form() {
             return None;
         }
-        note(&budget.decode_strict(s).ok()?);
+        note(&budget.decode_strict(doc, s).ok()?);
         if let Some(own) = s.dict.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
             dicts.push(own);
         }
