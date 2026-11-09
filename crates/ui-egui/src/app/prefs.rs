@@ -170,6 +170,7 @@ impl PdfCraftApp {
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
         // a custom paper is stored by the name it was given.
@@ -246,6 +247,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
+        }
+        if let Some(on) = v["text_links"].as_bool() {
+            self.text_links = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
         if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
