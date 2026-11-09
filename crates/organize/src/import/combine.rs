@@ -1,5 +1,5 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
-use super::{Dict, Document, FieldConflicts, HashMap, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
+use super::{Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over, and so is the print standard the
@@ -95,7 +95,8 @@ pub fn combine_with(sources: &[(&str, &Document)], conflicts: FieldConflicts) ->
 }
 
 /// Combine Files with chosen pages: each source contributes `pages` (0-based, in that order;
-/// `None` for all of them). Bookmarks that point at pages left out lose their destination.
+/// `None` for all of them). A source whose pages are not all used brings only the bookmarks that
+/// lead to its copied pages (and those above them), and none of its attachments.
 pub fn combine_selected(sources: &[(&str, &Document, Option<&[usize]>)]) -> Result<Document, OrganizeError> {
     combine_selected_with(sources, FieldConflicts::Rename).map(|o| o.doc)
 }
@@ -187,7 +188,11 @@ impl Combiner {
             let outline = source_outline(src, imported.page_map);
             self.marks.push(Mark { title: title.to_string(), page: *first, outline });
         }
-        collect_attachments(&mut self.out, src, &mut self.attachments)?;
+        // Attachments belong to the whole file: they come along with all of its pages, not with a
+        // selection of them.
+        if pages.iter().collect::<HashSet<_>>().len() == n {
+            collect_attachments(&mut self.out, src, &mut self.attachments)?;
+        }
         let declared = crate::pdfx::PrintStandard::of(src);
         match self.standard.as_ref().map(|first| first.declared.same_as(&declared)) {
             Some(same) => self.agreed &= same,
@@ -227,9 +232,9 @@ pub type Run<'a> = (usize, &'a str, &'a Document, Option<&'a [usize]>);
 
 /// Combine Files where a file's pages may be split into several runs with other files' pages
 /// between them. Each file (group) is copied once, all its pages together, then the pages are put
-/// in the runs' order: its links between its own pages, its form fields and its attachments stay
-/// whole, and it gets one top-level bookmark (the title of its first run) at its first page, its
-/// own bookmarks nested. Otherwise as [`combine_selected`] (print standard, shared resources).
+/// in the runs' order: its links between its own pages and its form fields stay whole across its
+/// runs, its attachments come along when its runs use all of its pages, and it gets one top-level
+/// bookmark (the title of its first run) at its first page, its own bookmarks nested. Otherwise as [`combine_selected`] (print standard, shared resources).
 pub fn combine_grouped(runs: &[Run<'_>]) -> Result<Document, OrganizeError> {
     combine_grouped_with(runs, FieldConflicts::Rename).map(|o| o.doc)
 }
@@ -281,7 +286,10 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         if let Some(first) = imported.pages.first() {
             marks.push(Mark { title: file.title.to_string(), page: *first, outline: source_outline(file.src, imported.page_map) });
         }
-        collect_attachments(&mut out, file.src, &mut attachments)?;
+        // Attachments come along with all of a file's pages, not with a selection of them.
+        if file.pages.iter().collect::<HashSet<_>>().len() == crate::page_count(file.src)? {
+            collect_attachments(&mut out, file.src, &mut attachments)?;
+        }
         let declared = crate::pdfx::PrintStandard::of(file.src);
         match &standard {
             None => standard = Some((declared, file.src, imported.objects)),
