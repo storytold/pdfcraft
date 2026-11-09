@@ -1,6 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M3, PR #6323: Recent deduplicates relative and absolute paths consistently with tab reuse; synchronized with main fe3879bc; estimates unchanged)
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M3, PR #6323: Recent deduplicates relative and absolute paths consistently with tab reuse; synchronized with main d2139e58; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M7 #2964 / #3185: grouped source text and Thai font/style preservation, with reported deep or unsafe groups and a per-glyph check of the Thai map repair; estimates unchanged)
 >
@@ -321,7 +321,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-09 | patch | M3, PR #6323: synchronize main fe3879bc and deduplicate Recent path aliases; dirty-tab reuse, bounded history and persistence covered; 2,642 scoped UI tests passed, five existing ignores. Estimates unchanged. |
+| 2026-11-09 | patch | M3, PR #6323: synchronize main d2139e58 and deduplicate Recent path aliases; dirty-tab reuse, bounded history and persistence covered; 2,652 scoped UI tests passed, five existing ignores. Estimates unchanged. |
 | 2026-11-07 | patch | M10 `ocr.ocr-web` ported onto #977's engines and preprocessing: the page prepares each page, a Web Worker runs ocrs, the downloaded models join the engine cache. Estimates unchanged. |
 | 2026-11-05 | patch | M7 #2964 / #3185: grouped text and Thai source-font preservation; limitations and estimates unchanged. |
 | 2026-11-06 | patch | M3 #6241 candidate: existing-tab opens refresh Recent without reloading unsaved content; first-time Home/File picker controls already pass; original issue closed after the reporter could no longer reproduce it; this PR covers a separate verified case. Estimates unchanged. |

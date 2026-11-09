@@ -3340,6 +3340,166 @@ fn form_fill_warns_when_a_value_does_not_fit() {
     assert!(r.get("warnings").is_none(), "{r}");
 }
 
+/// `form_fill` takes a radio option as `form_fields` lists it: the export value. With `/Opt [(1)
+/// (2) (3)]` and on states named by position (`/0`, `/1`, `/2`; ISO 32000-2 Table 230), `1` is the
+/// first button. It used to be read as the state `/1` and turn the second one on.
+#[test]
+fn form_fill_picks_a_radio_option_by_its_export_value() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (title) /Ff 49152 /Opt [(1) (2) (3)] /V /Off /Kids [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [70 250 82 262] /P 3 0 R /AP << /N << /2 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream",
+    ];
+    let dir = workdir("radio-export");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["options"], json!(["1", "2", "3"]));
+    for pick in ["1", "2", "3"] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "title": pick } }));
+        assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], pick);
+        // The button drawn on is the one picked.
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        let on: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect();
+        assert_eq!(on, [pick.parse::<usize>().unwrap() - 1], "picked {pick}");
+    }
+    // A number is the same option: `1` is the first button, not the state `/1`.
+    for pick in [1, 2, 3] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "title": pick } }));
+        assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], pick.to_string(), "picked {pick}");
+    }
+    // An on-state name the options do not list still selects its button.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "title": "0" } }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], "1");
+}
+
+/// The ambiguous pair: the second button's on state is named `1` and the first button exports
+/// `1`. The export value wins, however the number is written in JSON (`1`, `1.0`, `1e0`, `0.1e1`);
+/// `-0` is `0`, the first button's state. A string is matched as written, so `"1.0"` names no
+/// option, and neither does a number that is not whole (`1.5`) or past 2^53 (`1e300`): each is
+/// refused with the options listed and the selection kept.
+#[test]
+fn form_fill_reads_a_radio_number_by_its_integer_spelling() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (title) /Ff 49152 /Opt [(1) (2) (3)] /V /Off /Kids [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [70 250 82 262] /P 3 0 R /AP << /N << /2 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream",
+    ];
+    let dir = workdir("radio-number-spelling");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    // The values as JSON text, so each number keeps the spelling a client sends.
+    let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"title": {lit}}}}}"#)).unwrap() };
+    let on = |a: &Automation| -> Vec<usize> {
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+    };
+    for (lit, button) in [("2", 1), ("1", 0), ("3.0", 2), ("1.0", 0), ("2e0", 1), ("1e0", 0), ("0.1e1", 0), ("-0", 0), ("\"1\"", 0), ("2.000", 1)] {
+        // From another button, so a fill that does nothing would show.
+        ok(&mut a, "form_fill", fill(if button == 2 { "1" } else { "3" }));
+        ok(&mut a, "form_fill", fill(lit));
+        assert_eq!(on(&a), [button], "{lit} selects button {}", button + 1);
+    }
+    ok(&mut a, "form_fill", fill("2"));
+    for lit in ["\"1.0\"", "1.5", "-1", "1e300", "18446744073709551615", "9007199254740993.0"] {
+        let e = err(&mut a, "form_fill", fill(lit)).to_string();
+        assert!(e.contains("has no option") && e.contains("options: 1, 2, 3"), "{lit}: {e}");
+        assert_eq!(on(&a), [1], "{lit} keeps the selection");
+    }
+}
+
+/// Export values written as decimals (`/Opt [(1.0) (2.0)]`, states `/0 /1`): a number is compared
+/// with them as a number first, so `1`, `1.0` and `1e0` all pick the first button and `2.0` the
+/// second, where `1.0` had become `"1"`, matched no export value and picked the button whose state
+/// is `/1`. A string is still matched as written, and a number no export value equals is refused.
+#[test]
+fn form_fill_matches_a_radio_number_to_decimal_export_values() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (rate) /Ff 49152 /Opt [(1.0) (2.0)] /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>
+stream
+
+endstream",
+    ];
+    let dir = workdir("radio-decimal-exports");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"rate": {lit}}}}}"#)).unwrap() };
+    let on = |a: &Automation| -> Vec<usize> {
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+    };
+    for (lit, button) in [("1.0", 0), ("2.0", 1), ("1", 0), ("2", 1), ("1e0", 0), ("\"1.0\"", 0), ("\"2.0\"", 1)] {
+        // From the other button, so a fill that does nothing would show.
+        ok(&mut a, "form_fill", fill(if button == 0 { "2.0" } else { "1.0" }));
+        ok(&mut a, "form_fill", fill(lit));
+        assert_eq!(on(&a), [button], "{lit} selects button {}", button + 1);
+    }
+    let e = err(&mut a, "form_fill", fill("3")).to_string();
+    assert!(e.contains("has no option"), "{e}");
+}
+
+/// Past 2^53 a float no longer holds every integer, so `9007199254740992` and `9007199254740993`
+/// are the same `f64`. A number there is matched only by its exact text, never compared as a
+/// number with the export values: with `/Opt [(9007199254740992) (2)]` the number
+/// `9007199254740993` names no option, nor does `9007199254740992` with
+/// `/Opt [(9007199254740993) (2)]`. Each is refused and the selection kept, while the number
+/// spelled as its export value still picks that button.
+#[test]
+fn form_fill_matches_a_radio_number_past_2_53_only_by_its_text() {
+    for (export, other) in [("9007199254740992", "9007199254740993"), ("9007199254740993", "9007199254740992")] {
+        let field = format!("<< /FT /Btn /T (big) /Ff 49152 /Opt [({export}) (2)] /V /Off /Kids [6 0 R 7 0 R] >>");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+            field.as_str(),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>
+stream
+
+endstream",
+        ];
+        let dir = workdir(&format!("radio-past-2-53-{export}"));
+        std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+        let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"big": {lit}}}}}"#)).unwrap() };
+        let on = |a: &Automation| -> Vec<usize> {
+            let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+            f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+        };
+        ok(&mut a, "form_fill", fill(export));
+        assert_eq!(on(&a), [0], "{export} selects the button exported as {export}");
+        ok(&mut a, "form_fill", fill("2"));
+        let e = err(&mut a, "form_fill", fill(other)).to_string();
+        assert!(e.contains("has no option"), "{other} with /Opt [({export}) (2)]: {e}");
+        assert_eq!(on(&a), [1], "{other} keeps the selection");
+    }
+}
+
 /// `form_fill` with {"widget": n} turns on that radio button alone when others share its on
 /// state (ISO 32000-2 Table 229, RadiosInUnison clear), and `form_fields` says which is on.
 #[test]
@@ -7643,6 +7803,7 @@ fn object_has_name(obj: &pdfcraft_cos::Object, name: &[u8]) -> bool {
     }
 }
 
+/// Polygons, polylines and other drawing comments are added and listed through the tools.
 #[test]
 fn drawing_comments_through_tools() {
     let dir = workdir("drawing");
@@ -7749,6 +7910,8 @@ fn lines_and_corners_are_held_level_or_plumb_through_the_tool() {
     assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "ortho is for lines and corners: {refused:?}");
 }
 
+/// A visible signature drawn from an image, typed text or strokes through sign_document; bad
+/// graphics are refused before anything is written.
 #[test]
 fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     let dir = workdir("signing-graphic");
@@ -7818,6 +7981,111 @@ fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     assert!(inked(60, 110), "the strokes are drawn");
 }
 
+/// Signing a dynamic form's signature box through sign_document runs its XFA signing scripts only
+/// when asked (run_form_scripts): preSign first, so what it changes is signed, listed field by field,
+/// and postSign after, left as unsaved changes; the result carries their messages. Not asked, they
+/// don't run and the result says the box has them; a box without them reports nothing.
+#[test]
+fn signing_an_xfa_box_runs_its_signing_scripts_through_tools() {
+    let dir = workdir("xfa-sign-events");
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template())).unwrap();
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let name = |n: &str| {
+        fields["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f["name"].as_str())
+            .find(|f| *f == n || f.ends_with(&format!(".{n}[0]")))
+            .unwrap()
+            .to_string()
+    };
+    // Not asked: the scripts don't run, and the result says the box has them.
+    let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "unasked.pdf" }));
+    assert_eq!(r["form_scripts"]["skipped"], json!(true), "{r}");
+    let unasked = ok(&mut a, "doc_open", json!({ "path": "unasked.pdf" }))["doc"].as_u64().unwrap();
+    let unasked = ok(&mut a, "form_fields", json!({ "doc": unasked }));
+    assert!(
+        unasked["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n == "when" || n.ends_with(".when[0]")) && f["value"].is_null()),
+        "{unasked}"
+    );
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    // A bad argument is refused before the preSign scripts run.
+    let bad = a.call(
+        "sign_document",
+        &json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "bad.pdf", "run_form_scripts": true, "reason": 5 }),
+    );
+    assert!(matches!(bad, Err(ToolError::InvalidArgs(_))), "{bad:?}");
+    let now = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(
+        now["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n == "when" || n.ends_with(".when[0]")) && f["value"].is_null()),
+        "{now}"
+    );
+    // A signed file that can't be written (`out` is a folder): not signed, and what preSign did
+    // is taken back.
+    std::fs::create_dir_all(dir.join("taken")).unwrap();
+    let failed = a.call(
+        "sign_document",
+        &json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "taken", "run_form_scripts": true }),
+    );
+    assert!(failed.is_err(), "{failed:?}");
+    let now = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(
+        now["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n == "when" || n.ends_with(".when[0]")) && f["value"].is_null()),
+        "{now}"
+    );
+    let r = ok(
+        &mut a,
+        "sign_document",
+        json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "signed.pdf", "run_form_scripts": true }),
+    );
+    let scripts = &r["form_scripts"];
+    let changed = scripts["changed"].as_array().unwrap();
+    assert_eq!(changed.len(), 1, "only what preSign changed: {r}");
+    assert_eq!((&changed[0]["after"], &changed[0]["read_only"]), (&json!(["signed"]), &json!(true)), "{r}");
+    assert_eq!((scripts["before_signing"].as_bool(), scripts["after_signing"].as_bool()), (Some(true), Some(true)), "{r}");
+    assert_eq!(scripts["alerts"], json!([{ "message": "Signing notice", "title": null, "icon": "error", "buttons": "ok" }]), "{r}");
+    assert_eq!(scripts["unsaved_changes"], json!(true), "the postSign change isn't in the signed file: {r}");
+    // The signed file holds what the preSign script did, not what the postSign one did.
+    let signed = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let values = ok(&mut a, "form_fields", json!({ "doc": signed }));
+    let value = |n: &str| {
+        values["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"].as_str().is_some_and(|f| f == n || f.ends_with(&format!(".{n}[0]"))))
+            .map(|f| f["value"].clone())
+    };
+    assert_eq!(value("when"), Some(json!("signed")), "{values}");
+    assert_eq!(value("after"), Some(json!(null)), "{values}");
+    let list = ok(&mut a, "sign_list", json!({ "doc": signed }));
+    assert!(list["signatures"].as_array().unwrap().iter().any(|s| s["signed"] == true && s["status"] == "unknown"), "intact: {list}");
+    // A box without signing scripts: nothing reported.
+    let r = ok(
+        &mut a,
+        "sign_document",
+        json!({ "doc": signed, "id": "ada.p12", "password": "secret12", "field": name("plain"), "out": "both.pdf", "run_form_scripts": true }),
+    );
+    assert!(r.get("form_scripts").is_none(), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Signing a laid-out XFA form's signature box through the tools signs the field named by its
 /// SOM path, which is how another viewer, laying the form out again, finds the signature; the
 /// signed file reopens with the signature intact and on that field.
@@ -7840,6 +8108,8 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Digital IDs are created and opened, documents signed with them and their signatures validated,
+/// all through the tools.
 #[test]
 fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
     use pdfcraft_cos::{Dict, Document, Lexer, ObjRef, Object, SaveOptions, Stream};
@@ -10216,6 +10486,8 @@ fn growable_xfa_text_paginates_after_fill_save_and_print() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A print button repeated on every page of an XFA form runs its own XFA click script (a print
+/// request) through js_run, from each copy, before and after saving and reopening.
 #[test]
 fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     let dir = workdir("xfa-print-buttons");
@@ -10241,6 +10513,93 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     ok(&mut a, "doc_close", json!({ "doc": doc }));
     let doc = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
     check(&mut a, doc);
+}
+
+/// form_focus runs a field's XFA enter and exit scripts on every focus change; scripts that
+/// change nothing leave no edit, a radio button's own scripts run for its widget, and unknown
+/// fields, widgets and events are refused.
+#[test]
+fn xfa_focus_scripts_run_through_form_focus() {
+    let dir = workdir("xfa-focus");
+    std::fs::write(dir.join("focus.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "focus.pdf" }))["doc"].as_u64().unwrap();
+    let value = |a: &mut Automation, n: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|f| f["name"] == n).map(|f| f["value"].clone()).unwrap()
+    };
+    for _ in 0..3 {
+        assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": "probe", "event": "enter" }))["changed"], true);
+        assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": "probe", "event": "exit" }))["changed"], true);
+    }
+    assert_eq!((value(&mut a, "enters"), value(&mut a, "exits")), (json!("3"), json!("3")));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(value(&mut a, "exits"), "2", "each run is one undo step");
+    // A script that only shows a message changes nothing: no edit (the document stays saved and
+    // what was undone can still be redone), and the message comes back.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let quiet = ok(&mut a, "form_focus", json!({ "doc": doc, "field": "quiet", "event": "exit" }));
+    assert_eq!(
+        (quiet["changed"].clone(), quiet["alerts"].clone()),
+        (json!(false), json!([{ "message": "left quiet", "title": null, "icon": "error", "buttons": "ok" }])),
+        "{quiet}"
+    );
+    let state = &ok(&mut a, "doc_info", json!({ "doc": doc }))["document"];
+    assert_eq!((state["dirty"].clone(), state["redo"].clone()), (json!(false), json!("Run form script")), "{state}");
+    // The second radio button has an enter script of its own.
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let group = fields["fields"].as_array().unwrap().iter().find(|f| f["type"] == "radio").unwrap()["name"].clone();
+    assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter" }))["changed"], false);
+    assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter", "widget": 2 }))["changed"], true);
+    assert_eq!(value(&mut a, "picks"), "1");
+    for bad in [
+        json!({ "doc": doc, "field": "nowhere", "event": "enter" }),
+        json!({ "doc": doc, "field": group, "event": "enter", "widget": 3 }),
+        json!({ "doc": doc, "field": "probe", "event": "enter", "widget": 0 }),
+        json!({ "doc": doc, "field": "probe", "event": "click" }),
+    ] {
+        assert!(a.call("form_focus", &bad).is_err(), "{bad}");
+    }
+}
+
+/// form_focus refuses a field with no widget, which nothing can focus, instead of reporting a
+/// focus change that ran nothing.
+#[test]
+fn form_focus_refuses_a_field_with_no_widget() {
+    let dir = workdir("focus-no-widget");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [60 60 200 80] /P 3 0 R >>",
+        "<< /FT /Tx /T (total) /V (3) >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("total.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "total.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(fields["fields"].as_array().unwrap().iter().any(|f| f["name"] == "total"), "the field without a widget is listed: {fields}");
+    for args in [json!({ "doc": doc, "field": "total", "event": "enter" }), json!({ "doc": doc, "field": "total", "event": "enter", "widget": 1 })] {
+        let e = err(&mut a, "form_focus", args.clone()).to_string();
+        assert!(e.contains("\"total\" has no widget to focus"), "{args}: {e}");
+    }
+    assert_eq!(
+        ok(&mut a, "form_focus", json!({ "doc": doc, "field": "name", "event": "enter" }))["changed"],
+        false,
+        "a field with a widget still takes it"
+    );
 }
 
 /// A dynamic XFA form's scripts run on open, on fills and for buttons through the tools, with undo,

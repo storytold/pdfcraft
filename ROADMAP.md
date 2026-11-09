@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M3, PR #6323: Recent deduplicates relative and absolute paths consistently with tab reuse; synchronized with main fe3879bc; estimates unchanged)
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M3, PR #6323: Recent deduplicates relative and absolute paths consistently with tab reuse; synchronized with main d2139e58; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
 >
@@ -241,7 +241,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
-- **2026-11-09 (M3, PR #6323 review):** Recent uses the same path comparison as existing-tab lookup, so relative and absolute aliases replace one row rather than displacing another file. Reopening keeps the document ID and unsaved bytes. A regression covers both open entry points, limits of two and three, and persisted history; it fails before the fix and after actually reverting it. Full scoped UI tests: 2,642 passed, five existing ignores; scoped Clippy/WASM, formatting, layers, assets and parity passed. A real opt-in control run retained the dirty document through Clear Recent and reopening, then showed its restored Home row in inspect and screenshot. The original #6241 report was closed after it could no longer be reproduced; this PR addresses the independent existing-tab case. Estimates unchanged.
+- **2026-11-09 (M3, PR #6323 review):** Recent uses the same path comparison as existing-tab lookup, so relative and absolute aliases replace one row rather than displacing another file. Reopening keeps the document ID and unsaved bytes. A regression covers both open entry points, limits of two and three, and persisted history; it fails before the fix and after actually reverting it. Full scoped UI tests: 2,652 passed, five existing ignores; scoped Clippy/WASM, formatting, layers, assets and parity passed. A real opt-in control run retained the dirty document through Clear Recent and reopening, then showed its restored Home row in inspect and screenshot. The original #6241 report was closed after it could no longer be reproduced; this PR addresses the independent existing-tab case. Estimates unchanged.
 
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
