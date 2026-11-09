@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, held_bytes, objstm_member};
+use super::state::{
+    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, note_overlay_read, objstm_member, overlay_reads,
+};
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
     Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
@@ -86,6 +88,46 @@ impl Document {
 
     pub fn repair_log(&self) -> &[String] {
         &self.repair_log
+    }
+
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
+    }
+
+    /// Objects of the file that could not be read, lowest number first, as lines such as
+    /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
+    /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
+    /// unlike [`Self::repair_log`], nothing was repaired. Lists the objects read so far, by this
+    /// document, its clones or a scan of it, that have not since been edited; past 100, a last
+    /// line says there were more. Opening again, authenticating or rebuilding the index starts
+    /// the list afresh, as it does the object cache.
+    pub fn unreadable_objects(&self) -> Vec<String> {
+        let Ok(unreadable) = self.unreadable.lock() else { return Vec::new() };
+        unreadable.lines(|num| self.overlay.contains_key(&num))
+    }
+
+    /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file
+    /// whose broken object is asked for again and again pays for it once.
+    fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
+        // A poisoned lock only means the object goes unlisted; the read itself still fails.
+        let Ok(mut unreadable) = self.unreadable.lock() else { return };
+        let hidden = |n: u32| self.overlay.contains_key(&n);
+        if unreadable.wants(num, hidden) {
+            unreadable.note(num, self.generation(num), &reason(), hidden);
+        }
+    }
+
+    /// Why an object listed at `offset` could not be read: what parsing it there, without resolving
+    /// an indirect `/Length`, found. A best account, not the only one: the reader also tried
+    /// elsewhere.
+    fn why_unreadable(&self, offset: usize) -> String {
+        match parse_indirect_shared(&self.data, offset, &|_| None, &self.endstreams) {
+            Err(e) => e.to_string(),
+            Ok(_) => "no readable copy was found at its cross-reference offset or elsewhere in the file".into(),
+        }
     }
 
     /// Add a line to [`Self::repair_log`]: a leniency applied while reading that the user should
@@ -288,7 +330,29 @@ impl Document {
     /// ([`pdfcraft_filters::MAX_CHAIN`]). Only small values are copied, so a file can't have a
     /// large object copied once for each key and filter.
     pub fn with_direct_parms<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
-        let Some(p) = s.dict.get(b"DecodeParms") else { return Cow::Borrowed(s) };
+        let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
+        let mut s = s.clone();
+        s.dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(s)
+    }
+
+    /// [`Document::with_direct_parms`] for decoding alone: where that copies `s`, this makes a
+    /// stream of `s`'s data, shared, and a dictionary of its `/Filter` and the parameters made
+    /// direct, all its filters read. A stream named again and again, as a page's `/Contents` may
+    /// list one, isn't copied whole each time.
+    pub(crate) fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
+        let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
+        let mut dict = Dict::new();
+        if let Some(f) = s.dict.get(b"Filter") {
+            dict.set(b"Filter".to_vec(), f.clone());
+        }
+        dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(Stream { dict, raw: s.raw.clone() })
+    }
+
+    /// The `/DecodeParms` [`Document::with_direct_parms`] gives `s`, or `None` when it keeps `s`.
+    fn direct_parms(&self, s: &Stream) -> Option<Object> {
+        let p = s.dict.get(b"DecodeParms")?;
         let crypt = |f: &Object| matches!(f.as_name(), Some(b"Crypt"));
         let filters: Vec<bool> = match s.dict.get(b"Filter") {
             Some(Object::Array(a)) => a.iter().map(crypt).collect(),
@@ -296,7 +360,7 @@ impl Document {
             None => Vec::new(),
         };
         if filters.iter().filter(|c| !**c).count() > pdfcraft_filters::MAX_CHAIN {
-            return Cow::Borrowed(s);
+            return None;
         }
         let mut changed = matches!(p, Object::Ref(_));
         // Its numbers and flags kept, resolved; anything else is no filter's parameters (null).
@@ -323,12 +387,7 @@ impl Document {
             }
             _ => one(p, &mut changed),
         };
-        if !changed {
-            return Cow::Borrowed(s);
-        }
-        let mut s = s.clone();
-        s.dict.set(b"DecodeParms".to_vec(), made);
-        Cow::Owned(s)
+        changed.then_some(made)
     }
 
     /// `o`, or the object it refers to, without copying either.
@@ -427,7 +486,14 @@ impl Document {
             let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
+        let Some(p) = self.fax_params(s) else {
+            // The last filter gives the image's rows: rows without the tags of the PNG predictor
+            // they declare are read as they are (`pdfcraft_filters::decode_image_tolerant_within`).
+            return match height {
+                Some(rows) => s.decoded_image_rows_spending(max, rows, work),
+                None => s.decoded_spending(max, work),
+            };
+        };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
@@ -497,27 +563,38 @@ impl Document {
     }
 
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
-        match self.overlay.get(&num) {
-            Some(Slot::Set(_, o) | Slot::RepairedSet(_, _, o)) => return Ok(o.clone()),
-            Some(Slot::Freed(_)) => return Ok(Arc::new(Object::Null)),
-            None => {}
+        if let Some(slot) = self.overlay.get(&num) {
+            note_overlay_read();
+            return Ok(match slot {
+                Slot::Set(_, o) | Slot::RepairedSet(_, _, o) => o.clone(),
+                Slot::Freed(_) => Arc::new(Object::Null),
+            });
         }
-        if let Some(o) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
-            return Ok(o.clone());
+        if let Some(loaded) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
+            return loaded.clone();
         }
         // Loading can re-enter (indirect stream `/Length`, object streams); damaged files make
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let _scope = crate::security::FollowScope::enter();
-        let obj = self.load(num, 0)?;
-        let obj = Arc::new(obj);
-        // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
-        // is cheap, and returned objects outlive eviction.
-        let owned = held_bytes(&obj, &self.data, 0);
-        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone(), owned);
-        self.evict_editor_cache_if_over_budget(num)?;
-        Ok(obj)
+        let edits_read = overlay_reads();
+        let loaded = self.load(num, 0).map(Arc::new);
+        if let Err(e) = &loaded
+            && !matches!(e, CosError::Poisoned)
+        {
+            self.note_unreadable(num, || e.to_string());
+        }
+        // A failure is kept like an object, or every read of a damaged object loads it again. A
+        // poisoned lock says nothing about the object. Clones share the cache, so a load that read
+        // this document's edits (an edited object stream or `/Length`) is not kept.
+        if overlay_reads() == edits_read && !matches!(loaded, Err(CosError::Poisoned)) {
+            // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
+            // is cheap, and returned objects outlive eviction.
+            self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, loaded.clone(), loaded_bytes(&loaded, &self.data));
+            self.evict_editor_cache_if_over_budget(num)?;
+        }
+        loaded
     }
 
     /// Bounds for the editing cache: roomier than the scan reader's (128 objects / 8 MB)
@@ -629,11 +706,20 @@ impl Document {
             None | Some(XrefEntry::Free { .. }) => Ok(Object::Null),
             Some(XrefEntry::InFile { offset, .. }) => {
                 let resolve = |r: ObjRef| {
-                    if let Some(known) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
+                    if self.overlay.contains_key(&r.num) {
+                        note_overlay_read();
+                    }
+                    // A length resolved through this document's edits counts as an edit read
+                    // on every reuse.
+                    if let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
+                        if edits {
+                            note_overlay_read();
+                        }
                         return known;
                     }
+                    let edits_read = overlay_reads();
                     let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
-                    LENGTHS.with(|m| m.borrow_mut().insert(r, length));
+                    LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read)));
                     length
                 };
                 let off = offset as usize;
@@ -646,7 +732,10 @@ impl Document {
                     .or_else(|| if self.header_offset == 0 { None } else { at(off.saturating_add(self.header_offset)) })
                     .or_else(|| self.located.get(&num).and_then(|(o, _)| usize::try_from(*o).ok()).and_then(at))
                     .or_else(|| self.scan_for(num).map(|(id, o)| self.decrypted(id, o)))
-                    .ok_or(CosError::MissingObject(num))
+                    .ok_or_else(|| {
+                        self.note_unreadable(num, || self.why_unreadable(off));
+                        CosError::MissingObject(num)
+                    })
             }
             Some(XrefEntry::InStream { stream, index }) => {
                 let stm = self.objstm(stream)?;
@@ -659,7 +748,9 @@ impl Document {
     }
 
     pub(super) fn objstm(&self, num: u32) -> Result<Arc<ObjStm>, CosError> {
-        if let Some(s) = self.objstms.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
+        // An edited or freed stream is this document's alone: clones share the parsed streams.
+        let edited = self.overlay.contains_key(&num);
+        if !edited && let Some(s) = self.objstms.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
             return Ok(s.clone());
         }
         // A file entry that cannot place the stream (one that says it is itself compressed
@@ -667,6 +758,7 @@ impl Document {
         // header, as a plain object with a wrong offset is. An edited or freed stream, in the
         // overlay or in a saved revision's table, is what that says it is: the file's copy
         // must not come back.
+        let edits_read = overlay_reads();
         let loaded = match self.try_get(num) {
             Ok(o) if matches!(*o, Object::Stream(_)) => o,
             _ if self.overlay.contains_key(&num) || matches!(self.xref_entry(num), Some(XrefEntry::Free { .. })) => {
@@ -674,6 +766,8 @@ impl Document {
             }
             _ => Arc::new(self.scan_for(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
         };
+        // A stream whose load read this document's edits (its `/Length`) is as much its own as an edited one.
+        let own = edited || overlay_reads() != edits_read;
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
@@ -681,6 +775,8 @@ impl Document {
         // the file's object streams comes here without a read around it.
         let _scope = crate::security::FollowScope::enter();
         let readable = crate::security::following(Cow::Borrowed(s), || self.with_direct_parms(s));
+        #[cfg(test)]
+        super::tests::OBJSTM_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
         let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
         let mut index = Vec::with_capacity(n);
@@ -689,6 +785,9 @@ impl Document {
             index.push(objstm_member(onum, off, first, data.len()));
         }
         let stm = Arc::new(ObjStm { index, data: Arc::new(data) });
+        if own {
+            return Ok(stm);
+        }
         // Same bound as the object cache: decoded object streams can be megabytes each.
         // Insert first so the retained `num` is actually in the map.
         self.objstms.lock().map_err(|_| CosError::Poisoned)?.insert(num, stm.clone());
@@ -745,6 +844,7 @@ impl Document {
     pub fn set(&mut self, r: ObjRef, obj: impl Into<Object>) {
         let obj = self.adopt(obj.into());
         self.overlay.insert(r.num, Slot::Set(r.generation, Arc::new(obj)));
+        self.forget_member_failures(r.num);
         if r.num >= self.next_num {
             self.next_num = r.num.saturating_add(1);
         }
@@ -804,6 +904,16 @@ impl Document {
     /// Delete an object (its number becomes free with the next generation).
     pub fn free(&mut self, r: ObjRef) {
         self.overlay.insert(r.num, Slot::Freed(r.generation.saturating_add(1)));
+        self.forget_member_failures(r.num);
+    }
+
+    /// Forget cached failures of the members `stream` held in the file: they were failures of
+    /// the file's copy, and an edit of `stream` may read. Clones share the cache, so theirs are
+    /// searched again too, which costs time only. A poisoned lock leaves the cache as it is.
+    fn forget_member_failures(&self, stream: u32) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.forget_failures(|n| matches!(self.entries.lookup(*n, &self.data), Some(XrefEntry::InStream { stream: s, .. }) if s == stream));
+        }
     }
 
     /// Free what was added since the file was read and nothing refers to any more: the objects

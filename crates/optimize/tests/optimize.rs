@@ -2647,7 +2647,9 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
     };
     let mut seen = Vec::new();
     let report = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
-        seen.push(s);
+        if !matches!(s, Stage::Reading { .. }) {
+            seen.push(s);
+        }
         true
     })
     .unwrap();
@@ -2665,7 +2667,10 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
 
     // Stopping after the first image.
     let mut calls = 0;
-    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |_| {
+    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
+        if matches!(s, Stage::Reading { .. }) {
+            return true;
+        }
         calls += 1;
         calls < 2
     });
@@ -3155,6 +3160,87 @@ fn images_that_do_not_tile_a_picture_are_left_alone() {
     unmerged(&mut few, &all);
     let (mut off, _) = printed_page(40, |_| false, |_, s| s);
     unmerged(&mut off, &Settings { merge_fragments: false, ..Settings::default() });
+}
+
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    Stream::from_raw(dict, raw)
+}
+
+/// A page whose content is damaged partway isn't all known: its strips aren't merged, which would
+/// write its content again without what follows the damage.
+#[test]
+fn strips_on_a_page_damaged_partway_are_left_as_they_are() {
+    let (mut doc, _) = printed_page(40, |_| false, |_, s| s);
+    let p = pdfcraft_annot::page_refs(&doc).unwrap()[0];
+    let bad = damaged_flate(b"0 g\n", b"q 1000 0 0 1 0 0 cm /R0 Do Q");
+    let damaged = doc.add(Object::Stream(bad.clone()));
+    let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+    let contents = Object::Array(vec![first, Object::Ref(damaged)]);
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+    assert_eq!(doc.get(p).as_dict().unwrap().get(b"Contents"), Some(&contents));
+    assert_eq!(stream(&doc, damaged), bad);
+}
+
+/// An image may be drawn larger past the damage in a page's or a form's content, so no image is
+/// resampled for the uses before it.
+#[test]
+fn content_damaged_partway_leaves_every_image_at_its_resolution() {
+    for in_form in [false, true] {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 720, 720, 1, false, None);
+        let p = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+        assert_eq!(effective_resolutions(&doc, &[p])[&img], 720.0);
+        let mut bad = damaged_flate(b"q 72 0 0 72 0 0 cm /Im Do Q\n", b"q 720 0 0 720 0 0 cm /Im Do Q");
+        let added = if in_form {
+            bad.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            bad.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            bad.dict.set(b"Resources".to_vec(), Object::Dict(resources(xobjects(&[("Im", img)]))));
+            let f = doc.add(Object::Stream(bad));
+            let res = Object::Dict(resources(xobjects(&[("Im", img), ("F", f)])));
+            doc.update_dict(p, |d| d.set(b"Resources".to_vec(), res)).unwrap();
+            content(&mut doc, "/F Do")
+        } else {
+            doc.add(Object::Stream(bad))
+        };
+        let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![first, Object::Ref(added)]))).unwrap();
+        // Not measured, or measured as never resampled: the image pass reads only what was measured.
+        let ppi = effective_resolutions(&doc, &[p]).get(&img).copied().unwrap_or(f64::INFINITY);
+        assert_eq!(ppi, f64::INFINITY, "in a form: {in_form}");
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(r.images_resampled, 0, "{r:?}");
+    }
+}
+
+/// One page damaged partway stops resampling for the whole document: another page drawing the same
+/// image at its full resolution, whole, doesn't get it resampled either.
+#[test]
+fn content_damaged_partway_on_one_page_leaves_the_image_another_page_draws() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 720, 720, 1, false, None);
+    let damaged = page(&mut doc, &[("Im", img)], "");
+    let bad = doc.add(Object::Stream(damaged_flate(b"0 g\n", b"q 720 0 0 720 0 0 cm /Im Do Q")));
+    doc.update_dict(damaged, |d| d.set(b"Contents".to_vec(), Object::Ref(bad))).unwrap();
+    let whole = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+    assert_eq!(effective_resolutions(&doc, &[whole])[&img], 720.0);
+    let ppi = effective_resolutions(&doc, &[damaged, whole]).get(&img).copied().unwrap_or(f64::INFINITY);
+    assert_eq!(ppi, f64::INFINITY);
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 0, "{r:?}");
+    assert_eq!(doc.get(img).as_dict().and_then(|d| d.int(b"Width")), Some(720));
 }
 
 /// `levels` nested forms with their own resources, the innermost drawing `img` over the unit square.
@@ -4207,4 +4293,136 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
         assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
         assert_eq!(stream(&doc, img), before, "{what}");
     }
+}
+
+/// Pictures run on several threads: what comes out doesn't depend on how many.
+#[test]
+fn the_same_file_comes_out_with_any_number_of_threads() {
+    let build = || {
+        let mut doc = Document::new_empty();
+        let shared_mask = image(&mut doc, 1200, 1200, 1, false, None);
+        // Under a soft mask they share, at different sizes on the page: the second must start from
+        // the mask the first left. Each needs the mask at a different size.
+        let first = image(&mut doc, 1200, 1200, 3, true, Some(shared_mask));
+        let second = image(&mut doc, 1000, 1000, 3, true, Some(shared_mask));
+        page(&mut doc, &[("Im0", first)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        page(&mut doc, &[("Im0", second)], "q 180 0 0 180 100 100 cm /Im0 Do Q");
+        // Enough others for the threads.
+        for page_no in 0..22u32 {
+            let img = image(&mut doc, 500 + page_no, 500, 3, true, None);
+            page(&mut doc, &[("Im0", img)], "q 72 0 0 72 100 100 cm /Im0 Do Q");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        assert_eq!(report.images, 24, "{report:?}");
+        assert!(report.images_resampled + report.images_recompressed > 16, "{report:?}");
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// A table that disagrees with an object's header leaves it reachable under two generations, as
+/// one object: each use decides from what the one before it left, with any number of threads.
+#[test]
+fn one_object_under_two_generations_comes_out_the_same_with_any_number_of_threads() {
+    let picture = |size: usize, extra: &str| {
+        let samples: Vec<u8> = (0..size * size).map(|i| ((i % size) * 255 / size) as u8 ^ ((i / size) as u8 & 7)).collect();
+        let dict = format!(
+            "<< /Type /XObject /Subtype /Image /Width {size} /Height {size} /BitsPerComponent 8 /ColorSpace /DeviceGray{extra} /Length {} >>\nstream\n",
+            samples.len()
+        );
+        [dict.as_bytes(), &samples, b"\nendstream"].concat()
+    };
+    let build = || {
+        // 1 the catalog, 2 the pages, 3 the mask, 4 and 5 under it, 6 the picture, 7 a picture that is
+        // also 8's mask, then the others.
+        let mut objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), Vec::new()];
+        objects.push(picture(1200, ""));
+        objects.push(picture(1200, " /SMask 3 0 R"));
+        objects.push(picture(1000, " /SMask 3 1 R"));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1000, " /SMask 7 1 R"));
+        // Small under one generation, large under the other: they want different sizes.
+        let mut draws = vec![
+            ("4 0 R".to_string(), 144),
+            ("5 0 R".to_string(), 180),
+            ("6 0 R".to_string(), 72),
+            ("6 1 R".to_string(), 576),
+            ("7 0 R".to_string(), 72),
+            ("8 0 R".to_string(), 180),
+        ];
+        for i in 0..22 {
+            objects.push(picture(500 + i, ""));
+            draws.push((format!("{} 0 R", objects.len()), 72));
+        }
+        let mut kids = String::new();
+        for (drawn, size) in &draws {
+            let content = format!("q {size} 0 0 {size} 10 10 cm /Im0 Do Q");
+            objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes());
+            let contents = objects.len();
+            objects.push(
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {contents} 0 R /Resources << /XObject << /Im0 {drawn} >> >> >>"
+                )
+                .into_bytes(),
+            );
+            kids.push_str(&format!("{} 0 R ", objects.len()));
+        }
+        objects[1] = format!("<< /Type /Pages /Kids [{kids}] /Count {} >>", draws.len()).into_bytes();
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+        for (i, object) in objects.iter().enumerate() {
+            let num = i + 1;
+            // Headers say generation 0, and the table says 1 of these three.
+            let generation = u8::from(num == 3 || num == 6 || num == 7);
+            table.push_str(&format!("{:010} {generation:05} n \n", bytes.len()));
+            bytes.extend(format!("{num} 0 obj\n").as_bytes());
+            bytes.extend(object);
+            bytes.extend(b"\nendobj\n");
+        }
+        let start = bytes.len();
+        bytes.extend(table.as_bytes());
+        bytes.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        for (num, generation) in [(3, 0), (3, 1), (6, 0), (6, 1), (7, 0), (7, 1)] {
+            assert!(matches!(&*doc.get(ObjRef { num, generation }), Object::Stream(_)), "{num} {generation} finds the object");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// Pages too small for a run aren't read, and that must not cost the smallest run there can be.
+#[test]
+fn the_fewest_strips_that_make_a_picture_are_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let (mut doc, _) = printed_page(MIN_FRAGMENTS as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (1, MIN_FRAGMENTS), "{r:?}");
+    let (mut doc, _) = printed_page((MIN_FRAGMENTS - 1) as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }
