@@ -145,6 +145,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
+        | Edit::LayoutTableToBlocks { .. }
         | Edit::AddOcrText { .. }
         | Edit::EnhanceScan { .. }
         | Edit::SetDocumentScript { .. }
@@ -802,6 +803,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::AddPrinterMarks { pages, settings, replace } => {
             pdfcraft_edit::add_printer_marks(doc, pages, settings, *replace)?;
+        }
+        Edit::LayoutTableToBlocks { object } => {
+            a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
