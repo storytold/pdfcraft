@@ -3273,8 +3273,10 @@ fn a_referenced_colour_is_listed_like_a_direct_one() {
 }
 
 /// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
-/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The builder
-/// doesn't follow it and draws no appearance, as for any colour it can't read.
+/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The display
+/// and the properties follow the reference (`draw::with_direct_values`) and draw and
+/// read it black; the comment list, which follows only a `/C` given whole by reference, reads no
+/// colour rather than cyan.
 #[test]
 fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
     let doc = document_of(&[
@@ -3285,11 +3287,12 @@ fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
         b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
         b"1",
     ]);
-    let display = with_missing_appearances(&doc).expect("the RGB square gets a fallback appearance");
+    let display = with_missing_appearances(&doc).expect("both squares get a fallback appearance");
     let squares = list(&display, 0);
-    assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
-    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
-    assert_eq!(summaries(&doc)[0].color, None, "nor in the comment list");
+    let black = ap_content(&display, &squares[0]);
+    assert!(black.contains("0 0 0 RG") && !black.contains("0 1 1 RG"), "CMYK black, no cyan stand-in: {black}");
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), Some([0.0, 0.0, 0.0]));
+    assert_ne!(summaries(&doc)[0].color, Some([0.0, 1.0, 1.0]), "nor cyan in the comment list");
 }
 
 /// A text markup annotation is drawn over its `/QuadPoints` (ISO 32000-2 Table 182), and an

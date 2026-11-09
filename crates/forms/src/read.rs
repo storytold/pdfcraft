@@ -575,7 +575,9 @@ fn walk(
             // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
             // §12.7.4.2). A kid that doesn't name this field as its `/Parent` is named from its
             // own chain, as other readers name it; it still inherits this field's attributes.
-            let parent = doc.get(k).as_dict().and_then(|kd| parent_of(doc, kd));
+            // The `/Parent` as written: `qualified_name` follows an object that only refers on,
+            // and names a missing one as no parent.
+            let parent = doc.get(k).as_dict().and_then(|kd| kd.reference(b"Parent"));
             if parent == Some(r) {
                 walk(doc, k, &inh, page_of, seen, out, depth + 1);
             } else {
