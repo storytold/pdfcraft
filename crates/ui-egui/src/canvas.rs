@@ -563,6 +563,10 @@ pub struct DocView {
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
+    /// Pages whose content was cut at the renderer's limits (#623): drawn and searched in part.
+    cut_pages: std::collections::BTreeSet<usize>,
+    /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
+    cut_notice_dismissed: std::collections::BTreeSet<usize>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -1021,6 +1025,8 @@ impl DocView {
             presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
+            cut_pages: Default::default(),
+            cut_notice_dismissed: Default::default(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),
@@ -1183,6 +1189,7 @@ impl DocView {
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
         fresh.notice_dismissed = self.notice_dismissed;
+        fresh.cut_notice_dismissed = std::mem::take(&mut self.cut_notice_dismissed);
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
