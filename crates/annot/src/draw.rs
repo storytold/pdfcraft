@@ -32,10 +32,11 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 /// can't show, and for display-only copies.
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
-    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     let direct = with_direct_values(doc, &d);
-    let Some(stream) = build_appearance(doc, &d, &direct) else { return Err(AnnotError::Unsupported(subtype)) };
-    let built = Built::new(stream, &direct);
+    let Some((stream, drawn_from)) = build_appearance(doc, &d, &direct) else {
+        return Err(AnnotError::Unsupported(String::from_utf8_lossy(direct.name(b"Subtype").unwrap_or_default()).into_owned()));
+    };
+    let built = Built::new(stream, drawn_from);
     apply_appearance(doc, r, &d, built)
 }
 
@@ -47,13 +48,14 @@ pub(crate) fn can_draw(doc: &Document, d: &Dict) -> bool {
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// `direct` is `d` with references followed ([`with_direct_values`]). Pure from the dictionary and
-/// the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict, direct: &Dict) -> Option<Stream> {
+/// the objects it points at, so [`AppearanceCache`] can reuse it. Returns the stream and the
+/// dictionary it was drawn from (`direct`, or `d` for the fallback), which [`Built::new`] reads.
+fn build_appearance<'a>(doc: &Document, d: &'a Dict, direct: &'a Dict) -> Option<(Stream, &'a Dict)> {
     // References followed first. Where that turns up something the builder doesn't draw (a
     // cloudy `/BE` on a square), the drawing made without them stays, rather than none.
-    let mut stream = match appearance::build(doc, direct) {
-        Some(stream) => stream,
-        None if !std::ptr::eq(direct, d) => appearance::build(doc, d)?,
+    let (mut stream, drawn_from) = match appearance::build(doc, direct) {
+        Some(stream) => (stream, direct),
+        None if !std::ptr::eq(direct, d) => (appearance::build(doc, d)?, d),
         None => return None,
     };
     // Picture-stamp restyling must retain the placement's page-axis correction.
@@ -68,7 +70,7 @@ fn build_appearance(doc: &Document, d: &Dict, direct: &Dict) -> Option<Stream> {
             stream.dict.set(b"Matrix".to_vec(), matrix);
         }
     }
-    Some(stream)
+    Some((stream, drawn_from))
 }
 
 /// Entries that link the annotation to other objects rather than describe how it looks: left as
@@ -98,14 +100,21 @@ pub(crate) const PASS_BUDGET: usize = 1 << 22;
 /// copied values a reference is left as it is, which the builder treats as unreadable. `d` itself
 /// when nothing is a reference.
 pub(crate) fn with_direct_values<'d>(doc: &Document, d: &'d Dict) -> std::borrow::Cow<'d, Dict> {
-    with_direct_values_within(doc, d, &mut INLINE_BUDGET.clone())
+    follow(doc, d, &mut INLINE_BUDGET.clone()).0
 }
 
 /// [`with_direct_values`], copying at most [`INLINE_BUDGET`] values and no more than `pass` has
 /// left, which is reduced by what was copied.
+#[cfg(test)]
 pub(crate) fn with_direct_values_within<'d>(doc: &Document, d: &'d Dict, pass: &mut usize) -> std::borrow::Cow<'d, Dict> {
+    follow(doc, d, pass).0
+}
+
+/// [`with_direct_values_within`], and whether a reference was left as it is because `pass` had
+/// less than [`INLINE_BUDGET`] left: a drawing that a later pass, with room, would draw better.
+fn follow<'d>(doc: &Document, d: &'d Dict, pass: &mut usize) -> (std::borrow::Cow<'d, Dict>, bool) {
     let allowed = INLINE_BUDGET.min(*pass);
-    let mut budget = allowed;
+    let mut budget = Budget { left: allowed, cut: false };
     let mut out: Option<Dict> = None;
     for (key, value) in d.iter() {
         if LINK_KEYS.contains(&key.as_slice()) {
@@ -115,20 +124,43 @@ pub(crate) fn with_direct_values_within<'d>(doc: &Document, d: &'d Dict, pass: &
             out.get_or_insert_with(|| d.clone()).set(key.clone(), direct);
         }
     }
-    *pass = pass.saturating_sub(allowed.saturating_sub(budget));
-    out.map_or(std::borrow::Cow::Borrowed(d), std::borrow::Cow::Owned)
+    *pass = pass.saturating_sub(allowed.saturating_sub(budget.left));
+    let starved = budget.cut && allowed < INLINE_BUDGET;
+    (out.map_or(std::borrow::Cow::Borrowed(d), std::borrow::Cow::Owned), starved)
 }
 
-/// The number of values in `o`, counting into its arrays and dictionaries (not through
-/// references, which are charged when followed), or, past `limit`, `Err` with the values it
-/// visited or queued before finding that out (at least one), so a rejected walk is charged too.
-/// Walks at most `limit` values and holds no more than `limit` waiting.
+/// What is left of a budget, and whether a reference was left as it is for lack of it.
+struct Budget {
+    left: usize,
+    cut: bool,
+}
+
+/// Bytes of a string or a name that cost one value more in the budgets, about what a value itself
+/// takes in memory: a long string costs what it holds, so a large string that many entries point
+/// at is not copied for each of them without bound.
+const BYTES_PER_VALUE: usize = 64;
+
+/// What copying `o` itself costs in the budgets, not counting what is inside an array or a
+/// dictionary: one, and one more for every [`BYTES_PER_VALUE`] bytes of a string or a name.
+fn cost(o: &Object) -> usize {
+    let bytes = match o {
+        Object::String(s) => s.bytes.len(),
+        Object::Name(n) => n.len(),
+        _ => 0,
+    };
+    1usize.saturating_add(bytes / BYTES_PER_VALUE)
+}
+
+/// What copying `o` costs: the [`cost`] of every value in it, counting into its arrays and
+/// dictionaries (not through references, which are charged when followed), or, past `limit`,
+/// `Err` with the values it visited or queued before finding that out (at least one), so a
+/// rejected walk is charged too. Walks at most `limit` values and holds no more than `limit` waiting.
 fn weight(o: &Object, limit: usize) -> Result<usize, usize> {
     let mut count = 0usize;
     let mut stack = vec![o];
     while let Some(o) = stack.pop() {
         let spent = count.saturating_add(stack.len()).max(1);
-        count = match count.checked_add(1).filter(|c| *c <= limit) {
+        count = match count.checked_add(cost(o)).filter(|c| *c <= limit) {
             Some(c) => c,
             None => return Err(spent),
         };
@@ -152,12 +184,13 @@ fn weight(o: &Object, limit: usize) -> Result<usize, usize> {
 
 /// `o` with references followed `depth` levels into arrays and dictionaries, or `None` when there
 /// is nothing to follow (or it may not be: a stream, an over-budget object, a chain of references).
-fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut usize) -> Option<Object> {
+fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut Budget) -> Option<Object> {
     let held;
     let (base, followed) = match o {
         Object::Ref(_) => {
             // A spent budget follows nothing more, not even to find out what is there.
-            if *budget == 0 {
+            if budget.left == 0 {
+                budget.cut = true;
                 return None;
             }
             held = doc.resolve(o);
@@ -167,10 +200,11 @@ fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut usize) ->
             // Everything copied counts, inner arrays and dictionaries too, and so does the walk
             // that finds an object too large: many references to one would otherwise each walk
             // it again for free.
-            match weight(&held, *budget) {
-                Ok(n) => *budget = budget.checked_sub(n)?,
+            match weight(&held, budget.left) {
+                Ok(n) => budget.left = budget.left.checked_sub(n)?,
                 Err(spent) => {
-                    *budget = budget.saturating_sub(spent);
+                    budget.left = budget.left.saturating_sub(spent);
+                    budget.cut = true;
                     return None;
                 }
             }
@@ -205,8 +239,9 @@ fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut usize) ->
     }
 }
 
-/// A built appearance and what storing it needs from the dictionary it was drawn from, read
-/// with references followed, so a cached one is stored without following them again.
+/// A built appearance and what storing it needs from the dictionary it was drawn from (with
+/// references followed, or not for the fallback drawing), so a cached one is stored without
+/// following them again, and its marker matches what it draws.
 #[derive(Clone, Debug)]
 struct Built {
     stream: Stream,
@@ -217,10 +252,10 @@ struct Built {
 }
 
 impl Built {
-    fn new(stream: Stream, direct: &Dict) -> Self {
-        let missing = appearance::undrawable_text(direct).map(|(_, c)| c);
-        let rect = matches!(direct.name(b"Subtype"), Some(b"Text" | b"FileAttachment"))
-            .then(|| direct.get(b"Rect")?.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>())
+    fn new(stream: Stream, drawn_from: &Dict) -> Self {
+        let missing = appearance::undrawable_text(drawn_from).map(|(_, c)| c);
+        let rect = matches!(drawn_from.name(b"Subtype"), Some(b"Text" | b"FileAttachment"))
+            .then(|| drawn_from.get(b"Rect")?.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>())
             .flatten();
         Built { stream, missing, rect }
     }
@@ -340,7 +375,9 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 continue;
             }
             let d = annot_dict(doc, r);
-            if matches!(d.name(b"Subtype"), None | Some(b"Link" | b"Widget" | b"Popup")) {
+            // `/Subtype` may be given by reference too (ISO 32000-2 §7.3.10).
+            let subtype = d.get(b"Subtype").map(|o| doc.resolve(o));
+            if matches!(subtype.as_deref().and_then(Object::as_name), None | Some(b"Link" | b"Widget" | b"Popup")) {
                 continue;
             }
             let has_normal = d.get(b"AP").is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N")));
@@ -359,10 +396,19 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let direct = with_direct_values_within(doc, &d, &mut budget);
-            let Some(stream) = build_appearance(doc, &d, &direct).or_else(other_stamp) else { continue };
-            let built = Built::new(stream, &direct);
-            cache.insert(r, &built);
+            let (direct, starved) = follow(doc, &d, &mut budget);
+            let built = match build_appearance(doc, &d, &direct) {
+                Some((stream, drawn_from)) => Built::new(stream, drawn_from),
+                None => match other_stamp() {
+                    Some(stream) => Built::new(stream, &d),
+                    None => continue,
+                },
+            };
+            // Drawn with references left as they are because earlier annotations spent the pass's
+            // budget: not kept, so a later pass, where those hit the cache, draws it with them.
+            if !starved {
+                cache.insert(r, &built);
+            }
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
             apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, built).ok();
         }

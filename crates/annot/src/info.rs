@@ -252,10 +252,11 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { drawn_color(d, b"C") };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
-        if subtype == "FreeText" {
-            if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
+        if subtype == "FreeText" && !d.contains(b"BS") && !d.contains(b"Border") {
+            0.0
         } else {
-            d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0)
+            // The width drawn: `/BS /W`, else the third `/Border` entry (Table 166), else 1.
+            appearance::border_width(d)
         }
     });
     Some(Props {

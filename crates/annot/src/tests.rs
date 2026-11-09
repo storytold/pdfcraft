@@ -1714,6 +1714,190 @@ fn callout_without_rd_is_drawn() {
     assert!(shown[2].get(b"AP").is_none(), "a malformed /RD is still not guessed at");
 }
 
+/// A text box another program drew whose text is given by reference (`/Contents 6 0 R`,
+/// ISO 32000-2 §7.3.10): a restyle reads that text, finds a character the standard fonts can't
+/// draw, and keeps the appearance rather than replacing it with `?`.
+#[test]
+fn a_foreign_text_given_by_reference_is_not_redrawn_as_question_marks() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [100 100 300 130] /DA (0 g /Helv 12 Tf) /Contents 6 0 R /AP << /N 5 0 R >> >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 200 30] /Length 0 >>\nstream\n\nendstream",
+        b"<FEFF6B228FCE>",
+    ]);
+    let before = list(&doc, 0)[0].clone();
+    let err = set_style(&mut doc, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap_err();
+    assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("U+6B22")), "{err:?}");
+    assert_eq!(list(&doc, 0)[0], before, "the appearance and the style are kept");
+}
+
+/// `/Subtype` given by reference (§7.3.10): a square without an appearance is still drawn for
+/// display, and it can be filled and restyled.
+#[test]
+fn a_subtype_given_by_reference_is_drawn_and_edited() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype 5 0 R /Rect [20 20 180 180] /C [1 0 0] >>",
+        b"/Square",
+        b"<< /Type /Annot /Subtype 7 0 R /Rect [20 20 180 180] /DA (0 g /Helv 12 Tf) /C [1 1 0] /Contents (box) >>",
+        b"/FreeText",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the square gets a display appearance");
+    assert!(ap_content(&display, &list(&display, 0)[0]).contains("1 0 0 RG"), "the square is drawn");
+    assert!(props(&doc, 0, 0).is_some_and(|p| p.fillable && p.restylable));
+    set_fill(&mut doc, 0, 0, Some([0.0, 1.0, 0.0]), &meta("")).expect("an indirect /Square can be filled");
+    assert!(ap_content(&doc, &list(&doc, 0)[0]).contains("0 1 0 rg"));
+    // A text box's colour is its text's (`/DA`), not its background (`/C`).
+    set_style(&mut doc, 0, 1, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).expect("an indirect /FreeText");
+    let d = list(&doc, 0).remove(1);
+    assert!(text(&d, b"DA").starts_with("0 0 1 rg"), "{}", text(&d, b"DA"));
+    assert_eq!(d.get(b"C"), Some(&Object::Array(vec![Object::Int(1), Object::Int(1), Object::Int(0)])), "the background is unchanged");
+}
+
+/// Edits read the values they change from as the display draws them, references followed
+/// (§7.3.10), so they keep what is there: a new fill opacity keeps an indirect `/CA`, a new text
+/// colour keeps an indirect `/DA`'s size and an indirect `/Contents` in the rich text, a new width
+/// grows a typewriter box whose `/Rect` is indirect and an ink comment whose `/InkList` is, and
+/// new line endings get room around an indirect `/L`.
+#[test]
+fn edits_keep_values_given_by_reference() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /C [1 0 0] /IC [0 0 1] /CA 8 0 R >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextTypeWriter /Rect 9 0 R /DA 10 0 R /Contents 11 0 R /BS << /W 1 >> >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [99 99 151 151] /InkList 12 0 R /C [0 0 0] /BS << /W 1 >> >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [199 199 301 301] /L 13 0 R /C [0 0 0] /BS << /W 2 >> >>",
+        b"0.5",
+        b"[100 200 300 240]",
+        b"(1 0 0 rg /Helv 18 Tf)",
+        b"(typed)",
+        b"[[100 100 150 150]]",
+        b"[200 200 300 300]",
+    ]);
+    set_part_opacity(&mut doc, 0, 0, Some(0.2), None, &meta("")).expect("fill opacity");
+    let square = list(&doc, 0).remove(0);
+    assert_eq!(square.get(b"CA").and_then(Object::as_f64), Some(0.5), "the line keeps its opacity");
+    assert_eq!(square.get(b"ca").and_then(Object::as_f64), Some(0.2));
+
+    set_style(&mut doc, 0, 1, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).expect("text colour");
+    let typed = list(&doc, 0).remove(1);
+    assert!(text(&typed, b"DA").contains("/Helv 18 Tf"), "the size is kept: {}", text(&typed, b"DA"));
+    assert!(text(&typed, b"RC").contains("typed"), "the rich text has the text: {}", text(&typed, b"RC"));
+    set_style(&mut doc, 0, 1, StyleChange::new(None, None, Some(3.0), None), &meta("")).expect("text box width");
+    assert_eq!(rect(&list(&doc, 0)[1]), [98.0, 198.0, 302.0, 242.0], "the box grows by the new width on every side");
+
+    set_style(&mut doc, 0, 2, StyleChange::new(None, None, Some(9.0), None), &meta("")).expect("ink width");
+    let ink = rect(&list(&doc, 0)[2]);
+    assert!(ink[0] <= 95.5 && ink[2] >= 154.5, "the rectangle holds the thicker stroke: {ink:?}");
+
+    let ends = vec![LineEnding::ClosedArrow, LineEnding::ClosedArrow];
+    set_style(&mut doc, 0, 3, StyleChange::new(None, None, None, Some(ends)), &meta("")).expect("line endings");
+    let line = rect(&list(&doc, 0)[3]);
+    assert!(line[0] < 199.0 && line[2] > 301.0, "the rectangle has room for the arrows: {line:?}");
+}
+
+/// `/RD` is optional (Table 177): new text in a callout without it re-fits its box, which is its
+/// `/Rect`, rather than keeping a box too small for the text.
+#[test]
+fn a_callout_without_rd_refits_to_new_text() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 300 300 330] /CL [20 20 60 60 100 310] /C [1 1 0] /DA (0 g /Helv 12 Tf) /Contents (one) >>",
+    ]);
+    set_contents(&mut doc, 0, 0, "one\ntwo\nthree\nfour", &meta("")).expect("new text");
+    let r = text_box_of(&list(&doc, 0)[0]).expect("a text box");
+    assert_eq!((r[0], r[2], r[3]), (100.0, 300.0, 330.0), "the top and sides stay: {r:?}");
+    assert!(r[1] < 290.0, "the box grows down for four lines: {r:?}");
+}
+
+/// The properties report the border width drawn: with no `/BS`, the third entry of `/Border`
+/// (Table 166), here given by reference.
+#[test]
+fn props_report_the_width_of_a_border_array() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [20 20 180 180] /C [1 0 0] /Border 5 0 R >>",
+        b"[0 0 6]",
+    ]);
+    let display = with_missing_appearances(&doc).expect("drawn");
+    assert!(ap_content(&display, &list(&display, 0)[0]).contains("6 w"));
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.width), Some(6.0));
+}
+
+/// Following references is charged by size as well as by count: a large string that many entries
+/// point at is copied only as often as the budget allows, not once for every entry.
+#[test]
+fn a_large_string_many_entries_point_at_is_copied_within_the_budget() {
+    let mut doc = fixture();
+    let big = doc.add(Object::String(PdfString::literal(vec![b'x'; 6_400])));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Junk".to_vec(), Object::Array(vec![Object::Ref(big); 1_000]));
+    let direct = crate::draw::with_direct_values(&doc, &d);
+    let copied = direct.get(b"Junk").and_then(Object::as_array).map_or(0, |a| a.iter().filter(|o| matches!(o, Object::String(_))).count());
+    assert_eq!(copied, crate::draw::INLINE_BUDGET / 101, "each copy costs 1 + 6,400 / 64 values");
+}
+
+/// One display pass shares its budget among the annotations it draws, and an appearance drawn
+/// after the pass ran out is not kept: the next pass, where the earlier ones come from the cache,
+/// draws it with the references followed.
+#[test]
+fn an_appearance_drawn_past_the_pass_budget_is_drawn_again() {
+    let mut doc = fixture();
+    let mut bs = Dict::new();
+    bs.set(b"W".to_vec(), Object::Int(6));
+    bs.set(b"Junk".to_vec(), Object::Array(vec![Object::Int(0); 65_000]));
+    let bs = doc.add(Object::Dict(bs));
+    let count = crate::draw::PASS_BUDGET / 65_003 + 1;
+    let page = page_ref(&doc, 0).unwrap();
+    let refs: Vec<Object> = (0..count)
+        .map(|_| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Annot"));
+            d.set(b"Subtype".to_vec(), Object::name("Square"));
+            d.set(b"Rect".to_vec(), num_array(&[20.0, 20.0, 180.0, 180.0]));
+            d.set(b"C".to_vec(), num_array(&[1.0, 0.0, 0.0]));
+            d.set(b"BS".to_vec(), Object::Ref(bs));
+            Object::Ref(doc.add(Object::Dict(d)))
+        })
+        .collect();
+    set_annots(&mut doc, page, refs).unwrap();
+    let mut cache = AppearanceCache::default();
+    let widths = |display: &Document| -> Vec<bool> { list(display, 0).iter().map(|d| ap_content(display, d).contains("\n6 w\n")).collect() };
+    let first = widths(&with_missing_appearances_cached(&doc, &mut cache).expect("drawn"));
+    assert!(first[0] && !first[count - 1], "the last square is past the pass budget");
+    let second = widths(&with_missing_appearances_cached(&doc, &mut cache).expect("drawn"));
+    assert!(second.iter().all(|w| *w), "the next pass draws it with its 6 pt border");
+}
+
+/// A text box whose border effect is an indirect cloudy one is drawn without following references,
+/// and so without its indirect text: it is not marked as drawn with `?` for text it doesn't show.
+#[test]
+fn the_fallback_drawing_is_marked_for_what_it_draws() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [100 100 300 130] /DA (0 g /Helv 12 Tf) /BE 5 0 R /Contents 6 0 R >>",
+        b"<< /S /C /I 1 >>",
+        b"<FEFF6B228FCE>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("drawn");
+    let shown = list(&display, 0).remove(0);
+    assert!(!ap_content(&display, &shown).contains('?'), "no text drawn");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&shown), None, "and no mark for it");
+}
+
 /// #3175: viewers draw a note without an appearance as a fixed-size icon at the upper-left corner
 /// of its `/Rect`. The display copy must not stretch the icon over a large `/Rect` or shrink it
 /// to nothing in one with no width.

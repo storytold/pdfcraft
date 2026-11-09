@@ -13,6 +13,9 @@ use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfStr
 /// A comment another program drew, whose text the standard fonts can't draw. Redrawing it would
 /// replace those characters with `?`, so the edit is refused before the dictionary changes.
 pub(crate) fn refuse_foreign_text(doc: &Document, d: &Dict) -> Result<(), AnnotError> {
+    // Text given by reference (`/Contents 9 0 R`, ISO 32000-2 §7.3.10) is drawn as followed.
+    let d = crate::draw::with_direct_values(doc, d);
+    let d = d.as_ref();
     let drawn_elsewhere =
         d.get(b"AP").is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N"))) && pdfcraft_fonts::undrawn_mark(d).is_none();
     if drawn_elsewhere && let Some((what, c)) = appearance::undrawable_text(d) {
@@ -224,7 +227,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
 /// top edge stay and the height fits the wrapped lines, as at creation. `None` keeps the old
 /// rectangle (the box can't be measured, so only the appearance is redrawn).
 fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
-    let d = annot_dict(doc, r);
+    let d = resolved(doc, &annot_dict(doc, r));
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
     let (_, size) = appearance::parse_da(&d);
     let pad = 2.0 + border_width_of(&d);
@@ -233,7 +236,11 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     // A callout re-fits its text box (`/Rect` inset by `/RD`); the leader line keeps its place.
     // So does a text box inside an oval or a circle.
     let tb = if d.contains(b"CL") {
-        let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| *x >= 0.0))?;
+        // `/RD` is optional (Table 177; null is absent, §7.3.9): without it the text box is `/Rect`.
+        let rd = match d.get(b"RD") {
+            None | Some(Object::Null) => vec![0.0; 4],
+            Some(_) => nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| *x >= 0.0))?,
+        };
         [rect[0] + rd[0], rect[1] + rd[1], rect[2] - rd[2], rect[3] - rd[3]]
     } else {
         text_box_of(&d).unwrap_or(rect)
@@ -698,6 +705,14 @@ fn border_width_of(d: &Dict) -> f64 {
     appearance::border_width(d)
 }
 
+/// `d` with the values the drawing reads followed where they are given by reference (ISO 32000-2
+/// §7.3.10; [`crate::draw::with_direct_values`]): `/Subtype`, `/Rect`, `/BS`, `/DA`, `/CA`,
+/// `/Contents`, `/InkList`, `/L`, … An edit reads the comment as the display draws it and writes
+/// these values back direct; the objects they pointed at, which others may share, are left alone.
+fn resolved(doc: &Document, d: &Dict) -> Dict {
+    crate::draw::with_direct_values(doc, d).into_owned()
+}
+
 /// Recompute `/Rect` for an `Ink` annotation when its stroke width changes from `old_w` to `w`.
 /// Preserves any baseline margin beyond `old_w / 2.0` (at least `1.0` pt) without accumulating
 /// padding across repeated width increases and decreases.
@@ -782,7 +797,8 @@ fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<O
 fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings } = change;
     unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
+    let before = annot_dict(doc, r);
+    let d = resolved(doc, &before);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
     if !crate::draw::can_draw(doc, &d) {
@@ -805,17 +821,14 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
     // So does a text box inside an oval or a circle, which goes around it again.
     let shape = if free_text { BorderShape::of(&d) } else { BorderShape::Rectangle };
     let typewriter = free_text && (d.name(b"IT") == Some(b"FreeTextTypeWriter") || shape != BorderShape::Rectangle) && !d.contains(b"CL");
-    // A border style given by reference (`/BS 5 0 R`, ISO 32000-2 §7.3.10): its width and other
-    // entries, which a new width keeps.
-    let direct = crate::draw::with_direct_values(doc, &d);
-    let (old_width, old_bs) = (border_width_of(&direct), direct.get(b"BS").and_then(Object::as_dict).cloned());
     let regrow = width.filter(|_| typewriter).and_then(|w| {
-        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { old_width } else { 0.0 };
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
         let rect = grow(text_box_of(&d)?, by);
         (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some((rect, w.max(0.0)))
     });
-    let before = d;
-    doc.update_dict(r, |d| {
+    doc.update_dict(r, |stored| {
+        stored.clone_from(&d);
+        let d = stored;
         if let Some((rect, w)) = regrow {
             shape_text_box(d, rect, shape, w);
         }
@@ -834,9 +847,10 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
             set_part_keys(d, appearance::PartOpacity { line: o, fill: o, text: o });
         }
         if let Some(w) = width {
-            let old_w = old_width;
+            let old_w = border_width_of(d);
             let w = w.max(0.0);
-            let mut bs = old_bs.unwrap_or_default();
+            // A border style given by reference keeps its other entries (a dashed one stays dashed).
+            let mut bs = d.get(b"BS").and_then(Object::as_dict).cloned().unwrap_or_default();
             bs.set(b"W".to_vec(), Object::Real(w));
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
@@ -874,7 +888,8 @@ pub(crate) fn free_text_da(text: Rgb, border: Option<Rgb>, size: f64) -> PdfStri
 pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
+    let before = annot_dict(doc, r);
+    let d = resolved(doc, &before);
     if d.name(b"Subtype") != Some(b"FreeText") {
         return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a border colour".into()));
     }
@@ -882,8 +897,9 @@ pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Op
         return Err(AnnotError::Invalid("invalid colour".into()));
     }
     refuse_foreign_text(doc, &d)?;
-    let before = d;
-    doc.update_dict(r, |d| {
+    doc.update_dict(r, |stored| {
+        stored.clone_from(&d);
+        let d = stored;
         let (text, size) = appearance::parse_da(d);
         d.set(b"DA".to_vec(), free_text_da(text, color, size));
         rich_text(d);
@@ -898,7 +914,8 @@ pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Op
 pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
+    let before = annot_dict(doc, r);
+    let d = resolved(doc, &before);
     if d.name(b"Subtype") != Some(b"FreeText") {
         return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font size".into()));
     }
@@ -907,8 +924,9 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     }
     refuse_foreign_text(doc, &d)?;
     let snug = is_snug(&d);
-    let before = d;
-    doc.update_dict(r, |d| {
+    doc.update_dict(r, |stored| {
+        stored.clone_from(&d);
+        let d = stored;
         let (col, _) = appearance::parse_da(d);
         d.set(b"DA".to_vec(), free_text_da(col, appearance::da_border(d), size));
         rich_text(d);
@@ -944,7 +962,8 @@ pub fn fillable(subtype: &str) -> bool {
 pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
+    let before = annot_dict(doc, r);
+    let d = resolved(doc, &before);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     if !fillable(&subtype) {
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
@@ -957,8 +976,9 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         return Err(AnnotError::Invalid("invalid fill colour".into()));
     }
     refuse_foreign_text(doc, &d)?;
-    let before = d;
-    doc.update_dict(r, |d| {
+    doc.update_dict(r, |stored| {
+        stored.clone_from(&d);
+        let d = stored;
         let key: &[u8] = if subtype == "FreeText" { b"C" } else { b"IC" };
         match fill {
             Some(c) => d.set(key.to_vec(), rgb(c)),
@@ -979,7 +999,8 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
 pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Option<f64>, text: Option<f64>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
+    let before = annot_dict(doc, r);
+    let d = resolved(doc, &before);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     if fill.is_some() && !fillable(&subtype) {
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes have a fill of their own".into()));
@@ -995,8 +1016,9 @@ pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Opt
         return Err(AnnotError::Unsupported(subtype));
     }
     refuse_foreign_text(doc, &d)?;
-    let before = d;
-    doc.update_dict(r, |d| {
+    doc.update_dict(r, |stored| {
+        stored.clone_from(&d);
+        let d = stored;
         let mut parts = appearance::part_opacity(d);
         if let Some(f) = fill {
             parts.fill = f.clamp(0.0, 1.0);
