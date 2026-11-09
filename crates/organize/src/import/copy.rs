@@ -107,6 +107,11 @@ impl<'a> Copier<'a> {
             Object::Ref(r) => self.copy_ref(dst, *r).map(Object::Ref),
             Object::Array(a) => a.iter().map(|x| self.copy_value(dst, x, None)).collect::<Result<Vec<_>, _>>().map(Object::Array),
             Object::Dict(d) => self.copy_dict(dst, d, this).map(Object::Dict),
+            // Opened without the password its embedded files need, the source holds their data
+            // encrypted: copied into another document, it would read as the file.
+            Object::Stream(s) if self.src.reads_as_stored(s) => Err(OrganizeError::Invalid(
+                "an attached file is encrypted and the document was opened without its password: open it with the password to copy it".into(),
+            )),
             Object::Stream(s) => self.copy_dict(dst, &s.dict, None).map(|dict| {
                 let mut s = s.clone();
                 s.dict = dict;

@@ -764,8 +764,18 @@ fn process(
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
     }
-    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && settings.target_ppi.is_finite();
     let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
+    let (nw, nh) = if resize {
+        // Downsampling never enlarges: a target above the image's own resolution (or a hostile
+        // settings value) must not size a buffer from the setting.
+        let k = (settings.target_ppi / ppi).min(1.0);
+        (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
+    } else {
+        (w, h)
+    };
+    // A target at or above the image's own resolution resizes nothing.
+    let resize = resize && (nw, nh) != (w, h);
     if !resize && !recompress {
         return None;
     }
@@ -773,12 +783,6 @@ fn process(
     if !resize && (w as u64) * (h as u64) < 64 * 64 {
         return None;
     }
-    let (nw, nh) = if resize {
-        let k = settings.target_ppi / ppi;
-        (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
-    } else {
-        (w, h)
-    };
     let px = pixels(doc, s, n, budget)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
@@ -1609,6 +1613,77 @@ fn at_least_pdf_1_4(doc: &mut Document) -> Result<(), OptimizeError> {
         doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name("1.4")))?;
     }
     Ok(())
+}
+
+/// The space a picture is re-encoded in by [`recolour_image`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageTarget {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+/// Re-encode an 8-bit gray or RGB picture (Flate or JPEG, no mask, no decode array) in
+/// `target`: gray and RGB pictures keep their compression (JPEG stays JPEG, compressed a second
+/// time at quality 80, so with some loss), CMYK is written lossless. A soft mask stays as it is,
+/// and so does a picture whose soft mask has a `/Matte`, which is a colour in the picture's own
+/// space. `None` when the picture is not one this handles, or already in the target space.
+pub fn recolour_image(doc: &Document, s: &Stream, target: ImageTarget) -> Option<Stream> {
+    let d = &s.dict;
+    if d.contains(b"Mask") || matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) || d.int(b"BitsPerComponent") != Some(8) {
+        return None;
+    }
+    if d.get(b"SMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Stream(m) if m.dict.contains(b"Matte"))) {
+        return None;
+    }
+    if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, 3)) && d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, 1)) {
+        return None;
+    }
+    let n = components(doc, d.get(b"ColorSpace")?)?;
+    let want = match target {
+        ImageTarget::Gray => 1,
+        ImageTarget::Rgb => 3,
+        ImageTarget::Cmyk => 4,
+    };
+    if n == want {
+        return None;
+    }
+    let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
+    // One picture a call: `pixels` itself refuses one past MAX_PIXELS, so no shared allowance is kept here.
+    let px = pixels(doc, s, n, &mut ImageBudget::with_work(u64::MAX))?;
+    let was_dct = is_dct(s)?;
+    let out: Vec<u8> = match (n, target) {
+        (3, ImageTarget::Gray) => {
+            px.as_chunks::<3>().0.iter().map(|p| ((299 * p[0] as u32 + 587 * p[1] as u32 + 114 * p[2] as u32) / 1000) as u8).collect()
+        }
+        (1, ImageTarget::Rgb) => px.iter().flat_map(|g| [*g, *g, *g]).collect(),
+        (1, ImageTarget::Cmyk) => px.iter().flat_map(|g| [0, 0, 0, 255 - *g]).collect(),
+        (3, ImageTarget::Cmyk) => px
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| {
+                let k = 255 - p.iter().copied().max().unwrap_or(0) as u32;
+                if k >= 255 {
+                    return [0u8, 0, 0, 255];
+                }
+                let f = |v: u8| (((255 - v as u32 - k) * 255) / (255 - k)).min(255) as u8;
+                [f(p[0]), f(p[1]), f(p[2]), k as u8]
+            })
+            .collect(),
+        _ => return None,
+    };
+    let mut dict = d.clone();
+    dict.set(
+        b"ColorSpace".to_vec(),
+        Object::name(match target {
+            ImageTarget::Gray => "DeviceGray",
+            ImageTarget::Rgb => "DeviceRGB",
+            ImageTarget::Cmyk => "DeviceCMYK",
+        }),
+    );
+    let compression = if want == 4 { Compression::Flate } else { Compression::Retain };
+    image_stream(&dict, &out, want, w, h, compression, was_dct)
 }
 
 #[cfg(test)]

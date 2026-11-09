@@ -234,6 +234,42 @@ impl SecurityHandler {
         Ok(Self::new(dict, key, auth, recovered_user))
     }
 
+    /// A handler with no file key, for a document opened without a password whose strings and
+    /// streams aren't encrypted and whose encrypted crypt filters are all ones the caller found
+    /// authorised only when an embedded file is opened (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6,
+    /// Table 25). Data such a filter encrypts is left as stored, read and written alike, so it
+    /// keeps its encrypted bytes; [`SecurityHandler::decrypts`] tells which. `None` when strings or
+    /// streams are encrypted, which needs the key, or the handler is older than crypt filters (V4).
+    pub fn without_key(dict: EncryptDict) -> Option<Self> {
+        if dict.v < 4 {
+            return None;
+        }
+        let methods = Methods::new(&dict);
+        if methods.string != Method::Identity || methods.stream != Method::Identity {
+            return None;
+        }
+        Some(Self { dict, key: Vec::new(), auth: Auth::User, recovered_user: None, methods })
+    }
+
+    /// Whether the handler has the file key: false for [`SecurityHandler::without_key`].
+    pub fn has_key(&self) -> bool {
+        !self.key.is_empty()
+    }
+
+    /// Whether data of `kind` is encrypted, so that reading it needs the file key.
+    pub fn decrypts(&self, kind: StreamKind) -> bool {
+        self.method(Some(kind)) != Method::Identity
+    }
+
+    /// Whether data left as stored by a handler without the key still decrypts after its object
+    /// is renumbered: only AES-256 doesn't mix the object number into the key (Algorithm 1.A).
+    pub fn survives_renumbering(&self) -> bool {
+        [self.methods.string, self.methods.stream, self.methods.embedded_file]
+            .into_iter()
+            .chain(self.methods.named.values().copied())
+            .all(|m| matches!(m, Method::Identity | Method::Aes256))
+    }
+
     /// Upgrade to owner access with the owner (permissions) password, as when a restricted
     /// document is unlocked after opening. The user password, or any other, is `WrongPassword`.
     /// Both passwords unlock the same file key, so what was decrypted so far stays valid; a
@@ -267,7 +303,7 @@ impl SecurityHandler {
 
     /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.
     fn perms_p(&self) -> Option<i32> {
-        if !matches!(self.dict.r, 5 | 6) {
+        if !matches!(self.dict.r, 5 | 6) || !self.has_key() {
             return None;
         }
         let plain = aes_cbc_decrypt(&self.key, &[0; 16], self.dict.perms.first_chunk::<16>()?, false);
@@ -332,6 +368,10 @@ impl SecurityHandler {
     }
 
     fn apply(&self, method: Method, num: u32, generation: u16, data: &[u8], encrypt: bool) -> Vec<u8> {
+        // Without the key, encrypted data stays as stored (see `without_key`).
+        if !self.has_key() {
+            return data.to_vec();
+        }
         match method {
             Method::Identity => data.to_vec(),
             Method::Rc4 => rc4(&self.object_key(method, num, generation), data),

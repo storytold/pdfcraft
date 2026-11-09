@@ -1,4 +1,4 @@
-use super::{Arc, Face, HAlign, Rect, Span};
+use super::{Arc, Face, HAlign, Rect, Span, Views};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -27,6 +27,12 @@ pub enum Item {
         content_type: String,
     },
     Widget(Box<Widget>),
+    /// An item drawn only on screen or only in print (XFA `relevant`, `presence`): written in an
+    /// optional content group whose usage says so.
+    Only {
+        views: Views,
+        item: Box<Item>,
+    },
     /// A draw turned about its anchor.
     Turned(Box<Turned>),
 }
@@ -147,6 +153,10 @@ pub struct Widget {
     /// Date fields: the date letters of the display picture (`<format><picture>`), how the value
     /// shows when it isn't being typed in. `None`: as the edit pattern writes it.
     pub display_date: Option<String>,
+    /// Where the field is shown: on screen, in print, or both (its annotation flags).
+    pub views: Views,
+    /// The field must be filled in (`Required`); a radio button, when its group must be.
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -154,6 +164,8 @@ pub struct Page {
     pub width: f64,
     pub height: f64,
     pub items: Vec<Item>,
+    /// The name of the page area the page was made from (`None` for an unnamed one).
+    pub area: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

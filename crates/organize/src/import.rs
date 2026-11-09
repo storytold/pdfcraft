@@ -31,8 +31,8 @@ mod combine;
 mod copy;
 mod fields;
 
-pub(crate) use carry::set_attachments;
 use carry::{Mark, source_outline, write_outline_level};
+pub(crate) use carry::{set_attachments, set_attachments_exact};
 pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
     extract_pages, split, split_ranges,
@@ -103,8 +103,8 @@ fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
 /// Insert Pages from File: [`import_pages_with`], and the inserted file's bookmarks come along
 /// under one new bookmark titled `title` (the file's name) at its first inserted page, as Combine
 /// Files does for each file. That bookmark goes among the top-level bookmarks where the pages went:
-/// before the first one that points after them. Bookmarks to pages left out lose their destination;
-/// a file without bookmarks adds none.
+/// before the first one that points after them. Bookmarks to pages left out stay behind, unless a
+/// bookmark below them leads to an inserted page; a file without bookmarks adds none.
 pub fn insert_file_pages(
     dst: &mut Document,
     src: &Document,
