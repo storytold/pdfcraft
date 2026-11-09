@@ -477,7 +477,20 @@ impl Type0Font {
             } else {
                 code
             };
-            if let Some(s) = to_unicode.lookup_bf_string(key) {
+            // PdfCraft patch (85): a `/ToUnicode` written as a CID CMap (`begincidrange` /
+            // `begincidchar`, whose destinations are numbers) gives the code's Unicode value as
+            // that number, as glyph lookup already reads it (`map_via_unicode`) and as pdftotext
+            // and PDFium extract it. ISO 32000-2 §9.10.3 has `beginbfrange` / `beginbfchar` here;
+            // Word writes CID ranges, and such text extracted nothing.
+            if let Some(s) = to_unicode.lookup_bf_string(key).or_else(|| {
+                (1..=4)
+                    .find_map(|len| {
+                        to_unicode
+                            .lookup_cid_code(key, len)
+                            .and_then(|cid| char::from_u32(cid.to_u32()))
+                    })
+                    .map(BfString::Char)
+            }) {
                 return Some(s);
             }
         }
