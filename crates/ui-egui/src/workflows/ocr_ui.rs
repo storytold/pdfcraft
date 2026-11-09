@@ -236,8 +236,9 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
 /// The dialog's height outside its scrolling settings: the title, a notice of up to two lines,
 /// the Cancel / Recognize text row and the modal's own margins.
 const OCR_DIALOG_RESERVE: f32 = 220.0;
-/// The least the settings scroll in, however short the window.
-const OCR_MIN_SCROLL: f32 = 120.0;
+/// The least the settings scroll in, however short the window: small enough that the title and the
+/// buttons still fit the smallest window at the largest interface size (173 pt), as Preferences.
+const OCR_MIN_SCROLL: f32 = 40.0;
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));

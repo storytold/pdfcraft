@@ -471,7 +471,8 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
 #[test]
 fn recognize_text_keeps_its_buttons_in_a_short_window() {
     use egui::accesskit::Role;
-    for height in [400.0, 480.0, 560.0, 700.0] {
+    // 173 is the smallest window (520 pt) at the largest interface size (300%), 208 is 250%.
+    for height in [173.0, 208.0, 260.0, 400.0, 480.0, 560.0, 700.0] {
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, height)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
