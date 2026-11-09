@@ -785,7 +785,7 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build(doc, &d).is_none() {
+    if !crate::draw::can_draw(doc, &d) {
         return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
@@ -805,8 +805,12 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
     // So does a text box inside an oval or a circle, which goes around it again.
     let shape = if free_text { BorderShape::of(&d) } else { BorderShape::Rectangle };
     let typewriter = free_text && (d.name(b"IT") == Some(b"FreeTextTypeWriter") || shape != BorderShape::Rectangle) && !d.contains(b"CL");
+    // A border style given by reference (`/BS 5 0 R`, ISO 32000-2 §7.3.10): its width and other
+    // entries, which a new width keeps.
+    let direct = crate::draw::with_direct_values(doc, &d);
+    let (old_width, old_bs) = (border_width_of(&direct), direct.get(b"BS").and_then(Object::as_dict).cloned());
     let regrow = width.filter(|_| typewriter).and_then(|w| {
-        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { old_width } else { 0.0 };
         let rect = grow(text_box_of(&d)?, by);
         (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some((rect, w.max(0.0)))
     });
@@ -830,9 +834,9 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
             set_part_keys(d, appearance::PartOpacity { line: o, fill: o, text: o });
         }
         if let Some(w) = width {
-            let old_w = border_width_of(d);
+            let old_w = old_width;
             let w = w.max(0.0);
-            let mut bs = d.get(b"BS").and_then(|b| b.as_dict()).cloned().unwrap_or_default();
+            let mut bs = old_bs.unwrap_or_default();
             bs.set(b"W".to_vec(), Object::Real(w));
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
@@ -946,7 +950,7 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
-    if appearance::build(doc, &d).is_none() {
+    if !crate::draw::can_draw(doc, &d) {
         return Err(AnnotError::Unsupported(subtype));
     }
     if fill.is_some_and(|c| !finite(&c)) {
@@ -987,7 +991,7 @@ pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Opt
         return Err(AnnotError::Invalid("invalid opacity".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new opacity.
-    if appearance::build(doc, &d).is_none() {
+    if !crate::draw::can_draw(doc, &d) {
         return Err(AnnotError::Unsupported(subtype));
     }
     refuse_foreign_text(doc, &d)?;
