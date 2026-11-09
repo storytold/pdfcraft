@@ -294,8 +294,10 @@ fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
     let Object::Stream(s) = &*doc.get(obj) else { return Vec::new() };
     // The stream is one this writer put there, so its decode is bounded by the stream itself: the
     // page limit alone would refuse an item larger than a page's content, and its fonts would stay
-    // on the page's /Font, which `write` and `delete_content` are supposed to take them off.
-    let limit = pdfcraft_cos::MAX_PAGE_DECODED.max(s.raw.len().saturating_mul(16));
+    // on the page's /Font, which `write` and `delete_content` are supposed to take them off. The
+    // ceiling is the 1 GiB the old `decoded()` allowed, so an item between the page limit and it
+    // still has its fonts found.
+    let limit = (1usize << 30).max(s.raw.len().saturating_mul(16));
     let Ok(data) = s.decoded_within(limit) else { return Vec::new() };
     // Each name once: a stream that repeats a name is not copied out once per use.
     let names: std::collections::BTreeSet<&[u8]> =
