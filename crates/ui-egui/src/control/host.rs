@@ -100,6 +100,8 @@ impl Host for crate::PdfCraftApp {
                 "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
+                // Pages cut at the renderer's limits (#623), 1-based.
+                "cut_pages": v.cut_pages().iter().map(|p| p + 1).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
                 "pages_on_screen": v.visible_page_rects().iter().map(|(p, r)| json!({ "page": p + 1, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
                 "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
@@ -144,6 +146,8 @@ impl Host for crate::PdfCraftApp {
             "default_mode": self.default_mode,
             "hotbar": self.hotbar,
             "comment_tool_pinned": self.comment_prefs.pinned,
+            // Home's pinned folders, in order, and whether each is folded down to its heading.
+            "pinned_folders": self.pinned.folders.iter().map(|f| json!({ "folder": f, "collapsed": self.pinned.collapsed.contains(f) })).collect::<Vec<_>>(),
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": if self.side_panels.tools_on_right() { "right" } else { "left" },
             "rail_side": if self.side_panels.rail_on_right() { "right" } else { "left" },

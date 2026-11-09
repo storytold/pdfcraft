@@ -25,7 +25,7 @@ pub mod spool;
 #[cfg(test)]
 mod tests;
 
-pub use range::{Subset, select_listed, select_pages};
+pub use range::{Subset, position, select_listed, select_pages};
 
 mod error;
 mod imposition;
@@ -42,4 +42,4 @@ pub use settings::{
 };
 #[cfg(test)]
 use sheets::text_direction;
-pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up};
+pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up, texts_read_up};

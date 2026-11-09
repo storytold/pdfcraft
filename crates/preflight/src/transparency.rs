@@ -131,6 +131,16 @@ fn walk_page<'a>(doc: &'a Document, page: &Dict, shared: &'a mut Shared) -> Walk
     walk
 }
 
+/// The default colour space resource name and component count for a device colour space name.
+fn device_default_space(name: &[u8]) -> Option<(&'static [u8], i64)> {
+    match name {
+        b"DeviceGray" => Some((b"DefaultGray", 1)),
+        b"DeviceRGB" => Some((b"DefaultRGB", 3)),
+        b"DeviceCMYK" => Some((b"DefaultCMYK", 4)),
+        _ => None,
+    }
+}
+
 /// Whether `page` names a blending colour space PDF/A accepts without an output intent: its
 /// `/Group` has a `/CS` that is a blending colour space (ISO 32000-1 and 32000-2 11.3.4:
 /// `CalGray`, `CalRGB`, or an `ICCBased` space of 1, 3 or 4 components whose profile describes
@@ -142,10 +152,19 @@ pub(crate) fn page_names_blending_space(doc: &Document, page: &Dict) -> bool {
     let group = page.get(b"Group").map(|g| doc.resolve(g));
     let Some(cs) = group.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"CS")).map(|c| doc.resolve(c)) else { return false };
     let (default, components): (&[u8], i64) = match &*cs {
-        Object::Name(n) if n == b"DeviceGray" => (b"DefaultGray", 1),
-        Object::Name(n) if n == b"DeviceRGB" => (b"DefaultRGB", 3),
-        Object::Name(n) if n == b"DeviceCMYK" => (b"DefaultCMYK", 4),
-        Object::Array(a) => return independent_blending_space(doc, a).is_some(),
+        Object::Name(n) => {
+            let Some(space) = device_default_space(n) else { return false };
+            space
+        }
+        Object::Array(a) => match a.as_slice() {
+            [only] => {
+                let Some(space) = doc.resolve(only).as_name().and_then(device_default_space) else {
+                    return independent_blending_space(doc, a).is_some();
+                };
+                space
+            }
+            _ => return independent_blending_space(doc, a).is_some(),
+        },
         _ => return false,
     };
     let resources = page.get(b"Resources").map(|r| doc.resolve(r));
@@ -268,7 +287,7 @@ impl Walk<'_> {
 
     /// A graphics state (ISO 32000-1 Table 58): whether it paints transparently, and the blend
     /// modes it names that ISO 32000-1 doesn't define.
-    fn ext_gstate(&mut self, g: &Object, _depth: usize) {
+    fn ext_gstate(&mut self, g: &Object, depth: usize) {
         let doc = self.doc;
         let g = held(doc, g);
         let Some(g) = g.as_dict() else { return };
@@ -276,10 +295,16 @@ impl Walk<'_> {
         let bm = g.get(b"BM").map(|b| held(doc, b));
         let blend = bm.as_deref().is_some_and(|b| blends(doc, b));
         // A soft mask is a dictionary; `/None`, null or anything else is none (ISO 32000-1 Table 58).
-        let mask = g.get(b"SMask").map(|m| held(doc, m)).is_some_and(|m| matches!(&*m, Object::Dict(_)));
+        let smask = g.get(b"SMask").map(|m| held(doc, m));
+        let mask = smask.as_deref().is_some_and(|m| matches!(m, Object::Dict(_)));
         self.found.transparency |= below_one(b"CA") || below_one(b"ca") || blend || mask;
         if let Some(bm) = bm.as_deref() {
             unknown_blend_modes(doc, bm, &mut self.found);
+        }
+        if let Some(Object::Dict(m)) = smask.as_deref()
+            && let Some(group) = m.get(b"G")
+        {
+            self.visit(group, depth + 1, Self::xobject);
         }
     }
 
@@ -290,13 +315,16 @@ impl Walk<'_> {
         let x = held(doc, x);
         let Object::Stream(s) = &*x else { return };
         let d = &s.dict;
-        if d.name(b"Subtype") == Some(b"Image") {
+        if d.get(b"Subtype").is_some_and(|s| held(doc, s).as_name() == Some(b"Image")) {
             let soft_mask = d.get(b"SMask").is_some_and(|m| matches!(&*held(doc, m), Object::Stream(_)));
             let in_data = d.get(b"SMaskInData").and_then(|v| held(doc, v).as_int()).is_some_and(|v| v > 0);
             self.found.transparency |= soft_mask || in_data;
             return;
         }
-        let group = d.get(b"Group").map(|g| held(doc, g)).is_some_and(|g| g.as_dict().is_some_and(|g| g.name(b"S") == Some(b"Transparency")));
+        let group = d
+            .get(b"Group")
+            .map(|g| held(doc, g))
+            .is_some_and(|g| g.as_dict().is_some_and(|g| g.get(b"S").is_some_and(|s| held(doc, s).as_name() == Some(b"Transparency"))));
         self.found.transparency |= group;
         if let Some(r) = d.get(b"Resources") {
             self.visit(r, depth + 1, Self::resources);
@@ -323,9 +351,10 @@ impl Walk<'_> {
 
     /// A Type 3 font's resources, which its glyph procedures paint with.
     fn type3(&mut self, f: &Object, depth: usize) {
-        let f = held(self.doc, f);
+        let doc = self.doc;
+        let f = held(doc, f);
         let Some(d) = f.as_dict() else { return };
-        if d.name(b"Subtype") != Some(b"Type3") {
+        if !d.get(b"Subtype").is_some_and(|s| held(doc, s).as_name() == Some(b"Type3")) {
             return;
         }
         if let Some(r) = d.get(b"Resources") {
@@ -387,5 +416,111 @@ fn blends(doc: &Document, b: &Object) -> bool {
         Object::Name(n) => !normal(n),
         Object::Array(a) => a.iter().find_map(|m| doc.resolve(m).as_name().map(|n| !normal(n))).unwrap_or(false),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use pdfcraft_cos::Document;
+
+    use super::{Shared, page_names_blending_space, page_painting};
+    use crate::{Level, verify};
+
+    fn build(objs: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        let id = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {id} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).unwrap()
+    }
+
+    #[test]
+    fn walks_soft_mask_transparency_group_for_unknown_blend_modes() {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G0 << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /G1 << /BM /MaskCustom >> >> >> /Length 0 >>\nstream\n\nendstream",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        let painting = page_painting(&doc, &page.dict, &mut Shared::default());
+        assert!(painting.transparency);
+        assert_eq!(painting.unknown_blend_modes, ["MaskCustom"]);
+        let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+        assert_eq!(messages, ["A graphics state uses the blend mode MaskCustom, which ISO 32000-1 doesn't define"]);
+    }
+
+    #[test]
+    fn resolves_indirect_subtypes_and_transparency_group_kinds() {
+        // Indirect `/Image` subtype on an image with `/SMaskInData 1`.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im 4 0 R >> >> >>",
+            "<< /Type /XObject /Subtype 5 0 R /Width 1 /Height 1 /SMaskInData 1 /Length 0 >>\nstream\n\nendstream",
+            "/Image",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        assert!(page_painting(&doc, &page.dict, &mut Shared::default()).transparency);
+
+        // Indirect `/Transparency` group kind `/S` on a form XObject.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Fm 4 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Group << /S 5 0 R >> /Length 0 >>\nstream\n\nendstream",
+            "/Transparency",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        assert!(page_painting(&doc, &page.dict, &mut Shared::default()).transparency);
+
+        // Indirect `/Type3` subtype on a font with translucent resources and an unknown blend mode.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F0 4 0 R >> >> >>",
+            "<< /Type /Font /Subtype 5 0 R /Resources << /ExtGState << /G << /ca 0.5 /BM /T3Mode >> >> >> >>",
+            "/Type3",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        let painting = page_painting(&doc, &page.dict, &mut Shared::default());
+        assert!(painting.transparency);
+        assert_eq!(painting.unknown_blend_modes, ["T3Mode"]);
+    }
+
+    #[test]
+    fn accepts_single_element_device_colour_array_with_default_space() {
+        let cal_rgb = "[/CalRGB << /WhitePoint [0.9505 1 1.089] >>]";
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 /MediaBox [0 0 200 200] >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/DeviceRGB] >> /Resources << /ColorSpace << /DefaultRGB {cal_rgb} >> >> >>"
+            ),
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [7 0 R] >> /Resources << /ColorSpace << /DefaultRGB {cal_rgb} >> >> >>"
+            ),
+            "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/DeviceRGB] >> /Resources << >> >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/DeviceRGB /Extra] >> /Resources << /ColorSpace << /DefaultRGB {cal_rgb} >> >> >>"
+            ),
+            "/DeviceRGB",
+        ]);
+        let pages = pdfcraft_model::pages(&doc);
+        assert!(page_names_blending_space(&doc, &pages[0].dict));
+        assert!(page_names_blending_space(&doc, &pages[1].dict));
+        assert!(!page_names_blending_space(&doc, &pages[2].dict));
+        assert!(!page_names_blending_space(&doc, &pages[3].dict));
     }
 }

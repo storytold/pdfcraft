@@ -169,7 +169,8 @@ impl<'a> Inspector<'a> {
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
         {
-            me.name_tree_raw(tree, &mut HashSet::new(), 0, &mut named);
+            let mut key_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+            me.name_tree_raw(tree, &mut HashSet::new(), 0, &mut named, &mut key_budget);
         }
         me.named = named;
         me
@@ -221,6 +222,10 @@ impl<'a> Inspector<'a> {
             Ok(notes) => info.warnings.extend(notes.into_iter().map(|note| format!("Page labels: {note}."))),
             Err(reason) => info.warnings.push(format!("Page labels were skipped: {reason}; using physical page numbers.")),
         }
+        info.uri_base = catalog.get(b"URI").ok().and_then(|o| self.dict(o)).and_then(|d| match d.get(b"Base").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) if bytes.len() <= crate::MAX_URI_BASE_BYTES => std::str::from_utf8(bytes).ok().map(str::to_owned),
+            _ => None,
+        });
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
         if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
             (info.outline, info.outline_more) = self.outline_window(first, &mut text_budget);
@@ -266,6 +271,7 @@ impl<'a> Inspector<'a> {
         }
         self.layers(catalog, &mut info.layers);
         info.layer_groups = self.layer_groups(catalog);
+        info.layer_order = self.layer_order(catalog, &info.layers);
         self.fonts(&mut info.fonts);
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
             if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {
