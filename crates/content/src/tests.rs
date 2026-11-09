@@ -43,6 +43,17 @@ fn a_given_up_array_keeps_the_operator_after_it() {
     assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
 }
 
+/// Damage to one array does not hide a later one: a closing delimiter ends it, so a valid `TJ`
+/// array after a given-up array still reaches the operator as an array.
+#[test]
+fn a_valid_array_after_a_given_up_one_is_parsed() {
+    let mut src = "[".repeat(4096);
+    src.push_str("] [(A) -50 (B)] TJ");
+    let p = parse(src.as_bytes());
+    let tj = p.ops.iter().find(|o| o.is("TJ")).expect("the operator after the valid array");
+    assert!(matches!(tj.operands.first(), Some(Object::Array(a)) if a.len() == 3), "{:?}", tj.operands);
+}
+
 #[test]
 fn a_long_unreadable_number_is_read_once() {
     for junk in ["+", "5"] {

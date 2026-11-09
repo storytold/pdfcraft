@@ -259,7 +259,13 @@ impl Iterator for Ops<'_> {
                 continue;
             }
             if is_delim(b) {
-                // A stray `)`, `>`, `]`, `{`, `}`.
+                // A stray `)`, `>`, `]`, `{`, `}`. A `]` closes the damage an array opener left
+                // behind, so a later `[` is a new array and is parsed rather than skipped. Only a
+                // closing delimiter re-arms the attempt: an unterminated nest of openers, which
+                // reads to the end of the stream at each one, is still read once.
+                if b == b']' {
+                    *arrays_given_up = false;
+                }
                 lx.pos += 1;
                 *skipped += 1;
                 continue;
