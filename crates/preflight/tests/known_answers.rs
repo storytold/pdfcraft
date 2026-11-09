@@ -22,7 +22,8 @@ use pdfcraft_preflight::{Level, convert, declared, icc, verify};
 /// A document from hand-written objects and extra trailer entries (copied from the crate's unit
 /// tests).
 fn build(objs: &[&str], trailer_extra: &str) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
+    // ISO 19005-2 6.1.2: the header line is followed by a comment of four bytes above 127.
+    let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
