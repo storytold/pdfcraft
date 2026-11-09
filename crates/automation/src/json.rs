@@ -388,6 +388,9 @@ pub(crate) fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "warnings": i.warnings,
         "repairs": d.repair_log(),
+        // Objects that could not be read (each reads as null): nothing was repaired, what they held is
+        // lost. Last, so it includes what reading the fields above failed on.
+        "unreadable_objects": d.unreadable_objects(),
     })
 }
 

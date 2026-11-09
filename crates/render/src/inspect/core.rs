@@ -1,4 +1,4 @@
-use super::annotations::{MAX_ANNOTATION_NAME_INDEX_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES};
+use super::annotations::{FieldWalk, MAX_ANNOTATION_NAME_INDEX_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
@@ -81,6 +81,9 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         Ok(p) => info.pages = p,
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
+    // Never silent: the pages of a file whose last update has no `/Prev` were found by rebuilding
+    // its cross-reference data (`pdfcraft-cos` rebuilds it under the same conditions and logs it).
+    let unlinked = pdf.rebuilt_unlinked_update();
     let options = load_options(password);
     // Geometry no longer needs the renderer parser. Do not overlap its allocations with
     // structural inspection, including the compatibility fallback for damaged files.
@@ -111,8 +114,16 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
     if info.pages.is_empty() {
         return Err(OpenError::Invalid("the document has no pages".into()));
     }
+    if unlinked {
+        info.warnings.push(UNLINKED_UPDATE.into());
+    }
     Ok(info)
 }
+
+/// The warning for a file whose pages were found by rebuilding its cross-reference data because its
+/// last update has no `/Prev` (ISO 32000-2 §7.5.6, §7.5.8.2).
+const UNLINKED_UPDATE: &str =
+    "This file's last update has no link (/Prev) to its earlier revisions; its pages were found by rebuilding the cross-reference data.";
 
 // Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
 pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
@@ -155,6 +166,9 @@ pub(super) struct Inspector<'a> {
     pub(super) annotation_names: OnceCell<Vec<OnceCell<AnnotationNames>>>,
     /// What is left of [`MAX_ANNOTATION_NAME_INDEX_BYTES`] for `annotation_names`.
     pub(super) annotation_name_budget: Cell<usize>,
+    /// The first page widget naming each field as its `/Parent`, built when a field has no widget
+    /// among its `/Kids`.
+    pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,
 }
 
 impl<'a> Inspector<'a> {
@@ -168,6 +182,7 @@ impl<'a> Inspector<'a> {
             named: HashMap::new(),
             annotation_pages: OnceCell::new(),
             annotation_names: OnceCell::new(),
+            parent_widgets: OnceCell::new(),
             annotation_name_budget: Cell::new(MAX_ANNOTATION_NAME_INDEX_BYTES),
         };
         let mut named = HashMap::new();
@@ -229,12 +244,13 @@ impl<'a> Inspector<'a> {
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
         self.annotations(info, &mut text_budget);
         self.transitions(info);
-        let mut field_seen = HashSet::new();
+        let mut walk = FieldWalk::default();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
             && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
         {
+            walk.roots = fields.iter().filter_map(|f| if let Object::Reference(id) = f { Some(*id) } else { None }).collect();
             for f in fields {
-                self.field(f, None, &mut info.fields, &mut field_seen, 0);
+                self.field(f, None, &mut info.fields, &mut walk, 0);
             }
         }
         // Widgets no `/Fields` entry reaches are fields too (Acrobat and the browsers fill them);
@@ -250,9 +266,9 @@ impl<'a> Inspector<'a> {
                     continue;
                 }
                 if let Object::Reference(id) = a
-                    && let Some(root) = self.unlisted_field(*id, &field_seen)
+                    && let Some(root) = self.unlisted_field(*id, &walk.seen)
                 {
-                    self.field(&Object::Reference(root), None, &mut info.fields, &mut field_seen, 0);
+                    self.field(&Object::Reference(root), None, &mut info.fields, &mut walk, 0);
                 }
             }
         }
@@ -447,5 +463,42 @@ mod open_action_javascript_tests {
         let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
         let info = inspect(Arc::new(bytes), None).expect("inspects");
         assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod unlinked_update_tests {
+    use super::*;
+
+    /// An update without `/Prev` cuts the page tree off the chain; the pages come from the
+    /// rebuilt table, the page tree's pages in its order, and the file says it was rebuilt.
+    #[test]
+    fn an_update_without_prev_shows_the_page_tree_and_says_it_was_rebuilt() {
+        let info = inspect(Arc::new(pdfcraft_testkit::update_without_prev(false)), None).expect("the unlinked file opens");
+        assert_eq!(info.pages.len(), 3, "{:?}", info.pages);
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        // The structure is read from the rebuilt table as well: the second page's link.
+        assert_eq!(info.links.len(), 1, "{:?}", info.links);
+        let linked = inspect(Arc::new(pdfcraft_testkit::update_without_prev(true)), None).expect("the linked file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert_eq!(linked.links.len(), 1);
+    }
+
+    /// A hybrid update's `/XRefStm` stream is part of that update, not an earlier section: without
+    /// `/Prev` the file is rebuilt as the document model rebuilds it, and with it, it isn't.
+    #[test]
+    fn a_hybrid_update_without_prev_is_rebuilt_as_the_document_model_rebuilds_it() {
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false));
+        let info = inspect(bytes.clone(), None).expect("the unlinked hybrid file opens");
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        assert!(pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true));
+        let linked = inspect(bytes.clone(), None).expect("the linked hybrid file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert!(!pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
     }
 }
