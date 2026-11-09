@@ -251,7 +251,7 @@ impl Drop for WorkerPermit {
 /// Dropping it releases the sender; after any active job finishes the worker exits and drops its realm.
 #[derive(Default)]
 pub struct ScriptSession {
-    sender: Option<mpsc::SyncSender<(Job, mpsc::Sender<InteractiveEvent>)>>,
+    sender: Option<mpsc::SyncSender<(Job, bool, mpsc::Sender<InteractiveEvent>)>>,
     busy: Arc<std::sync::atomic::AtomicBool>,
     worker_lifetime: std::sync::Weak<()>,
     instances: FieldInstances,
@@ -262,12 +262,16 @@ pub struct ScriptSession {
 #[cfg(not(target_arch = "wasm32"))]
 impl ScriptSession {
     /// Start a bounded-stack native worker lazily and reject a second active job, including during prompts.
-    pub fn start(&mut self, mut job: Job) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
+    pub fn start(&mut self, job: Job) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
+        self.start_job(job, false)
+    }
+
+    fn start_job(&mut self, mut job: Job, english_retry: bool) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
         if self.sender.is_none() {
             if self.worker_lifetime.upgrade().is_some() {
                 return Err("the timed-out script is still stopping; retry once it exits".into());
             }
-            let (tx, rx) = mpsc::sync_channel::<(Job, mpsc::Sender<InteractiveEvent>)>(1);
+            let (tx, rx) = mpsc::sync_channel::<(Job, bool, mpsc::Sender<InteractiveEvent>)>(1);
             let permit = WorkerPermit::acquire()?;
             let lifetime = Arc::new(());
             self.worker_lifetime = Arc::downgrade(&lifetime);
@@ -278,9 +282,25 @@ impl ScriptSession {
                     let _lifetime = lifetime;
                     let _permit = permit;
                     let mut realm = Realm::new();
-                    while let Ok((job, reply)) = rx.recv() {
-                        crate::interaction::set_host(Some(reply.clone()));
-                        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| realm.run(job)));
+                    while let Ok((job, english_retry, reply)) = rx.recv() {
+                        crate::interaction::set_host((!english_retry).then(|| reply.clone()));
+                        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if english_retry {
+                                crate::with_english_printd(true, || {
+                                    crate::run::run_shared_here(
+                                        &job.script,
+                                        &job.event,
+                                        &job.doc,
+                                        job.fields,
+                                        &job.doc_scripts,
+                                        &job.calculations,
+                                        Limits::default(),
+                                    )
+                                })
+                            } else {
+                                realm.run(job)
+                            }
+                        }));
                         crate::interaction::set_host(None);
                         let out = out.unwrap_or_else(|_| {
                             realm = Realm::new();
@@ -300,14 +320,16 @@ impl ScriptSession {
         if self.busy.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_err() {
             return Err("another script is active in this document".into());
         }
-        self.instances.stamp(&mut job);
-        self.stamp_icons(&mut job);
+        if !english_retry {
+            self.instances.stamp(&mut job);
+            self.stamp_icons(&mut job);
+        }
         let (tx, rx) = mpsc::channel();
         let Some(sender) = self.sender.as_ref() else {
             self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("script worker unavailable".into());
         };
-        sender.try_send((job, tx)).map_err(|_| {
+        sender.try_send((job, english_retry, tx)).map_err(|_| {
             self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
             "script worker disconnected"
         })?;
@@ -340,8 +362,17 @@ impl ScriptSession {
     }
     /// Run a callback within the remaining time of a larger operation.
     pub fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
+        self.run_timed(job, answers, limit, false)
+    }
+
+    /// Retry formatting in a fresh context on the document worker, within the caller's remaining time.
+    pub fn run_english_retry(&mut self, job: Job, limit: std::time::Duration) -> Outcome {
+        self.run_timed(job, &[], limit, true)
+    }
+
+    fn run_timed(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration, english_retry: bool) -> Outcome {
         let started = std::time::Instant::now();
-        let rx = match self.start(job) {
+        let rx = match self.start_job(job, english_retry) {
             Ok(rx) => rx,
             Err(e) => return Outcome { execution_refused: true, error: Some(e), ..Default::default() },
         };
@@ -689,6 +720,19 @@ mod tests {
         assert!(session.sender.is_none());
         drop(worker);
         assert_eq!(session.run(job("1+1"), &[]).result.as_deref(), Some("2"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn english_retry_is_isolated_and_obeys_the_remaining_time() {
+        use std::time::Duration;
+        let mut session = ScriptSession::default();
+        assert_eq!(session.run(job("var retained = 17; retained;"), &[]).result.as_deref(), Some("17"));
+        let retry = session.run_english_retry(job("var retryOnly = 1; typeof retained;"), Duration::from_secs(2));
+        assert_eq!(retry.result.as_deref(), Some("undefined"));
+        assert_eq!(session.run(job("retained + '/' + typeof retryOnly;"), &[]).result.as_deref(), Some("17/undefined"));
+        let expired = session.run_english_retry(job("1;"), Duration::ZERO);
+        assert!(expired.execution_refused);
     }
 
     #[test]

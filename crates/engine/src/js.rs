@@ -627,9 +627,34 @@ impl Scripts for JsRunner {
         let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         ev.target_id = Some(field_object_id(target.obj));
         let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields));
+        #[cfg(target_arch = "wasm32")]
         let o = pdfcraft_js::with_english_printd(true, || {
             pdfcraft_js::run_shared_calculations(script, &ev, &self.doc, states, &self.doc_scripts, calculations, Limits::default())
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        let o = {
+            let job = pdfcraft_js::session::Job {
+                script: script.into(),
+                event: ev,
+                doc: self.doc.clone(),
+                fields: states,
+                doc_scripts: self.doc_scripts.clone(),
+                calculations: calculations.clone(),
+            };
+            let remaining = self.callback_time_left();
+            let outcome = if remaining.is_zero() {
+                Outcome { execution_refused: true, ..Default::default() }
+            } else if let Ok(mut runtime) = self.runtime.lock() {
+                runtime.run_english_retry(job, remaining)
+            } else {
+                Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() }
+            };
+            if outcome.execution_refused {
+                self.refused = Some(outcome.error.unwrap_or_else(|| "form script callbacks exceeded their shared execution budget".into()));
+                return None;
+            }
+            outcome
+        };
         if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             return None;
         }

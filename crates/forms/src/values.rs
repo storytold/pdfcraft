@@ -203,6 +203,14 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
 
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
+    recalculate_values(doc, scripts, None)
+}
+
+fn recalculate_values(
+    doc: &mut Document,
+    scripts: &mut dyn Scripts,
+    mut deferred: Option<&mut std::collections::HashSet<ObjRef>>,
+) -> Result<usize, FormError> {
     let mut all = fields(doc);
     if !all.iter().any(calc_order::is_calculated) {
         return Ok(0);
@@ -270,7 +278,11 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
                     _ => {}
                 }
             })?;
-            redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            if let Some(pending) = deferred.as_deref_mut() {
+                pending.insert(obj);
+            } else {
+                redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            }
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
@@ -328,7 +340,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, f, std::slice::from_ref(t), scripts)
+            if resetting { Ok(()) } else { redraw(doc, f, std::slice::from_ref(t), scripts) }
         }
         (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
             // A button can be read-only on its own (its own `/Ff`), though the field isn't.
@@ -475,6 +487,9 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
                 }
             })?;
             scroll_widgets(doc, f, &picked, f.options.len())?;
+            if resetting {
+                return Ok(());
+            }
             let mut shown = f.clone();
             shown.value = exports.clone();
             shown.selected = picked;
@@ -874,6 +889,7 @@ pub fn reset_with_formatting(
     }
     let named: Option<std::collections::HashSet<&str>> = names.map(|n| n.iter().map(String::as_str).collect());
     let mut changed = 0;
+    let mut redraw_fields = std::collections::HashSet::new();
     for f in all.iter().filter(|f| named.as_ref().is_none_or(|n| n.contains(f.name.as_str()))) {
         // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
         // the field to nothing would lose the value it should go back to. A value it didn't decode
@@ -894,11 +910,22 @@ pub fn reset_with_formatting(
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
         write_value_impl(doc, &tmp, &v, scripts, true)?;
         changed += 1;
-        if scripts.stopped() {
-            return Ok((changed, 0));
+        if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+            redraw_fields.insert(f.obj);
         }
     }
-    let recalculated = if calculate_with_scripts { recalculate_with(doc, scripts)? } else { recalculate_with(doc, &mut NoScripts)? };
+    let calculation_runner: &mut dyn Scripts = if calculate_with_scripts { scripts } else { &mut NoScripts };
+    let recalculated = recalculate_values(doc, calculation_runner, Some(&mut redraw_fields))?;
+    // Format scripts can read other fields. Draw from the final values once all
+    // selected defaults and calculated values have been written.
+    if !redraw_fields.is_empty() && !scripts.stopped() {
+        for f in fields(doc).into_iter().filter(|f| redraw_fields.contains(&f.obj)) {
+            redraw(doc, &f, &f.value, scripts)?;
+            if scripts.stopped() {
+                break;
+            }
+        }
+    }
     Ok((changed, recalculated))
 }
 

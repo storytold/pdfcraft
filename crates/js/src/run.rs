@@ -73,6 +73,34 @@ pub fn run_shared_calculations(
     calculations: &[(usize, String)],
     limits: Limits,
 ) -> Outcome {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let english = crate::format::printd_english();
+        let failed =
+            |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
+        std::thread::scope(|scope| {
+            let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
+                crate::format::with_english_printd(english, || run_shared_here(script, event, doc, fields, doc_scripts, calculations, limits))
+            });
+            match spawned {
+                Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
+                Err(e) => failed(format!("the script engine could not start: {e}")),
+            }
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    run_shared_here(script, event, doc, fields, doc_scripts, calculations, limits)
+}
+
+pub(crate) fn run_shared_here(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &[(usize, String)],
+    limits: Limits,
+) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
         return failed(why);
@@ -91,47 +119,14 @@ pub fn run_shared_calculations(
             None => Some((i, d.as_str())),
         })
         .collect();
-    let (kept, skipped) = (&kept, &skipped);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // The script's thread writes dates as this one asked (`with_english_printd`).
-        let english = crate::format::printd_english();
-        std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
-                crate::format::with_english_printd(english, || {
-                    run_here(
-                        script,
-                        event,
-                        doc,
-                        fields,
-                        ScriptSetup {
-                            doc_scripts: kept,
-                            skipped,
-                            calculations,
-                            initialize: true,
-                            reset_calls: 0,
-                            calculation_evaluations: 0,
-                            calculation_limit_exceeded: false,
-                        },
-                        limits,
-                    )
-                })
-            });
-            match spawned {
-                Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
-                Err(e) => failed(format!("the script engine could not start: {e}")),
-            }
-        })
-    }
-    #[cfg(target_arch = "wasm32")]
     run_here(
         script,
         event,
         doc,
         fields,
         ScriptSetup {
-            doc_scripts: kept,
-            skipped,
+            doc_scripts: &kept,
+            skipped: &skipped,
             calculations,
             initialize: true,
             reset_calls: 0,

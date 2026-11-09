@@ -9139,6 +9139,26 @@ fn hostile_xfa_scripts_cannot_hang_or_bloat_the_document() {
 }
 
 #[test]
+fn xfa_focus_follows_the_surviving_row_after_removal() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"if (table._row.count > 1) { table._row.removeInstance(table._row.count - 1); }"#,
+        r#"xfa.host.setFocus("table.row[0].amount"); xfa.host.setFocus("table.row[1].amount"); table._row.removeInstance(0);"#,
+    );
+    let mut s = Session::new();
+    let id = s.open("focus-row.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    for _ in 0..2 {
+        s.run_javascript(id, "", Some("addRow")).unwrap();
+    }
+    let out = s.run_javascript(id, "", Some("removeRow")).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().filter(|f| f.name.starts_with("amount")).count(), 2);
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let by_som = pdfcraft_xfa::field_objects_by_som(cos);
+    let (name, object) = &by_som["form[0].page1[0].table[0].row[0].amount[0]"];
+    assert_eq!(out.requests, [pdfcraft_js::Request::FocusField { name: name.clone(), object_id: crate::js::field_object_id(*object) }], "{out:?}");
+}
+
+#[test]
 fn xfa_scripts_can_remove_rows_twice_and_reset_fields_by_name() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
         .replace(r#"if (table._row.count > 1) { table._row.removeInstance(table._row.count - 1); }"#, r#"table._row.setInstances(1);"#)
@@ -13582,18 +13602,27 @@ fn reset_draws_the_formatted_default() {
     let (mut s, id) = reset_order_session("");
     s.apply(
         id,
-        Edit::SetFieldScript {
-            name: "price".into(),
-            event: "format".into(),
-            script: Some("event.value = 'USD ' + Number(event.value).toFixed(2);".into()),
-        },
+        Edit::SetFieldProps { name: "qty".into(), props: Box::new(FieldProps { default_value: Some(Some("3".into())), ..Default::default() }) },
     )
     .unwrap();
-    s.apply(id, Edit::SetFieldScript { name: "price".into(), event: "validate".into(), script: Some("event.rc = false;".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    for (name, event, script) in [
+        ("price", "format", "event.value = 'USD ' + Number(event.value).toFixed(2) + ' ' + getField('qty').value + '/' + getField('total').value;"),
+        ("price", "validate", "var resetValidated = true; event.rc = false;"),
+        ("price", "keystroke", "var resetKeystroked = true;"),
+        ("total", "calculate", "event.value = Number(getField('price').value) * Number(getField('qty').value);"),
+    ] {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: event.into(), script: Some(script.into()) }).unwrap();
+    }
     s.set_javascript(true);
-    s.apply(id, Edit::ResetForm { names: Some(vec!["price".into()]) }).unwrap();
-    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["7"]);
-    assert!(page_texts(&s, id)[0].contains("USD 7.00"), "{:?}", page_texts(&s, id));
+    s.apply(id, Edit::ResetForm { names: Some(vec!["price".into(), "qty".into()]) }).unwrap();
+    let form = &s.get(id).unwrap().form;
+    for (name, value) in [("price", "7"), ("qty", "3"), ("total", "21")] {
+        assert_eq!(form.iter().find(|f| f.name == name).unwrap().value, [value]);
+    }
+    assert!(page_texts(&s, id)[0].contains("USD 7.00 3/21"), "{:?}", page_texts(&s, id));
+    let scripts = s.run_javascript(id, "typeof resetValidated + '/' + typeof resetKeystroked;", None).unwrap();
+    assert_eq!(scripts.result.as_deref(), Some("undefined/undefined"));
 }
 
 #[test]
