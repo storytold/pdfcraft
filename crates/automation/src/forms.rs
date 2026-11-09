@@ -269,8 +269,18 @@ impl Automation {
                 if let Some(t) = &f.tooltip {
                     o.insert("tooltip".into(), json!(t));
                 }
-                if let Some(s) = doc.field_check_style(&f.name) {
-                    o.insert("check_style".into(), json!(s.label().to_lowercase()));
+                // Each widget has its own mark (#6682): one style when they agree, else "mixed"
+                // and each widget's.
+                if let Some(styles) = doc.field_check_styles(&f.name)
+                    && let Some(first) = styles.first()
+                {
+                    let label = |s: &pdfcraft_engine::CheckStyle| s.label().to_lowercase();
+                    if styles.iter().all(|s| s == first) {
+                        o.insert("check_style".into(), json!(label(first)));
+                    } else {
+                        o.insert("check_style".into(), json!("mixed"));
+                        o.insert("check_styles".into(), json!(styles.iter().map(label).collect::<Vec<_>>()));
+                    }
                 }
                 if f.actions.format != Format::None {
                     o.insert("format".into(), format_json(&f.actions.format));
@@ -479,8 +489,8 @@ impl Automation {
     }
 
     pub(crate) fn form_set_props(&mut self, a: &Args) -> Result<Value> {
-        if a.get("widget").is_some() && a.get("caption").is_none() && a.get("export_value").is_none() {
-            return Err(bad("widget requires caption or export_value"));
+        if a.get("widget").is_some() && a.get("caption").is_none() && a.get("export_value").is_none() && a.get("check_style").is_none() {
+            return Err(bad("widget requires caption, export_value or check_style"));
         }
         let single = a.opt_str("field")?;
         let bulk = a.get("fields").is_some();
@@ -651,6 +661,12 @@ impl Automation {
                         .find(|c| c.label().eq_ignore_ascii_case(s))
                         .ok_or_else(|| bad(format!("unknown check style {s:?} (check, circle, cross, diamond, square, star)")))?,
                 ),
+            },
+            check_style_widget: match (a.get("check_style"), a.opt_int("widget")?) {
+                (Some(_), Some(wi)) => {
+                    Some(usize::try_from(wi).ok().and_then(|wi| wi.checked_sub(1)).ok_or_else(|| bad("widget must be a positive 1-based index"))?)
+                }
+                _ => None,
             },
         })
     }

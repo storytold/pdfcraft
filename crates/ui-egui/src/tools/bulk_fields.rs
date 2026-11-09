@@ -27,6 +27,11 @@ impl<T: Clone + PartialEq> Change<T> {
     }
 }
 
+/// Each widget's mark, or one check for a field that has none (it is not a button).
+fn button_styles(doc: &pdfcraft_engine::Document, name: &str) -> Vec<CheckStyle> {
+    doc.field_check_styles(name).filter(|s| !s.is_empty()).unwrap_or_else(|| vec![CheckStyle::Check])
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     General,
@@ -145,7 +150,8 @@ impl Draft {
             align: Change::from_values(fields.iter().map(|f| f.quadding))?,
             multiline: Change::from_values(fields.iter().map(|f| f.has(field_flags::MULTILINE)))?,
             max_length: Change::from_values(fields.iter().map(|f| f.max_len.unwrap_or(0)))?,
-            check_style: Change::from_values(fields.iter().map(|f| doc.field_check_style(&f.name).unwrap_or(CheckStyle::Check)))?,
+            // Every widget's mark (#6682): a field's buttons can differ.
+            check_style: Change::from_values(fields.iter().flat_map(|f| button_styles(doc, &f.name)))?,
             flags,
             error: None,
             text_fields,
@@ -186,7 +192,8 @@ impl Draft {
                 multiline: self.text_fields.then(|| self.multiline.changed(&f.has(field_flags::MULTILINE))).flatten(),
                 max_len: self.text_fields.then(|| self.max_length.changed(&f.max_len.unwrap_or(0))).flatten().map(|v| (v > 0).then_some(v)),
                 quadding: (self.text_fields || self.choice_fields).then(|| self.align.changed(&f.quadding)).flatten(),
-                check_style: self.check_fields.then(|| self.check_style.changed(&doc.field_check_style(name).unwrap_or(CheckStyle::Check))).flatten(),
+                check_style: (self.check_fields && self.check_style.apply && button_styles(doc, name).iter().any(|s| *s != self.check_style.value))
+                    .then_some(self.check_style.value),
                 flags: self
                     .flags
                     .iter()

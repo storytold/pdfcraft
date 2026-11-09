@@ -23,10 +23,14 @@ impl crate::PdfCraftApp {
         let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name).cloned()) else { return };
         let mut d = FieldDraft::new(&f, widget);
         d.look = self.session.get(id).and_then(|doc| doc.field_look(name));
-        d.check_style = self.session.get(id).and_then(|doc| doc.field_check_style(name));
+        // Each widget has its own mark (#6682): show the first, marked mixed when they differ.
+        let styles = self.session.get(id).and_then(|doc| doc.field_check_styles(name)).unwrap_or_default();
+        d.check_style = styles.first().copied();
+        d.check_mixed = styles.iter().any(|s| Some(*s) != d.check_style);
         if let Some(o) = d.original.as_mut() {
             o.look = d.look;
             o.check_style = d.check_style;
+            o.check_mixed = d.check_mixed;
         }
         let others: Vec<String> =
             self.session.get(id).map(|doc| doc.form.iter().filter(|x| x.name != name).map(|x| x.name.clone()).collect()).unwrap_or_default();
@@ -138,6 +142,8 @@ pub struct FieldDraft {
     pub look: Option<FieldLook>,
     /// Check boxes and radio buttons: the mark when on (Options tab).
     pub check_style: Option<pdfcraft_engine::CheckStyle>,
+    /// The widgets have different marks (#6682): the style shows "Mixed" until one is chosen.
+    pub check_mixed: bool,
     pub format: Format,
     pub validate: Validate,
     pub calculate: Calculate,
@@ -208,6 +214,7 @@ impl FieldDraft {
             rotation: f.widgets.get(widget).map(|w| w.rotation).unwrap_or(0),
             look: None,
             check_style: None,
+            check_mixed: false,
             format: f.actions.format.clone(),
             validate: f.actions.validate.clone(),
             calculate: f.actions.calculate.clone(),
@@ -268,7 +275,9 @@ impl FieldDraft {
             rotation: (self.rotation != o.rotation).then_some((self.widget, self.rotation)),
             look: (self.look != o.look).then_some(self.look).flatten(),
             appearance: None,
-            check_style: (self.check_style != o.check_style).then_some(self.check_style).flatten(),
+            // A mixed field keeps every widget's mark until a style is chosen for them all.
+            check_style: (!self.check_mixed && (self.check_style != o.check_style || o.check_mixed)).then_some(self.check_style).flatten(),
+            check_style_widget: None,
             format: (self.format != o.format).then(|| self.format.clone()),
             validate: (self.validate != o.validate).then(|| self.validate.clone()),
             calculate: (self.calculate != o.calculate).then(|| self.calculate.clone()),

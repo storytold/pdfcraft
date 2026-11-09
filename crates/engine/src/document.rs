@@ -592,11 +592,20 @@ impl Document {
         Some(pdfcraft_forms::look(&e.cos, f))
     }
 
-    /// A check box's or radio button's mark (Field Properties ▸ Options), `None` for other fields.
+    /// A check box's or radio button's mark (Field Properties ▸ Options) from its first widget,
+    /// `None` for other fields. [`Self::field_check_styles`] gives every widget's.
     pub fn field_check_style(&self, name: &str) -> Option<CheckStyle> {
         let e = self.editor.as_ref()?;
         let f = self.form.iter().find(|f| f.name == name)?;
         matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio).then(|| pdfcraft_forms::check_style(&e.cos, f))
+    }
+
+    /// Each widget's mark of a check box or radio button, in widget order, `None` for other
+    /// fields. The widgets of one field can have different marks.
+    pub fn field_check_styles(&self, name: &str) -> Option<Vec<CheckStyle>> {
+        let e = self.editor.as_ref()?;
+        let f = self.form.iter().find(|f| f.name == name)?;
+        matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio).then(|| pdfcraft_forms::check_styles(&e.cos, f))
     }
 
     /// Whether text field `name`'s value is cut off by its box at the field's font size (#4018):

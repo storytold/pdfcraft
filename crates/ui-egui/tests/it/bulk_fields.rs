@@ -317,6 +317,37 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
 }
 
 #[test]
+fn shared_button_style_sees_every_buttons_mark() {
+    // #6682: a radio group whose second button has its own mark is mixed, even when its first
+    // button matches the other field, and a shared style reaches that second button too.
+    use pdfcraft_engine::CheckStyle;
+    let mut h = harness();
+    for (export, x) in [("A", 100.0), ("B", 150.0)] {
+        h.state_mut().apply_edit(Edit::AddField {
+            page: 0,
+            rect: [x, 180.0, x + 14.0, 194.0],
+            kind: NewField::Radio { group: Some("group".into()), export: export.into() },
+            name: None,
+        });
+    }
+    for (name, style, widget) in [("consent", CheckStyle::Circle, None), ("group", CheckStyle::Star, Some(1))] {
+        let props = FieldProps { check_style: Some(style), check_style_widget: widget, ..Default::default() };
+        h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props: Box::new(props) });
+    }
+    let p = &mut h.state_mut().views[0].prepare;
+    p.selected = Some(("consent".into(), 0));
+    p.also = vec![("group".into(), 0)];
+    h.state_mut().execute("form.field.properties");
+    h.run_steps(4);
+    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
+    assert!(d.check_style.mixed, "the group's second button is a star");
+    (d.check_style.apply, d.check_style.value) = (true, CheckStyle::Circle);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(doc(&h).field_check_styles("group").unwrap(), [CheckStyle::Circle, CheckStyle::Circle]);
+}
+
+#[test]
 fn escape_cancels_a_selection_rectangle_and_restores_the_previous_selection() {
     let mut h = harness();
     h.state_mut().views[0].prepare.selected = Some(("consent".into(), 0));

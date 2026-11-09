@@ -2373,6 +2373,26 @@ fn check_box_styles_change_the_mark() {
 }
 
 #[test]
+fn radio_buttons_keep_their_own_marks() {
+    // #6682: /MK /CA belongs to each widget (ISO 32000-2 Table 192), so one radio group can mix
+    // marks. Each button's is reported, and one button's can change without the others'.
+    let mut doc = one_page();
+    for (x, export) in [(50.0, "a"), (80.0, "b")] {
+        let button = NewField::Radio { group: Some("pick".into()), export: export.into() };
+        add_field(&mut doc, 0, [x, 600.0, x + 20.0, 620.0], &button, None).unwrap();
+    }
+    let styles = |doc: &Document| check_styles(doc, field(&fields(doc), "pick"));
+    assert_eq!(styles(&doc), [CheckStyle::Circle, CheckStyle::Circle]);
+    let one = |wi, s| FieldProps { check_style: Some(s), check_style_widget: Some(wi), ..FieldProps::default() };
+    set_props(&mut doc, "pick", &one(1, CheckStyle::Star)).unwrap();
+    assert_eq!(styles(&reopen(&doc)), [CheckStyle::Circle, CheckStyle::Star], "only the second button changes");
+    assert!(set_props(&mut doc, "pick", &one(2, CheckStyle::Cross)).is_err(), "there is no third button");
+    assert_eq!(styles(&doc), [CheckStyle::Circle, CheckStyle::Star], "a rejected change writes nothing");
+    set_props(&mut doc, "pick", &FieldProps { check_style: Some(CheckStyle::Square), ..FieldProps::default() }).unwrap();
+    assert_eq!(styles(&reopen(&doc)), [CheckStyle::Square, CheckStyle::Square], "without a widget, every button changes");
+}
+
+#[test]
 fn check_mark_takes_the_fields_text_colour() {
     // #4261: Appearance ▸ Text Color is written to /DA; the mark of a check box or radio button
     // is drawn in it (Acrobat does the same), black when the /DA has no colour.

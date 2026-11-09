@@ -5010,8 +5010,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fields"]
-evidence = ["crates/forms/src/tests.rs::check_box_styles_change_the_mark", "crates/ui-egui/tests/it/prepare.rs::options_tab_sets_the_check_box_style", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools"]
-notes = "Field Properties ▸ Options: check, circle, cross, diamond, square, star (/MK /CA, Acrobat's codes), drawn as paths; defaults check (check boxes) and circle (radio buttons)"
+evidence = ["crates/forms/src/tests.rs::check_box_styles_change_the_mark", "crates/forms/src/tests.rs::radio_buttons_keep_their_own_marks", "crates/ui-egui/tests/it/prepare.rs::options_tab_sets_the_check_box_style", "crates/ui-egui/tests/it/prepare.rs::button_style_of_a_group_with_mixed_marks_says_mixed", "crates/ui-egui/tests/it/bulk_fields.rs::shared_button_style_sees_every_buttons_mark", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/automation/tests/it/automation.rs::radio_buttons_keep_their_own_marks_through_tools"]
+notes = "Field Properties ▸ Options: check, circle, cross, diamond, square, star (/MK /CA, Acrobat's codes), drawn as paths; defaults check (check boxes) and circle (radio buttons). Each widget keeps its own mark: a field whose widgets differ shows Mixed (form_fields: check_style \"mixed\" and check_styles), and form_set_props takes widget to change one"
 
 [[feature]]
 id = "form.add-dropdown"

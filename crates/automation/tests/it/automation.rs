@@ -4940,6 +4940,34 @@ fn replacing_pages_through_tools() {
 }
 
 #[test]
+fn radio_buttons_keep_their_own_marks_through_tools() {
+    // #6682: each button keeps its own mark (/MK /CA); widget changes one, and a group whose
+    // buttons differ reports "mixed" with each button's.
+    let dir = workdir("radio-marks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (x, export) in [(20, "S"), (40, "L")] {
+        ok(
+            &mut a,
+            "form_add_field",
+            json!({ "doc": doc, "page": 1, "type": "radio", "rect": [x, 100, x + 14, 114], "group": "size", "export": export }),
+        );
+    }
+    let size = |a: &mut Automation| ok(a, "form_fields", json!({ "doc": doc }))["fields"][0].clone();
+    let s = size(&mut a);
+    assert_eq!((&s["check_style"], s.get("check_styles")), (&json!("circle"), None), "one style when the buttons agree");
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "size", "check_style": "star", "widget": 2 }));
+    let s = size(&mut a);
+    assert_eq!((&s["check_style"], &s["check_styles"]), (&json!("mixed"), &json!(["circle", "star"])));
+    let style = |widget| json!({ "doc": doc, "field": "size", "check_style": "cross", "widget": widget });
+    assert!(matches!(a.call("form_set_props", &style(3)), Err(ToolError::Failed(_))), "there is no third button");
+    assert!(matches!(a.call("form_set_props", &style(0)), Err(ToolError::InvalidArgs(_))), "widget is 1-based");
+    assert_eq!(size(&mut a)["check_styles"], json!(["circle", "star"]), "a rejected change writes nothing");
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "size", "check_style": "square" }));
+    assert_eq!(size(&mut a)["check_style"], "square", "without widget, every button changes");
+}
+
+#[test]
 fn preparing_a_form_through_tools() {
     let dir = workdir("prepare");
     let mut a = auto(&dir);

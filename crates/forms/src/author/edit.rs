@@ -231,6 +231,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
         return invalid("only check boxes and radio buttons have a check style");
     }
+    if props.check_style.is_some()
+        && let Some(wi) = props.check_style_widget
+        && wi >= f.widgets.len()
+    {
+        return invalid(format!("{name} has no widget {}; it has {}", wi.saturating_add(1), f.widgets.len()));
+    }
     let mut list_picked = None;
     let (sort_items, old_selection) = items_to_sort(doc, &f, props);
     let parent_default = ancestor_sets(doc, f.obj, b"DV");
@@ -476,7 +482,9 @@ fn apply_widget_style_props(doc: &mut Document, f: &Field, name: &str, props: &F
         }
     }
     if let Some(style) = props.check_style {
-        for w in &f.widgets {
+        // One widget's mark, or every widget's: each keeps its own unless named.
+        let widgets = f.widgets.iter().enumerate().filter(|(i, _)| props.check_style_widget.is_none_or(|wi| wi == *i)).map(|(_, w)| w);
+        for w in widgets {
             // Resolved first: an indirect /MK keeps its colours.
             let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
             mk.set(b"CA".to_vec(), PdfString::text(style.code()));

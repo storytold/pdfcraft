@@ -493,6 +493,48 @@ fn options_tab_sets_the_check_box_style() {
 }
 
 #[test]
+fn button_style_of_a_group_with_mixed_marks_says_mixed() {
+    // #6682: each radio button has its own mark. A group whose buttons differ shows "Mixed",
+    // keeps every mark until a style is chosen, and then gives every button that style.
+    use pdfcraft_engine::{CheckStyle, Edit, FieldProps, NewField};
+    let mut h = harness();
+    for (export, x) in [("a", 40.0), ("b", 70.0)] {
+        h.state_mut().apply_edit(Edit::AddField {
+            page: 0,
+            rect: [x, 300.0, x + 16.0, 316.0],
+            kind: NewField::Radio { group: Some("pick".into()), export: export.into() },
+            name: None,
+        });
+    }
+    let star = FieldProps { check_style: Some(CheckStyle::Star), check_style_widget: Some(1), ..FieldProps::default() };
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "pick".into(), props: Box::new(star) });
+    let styles = |h: &Harness<'_, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().field_check_styles("pick").unwrap();
+    assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Star]);
+    let open = |h: &mut Harness<'_, PdfCraftApp>| {
+        h.state_mut().open_field_props("pick", 0);
+        h.run_steps(2);
+        h.get_by_label("Options").click();
+        h.run_steps(2);
+    };
+    open(&mut h);
+    assert!(h.state().field_props.as_ref().unwrap().check_mixed, "the buttons differ");
+    h.get_by_value("Mixed");
+    assert_eq!(h.state().field_props.as_ref().unwrap().props(), None, "opening changes nothing");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Star], "OK without a choice keeps both marks");
+    open(&mut h);
+    h.get_by_value("Mixed").click();
+    h.run_steps(2);
+    h.get_by_label("Circle").click();
+    h.run_steps(2);
+    h.get_by_value("Circle");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Circle], "choosing the first button's style still changes the second");
+}
+
+#[test]
 fn button_label_is_editable_without_renaming_the_field() {
     use pdfcraft_engine::{Edit, NewField};
     let mut h = harness();
