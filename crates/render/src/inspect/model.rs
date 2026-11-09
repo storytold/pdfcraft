@@ -350,6 +350,8 @@ pub struct Annotation {
     pub points: Vec<[f32; 2]>,
     /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
     pub text_box: Option<[f32; 4]>,
+    /// The comment's pop-up window (`/Popup`): where it sits and whether it is open.
+    pub popup: Option<Popup>,
 }
 
 /// How far [`group_primaries`] follows `/IRT` from a group subordinate to its primary.
@@ -410,6 +412,15 @@ pub fn fill_group_text(all: &mut [Annotation]) {
             primary.contents = Some(text);
         }
     }
+}
+
+/// A comment's pop-up window (ISO 32000-2 §12.5.6.14).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Popup {
+    /// `/Rect` of the `/Popup` annotation, in user space.
+    pub rect: [f32; 4],
+    /// `/Open`: shown open.
+    pub open: bool,
 }
 
 impl Annotation {

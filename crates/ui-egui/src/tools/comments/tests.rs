@@ -87,6 +87,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         no_rotate,
         points: Vec::new(),
         text_box: None,
+        popup: None,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -133,6 +134,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         no_rotate: false,
         points: Vec::new(),
         text_box: None,
+        popup: None,
     }
 }
 
@@ -223,6 +225,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         no_rotate: false,
         points: Vec::new(),
         text_box: None,
+        popup: None,
     }
 }
 
@@ -428,6 +431,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             fill_sign: false,
             points: Vec::new(),
             text_box: None,
+            popup: None,
             no_rotate: false,
         }],
         ..Default::default()

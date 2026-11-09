@@ -31,7 +31,7 @@ mod types;
 use create::num_array;
 pub use create::{CALLOUT_KNEE_LINE, Side, add_annotation, callout_attach, callout_knee, callout_knee_on, callout_side, orient_image_stamp};
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
-pub use info::{Props, Summary, is_comment_subtype, is_group_subordinate, props, set_info, summaries};
+pub use info::{PopupInfo, Props, Summary, is_comment_subtype, is_group_subordinate, props, set_info, summaries};
 #[cfg(test)]
 use lookup::{ANNOTS_ENTRIES_COPIED, PageWalk, annot_dict, annot_ref};
 use lookup::{annots, page_ref};
@@ -42,8 +42,8 @@ pub use model3d::{Model3d, Model3dKind, model_3d, model_3d_annotations};
 pub(crate) use modify::n;
 pub use modify::{
     add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation, release_members,
-    set_border_color, set_border_shape, set_contents, set_fill, set_font_size, set_locked, set_marked, set_part_opacity, set_points, set_rect,
-    set_review_state, set_style, with_replies_and_popups,
+    set_border_color, set_border_shape, set_contents, set_fill, set_font_size, set_locked, set_marked, set_part_opacity, set_points, set_popup,
+    set_rect, set_review_state, set_style, with_replies_and_popups,
 };
 pub use threed::{Activation as Activation3d, MAX_MODEL_BYTES, ModelFormat, NewModel3d, PosterPicture, add_3d_model, check_model};
 pub use types::{
