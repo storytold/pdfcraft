@@ -1498,7 +1498,8 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     use crate::commands::{
-        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN, ZOOM_OUT,
+        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIRST_PAGE, FIT_WIDTH, LAST_PAGE, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW,
+        SELECT_ALL, ZOOM_IN, ZOOM_OUT,
     };
     // Registered commands first (always in sync with the real bindings), then the
     // keys the document view handles itself.
@@ -1528,7 +1529,10 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (key(FIT_WIDTH), tl!("Fit to width").to_string()),
         (pair(ZOOM_IN, ZOOM_OUT), scroll),
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
-        (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
+        (
+            format!("{} / {}, {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End"), pair(FIRST_PAGE, LAST_PAGE)),
+            tl!("First / last page").to_string(),
+        ),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
         (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
@@ -1842,6 +1846,9 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             let which: Vec<pdfcraft_engine::Hidden> = app.hidden_draft.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();
             let n: usize = app.hidden_draft.found.iter().filter(|f| f.2).map(|f| f.1).sum();
             if app.apply_edit(Edit::RemoveHidden { which }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 if n == 1 {
                     app.notify_tr("Removed 1 hidden item. Save to remove them from the file.");
                 } else {
@@ -1850,11 +1857,17 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             }
         }
         Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+            if let Some((_, id)) = app.active_ids() {
+                app.renew_recovery(id);
+            }
             app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+                if let Some((_, id)) = app.active_ids() {
+                    app.renew_recovery(id);
+                }
                 let applied = if marks == 1 {
                     tl!("Applied 1 redaction mark. Save to remove the content from the file.").to_string()
                 } else {

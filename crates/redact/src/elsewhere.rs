@@ -184,7 +184,9 @@ fn comments(doc: &Document, search: &Search, hit: &dyn Fn(Option<&Object>) -> bo
 fn rich_text(doc: &Document, o: &Object) -> Option<String> {
     let xml = match &*doc.resolve(o) {
         Object::String(s) => crate::metadata::text_string(s),
-        Object::Stream(s) if s.filters().len() <= 1 => String::from_utf8(s.decoded_first_filter_strict(crate::metadata::MAX_XMP_BYTES).ok()?).ok()?,
+        Object::Stream(s) if s.filters().len() <= 1 => {
+            String::from_utf8(doc.with_direct_parms(s).decoded_first_filter_strict(crate::metadata::MAX_XMP_BYTES).ok()?).ok()?
+        }
         Object::Stream(_) => return None,
         _ => return Some(String::new()),
     };

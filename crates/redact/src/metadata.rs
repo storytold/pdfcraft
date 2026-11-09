@@ -388,7 +388,8 @@ pub(crate) fn xmp_text(doc: &Document, o: &Object) -> Option<String> {
     if s.filters().len() > 1 {
         return None;
     }
-    let bytes = s.decoded_first_filter_strict(MAX_XMP_BYTES).ok()?;
+    // `/DecodeParms` given by reference are read too ([`Document::with_direct_parms`]).
+    let bytes = doc.with_direct_parms(s).decoded_first_filter_strict(MAX_XMP_BYTES).ok()?;
     decode_xmp(&bytes)
 }
 
