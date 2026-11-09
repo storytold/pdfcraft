@@ -175,6 +175,9 @@ impl<'a> Inspector<'a> {
         me
     }
 
+    /// Reads what `info` holds beyond the page list: encryption, document information, tagging,
+    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments,
+    /// JavaScript and the opening destination.
     pub(super) fn fill(&self, info: &mut DocInfo) {
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
@@ -185,6 +188,14 @@ impl<'a> Inspector<'a> {
             info.keywords = self.text(d, b"Keywords");
             info.creator = self.text(d, b"Creator");
             info.producer = self.text(d, b"Producer");
+            // Dates are text strings only (ISO 32000-2 §7.9.4), as the engine reads them after an
+            // edit (`pdfcraft_organize::info`): a name value is no date.
+            let date = |key: &[u8]| match self.resolve(d.get(key).ok()?) {
+                Object::String(..) => self.text(d, key).map(|s| pretty_date(&s)),
+                _ => None,
+            };
+            info.created = date(b"CreationDate");
+            info.modified = date(b"ModDate");
             const STANDARD: [&[u8]; 9] =
                 [b"Title", b"Author", b"Subject", b"Keywords", b"Creator", b"Producer", b"CreationDate", b"ModDate", b"Trapped"];
             // The same rule as the engine's list after an edit (`pdfcraft_organize::custom_info`,
@@ -218,10 +229,10 @@ impl<'a> Inspector<'a> {
             Ok(notes) => info.warnings.extend(notes.into_iter().map(|note| format!("Page labels: {note}."))),
             Err(reason) => info.warnings.push(format!("Page labels were skipped: {reason}; using physical page numbers.")),
         }
-        if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
-            (info.outline, info.outline_more) = self.outline_window(first);
-        }
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+        if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
+            (info.outline, info.outline_more) = self.outline_window(first, &mut text_budget);
+        }
         self.annotations(info, &mut text_budget);
         self.transitions(info);
         let mut walk = FieldWalk::default();

@@ -1299,7 +1299,7 @@ status = "shipped"
 commands = []
 tools = ["doc_info"]
 evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/control.rs::state_and_view_options", "crates/ui-egui/tests/it/view.rs::bookmark_destinations_scroll_to_their_position"]
-notes = "A bookmark goes to its destination's position and zoom, not just its page. The panel shows the first 10,000 bookmarks, nested 33 levels deep at most, and says so; bookmark_list pages through every bookmark in the file (up to 33 levels deep)."
+notes = "A bookmark goes to its destination's position and zoom, not just its page; one whose action goes elsewhere (a web address, another PDF) runs it as a link does (organize.bookmark-actions). The panel shows the first 10,000 bookmarks, nested 33 levels deep at most, and says so; bookmark_list pages through every bookmark in the file (up to 33 levels deep)."
 
 [[feature]]
 id = "view.highlight-current-bookmark"
@@ -2333,9 +2333,9 @@ tier = "P1"
 milestone = "M7"
 status = "partial"
 commands = ["edit.link"]
-tools = ["link_add"]
-evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/ui-egui/tests/it/pdf_links.rs::drawing_editing_and_deleting_links"]
-notes = "go to a page (Fit view); named destinations and zoom pending"
+tools = ["link_add", "link_edit", "link_list"]
+evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/ui-egui/tests/it/pdf_links.rs::drawing_editing_and_deleting_links", "crates/annot/src/tests.rs::page_links_keep_their_zoom", "crates/automation/tests/it/automation.rs::link_zoom_through_tools", "crates/ui-egui/tests/it/pdf_links.rs::link_properties_sets_the_page_view_zoom", "crates/ui-egui/tests/it/pdf_links.rs::an_appearance_edit_keeps_the_destination_as_written", "crates/annot/src/tests.rs::a_rewritten_link_keeps_its_own_zoom_factor", "crates/annot/src/tests.rs::an_unchanged_go_to_keeps_its_destination_and_a_new_page_keeps_its_fit", "crates/automation/tests/it/automation.rs::link_edit_keeps_a_links_own_zoom_outside_the_range_it_writes"]
+notes = "go to a page at a zoom: Fit Page, Fit Width, Fit Height, Fit Visible, Actual Size, Inherit Zoom or a percentage (Link Properties ▸ Zoom; link_add and link_edit zoom), written as /Fit, /FitH, /FitV, /FitB or /XYZ with the position null (ISO 32000-2 Table 149). Links other tools wrote read as the nearest zoom. One given a new page with its zoom unchanged keeps how that zoom is written (a /FitBH or /FitBV fit, its own /XYZ factor even outside the 1–6400% a chosen zoom is written within) but not its position; one edited with its own page and zoom (Link Properties, link_edit) is left as it is, position included. Missing: named destinations as targets, and a position on the page (Acrobat's Set Link takes the current view)"
 
 [[feature]]
 id = "edit.action-uri"
@@ -3379,11 +3379,11 @@ title = "Bookmark actions"
 area = "D"
 tier = "P1"
 milestone = "M4"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_info", "bookmark_list"]
+evidence = ["crates/render/src/inspect/tests.rs::bookmark_actions_are_read_as_links_read_them", "crates/organize/src/tests.rs::only_a_go_to_action_names_a_page_here", "crates/ui-egui/tests/it/document_links.rs::a_web_bookmark_asks_first_like_a_link", "crates/ui-egui/tests/it/document_links.rs::a_bookmark_to_another_pdf_opens_it_instead_of_moving_here", "crates/automation/tests/it/automation.rs::bookmarks_report_their_actions_and_a_remote_go_to_names_no_page_here"]
+notes = "Clicking a bookmark runs its action as a link runs it: a web address asks first, a remote go-to or a Launch of a PDF opens that file at its page, a set-layer-visibility action changes the view, and any other action type is named in a notice. Only a go-to's /D is a page of this document; a remote go-to's /D is the other file's (ISO 32000-2 §12.6.4.3), which bookmarks used to read as this file's page. doc_info lists each bookmark's action as links' targets are listed. Missing: adding or editing a bookmark's actions (Acrobat's Bookmark Properties ▸ Actions), /Next chains, and running Named and JavaScript actions."
 
 [[feature]]
 id = "organize.bookmark-expand-collapse"
@@ -3538,8 +3538,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown", "crates/ui-egui/tests/it/dialog_chrome.rs::document_properties_values_line_up_and_long_fields_wrap", "crates/ui-egui/tests/it/dialog_chrome.rs::space_audit_tab_measures_the_file_and_stays_in_the_card"]
-notes = "Description, Initial View, Security, Fonts, Custom (organize.custom-properties) and Advanced, plus a Space Audit tab Acrobat does not have (its audit is only in the PDF Optimizer); the audit runs when the tab opens and again after an edit. Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Missing: a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
+evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown", "crates/ui-egui/tests/it/dialog_chrome.rs::document_properties_values_line_up_and_long_fields_wrap", "crates/ui-egui/tests/it/dialog_chrome.rs::space_audit_tab_measures_the_file_and_stays_in_the_card", "crates/render/src/inspect/tests.rs::creation_and_modification_dates_are_read_for_document_properties"]
+notes = "Description, Initial View, Security, Fonts, Custom (organize.custom-properties) and Advanced, plus a Space Audit tab Acrobat does not have (its audit is only in the PDF Optimizer); the audit runs when the tab opens and again after an edit. Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Description and doc_info show the /Info CreationDate and ModDate as written (YYYY-MM-DD HH:MM, not converted to local time; #5534). Missing: the dates from XMP (xmp:CreateDate, xmp:ModifyDate) when /Info has none, editing them, a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
 
 [[feature]]
 id = "organize.edit-metadata"
@@ -3574,7 +3574,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_initial_view"]
-evidence = ["crates/organize/src/view.rs::initial_view_resolves_indirect_boolean_preferences", "crates/ui-egui/tests/it/ui.rs::a_document_asking_for_full_screen_is_asked_about_first", "crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/ui-egui/tests/it/viewer.rs::initial_view_is_edited_and_honoured_on_open", "crates/automation/tests/it/automation.rs::initial_view_through_tools", "crates/render/src/inspect/navigation.rs::a_go_to_action_opens_at_its_destination_explicit_or_named", "crates/ui-egui/tests/it/open_action.rs::an_xyz_open_action_puts_its_point_at_the_window_top_left", "crates/ui-egui/tests/it/open_action.rs::a_fith_open_action_puts_its_top_at_the_window_top", "crates/ui-egui/tests/it/open_action.rs::a_named_open_destination_opens_its_page", "crates/ui-egui/tests/it/open_action.rs::a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen", "crates/organize/src/tests.rs::an_unchanged_opening_destination_keeps_its_position_and_name", "crates/automation/tests/it/automation.rs::doc_info_reports_the_open_destination", "crates/organize/src/tests.rs::choosing_page_one_replaces_a_named_opening_destination", "crates/organize/src/tests.rs::a_named_opening_destination_is_kept_while_it_still_holds"]
+evidence = ["crates/organize/src/view.rs::initial_view_resolves_indirect_boolean_preferences", "crates/ui-egui/tests/it/ui.rs::a_document_asking_for_full_screen_is_asked_about_first", "crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/ui-egui/tests/it/viewer.rs::initial_view_is_edited_and_honoured_on_open", "crates/ui-egui/tests/it/viewer.rs::initial_view_magnification_offers_25_and_100_percent", "crates/organize/src/tests.rs::choosing_100_percent_keeps_an_actual_size_opening_destination", "crates/automation/tests/it/automation.rs::initial_view_through_tools", "crates/render/src/inspect/navigation.rs::a_go_to_action_opens_at_its_destination_explicit_or_named", "crates/ui-egui/tests/it/open_action.rs::an_xyz_open_action_puts_its_point_at_the_window_top_left", "crates/ui-egui/tests/it/open_action.rs::a_fith_open_action_puts_its_top_at_the_window_top", "crates/ui-egui/tests/it/open_action.rs::a_named_open_destination_opens_its_page", "crates/ui-egui/tests/it/open_action.rs::a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen", "crates/organize/src/tests.rs::an_unchanged_opening_destination_keeps_its_position_and_name", "crates/automation/tests/it/automation.rs::doc_info_reports_the_open_destination", "crates/organize/src/tests.rs::choosing_page_one_replaces_a_named_opening_destination", "crates/organize/src/tests.rs::a_named_opening_destination_is_kept_while_it_still_holds"]
 notes = "navigation panel, layout, magnification, page, window and interface options; honoured on open; script open actions kept. Open in Full Screen mode (/PageMode /FullScreen) asks first (Full Screen / Not now), as Acrobat does, instead of taking the screen. Window and interface options also read indirect boolean ViewerPreferences values. Missing: Acrobat's Full Screen preference to turn that alert off and its \"remember my choice for this document\" (misc.prefs-full-screen). On open the /OpenAction destination places the view as ISO 32000-2 Table 149 says (the /XYZ point at the window's top-left, /FitH and /FitV top or left at the edge), and a named destination (name or string, /Names /Dests tree or catalog /Dests, §12.3.2.4) resolves; Always use my default zoom keeps only the page. A full-screen document shows its /NonFullScreenPageMode panel outside full screen (Table 147). doc_info reports the opening destination. Document Properties keeps an opening action whose page and magnification are left alone, but still edits only those two; it shows a named destination's page and magnification, and choosing another page or magnification replaces the name with an explicit destination, except that page 1 at the default magnification removes /OpenAction so the first page opens. A name that resolves nowhere reads as page 1 and is kept until another page is chosen"
 
 [[feature]]
