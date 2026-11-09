@@ -208,7 +208,7 @@ pub(crate) fn restore(doc: &mut Document, page: &pdfcraft_model::Page) -> Result
                     let same = |w: &ObjRef| match &*doc.get(*w) {
                         Object::Stream(s) => {
                             [TAG, &b"PCMark"[..], b"Subtype"].iter().all(|k| s.dict.get(k).is_none())
-                                && DecodeBudget::new(SCAN_BYTES, 0).decode_strict(s).ok().as_deref() == Some(bytes.as_slice())
+                                && DecodeBudget::new(SCAN_BYTES, 0).decode_strict(doc, s).ok().as_deref() == Some(bytes.as_slice())
                         }
                         _ => false,
                     };
@@ -248,7 +248,7 @@ fn restored_copy(doc: &Document, page: &pdfcraft_model::Page, copy: ObjRef) -> O
         return None;
     }
     let hash = note.get(b"Before")?.as_string()?;
-    let bytes = DecodeBudget::new(SCAN_BYTES, 0).decode_strict(s).ok()?;
+    let bytes = DecodeBudget::new(SCAN_BYTES, 0).decode_strict(doc, s).ok()?;
     let parsed = pdfcraft_content::parse(head(&bytes));
     // The `n` standing in for the fill, after exactly the operators that came before it.
     let fill = parsed.ops.get(index)?;
@@ -384,11 +384,11 @@ fn scan(doc: &Document, p: &pdfcraft_model::Page, swap: Option<(ObjRef, &[u8])>)
                 if b.len() > SCAN_BYTES.saturating_sub(total) {
                     return None;
                 }
-                budget.decode_strict(&Stream::from_raw(Dict::new(), b.to_vec())).ok()?
+                budget.decode_strict(doc, &Stream::from_raw(Dict::new(), b.to_vec())).ok()?
             }
             // Tolerant decoding can return an empty or partial stream after corruption.
             // That cannot prove which paint preceded the candidate backdrop.
-            _ => budget.decode_strict(s).ok()?,
+            _ => budget.decode_strict(doc, s).ok()?,
         };
         if bytes.len() > SCAN_BYTES.saturating_sub(total).saturating_sub(1) {
             return None;
