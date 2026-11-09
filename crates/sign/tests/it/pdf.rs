@@ -507,25 +507,44 @@ fn add_sig_widget(doc: &mut Document, v: Option<&[(&[u8], Object)]>, rect: [i64;
 /// widget wearing a timestamp /SubFilter each break it; a genuine document timestamp does not.
 #[test]
 fn only_an_invisible_document_timestamp_survives_a_no_changes_certification() {
-    let (_, trust, signed) = certified_p1();
+    let (id, trust, signed) = certified_p1();
     let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed && s.certify == Some(1)).unwrap();
     assert_eq!(check(&signed).status, Status::Valid, "{:?}", check(&signed).details);
     let approval: &[(&[u8], Object)] = &[(b"Type", Object::name("Sig")), (b"SubFilter", Object::name("adbe.pkcs7.detached"))];
     let timestamp: &[(&[u8], Object)] = &[(b"Type", Object::name("DocTimeStamp")), (b"SubFilter", Object::name("ETSI.RFC3161"))];
-    // Each of these breaks the certification: it is a change P=1 does not allow. A widget with
-    // no signature value signs nothing: it is a new annotation (#6755).
-    for (what, v, rect, kind) in [
-        ("visible overlay widget", None, [0, 0, 300, 300], kind::COMMENTS),
-        ("invisible unsigned widget", None, [0, 0, 0, 0], kind::COMMENTS),
-        ("visible approval signature", Some(approval), [0, 0, 300, 300], kind::SIGNATURE),
-        ("invisible approval signature", Some(approval), [0, 0, 0, 0], kind::SIGNATURE),
-        ("visible widget wearing a timestamp subfilter", Some(timestamp), [0, 0, 300, 300], kind::SIGNATURE),
+    // Each of these breaks the certification: it is a change P=1 does not allow. A widget whose
+    // value signs no revision (none, or a dictionary that only claims to be a signature) signs
+    // nothing: it is a new annotation (#6755).
+    for (what, v, rect) in [
+        ("visible overlay widget", None, [0, 0, 300, 300]),
+        ("invisible unsigned widget", None, [0, 0, 0, 0]),
+        ("visible widget claiming an approval signature", Some(approval), [0, 0, 300, 300]),
+        ("invisible widget claiming an approval signature", Some(approval), [0, 0, 0, 0]),
+        ("visible widget wearing a timestamp subfilter", Some(timestamp), [0, 0, 300, 300]),
     ] {
         let edited = edit_after(&signed, |doc| add_sig_widget(doc, v, rect));
         let s = check(&edited);
-        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind)), "{what}: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::COMMENTS)), "{what}: {:?}", s.modification);
         assert_ne!(s.status, Status::Valid, "{what}");
     }
+    // A real approval signature, visible or not, is signing, which P=1 does not allow either.
+    for (what, rect) in [("visible approval signature", opts().rect), ("invisible approval signature", None)] {
+        let approved = pdfcraft_sign::sign(&open(&signed), &id, &SignOptions { rect, ..opts() }).unwrap();
+        let s = check(&approved);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::SIGNATURE)), "{what}: {:?}", s.modification);
+        assert_ne!(s.status, Status::Valid, "{what}");
+    }
+}
+
+/// Add a signature widget to page 3 as [`add_sig_widget`] does, with value `v`, filling the page
+/// with an opaque appearance.
+fn add_opaque_sig_widget(doc: &mut Document, v: Option<&[(&[u8], Object)]>) {
+    add_sig_widget(doc, v, [0, 0, 300, 300]);
+    // The widget is the last object added; its appearance comes after it.
+    let widget = doc.object_numbers().into_iter().max().map(|num| ObjRef { num, generation: 0 }).unwrap();
+    assert_eq!(doc.get(widget).as_dict().and_then(|w| w.name(b"Subtype")), Some(b"Widget".as_slice()));
+    let ap = opaque_appearance(doc);
+    doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", Object::Ref(ap))])))).unwrap();
 }
 
 /// A genuine document timestamp, which draws nothing, is validation data P=1 permits: the
@@ -560,21 +579,19 @@ fn an_empty_signature_widget_added_or_restyled_after_certification_is_not_signin
     let trust = TrustStore { certs: vec![id.certificate.clone()] };
     let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed && s.certify.is_some()).unwrap();
     let field = ObjRef { num: 6, generation: 0 };
-    let added = |doc: &mut Document| {
-        add_sig_widget(doc, None, [0, 0, 300, 300]);
-        let ap = opaque_appearance(doc);
-        let widget = doc.object_numbers().into_iter().max().map(|num| ObjRef { num, generation: 0 }).unwrap();
-        doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", Object::Ref(ap))])))).unwrap();
-    };
     let restyled = |doc: &mut Document| {
         let ap = opaque_appearance(doc);
         doc.update_dict(field, |w| w.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", Object::Ref(ap))])))).unwrap();
     };
+    // A value that is a dictionary but signs nothing.
+    let foreign: &[(&[u8], Object)] = &[(b"Foo", Object::name("Bar"))];
     for p in [2, 3] {
         let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(p), ..opts() }).unwrap();
-        for (what, edited) in
-            [("an empty signature widget added", edit_after(&certified, added)), ("the empty field restyled", edit_after(&certified, restyled))]
-        {
+        for (what, edited) in [
+            ("an empty signature widget added", edit_after(&certified, |doc| add_opaque_sig_widget(doc, None))),
+            ("a signature widget added with a value that signs nothing", edit_after(&certified, |doc| add_opaque_sig_widget(doc, Some(foreign)))),
+            ("the empty field restyled", edit_after(&certified, restyled)),
+        ] {
             let s = check(&edited);
             if p == 2 {
                 assert_ne!(s.status, Status::Valid, "P={p}, {what}: {:?}", s.modification);

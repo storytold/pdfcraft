@@ -619,7 +619,7 @@ fn gains_signature(doc: &Document, old: &Document, d: &Dict, before: Option<&Dic
         return false;
     }
     let Some((holder, value)) = inherited(doc, d, b"V") else { return false };
-    if doc.resolve(&value).as_dict().is_none() {
+    if !doc.resolve(&value).as_dict().is_some_and(|v| signs_a_later_revision(doc, old, v)) {
         return false;
     }
     let existed = |num: u32| old.try_get(num).ok().is_some_and(|o| !matches!(*o, Object::Null));
@@ -632,6 +632,27 @@ fn gains_signature(doc: &Document, old: &Document, d: &Dict, before: Option<&Dic
         Some(num) => old.try_get(num).ok().and_then(|o| o.as_dict().and_then(|f| f.get(b"V").cloned())),
     };
     !signed_value.is_some_and(|v| old.resolve(&v).as_dict().is_some())
+}
+
+/// Whether the signature dictionary `v` signs a revision of `doc` added after the signed revision
+/// `old`: a `/Contents` string, and a `/ByteRange` `[0 a b c]` (`a` ≤ `b`) that ends where one of
+/// those revisions ends. That is what signing (a document timestamp included) writes, with or
+/// without `/Type`, and what the signature list then checks, so a forged one is shown as invalid
+/// there. Any other dictionary in `/V` signs nothing: `<< /Foo /Bar >>` under an opaque appearance
+/// is a new annotation, not a signature.
+fn signs_a_later_revision(doc: &Document, old: &Document, v: &Dict) -> bool {
+    let whole = |x: &f64| x.fract() == 0.0 && (0.0..9.0e15).contains(x);
+    let range = super::listing::nums(doc, v, b"ByteRange").and_then(|r| <[f64; 4]>::try_from(r).ok());
+    let Some([start, first_end, second_start, second_len]) = range.filter(|r| r.iter().all(whole)) else { return false };
+    let contents = v.get(b"Contents").is_some_and(|c| doc.resolve(c).as_string().is_some());
+    // Whole and below 9e15, so the sum is exact and fits. A revision's end counts up to two
+    // end-of-line bytes after its `%%EOF`, which a signature's range may leave out.
+    let end = (second_start + second_len) as usize;
+    contents
+        && start == 0.0
+        && first_end <= second_start
+        && end > old.bytes().len()
+        && doc.revision_ends().into_iter().any(|e| (end..=end.saturating_add(2)).contains(&e))
 }
 
 /// A change to an existing form widget that is not a signature's, `before` as signed and `d`
