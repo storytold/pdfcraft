@@ -42,6 +42,8 @@ pub struct FieldChange {
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
+    /// Move/resize the first widget, in PDF user space.
+    pub rect: Option<[f64; 4]>,
 }
 
 /// What a script did.
@@ -51,6 +53,8 @@ pub struct ScriptResult {
     pub rc: bool,
     /// `event.value` afterwards.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub changes: Vec<FieldChange>,
     /// Why it rejected the value (its alert), for the error shown.
     pub message: Option<String>,
@@ -82,7 +86,7 @@ pub struct NoScripts;
 
 impl Scripts for NoScripts {
     fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
-        ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+        ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None }
     }
 }
 
@@ -172,6 +176,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                     doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
                 }
             }
+        }
+        if let Some(rect) = c.rect {
+            crate::set_props(doc, &c.name, &crate::FieldProps { rect: Some((0, rect)), ..Default::default() })?;
         }
     }
     Ok(())

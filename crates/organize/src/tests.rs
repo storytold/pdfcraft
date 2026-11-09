@@ -4241,3 +4241,74 @@ fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
     crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
     assert_eq!(crate::bookmarks(&target).len(), 33);
 }
+
+/// Does any object in `doc` hold the string value `/V (value)`?
+fn holds_value(doc: &Document, value: &str) -> bool {
+    doc.scan_objects()
+        .into_iter()
+        .any(|(_, o)| o.as_dict().and_then(|d| d.get(b"V")).and_then(|v| v.as_string()).is_some_and(|v| v.to_text() == value))
+}
+
+/// A field with a widget on each of two pages: extracting one page brings that widget and the field
+/// above it, not the other kid with its value.
+#[test]
+fn extracting_a_page_leaves_the_rest_of_its_form_behind() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [8 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [9 0 R] >>".into(),   // 4
+        raw("0 0 m"),                                                               // 5
+        raw("0 0 m"),                                                               // 6
+        "<< /T (applicant) /Kids [8 0 R 9 0 R] >>".into(),                          // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /Parent 7 0 R /P 3 0 R /Rect [0 0 50 20] >>".into(), // 8
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (90000) /Parent 7 0 R /P 4 0 R /Rect [0 0 50 20] >>".into(), // 9
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let part = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert!(holds_value(&part, "Ada"));
+    assert!(!holds_value(&part, "90000"), "the widget on the page left behind came along with its value");
+    let form = part.resolve(catalog(&part).get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let fields = part.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let applicant = part.resolve(&fields[0]).as_dict().cloned().unwrap();
+    assert_eq!(part.resolve(applicant.get(b"Kids").unwrap()).as_array().map(Vec::len), Some(1));
+    // With every page, the whole form comes along, as before.
+    let both = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    assert!(holds_value(&both, "Ada") && holds_value(&both, "90000"));
+}
+
+/// A form action lists fields by reference: extracting the page with the button doesn't bring
+/// the fields it submits, resets or hides from a page left behind, with their values. A reset of
+/// only those would list none, which reads as every field: it goes.
+#[test]
+fn a_form_action_brings_no_field_from_a_page_left_behind() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R 8 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [7 0 R 9 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [8 0 R] >>".into(),         // 4
+        raw("0 0 m"),                                                                     // 5
+        raw("0 0 m"),                                                                     // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (send) /P 3 0 R /Rect [0 0 50 20] \
+         /A << /S /SubmitForm /F (https://example.invalid/) /Fields [8 0 R (other)] \
+         /Next << /S /ResetForm /Fields [8 0 R] /Next << /S /Hide /T 8 0 R >> >> >> >>"
+            .into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (90000) /P 4 0 R /Rect [0 0 50 20] >>".into(), // 8
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (clear) /P 3 0 R /Rect [0 30 50 50] \
+         /A << /S /ResetForm /Fields [8 0 R] >> /AA << /U << /S /ResetForm /Flags 1 /Fields [8 0 R] >> >> >>"
+            .into(), // 9
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let part = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert!(!holds_value(&part, "90000"), "a field the action lists came along from the page left behind");
+    let submit = part.resolve(annots(&part, 0)[0].get(b"A").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(part.resolve(submit.get(b"Fields").unwrap()).as_array().map(Vec::len), Some(1), "the field named by text stays");
+    assert!(submit.get(b"Next").is_none_or(|n| part.resolve(n).as_dict().is_none()), "the reset after the submit would clear every field");
+    let clear = annots(&part, 0).remove(1);
+    assert!(clear.get(b"A").is_none(), "the clear button would clear every field");
+    // A reset of every field but the one left behind still resets them all.
+    let aa = part.resolve(clear.get(b"AA").unwrap()).as_dict().cloned().unwrap();
+    assert!(aa.get(b"U").is_some_and(|u| part.resolve(u).as_dict().is_some()));
+    // With every page, the actions still list it.
+    assert!(holds_value(&full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap()), "90000"));
+}

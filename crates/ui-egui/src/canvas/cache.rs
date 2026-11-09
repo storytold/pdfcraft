@@ -458,7 +458,12 @@ impl DocView {
                 && !self.errors.contains_key(&r.page)
         });
         if visible_mains_pending {
-            // Caches are kept; demand is re-evaluated next frame once pixels arrive.
+            // Caches are kept; demand is re-evaluated next frame once pixels arrive. Thumbnails
+            // nothing shows any more (their panel closed) go now, though: no consumer is waiting.
+            if self.thumb_demand.is_empty() {
+                self.thumbs.clear();
+                self.stale_thumbs.clear();
+            }
             return queue;
         }
         let thumbs = self.thumbnail_requests(info, ppp);

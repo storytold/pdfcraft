@@ -319,31 +319,39 @@ fn rich_plain(node: roxmltree::Node) -> String {
     out.trim_end_matches('\r').to_string()
 }
 
-/// The name of every annotation, for `inreplyto`: its /NM, or, for one in `only` without one
-/// (other tools leave /NM out), a name new to the document for this export, so a reply copied
-/// with it still finds it.
+/// The name of every annotation, for `inreplyto`: its /NM, or, for one without one (other tools
+/// leave /NM out) that is in `only` or that another annotation replies to or is grouped under
+/// (`/IRT`, ISO 32000-2 §12.5.6.2; a Replace Text pair is such a group), a name new to the
+/// document for this export, so the link survives the round trip. Made-up names are never written
+/// into the PDF.
 fn annotation_names(doc: &Document, pages: &[pdfcraft_model::Page], only: Option<&HashSet<(usize, usize)>>) -> HashMap<ObjRef, String> {
     let mut names: HashMap<ObjRef, String> = HashMap::new();
     let mut unnamed: Vec<(usize, usize, ObjRef)> = Vec::new();
+    let mut targets: HashSet<ObjRef> = HashSet::new();
     // Every name in use, those of annotations written straight into the page array too, so a
     // given name is new.
     let mut taken: HashSet<String> = HashSet::new();
     for (pi, p) in pages.iter().enumerate() {
         for (ai, a) in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default().into_iter().enumerate() {
-            let nm = doc.resolve(&a).as_dict().and_then(|d| text_of(doc, d, b"NM"));
+            let d = doc.resolve(&a).as_dict().cloned();
+            if let Some(t) = d.as_ref().and_then(|d| d.get(b"IRT")).and_then(Object::as_ref) {
+                targets.insert(t);
+            }
+            let nm = d.as_ref().and_then(|d| text_of(doc, d, b"NM")).filter(|nm| !nm.is_empty());
             if let Some(nm) = &nm {
                 taken.insert(nm.clone());
             }
+            // Only an indirect annotation can be an `/IRT` target, so only it is keyed here.
             let Some(r) = a.as_ref() else { continue };
             match nm {
                 Some(nm) => {
                     names.insert(r, nm);
                 }
-                None if only.is_some_and(|only| only.contains(&(pi, ai))) => unnamed.push((pi, ai, r)),
-                None => {}
+                None => unnamed.push((pi, ai, r)),
             }
         }
     }
+    unnamed.retain(|(pi, ai, r)| only.is_some_and(|only| only.contains(&(*pi, *ai))) || targets.contains(r));
     for (pi, ai, r) in unnamed {
         let mut name = format!("pdfcraft-{pi}-{ai}");
         while taken.contains(&name) {
@@ -427,8 +435,8 @@ fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap
 /// `own`: write each comment's PdfCraft keys too (see [`own_keys`]), for a copy and paste.
 fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, usize)>>, own: bool) {
     let pages = pdfcraft_model::pages(doc);
-    // NM of every annotation, for inreplyto. A selected annotation without one (other tools
-    // leave /NM out) gets a name for this export, so a reply copied with it still finds it.
+    // NM of every annotation, for inreplyto. A selected or replied-to annotation without one
+    // (other tools leave /NM out) gets a name for this export, so its replies still find it.
     let names = annotation_names(doc, &pages, only);
     // What the import reads of appearances, over all of the comments.
     let mut appearance_budget = super::appearance::MAX_IMPORT_APPEARANCE_BYTES;
@@ -452,8 +460,8 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
                     n(rect[1].max(rect[3]))
                 );
             }
-            // The name: /NM, or the one given above for this export.
-            if let Some(nm) = text_of(doc, &d, b"NM").or_else(|| a.as_ref().and_then(|r| names.get(&r).cloned())) {
+            // Its `/NM`, or the name given above for this export.
+            if let Some(nm) = a.as_ref().and_then(|r| names.get(&r)).cloned().or_else(|| text_of(doc, &d, b"NM")) {
                 let _ = write!(attrs, " name=\"{}\"", esc(&nm));
             }
             for (key, attr) in [
