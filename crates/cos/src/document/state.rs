@@ -335,7 +335,7 @@ const OWNED_BYTES_DEPTH: usize = 256;
 /// InDesign's `/PieceInfo` -- thousands of small numeric arrays, parsed into tens of thousands of
 /// values -- weighed nothing, so the caches kept a thousand of them: a 35 MB file held 1.5 GB
 /// (#5873).
-pub(super) fn held_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
+pub(crate) fn held_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
     if depth > OWNED_BYTES_DEPTH {
         return usize::MAX;
     }

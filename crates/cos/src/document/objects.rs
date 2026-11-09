@@ -90,6 +90,13 @@ impl Document {
         &self.repair_log
     }
 
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
+    }
+
     /// Objects of the file that could not be read, lowest number first, as lines such as
     /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
     /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
@@ -323,7 +330,29 @@ impl Document {
     /// ([`pdfcraft_filters::MAX_CHAIN`]). Only small values are copied, so a file can't have a
     /// large object copied once for each key and filter.
     pub fn with_direct_parms<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
-        let Some(p) = s.dict.get(b"DecodeParms") else { return Cow::Borrowed(s) };
+        let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
+        let mut s = s.clone();
+        s.dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(s)
+    }
+
+    /// [`Document::with_direct_parms`] for decoding alone: where that copies `s`, this makes a
+    /// stream of `s`'s data, shared, and a dictionary of its `/Filter` and the parameters made
+    /// direct, all its filters read. A stream named again and again, as a page's `/Contents` may
+    /// list one, isn't copied whole each time.
+    pub(crate) fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
+        let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
+        let mut dict = Dict::new();
+        if let Some(f) = s.dict.get(b"Filter") {
+            dict.set(b"Filter".to_vec(), f.clone());
+        }
+        dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(Stream { dict, raw: s.raw.clone() })
+    }
+
+    /// The `/DecodeParms` [`Document::with_direct_parms`] gives `s`, or `None` when it keeps `s`.
+    fn direct_parms(&self, s: &Stream) -> Option<Object> {
+        let p = s.dict.get(b"DecodeParms")?;
         let crypt = |f: &Object| matches!(f.as_name(), Some(b"Crypt"));
         let filters: Vec<bool> = match s.dict.get(b"Filter") {
             Some(Object::Array(a)) => a.iter().map(crypt).collect(),
@@ -331,7 +360,7 @@ impl Document {
             None => Vec::new(),
         };
         if filters.iter().filter(|c| !**c).count() > pdfcraft_filters::MAX_CHAIN {
-            return Cow::Borrowed(s);
+            return None;
         }
         let mut changed = matches!(p, Object::Ref(_));
         // Its numbers and flags kept, resolved; anything else is no filter's parameters (null).
@@ -358,12 +387,7 @@ impl Document {
             }
             _ => one(p, &mut changed),
         };
-        if !changed {
-            return Cow::Borrowed(s);
-        }
-        let mut s = s.clone();
-        s.dict.set(b"DecodeParms".to_vec(), made);
-        Cow::Owned(s)
+        changed.then_some(made)
     }
 
     /// `o`, or the object it refers to, without copying either.
@@ -462,7 +486,14 @@ impl Document {
             let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
+        let Some(p) = self.fax_params(s) else {
+            // The last filter gives the image's rows: rows without the tags of the PNG predictor
+            // they declare are read as they are (`pdfcraft_filters::decode_image_tolerant_within`).
+            return match height {
+                Some(rows) => s.decoded_image_rows_spending(max, rows, work),
+                None => s.decoded_spending(max, work),
+            };
+        };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };

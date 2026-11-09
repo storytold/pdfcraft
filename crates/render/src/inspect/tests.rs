@@ -729,6 +729,31 @@ const CUSTOM_INFO: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R /Info 4 0 R >>
 %%EOF";
 
+/// One page whose `/Info` is `info` (the dictionary's contents).
+fn with_info(info: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << {info} >> endobj
+trailer << /Root 1 0 R /Info 4 0 R >>
+%%EOF"
+    )
+    .into_bytes()
+}
+
+#[test]
+fn creation_and_modification_dates_are_read_for_document_properties() {
+    let info = inspect(Arc::new(with_info("/CreationDate (D:20240105093000+01'00') /ModDate (D:20261031174500Z)")), None).expect("opens");
+    assert_eq!((info.created.as_deref(), info.modified.as_deref()), (Some("2024-01-05 09:30"), Some("2026-10-31 17:45")));
+    // Not a PDF date: shown as written. Empty, a number, a name and absent: no date.
+    let info = inspect(Arc::new(with_info("/CreationDate (last Tuesday) /ModDate ()")), None).expect("opens");
+    assert_eq!((info.created.as_deref(), info.modified.as_deref()), (Some("last Tuesday"), None));
+    let info = inspect(Arc::new(with_info("/CreationDate 20240105 /ModDate /D:20240105093000Z")), None).expect("opens");
+    assert_eq!((info.created, info.modified), (None, None));
+}
+
 #[test]
 fn custom_document_properties_are_listed_apart_from_the_standard_ones() {
     let info = inspect(Arc::new(CUSTOM_INFO.to_vec()), None).expect("opens");
@@ -883,6 +908,26 @@ fn fields_listed_only_on_the_pages_are_listed() {
     assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
 }
 
+/// A widget whose `/Parent` names an object the file doesn't hold, or one that isn't a dictionary,
+/// is listed as a field of its own: that parent reads as `null`, the same
+/// as none (ISO 32000-2 §7.3.9).
+#[test]
+fn a_widget_whose_parent_is_missing_is_listed() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /Fields [] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (alpha) /V (one) /Parent 40 0 R /Rect [10 100 90 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (beta) /Parent 7 0 R /Rect [10 60 90 80] >> endobj
+7 0 obj [1 2 3] endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.value.as_deref(), f.page)).collect();
+    assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
+}
+
 /// A `Structure` that counts the objects read through it.
 struct CountingReads<'a> {
     doc: &'a Document,
@@ -900,6 +945,50 @@ impl Structure for CountingReads<'_> {
     fn encrypted(&self) -> bool {
         false
     }
+}
+
+/// A font (or any dictionary whose `/Type` is present and isn't `/Annot`) a page lists in `/Annots`
+/// isn't an annotation (ISO 32000-2 §12.5.2, Table 166) and isn't listed as a comment; the real ones
+/// around it keep their place in the array, and an entry without `/Type` is still read as one. A
+/// `/Type` that isn't a name (`/Type 42`) isn't `/Annot` either, while `/Type null` counts as absent.
+#[test]
+fn dictionaries_of_another_type_in_annots_are_not_annotations() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (typed) >> endobj
+6 0 obj << /Type /Font /Subtype /TrueType /BaseFont /Arial >> endobj
+7 0 obj << /Subtype /Square /Rect [40 40 60 60] /Contents (untyped) >> endobj
+8 0 obj << /Type 42 /Subtype /Text /Rect [70 70 90 90] /Contents (number type) >> endobj
+9 0 obj << /Type null /Subtype /Circle /Rect [100 100 120 120] /Contents (null type) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let mut listed: Vec<_> = info.annotations.iter().map(|a| (a.subtype.as_str(), a.index, a.contents.as_deref())).collect();
+    listed.sort_by_key(|a| a.1);
+    assert_eq!(listed, [("Text", 1, Some("typed")), ("Square", 3, Some("untyped")), ("Circle", 5, Some("null type"))], "{:?}", info.annotations);
+}
+
+/// `/QuadPoints` is read by the rule redaction apply uses (`pdfcraft_geom::quad_points`): a quad
+/// with a non-number is left out rather than drawn with a zero, an indirect number is followed,
+/// and a trailing partial quad is dropped.
+#[test]
+fn only_usable_quads_are_listed() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >> endobj\n\
+         4 0 obj 40 endobj\n\
+         5 0 obj << /Type /Annot /Subtype /Redact /Rect [20 95 40 110] /QuadPoints \
+         [20 /oops 40 110 20 95 40 95  20 110 4 0 R 110 20 95 40 95  20 110 40 110] >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    let mark = info.annotations.iter().find(|a| a.subtype == "Redact").expect("listed");
+    assert_eq!(mark.quads, vec![[20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0]]);
 }
 
 /// One comment referenced many times, or a page-shared `/Annots` array, is listed once, and many
@@ -951,6 +1040,40 @@ fn an_annotation_reached_through_a_reference_chain_is_listed_once() {
         let mut info = DocInfo { pages: vec![page.clone(), page.clone()], ..Default::default() };
         Inspector::new(reader).fill(&mut info);
         assert_eq!(info.links.len(), 1, "{:?}", info.links);
+    }
+}
+
+/// Comments list their `/C` as pdfcraft-annot draws and lists it: four entries with a null are
+/// CMYK with the null as 0, one entry is grey, a reference among four entries is unreadable,
+/// three numbers (some by reference) are RGB, and a text box keeps its three-number `/C`.
+#[test]
+fn comment_colours_are_listed_as_drawn() {
+    let pdf = "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+             4 0 obj << /Type /Annot /Subtype /Square /Rect [0 0 10 10] /C [1 0 0 null] >> endobj
+             5 0 obj << /Type /Annot /Subtype /Square /Rect [0 20 10 30] /C 10 0 R >> endobj
+             6 0 obj << /Type /Annot /Subtype /Square /Rect [0 40 10 50] /C [1 0 0 11 0 R] >> endobj
+             7 0 obj << /Type /Annot /Subtype /Square /Rect [0 60 10 70] /C [11 0 R 0 0] >> endobj
+             8 0 obj << /Type /Annot /Subtype /Circle /Rect [0 80 10 90] /C [0 0 0 1] >> endobj
+             9 0 obj << /Type /Annot /Subtype /FreeText /Rect [0 100 10 110] /C [0 1 0] >> endobj
+             10 0 obj [0.5] endobj
+             11 0 obj 1 endobj
+             trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let mut saved = Vec::new();
+    doc.save_to(&mut saved).expect("saves");
+    let lazy = LazyStructure::new(Arc::new(saved), None).expect("opens");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    for reader in [&doc as &dyn Structure, &lazy] {
+        let mut info = DocInfo { pages: vec![page.clone()], ..Default::default() };
+        Inspector::new(reader).fill(&mut info);
+        let mut listed: Vec<(f32, Option<[f32; 3]>)> = info.annotations.iter().map(|a| (a.rect[1], a.color)).collect();
+        listed.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let colors: Vec<Option<[f32; 3]>> = listed.into_iter().map(|(_, c)| c).collect();
+        assert_eq!(colors, [Some([0.0, 1.0, 1.0]), Some([0.5, 0.5, 0.5]), None, Some([1.0, 0.0, 0.0]), Some([0.0, 0.0, 0.0]), Some([0.0, 1.0, 0.0])]);
     }
 }
 
@@ -1714,6 +1837,57 @@ fn outline_items_carry_their_colour_and_style() {
     );
 }
 
+/// A bookmark's action (`/A`, ISO 32000-2 §12.3.3 Table 151) is read as a link's is. Only a
+/// go-to's `/D` is a page of this document: a remote go-to's names a page or destination of the
+/// other file (§12.6.4.3), so `[0 /FitH 200]` there is not this file's first page. A web address,
+/// another PDF and actions PdfCraft doesn't run are kept for the bookmark to run or report. An
+/// action without a type is still read as the go-to its `/D` suggests.
+#[test]
+fn bookmark_actions_are_read_as_links_read_them() {
+    use DestView::*;
+    let actions = [
+        ("Go to", "/A << /S /GoTo /D [3 0 R /FitH 300] >>"),
+        ("Web", "/A << /S /URI /URI (https://example.org/manual) >>"),
+        ("Other file", "/A << /S /GoToR /F (other.pdf) /D [0 /FitH 200] /NewWindow true >>"),
+        ("Other file, named", "/A << /S /GoToR /F (other.pdf) /D (sec) >>"),
+        ("Launch", "/A << /S /Launch /F (other.pdf) >>"),
+        ("Menu item", "/A << /S /Named /N /NextPage >>"),
+        ("Script", "/A << /S /JavaScript /JS (app.alert\\(1\\)) >>"),
+        ("No type", "/A << /D [3 0 R /Fit] >>"),
+    ];
+    let n = actions.len();
+    let items: Vec<String> = actions
+        .iter()
+        .enumerate()
+        .map(|(k, (title, action))| {
+            let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+            let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+            format!("<< /Title ({title}) /Parent 4 0 R{prev}{next} {action} >>")
+        })
+        .collect();
+    let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+    let got: Vec<_> = info.outline.iter().map(|o| (o.title.as_str(), o.page, o.view, o.action.clone())).collect();
+    let remote = |destination, new_window| Some(LinkTarget::RemoteGoTo { launch: false, file: "other.pdf".into(), destination, new_window });
+    assert_eq!(
+        got,
+        [
+            ("Go to", Some(0), FitH { top: Some(300.0) }, None),
+            ("Web", None, Top, Some(LinkTarget::Uri("https://example.org/manual".into()))),
+            ("Other file", None, Top, remote(RemoteDestination::Page { page: 0, view: FitH { top: Some(200.0) } }, Some(true))),
+            ("Other file, named", None, Top, remote(RemoteDestination::Named("sec".into()), None)),
+            (
+                "Launch",
+                None,
+                Top,
+                Some(LinkTarget::RemoteGoTo { launch: true, file: "other.pdf".into(), destination: RemoteDestination::Default, new_window: None })
+            ),
+            ("Menu item", None, Top, Some(LinkTarget::Other("Named".into()))),
+            ("Script", None, Top, Some(LinkTarget::Other("JavaScript".into()))),
+            ("No type", Some(0), Fit, None),
+        ]
+    );
+}
+
 #[test]
 fn outline_window_keeps_the_first_bookmarks_and_says_when_more_follow() {
     const COUNT: usize = OUTLINE_WINDOW + 5;
@@ -2008,4 +2182,169 @@ fn inspection_keeps_no_private_page_data() {
         format!("{info:?}")
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
+}
+
+/// A `/Kids` entry that loops back, or names a root field that doesn't name this one as its
+/// `/Parent`, is not a child (ISO 32000-2 §12.7.3, Table 224; §12.7.4.1, Table 226): the field
+/// keeps its other kids and is listed with them.
+#[test]
+fn kids_that_loop_back_or_are_roots_are_not_children() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [6 0 R 9 0 R 12 0 R 15 0 R] >> endobj
+4 0 obj << /Fields [5 0 R 7 0 R 8 0 R 10 0 R] >> endobj
+5 0 obj << /FT /Btn /Ff 49152 /T (size) /Kids [5 0 R 6 0 R] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 150 20 160] >> endobj
+7 0 obj << /FT /Btn /Ff 49152 /T (left) /Kids [8 0 R 9 0 R] >> endobj
+8 0 obj << /FT /Btn /Ff 49152 /T (right) /Kids [7 0 R 12 0 R] >> endobj
+9 0 obj << /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [10 120 20 130] >> endobj
+10 0 obj << /T (group) /Kids [13 0 R] >> endobj
+12 0 obj << /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 90 20 100] >> endobj
+13 0 obj << /FT /Tx /T (inner) /Parent 10 0 R /Kids [14 0 R] >> endobj
+14 0 obj << /FT /Tx /T (deep) /Parent 13 0 R /Kids [13 0 R 15 0 R] >> endobj
+15 0 obj << /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [10 60 90 80] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.kind, f.page, f.rect.map(|r| r[1]))).collect();
+    assert_eq!(
+        listed,
+        [
+            ("size", FieldKind::Radio, Some(0), Some(150.0)),
+            ("left", FieldKind::Radio, Some(0), Some(120.0)),
+            ("right", FieldKind::Radio, Some(0), Some(90.0)),
+            ("group.inner.deep", FieldKind::Text, Some(0), Some(60.0)),
+        ],
+        "{:?}",
+        info.fields
+    );
+}
+
+/// A field with no widget among its `/Kids` takes the page widget that names it as its
+/// `/Parent`: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226). Here `pair` and `other`
+/// list each other (roots, so not children), and only a page widget says it belongs to `other`.
+#[test]
+fn a_field_takes_the_page_widget_naming_it_when_its_kids_list_none() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 7 0 R 11 0 R 13 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 150 20 160] >> endobj
+5 0 obj << /FT /Btn /Ff 49152 /T (radio) /Kids [5 0 R 7 0 R] >> endobj
+6 0 obj << /Fields [5 0 R 8 0 R 9 0 R] >> endobj
+7 0 obj << /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 120 20 130] >> endobj
+8 0 obj << /FT /Btn /Ff 49152 /T (pair) /Kids [9 0 R 11 0 R] >> endobj
+9 0 obj << /FT /Btn /Ff 49152 /T (other) /Kids [8 0 R] >> endobj
+11 0 obj << /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 90 20 100] >> endobj
+13 0 obj << /Type /Annot /Subtype /Widget /Parent 9 0 R /Rect [10 60 20 70] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.page, f.rect.map(|r| r[1]))).collect();
+    assert_eq!(listed, [("radio", Some(0), Some(120.0)), ("pair", Some(0), Some(90.0)), ("other", Some(0), Some(60.0))], "{:?}", info.fields);
+}
+
+/// The password values (`/O`, `/U`, `/OE`, `/UE`, `/Perms`) of an AES-256 (R6) protection with a
+/// user password, as a save writes them.
+fn r6_password_values() -> String {
+    let plain = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(plain)).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "user pw",
+        owner_password: "owner pw",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let saved = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let saved = pdfcraft_cos::Document::open_with_password(Arc::new(saved), Some("user pw")).unwrap();
+    let encrypt = saved.resolve(saved.trailer().get(b"Encrypt").unwrap());
+    let encrypt = encrypt.as_dict().unwrap();
+    ["O", "U", "OE", "UE", "Perms"]
+        .iter()
+        .map(|k| {
+            let value = saved.resolve(encrypt.get(k.as_bytes()).unwrap());
+            let hex: String = value.as_string().unwrap().bytes.iter().map(|b| format!("{b:02X}")).collect();
+            format!("/{k} <{hex}>")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A page with text in the clear and an attachment, `note.txt`, encrypted with `/StdCF` (through
+/// `/EFF`, or a `/Crypt` filter of its own when `named`). `/StdCF` is authorised by `auth_event`,
+/// under the handler `version`.
+fn efopen_pdf_with(auth_event: &str, named: bool, version: &str) -> Vec<u8> {
+    let (eff, crypt) = if named { ("", " /Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]") } else { (" /EFF /StdCF", "") };
+    let encrypt = format!(
+        "<< /Filter /Standard {version} {} /P -4 /CF << /StdCF << /AuthEvent /{auth_event} /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity{eff} >>",
+        r6_password_values()
+    );
+    let page = "BT /F1 12 Tf 20 100 Td (Visible page) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>".to_string(),
+        "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
+        format!("<< /Type /EmbeddedFile{crypt} /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream"),
+        format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        encrypt,
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt {} 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1, objs.len())
+            .as_bytes(),
+    );
+    out
+}
+
+fn efopen_pdf(auth_event: &str) -> Vec<u8> {
+    efopen_pdf_with(auth_event, false, "/V 5 /R 6")
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: a crypt filter whose `/AuthEvent` is `/EFOpen` needs its password
+/// only when an embedded file is opened. Such a document opens without one, its page reads, and
+/// its attachment is listed; asking for the attachment's bytes is an error, not its encrypted data.
+#[test]
+fn a_document_encrypting_only_its_embedded_files_opens_without_a_password() {
+    let bytes = Arc::new(efopen_pdf("EFOpen"));
+    assert!(check_pages(bytes.clone(), None, 1).is_ok());
+    let info = inspect(bytes.clone(), None).expect("opens without a password");
+    assert_eq!(info.pages.len(), 1);
+    let mut renderer = crate::PageRenderer::new(bytes.clone(), crate::RenderConfig::default());
+    let text = renderer.render(crate::RenderRequest { page: 0, kind: crate::RequestKind::Text, ..Default::default() });
+    assert!(text.text.is_some_and(|page| page.plain_text().contains("Visible page")), "{:?}", text.error);
+    let listed = |name: &str| info.attachments.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name} is listed")).clone();
+    let refused = attachment_data(&bytes, None, &listed("note.txt")).expect_err("encrypted bytes aren't the file");
+    assert!(refused.contains("password"), "{refused}");
+    // Authorised when the document opens, the same filter still needs the password.
+    let doc_open = Arc::new(efopen_pdf("DocOpen"));
+    assert!(matches!(inspect(doc_open.clone(), None), Err(OpenError::NeedsPassword)));
+    assert!(matches!(check_pages(doc_open, None, 1), Err(OpenError::NeedsPassword)));
+}
+
+/// From the review of the EFOpen change: an attachment naming its own EFOpen crypt filter, with no
+/// `/EFF`, opens the same way; a handler older than crypt filters (V2) still needs the password.
+#[test]
+fn efopen_filters_named_by_the_file_open_and_older_handlers_do_not() {
+    let named = Arc::new(efopen_pdf_with("EFOpen", true, "/V 5 /R 6"));
+    let info = inspect(named.clone(), None).expect("opens without a password");
+    let note = info.attachments.iter().find(|a| a.name == "note.txt").expect("listed").clone();
+    assert!(attachment_data(&named, None, &note).is_err());
+    let legacy = Arc::new(efopen_pdf_with("EFOpen", false, "/V 2 /R 3 /Length 128"));
+    assert!(matches!(check_pages(legacy, None, 1), Err(OpenError::NeedsPassword)));
 }
