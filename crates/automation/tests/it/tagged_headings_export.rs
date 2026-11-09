@@ -421,3 +421,25 @@ fn malformed_large_rolemap_values_keep_inherited_and_aliased_export_levels() {
         assert_form_export_level(&output, ext, "Heading 2", 4);
     }
 }
+
+/// Nested Form clipping and the invoking page's heading scope are both retained.
+#[test]
+fn nested_form_clip_preserves_the_inherited_heading_and_hides_clipped_text() {
+    use pdfcraft_cos::Object;
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(inherited_form_pdf(2, None, true))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+    let objects = doc.dict(resources.get(b"XObject").unwrap()).unwrap();
+    let outer = doc.get(objects.get(b"F").unwrap().as_ref().unwrap());
+    let resources = doc.dict(outer.as_dict().unwrap().get(b"Resources").unwrap()).unwrap();
+    let objects = doc.dict(resources.get(b"XObject").unwrap()).unwrap();
+    let inner = objects.get(b"N").unwrap().as_ref().unwrap();
+    doc.update_dict(inner, |d| d.set("BBox", Object::Array(vec![0, 755, 612, 842].into_iter().map(Object::Int).collect()))).unwrap();
+    let input = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    for ext in ["html", "docx"] {
+        let output = export_pdf(input.clone(), ext);
+        let text = if ext == "html" { std::str::from_utf8(&output).unwrap().to_owned() } else { part(&output, "word/document.xml") };
+        assert!(!text.contains("Restored heading"), "text outside the inner BBox must stay clipped: {text}");
+        assert_form_export_level(&output, ext, "Heading 1", 1);
+    }
+}

@@ -18,6 +18,7 @@ mod autotag_fields;
 mod content;
 mod heading_levels;
 mod headings;
+mod layout_table;
 mod report;
 mod structure;
 mod tags;
@@ -43,6 +44,7 @@ pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
 pub use autotag_fields::tag_form_fields;
 pub use heading_levels::{HeadingLevels, heading_levels};
 pub use headings::{Heading, headings};
+pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};
 pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
