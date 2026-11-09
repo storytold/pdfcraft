@@ -3570,7 +3570,7 @@ fn the_selection_bar_stays_inside_the_pages_area() {
     h.run_steps(4);
     let viewport = h.state().views[0].viewport_rect();
     // The bar's whole area, frame included, not only its first and last buttons.
-    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].id.0));
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
     let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
     // The bar opens at the selection's left edge: past the area's right edge, without the clamp.
     let anchor = h.state().views[0].glyph_screen_rect(0, last).unwrap().left();

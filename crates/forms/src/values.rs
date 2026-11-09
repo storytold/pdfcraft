@@ -350,7 +350,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                     }
                 }
                 FieldValue::Radio(None) => None,
-                FieldValue::Choice(_) | FieldValue::ChoiceIndices(_) | FieldValue::Widget(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
+                FieldValue::Choice(_) | FieldValue::ChoiceIndices(_) | FieldValue::Widget(_) => {
+                    return invalid(format!("{:?} is a check box: use true or false", f.name));
+                }
             };
             set_states(doc, f, state.as_deref(), None)
         }
