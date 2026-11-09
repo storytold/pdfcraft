@@ -42,7 +42,9 @@ pub use settings::{
 };
 #[cfg(test)]
 use sheets::text_direction;
-pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up, texts_read_up};
+pub use sheets::{
+    LABEL_MARGIN, MARGIN, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
+};
 
 /// The names of the Print dialog's choices, shared by the `doc_print` tool and the settings
 /// file, so a saved preference reads like a tool argument and there is one vocabulary to keep.

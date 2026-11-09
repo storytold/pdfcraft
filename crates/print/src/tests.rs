@@ -678,6 +678,8 @@ fn printer_options_come_from_the_ppd() {
     assert!(spool::parse_ppd("*OpenUI *Broken\n*Broken A/B\n").is_empty(), "unclosed or malformed blocks are skipped");
 }
 
+/// A driver option's current choice is read from `lpoptions`, and a job passes `lp` only the
+/// driver options that are well-formed PPD keywords, never the ones PdfCraft sets itself.
 #[test]
 fn printer_option_defaults_and_job_arguments() {
     let current =
@@ -696,6 +698,53 @@ fn printer_option_defaults_and_job_arguments() {
     let args = lp_args(&job).join(" ");
     assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
+}
+
+/// CUPS is asked to turn the sheets (`orientation-requested` 4) when every one is landscape, a
+/// booklet's included; portrait, mixed, square and empty jobs say nothing (#2713).
+#[test]
+fn landscape_sheets_ask_cups_to_turn_the_page() {
+    let landscape = |size: (f64, f64)| Sheet { size, ..Sheet::default() };
+    let ask = Some(("orientation-requested".to_string(), "4".to_string()));
+    // A landscape Size sheet, and a booklet (always landscape sheets), are both turned.
+    let page = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&page), ask);
+    let booklet =
+        layout(&[(200.0, 300.0); 4], &settings(vec![0, 1, 2, 3], Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }))
+            .unwrap();
+    assert_eq!(cups_orientation(&booklet), ask);
+    // Portrait sheets, mixed jobs and nothing at all say nothing.
+    let portrait = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&portrait), None);
+    assert_eq!(cups_orientation(&[landscape((792.0, 612.0)), landscape((612.0, 792.0))]), None, "a mixed job is not turned as a whole");
+    assert_eq!(cups_orientation(&[landscape((612.0, 612.0))]), None, "a square sheet has no orientation");
+    assert_eq!(cups_orientation(&[]), None);
+    // `lp` is given it, among the job's other options.
+    let job = Job { options: ask.into_iter().collect(), ..Job::default() };
+    assert!(lp_args(&job).join(" ").ends_with("-o fit-to-page=false -o orientation-requested=4"));
+}
+
+/// Both submission paths add the orientation through `add_cups_orientation`: after the job's
+/// other options, never over an orientation the job already names (a driver choice), so `lp` is
+/// never given it twice, and not on Windows, whose print ticket sets it.
+#[test]
+fn a_job_that_names_its_orientation_keeps_it() {
+    let landscape = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    let media = ("media".to_string(), "Letter".to_string());
+    let mut options = vec![media.clone()];
+    add_cups_orientation(&mut options, &landscape);
+    let turned = if cfg!(windows) { vec![media] } else { vec![media, ("orientation-requested".to_string(), "4".to_string())] };
+    assert_eq!(options, turned);
+    // Added again, it isn't doubled.
+    add_cups_orientation(&mut options, &landscape);
+    assert_eq!(options, turned);
+    // A choice already made stands, however its name is cased: CUPS reads option names without
+    // regard to case, so a second one would replace it.
+    for key in ["orientation-requested", "Orientation-Requested", "ORIENTATION-REQUESTED"] {
+        let mut chosen = vec![(key.to_string(), "5".to_string())];
+        add_cups_orientation(&mut chosen, &landscape);
+        assert_eq!(chosen, [(key.to_string(), "5".to_string())], "{key}");
+    }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -1332,6 +1381,52 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
+}
+
+/// #2630: a Windows installation without the print DLLs is told so, before anything calls into
+/// a delay-loaded DLL that is not there.
+#[cfg(windows)]
+#[test]
+fn missing_print_dlls_are_named() {
+    use crate::spool::{PRINT_DLLS, missing_print_dll_in};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[0]));
+    std::fs::write(dir.join(PRINT_DLLS[0]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[1]));
+    std::fs::write(dir.join(PRINT_DLLS[1]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #2630: on a Windows without the print DLLs, the public entry points answer before any call
+/// into the delay-loaded DLLs: no printers, and printing refused naming the DLL. The job names a
+/// printer that doesn't exist and the bytes aren't a PDF, so a missing guard fails here with
+/// another error rather than reaching a real printer.
+#[cfg(windows)]
+#[test]
+fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
+    use crate::spool::{PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printers, submit, submit_with_progress};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-no-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = Some(dir.clone()));
+    let job = crate::spool::Job { printer: Some("PdfCraft test: no such printer".into()), ..Default::default() };
+    let named = |r: Result<String, crate::PrintError>| match r {
+        Err(crate::PrintError::Spool(m)) => m.contains(PRINT_DLLS[0]),
+        _ => false,
+    };
+    assert!(named(submit(b"not a PDF", &job)), "submit names the missing DLL");
+    let mut called = false;
+    assert!(named(submit_with_progress(b"not a PDF", &job, &mut |_, _| called = true)), "submit_with_progress names it");
+    assert!(!called, "no sheet reached a spooler");
+    // Not only an empty list, which a machine without printers gives anyway: the backend wasn't asked.
+    PRINTER_BACKEND_CALLS.with(|c| c.set(0));
+    assert!(printers().is_empty(), "no printers are listed");
+    assert_eq!(PRINTER_BACKEND_CALLS.with(|c| c.get()), 0, "the printer backend wasn't asked");
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
