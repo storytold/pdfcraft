@@ -84,6 +84,29 @@ pub struct SpanStyle {
     pub bold: bool,
     /// Italic: the oblique standard Latin face. Arabic script has no italic and stays upright.
     pub italic: bool,
+    /// The font Latin text is drawn in where it has the glyphs: an index into the sources given
+    /// to [`wrap_styled_with`]. `None`, or a character it lacks, draws in the standard Latin face.
+    pub latin: Option<usize>,
+}
+
+/// A font already in the PDF that Latin text may be drawn in rather than the standard Latin
+/// face: the paragraph's own font, so an edit that adds Arabic keeps the Latin's look and widths.
+pub struct LatinSource<'a> {
+    /// The font's resource name where the drawing is placed (a PDF name of regular characters).
+    /// The resource is the caller's: it is not part of the returned template.
+    pub resource: String,
+    /// The bytes that show a character in the font and its advance (em), or `None` when the
+    /// font has no glyph for it.
+    pub glyph: Box<LatinGlyph<'a>>,
+}
+
+/// What [`LatinSource::glyph`] answers for a character: its bytes in the font and advance (em).
+pub type LatinGlyph<'a> = dyn Fn(char) -> Option<(Vec<u8>, f64)> + 'a;
+
+impl std::fmt::Debug for LatinSource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LatinSource").field("resource", &self.resource).finish_non_exhaustive()
+    }
 }
 
 /// How a piece is drawn: its Latin face, its size relative to the size the lines were wrapped
@@ -91,6 +114,8 @@ pub struct SpanStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Look {
     latin: Std14,
+    /// The source font (see [`LatinSource`]) Latin is drawn in where it has the glyphs.
+    source: Option<usize>,
     scale: f64,
     color: Option<[f64; 3]>,
     bold: bool,
@@ -98,7 +123,7 @@ struct Look {
 
 impl Look {
     fn plain(latin: Std14) -> Self {
-        Look { latin, scale: 1.0, color: None, bold: false }
+        Look { latin, source: None, scale: 1.0, color: None, bold: false }
     }
 }
 
@@ -109,11 +134,12 @@ struct Styles<'a> {
     base: Look,
     offset: usize,
     spans: &'a [(Range<usize>, Look)],
+    sources: &'a [LatinSource<'a>],
 }
 
 impl Styles<'_> {
     fn plain(latin: Std14) -> Styles<'static> {
-        Styles { base: Look::plain(latin), offset: 0, spans: &[] }
+        Styles { base: Look::plain(latin), offset: 0, spans: &[], sources: &[] }
     }
 
     /// The look at byte `local` of the paragraph.
@@ -128,6 +154,43 @@ impl Styles<'_> {
 enum Piece {
     Latin(String, Look),
     Shaped(Vec<ShapedCluster>, Look),
+    /// Latin text in a source font: the bytes that show it there, its advance (em) and the
+    /// font's resource name.
+    Source {
+        bytes: Vec<u8>,
+        advance: f64,
+        resource: String,
+        look: Look,
+    },
+}
+
+/// Latin `text` in `look`: what its source font has glyphs for is drawn in that font, the rest
+/// in the standard Latin face.
+fn push_latin(pieces: &mut Vec<Piece>, text: String, look: Look, sources: &[LatinSource<'_>]) {
+    let Some(source) = look.source.and_then(|i| sources.get(i)) else {
+        pieces.push(Piece::Latin(text, look));
+        return;
+    };
+    let mut standard = String::new();
+    for c in text.chars() {
+        let Some((bytes, advance)) = (source.glyph)(c).filter(|(bytes, advance)| !bytes.is_empty() && advance.is_finite()) else {
+            standard.push(c);
+            continue;
+        };
+        if !standard.is_empty() {
+            pieces.push(Piece::Latin(std::mem::take(&mut standard), look));
+        }
+        match pieces.last_mut() {
+            Some(Piece::Source { bytes: shown, advance: total, look: last, .. }) if *last == look => {
+                shown.extend(bytes);
+                *total += advance;
+            }
+            _ => pieces.push(Piece::Source { bytes, advance, resource: source.resource.clone(), look }),
+        }
+    }
+    if !standard.is_empty() {
+        pieces.push(Piece::Latin(standard, look));
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -213,14 +276,21 @@ fn layout_pass(
                 segments.reverse();
             }
             for (kind, look, s) in segments {
-                pieces.push(match kind {
-                    Some(ShapedScript::Arabic) => Piece::Shaped(crate::shape_arabic(&s, run_rtl)?, look),
-                    Some(ShapedScript::ArabicBold) => Piece::Shaped(crate::shape_arabic_bold(&s, run_rtl)?, look),
-                    Some(ShapedScript::Hebrew) => Piece::Shaped(crate::shape_hebrew(&s, run_rtl)?, look),
-                    Some(ShapedScript::Thai) => Piece::Shaped(crate::shape_thai(&s)?, look),
-                    None if run_rtl => Piece::Latin(s.chars().rev().map(mirrored).collect(), look),
-                    None => Piece::Latin(s, look),
-                });
+                let clusters = match kind {
+                    Some(ShapedScript::Arabic) => crate::shape_arabic(&s, run_rtl)?,
+                    Some(ShapedScript::ArabicBold) => crate::shape_arabic_bold(&s, run_rtl)?,
+                    Some(ShapedScript::Hebrew) => crate::shape_hebrew(&s, run_rtl)?,
+                    Some(ShapedScript::Thai) => crate::shape_thai(&s)?,
+                    None if run_rtl => {
+                        push_latin(&mut pieces, s.chars().rev().map(mirrored).collect(), look, styles.sources);
+                        continue;
+                    }
+                    None => {
+                        push_latin(&mut pieces, s, look, styles.sources);
+                        continue;
+                    }
+                };
+                pieces.push(Piece::Shaped(clusters, look));
             }
         }
     }
@@ -229,6 +299,7 @@ fn layout_pass(
         .map(|piece| match piece {
             Piece::Latin(s, look) => look.latin.text_width(s, size * look.scale),
             Piece::Shaped(cs, look) => cs.iter().map(|c| c.advance * size * look.scale).sum(),
+            Piece::Source { advance, look, .. } => advance * size * look.scale,
         })
         .sum();
     // Em units of `size`: a row holding larger runs needs their room.
@@ -236,7 +307,7 @@ fn layout_pass(
     let tallest = pieces
         .iter()
         .map(|piece| match piece {
-            Piece::Latin(_, look) | Piece::Shaped(_, look) => look.scale,
+            Piece::Latin(_, look) | Piece::Shaped(_, look) | Piece::Source { look, .. } => look.scale,
         })
         .fold(empty, f64::max);
     let (mut ascent, mut descent) = (0.9 * tallest, 0.3 * tallest);
@@ -373,6 +444,20 @@ pub fn wrap_with_latin(text: &str, size: f64, width: f64, latin: Std14) -> Resul
 /// each run drawn at its own size and in its own colour. Bold Arabic uses the face's bold
 /// instance ([`GlyphError::NoFont`] when it has none); paragraphs split at line feeds only.
 pub fn wrap_styled(text: &str, size: f64, width: f64, base: SpanStyle, spans: &[(Range<usize>, SpanStyle)]) -> Result<Vec<Line>, GlyphError> {
+    wrap_styled_with(text, size, width, base, spans, &[])
+}
+
+/// [`wrap_styled`] with fonts already in the PDF that Latin runs are drawn in where they have the
+/// glyphs (a [`SpanStyle::latin`] names one): the drawing shows that text in the source font's
+/// resource, which the caller keeps in the resources it places the drawing in.
+pub fn wrap_styled_with(
+    text: &str,
+    size: f64,
+    width: f64,
+    base: SpanStyle,
+    spans: &[(Range<usize>, SpanStyle)],
+    sources: &[LatinSource<'_>],
+) -> Result<Vec<Line>, GlyphError> {
     if text.len() > 262_144
         || spans.len() > 65_536
         || !size.is_finite()
@@ -394,6 +479,7 @@ pub fn wrap_styled(text: &str, size: f64, width: f64, base: SpanStyle, spans: &[
             (false, true) => Std14::HelveticaOblique,
             (true, true) => Std14::HelveticaBoldOblique,
         },
+        source: style.latin,
         scale: style.size / size,
         color: Some(style.color),
         bold: style.bold,
@@ -408,7 +494,7 @@ pub fn wrap_styled(text: &str, size: f64, width: f64, base: SpanStyle, spans: &[
         let paragraph = paragraph.strip_suffix('\r').unwrap_or(paragraph);
         let rtl = unicode_bidi::get_base_direction(paragraph) == unicode_bidi::Direction::Rtl;
         let bidi = ParagraphBidiInfo::new(paragraph, Some(if rtl { Level::rtl() } else { Level::ltr() }));
-        let styles = Styles { base: look(&base), offset: start, spans: &looks };
+        let styles = Styles { base: look(&base), offset: start, spans: &looks, sources };
         let ranges =
             wrap_ranges(paragraph, width, |range| layout(paragraph, &bidi, range, size, rtl, width, styles).map_or(f64::INFINITY, |l| l.width));
         for range in ranges {
@@ -634,7 +720,7 @@ pub fn draw_positioned(lines: &[Line], size: f64, positions: &[[f64; 2]], color:
     let faces = lines.iter().flat_map(|line| {
         std::iter::once(line.latin).chain(line.pieces.iter().filter_map(|piece| match piece {
             Piece::Latin(_, look) => Some(look.latin),
-            Piece::Shaped(..) => None,
+            Piece::Shaped(..) | Piece::Source { .. } => None,
         }))
     });
     for face in faces {
@@ -676,6 +762,13 @@ pub fn draw_positioned(lines: &[Line], size: f64, positions: &[[f64; 2]], color:
                     out.extend(literal(&win_ansi(s)));
                     out.extend_from_slice(b" Tj\n");
                     pen += look.latin.text_width(s, at);
+                }
+                Piece::Source { bytes, advance, resource, look } => {
+                    fill(&mut out, look.color);
+                    let at = size * look.scale;
+                    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+                    out.extend(format!("/{resource} {} Tf 1 0 0 1 {} {} Tm <{hex}> Tj\n", n(at), n(pen), n(*y)).bytes());
+                    pen += advance * at;
                 }
                 Piece::Shaped(cs, look) => {
                     fill(&mut out, look.color);

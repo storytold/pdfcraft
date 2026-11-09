@@ -15641,6 +15641,72 @@ fn arabic_fallback_keeps_the_source_weight_and_latin_slant() {
     }
 }
 
+/// Arabic typed into a Latin paragraph whose font can't draw it (a subset, as Word embeds Calibri)
+/// takes the Arabic fallback for the Arabic only: the Latin stays in the paragraph's own font,
+/// with its widths, instead of being redrawn in Helvetica, which is wider and pushed the
+/// paragraph's last words onto another row over the next paragraph. Latin the font has no
+/// glyph for still falls back to Helvetica, and the edit survives a save and another edit.
+#[test]
+fn arabic_added_to_a_latin_subset_paragraph_keeps_the_latin_in_its_own_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Total usage grew by twelve percent) Tj ET");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
+        font.set(b"BaseFont".to_vec(), Object::name("BCDGEE+Calibri"));
+        font.set(b"FirstChar".to_vec(), Object::Int(32));
+        font.set(b"LastChar".to_vec(), Object::Int(126));
+        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(400); 95]));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    })
+    .unwrap();
+    for draft in ["Total usage grew by twelve percent تم", "Total usage grew by twelve percent تم تحديثه"] {
+        text::replace_block(&mut doc, 0, 0, draft).unwrap_or_else(|e| panic!("{draft}: {e}"));
+        doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text.replace('\n', ""), draft);
+        let faces = shown_faces(&doc, 0);
+        assert!(faces.contains("BCDGEE+Calibri") && faces.contains("NotoSansArabic"), "{draft}: {faces:?}");
+        assert!(!faces.iter().any(|f| f.starts_with("Helvetica")), "the Latin was redrawn in Helvetica: {draft}: {faces:?}");
+        // The Latin keeps its own widths: 400/1000 em a character at 12 pt.
+        let latin = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text.starts_with("Total")).expect("the Latin run");
+        assert!((latin.rect[0] - 72.0).abs() < 0.5, "{latin:?}");
+        assert_eq!(latin.base_font, "BCDGEE+Calibri", "{latin:?}");
+    }
+    // A Latin letter outside the subset (é, past its /LastChar) is drawn in Helvetica; the rest
+    // keeps its font.
+    let draft = "Total usage grew by twelve percent تم caf\u{e9}";
+    text::replace_block(&mut doc, 0, 0, draft).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), draft);
+    let faces = shown_faces(&doc, 0);
+    assert!(faces.contains("BCDGEE+Calibri") && faces.contains("Helvetica"), "{faces:?}");
+}
+
+/// Word tightens its rows with `TJ` kerning, which the Arabic fallback doesn't repeat: laid out
+/// again, the widest source row came out a little wider than the paragraph and its last word
+/// wrapped onto a row of its own, over the next paragraph. A row as wide as its own source row
+/// still fits.
+#[test]
+fn the_arabic_fallback_does_not_wrap_a_row_that_kerning_had_tightened() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page(
+        "BT /F1 12 Tf 72 700 Td [(This report covers the storage)80( usage in the quarter. Total)] TJ ET BT /F1 12 Tf 72 686 Td (usage grew by twelve) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let draft = format!("{} تم", blocks[0].editor_text);
+    assert_eq!(draft.matches('\n').count(), 1, "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let doc = reopen(&doc);
+    let mut rows: Vec<f64> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.rect[1]).collect();
+    rows.sort_by(|a, b| b.total_cmp(a));
+    rows.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+    assert_eq!(rows.len(), 2, "the paragraph keeps its two rows: {rows:?}");
+}
+
 /// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
 /// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
 /// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
