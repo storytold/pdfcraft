@@ -41,9 +41,14 @@
   (§4, §6.6): a retryable cabinet failure is retried by the daemon in the
   background with a doubling backoff and an idempotency key, without waiting for
   the next commit or the last client leaving; a `409` stops the queue;
-  `pdfcraft_collab_publication_retries_total` counts the attempts. The pushed
-  head, the fork and PR #6622 are unchanged, and nothing was pushed from this
-  session either.
+  `pdfcraft_collab_publication_retries_total` counts the attempts.
+  **§5 p.4 / limitation 4 (presence selections) is done locally in `b4e9179d8`**
+  (§4, §5): presence now carries a selection — the `/NM` of the selected comment
+  or a rectangle in user space (a text range's bounding box, a column select) —
+  under the cursor's 30 s TTL, drawn in the actor's colour for every participant
+  including viewers; changing it writes no operation and moves no version. The
+  pushed head, the fork and PR #6622 are unchanged, and nothing was pushed from
+  this session either.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -63,7 +68,7 @@
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op`, inverse operations for undo |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
 | `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, commit callback to the cabinet with an idempotency key, the background publication queue with a backoff, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`) |
-| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors and TTL, commit, inverse undo, host reports. Holds `Box<dyn Sink>`, never a native `Handle` |
+| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
 | `crates/engine` | `Session::apply_remote` (collaborative edits without the local snapshot undo) |
 
@@ -256,6 +261,69 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Presence selections — §5 p.4 / limitation 4 (2026-11-09, local; not pushed)
+
+`b4e9179d8` on `f13bc634e`. The wire already had `Presence.selection`
+(`Selection::{Annotation,Text}`, proto `f13bc634e` and earlier), and the server
+and hub already forwarded it with the size/rate limits; what was missing was the
+client: the UI sent `selection: None` and drew nothing but pointers. Limitation 4
+is closed on the client side:
+
+- **What travels.** The selected comment's `/NM` when it is on the page in view
+  (`Selection::Annotation`); otherwise a rectangle in PDF user space
+  (`Selection::Text { page, rect }`) — the selected comment's markup quads, the
+  bounding box of the text selection's quads (a range is one box), or the
+  rectangle of a column select. No text, no comment `Contents`, no author and no
+  token is ever put in the frame; the client test pins the frame's keys.
+- **Sending.** `collab_presence` computes the selection from `DocView` state
+  (`comments.selected`, `DocView::selection_quads`) and `DocInfo` (the `/NM` and
+  geometry of a comment). The coalescing rule now includes it: a change of
+  selection sends within the 100 ms interval, the 1 s heartbeat still keeps a
+  reader current, and presence is sent by every role, viewers included (ADR-0006
+  §5). A selection addressed to page `p` travels with `PageRef { p, epoch }`, not
+  with the page in view, so scrolling does not move it.
+- **Receiving and drawing.** `CollabUi::selections` applies the pointer's rules —
+  the 30 s TTL and the sender's page-set epoch — and the canvas paints a
+  translucent fill (alpha 48) with a one-pixel outline in the actor's colour,
+  over the page and its comments, after the cursors (`paint_remote_selections`). An
+  `Annotation` selection is resolved to the comment's quads, else its rectangle;
+  a name that is no longer on the page draws nothing. The replica's own presence
+  never arrives back (the hub broadcasts to everyone but the sender), so the
+  local selection is never drawn as a remote one; the editor's own highlight
+  stays the editor's.
+- **Never an operation.** Presence still goes through `Room::presence`, which
+  only checks the actor and the rate, and through the hub's `broadcast_except`;
+  it is not journaled and does not touch `version`/`epoch`. A viewer may share a
+  selection and cannot write; the room accepts the next real operation as before.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-ws` e2e | `two_clients_share_a_selection_without_an_operation`: editor, commenter and viewer over a socket; the editor's `Text` selection reaches both others, the viewer's `Annotation` selection reaches the editor, versions stay 0, a joiner's resync tail is empty, and after a rotation the tail holds exactly that one operation |
+| `collab-client` | `a_presence_frame_carries_a_selection_and_no_document_content`: a `text` selection round-trips, the frame has exactly the presence keys, and `contents`/`text`/`jwt`/`token`/`bytes`/`password`/`author` are absent; the frame stays under `MAX_PRESENCE_BYTES` |
+| `ui-egui` | `a_remote_selection_expires_with_its_presence` (fresh draws, another epoch does not, stale after 30 s does not), `a_selected_comment_travels_by_its_name`, `a_text_range_travels_as_its_bounding_rect` |
+
+Gates at `b4e9179d8` (host `agents`, rustc 1.99.1):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, client + projection + transport | `cargo clippy -p pdfcraft-collab-client -p pdfcraft-collab-client-pdf -p pdfcraft-collab-ws --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, client + projection | `cargo test -p pdfcraft-collab-client -p pdfcraft-collab-client-pdf` | pass — client **13**, client-pdf 20 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **13/13** |
+| UI, the collab module | `cargo test -p pdfcraft-ui-egui --features collab --lib collab::` | pass — 6 (the three new ones and the three token/role ones) |
+
+What this does **not** cover: several selected comments share nothing (only the
+primary selection is sent); a multi-line range is one bounding box, not one quad
+per line (so the box may cover unselected text between lines); a caret/typing
+position is not shared; and selection rendering was not checked in a browser
+(the host page still gets only the participant list's page, not a selection).
+The full `ui-egui` suite was not re-run: clippy with the feature compiles it and
+the collab module's tests pass, but the page-painting path has no new test that
+drives a real frame.
 
 ### The publication queue — §5 p.6 / limitation 6 (2026-11-09, local; not pushed)
 
@@ -1015,8 +1083,15 @@ Ordered by the risk they pose to production.
    epoch, so an operation addressed to a passed epoch is `stale` (retryable).
    Replace, split/combine, blank insert, bookmarks, layers, attachments, form
    structure and content edits are still not shared.
-4. **Presence has cursors, not selections.** The pointer over a page is sent and
-   drawn (ADR-0006); a text selection, `/NM` or rect selection is not sent yet.
+4. ~~**Presence has cursors, not selections.**~~ Closed on the client in
+   `b4e9179d8` (§4): presence now carries the selected comment's `/NM` or a
+   rectangle in user space (a text range's bounding box, a column select), under
+   the cursor's 30 s TTL, drawn in the actor's colour for every participant
+   including viewers, and it never becomes an operation or moves `version`.
+   What is still open: several selected comments share only the primary one, a
+   multi-line text range is one bounding box rather than per-line quads, a
+   caret/typing position is not shared, and the host page's `pdfcraft:presence`
+   report still carries only the participant list's page, not a selection.
 5. **Undo of a deletion is best effort.** A comment the room added comes back
    exactly; a comment that came from the file has no wire body, so its delete
    carries no copy and cannot be undone. A page comes back while its one-page
@@ -1257,11 +1332,17 @@ Presence:
 - Remote cursors are drawn by the canvas (`paint_remote_cursors`, arrow + name
   in the actor's colour) on their page only; a presence whose `page.epoch` is
   not the current epoch is not drawn (its index means another page).
+- Selections followed (`b4e9179d8`, §4): `collab_presence` sends the selected
+  comment's `/NM` (on the page in view) or a rectangle in user space — the text
+  range's bounding box, the selected comment's quads, a column select — and the
+  canvas draws `remote_selections` as a translucent fill in the actor's colour.
+  The same TTL and epoch rules apply; viewers receive and draw them too.
 - TTL 30 s is client-side (`PRESENCE_TTL`), because presence is never journaled
   or replayed: a participant that goes quiet for 30 s is shown as `inactive` and
-  its cursor is dropped; a disconnect or `leave` clears it at once.
+  its cursor and selection are dropped; a disconnect or `leave` clears them at
+  once.
 - The canvas knows nothing about collaboration: it draws `remote_cursors` and
-  reports `local_cursor`, both empty without the feature.
+  `remote_selections` and reports `local_cursor`, all empty without the feature.
 
 Undo of deletions (RFC §6.1, ADR-0010):
 
@@ -1309,8 +1390,10 @@ Tests added: `collab-pdf` `a_deleted_comment_comes_back_from_the_copy`,
 comment delete undone by the other, one page delete undone from the copy, both
 replicas equal).
 
-Still open here: drawing remote *selections*, and the blob channel that would
-lift the 160 KiB page cap and make a page restore independent of one frame.
+Still open here: the blob channel that would lift the 160 KiB page cap and make
+a page restore independent of one frame. Remote selections are done (§4,
+`b4e9179d8`); what remains of them is listed in §5 p.4 (several selected
+comments, per-line range geometry, caret).
 
 ### 6.6 Cleanup and submission
 
