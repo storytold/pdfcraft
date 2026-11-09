@@ -44,7 +44,7 @@ pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, 
 #[cfg(test)]
 use flow::list_item;
 pub use layout::{Block, Cell, Image, Page, Table};
-pub(crate) use layout::{Item, Run, flowing_paragraphs, items, tables};
+pub(crate) use layout::{Item, Run, flowing_paragraphs, items, reading_order, tables};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
 
