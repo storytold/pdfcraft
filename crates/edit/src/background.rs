@@ -1,7 +1,7 @@
 //! A page's background colour: the colour the page is painted with before anything else, as
 //! Edit a PDF ▸ Background and many producers do it, for exports that keep a page colour (#2992).
 
-use pdfcraft_content::{Matrix, Op, Pieces};
+use pdfcraft_content::{Matrix, Op};
 use pdfcraft_cos::{Dict, Document};
 
 use crate::{EditError, Rgb};
@@ -51,7 +51,7 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
     let resources = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let gstates = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
     let streams = crate::text::content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
 
     let mut st = State { ctm: Matrix::IDENTITY, space: Space::Gray, fill: Some([0.0; 3]), alpha: 1.0, plain: true, clip: Some(Vec::new()) };
@@ -98,8 +98,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
             }
             b"sc" | b"scn" => st.fill = colour(st.space, op),
             b"gs" => {
-                if let Some(g) = op.name(0).and_then(|n| gstates.get(n)).map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()) {
-                    apply_gstate(doc, &g, &mut st);
+                let mut held = None;
+                let gstate = match op.name(0).and_then(|n| gstates.get(n)) {
+                    Some(g) => crate::text::dict_in_place(doc, g, &mut held),
+                    None => None,
+                };
+                if let Some(g) = gstate {
+                    apply_gstate(doc, g, &mut st);
                 }
             }
             b"re" => match op.nums::<4>() {
