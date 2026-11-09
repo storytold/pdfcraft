@@ -375,7 +375,7 @@ PdfCraft is a Cargo workspace of focused crates, layered so the core never depen
 | `pdfcraft-render` | Rendering, inspection and text extraction with reading order |
 | `pdfcraft-engine` | The façade every frontend uses: sessions, edits, undo, saving, the tool catalogue |
 | `pdfcraft-automation` | Agent control: the headless tool table, `pdfcraft-cli run`, and the opt-in MCP server |
-| `pdfcraft-geom` | Geometry primitives shared by every crate: points, rectangles, page transforms |
+| `pdfcraft-geom` | Geometry primitives: points, rectangles, page transforms |
 | `pdfcraft-model` | Typed views over the object graph: the page tree with inherited attributes, page geometry |
 | `pdfcraft-content` | Content streams: operators with source spans, inline images, serializer, matrices |
 | `pdfcraft-edit` | Page content editing: headers and footers, watermarks, backgrounds, Bates numbers |
@@ -401,7 +401,7 @@ PdfCraft is a Cargo workspace of focused crates, layered so the core never depen
 
 **Quality gates.** Every change passes the same automated checks:
 - formatting, and Clippy with warnings as errors;
-- more than 8,000 unit, property and UI tests;
+- the unit, property and UI tests (more than 8,000 test functions; a few are platform-specific or opt-in);
 - crate-layering rules and a WebAssembly build check;
 - an asset-licence audit.
 
@@ -462,11 +462,11 @@ Logs, environment variables and other development notes are in [docs/development
 
 PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, for professional and everyday workflows.
 
-**Where it stands (November 2026), honestly:** PdfCraft is **alpha**. Most essential offline PDF features exist in some form (62% of the features tracked in [docs/target-app-parity.md](docs/target-app-parity.md), 95% of core essentials). For everyday work (viewing, commenting, filling and signing forms, organizing pages) readiness is about 55%; across all professional workflows, about 50%; for someone who only needs the essentials, about 66% (judged in October; a re-measure is due). Every everyday workflow can be completed, but converting and sharing is weak: no office-document-to-PDF, and .docx export that loses layout.
+**Where it stands (November 2026), honestly:** PdfCraft is **alpha**. Most essential offline PDF features exist in some form (a breadth of 62% over the features tracked in [docs/target-app-parity.md](docs/target-app-parity.md), and 95% over the core essentials, counting a partial feature as half). For everyday work (viewing, commenting, filling and signing forms, organizing pages) readiness is about 55%; across all professional workflows, about 50%; for someone who only needs the essentials, about 66% (judged in October; a re-measure is due). Every everyday workflow can be completed, but converting and sharing is weak: no office-document-to-PDF, and .docx export that loses layout.
 
 - **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
 - **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
-- **Thin or missing:** reliable editing of existing text (especially CJK and right-to-left), OCR beyond Latin script unless Tesseract is installed, office document import and export that keeps layout, signature tokens and online long-term validation, Preflight and PDF/X/UA, physical printer fidelity, and full XFA forms.
+- **Thin or missing:** reliable editing of existing text (especially CJK and right-to-left), OCR beyond Latin script (the built-in default engine reads unaccented Latin; Tesseract reads more once it and its language data are installed and it is chosen), office document import and export that keeps layout, signature tokens and online long-term validation, Preflight and PDF/X/UA, physical printer fidelity, and full XFA forms.
 - **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. The issue tracker has grown with the user base (1,774 open in November 2026), and crash reports, above all printing on Windows, come first. Quality has not yet been benchmarked side by side.
 
 **Next, in order:** office-document-to-PDF and a .docx export that keeps layout, the reported bugs and the Chinese interface font, a fidelity harness against a reference renderer, editing existing content, then professional workflows (OCR, office formats, Preflight, signatures, accessibility tagging) and 1.0 polish.

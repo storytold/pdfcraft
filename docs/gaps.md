@@ -129,8 +129,8 @@ update the numbers.
 
 ### 6. Open-issue backlog of wrong results in shipped features
 
-- **Missing:** fixes for the ≈ 13 of ≈ 25 filed reports of features marked `shipped` that give wrong results still open,
-  plus triage of the rest of the open issues (≈ 220 on 2026-10-10, far more now).
+- **Missing:** fixes for the reports of wrong results in features marked `shipped` that are still open
+  (≈ 13 of ≈ 25 on 2026-10-10; not recounted since, and the #799–#821 batch below is closed), plus triage of the rest of the open issues (≈ 220 on 2026-10-10, far more now).
 - **Evidence (2026-11-09):** 1,774 open and 1,202 closed issues; 462 open issues carry `bug`, 74
   `priority: critical` and 306 `priority: high`. The critical ones cluster on Windows printing
   (#5661, #5751, #5779, #5870, #6060, #6201, #6372), on launching (#5239, #5553, #6500) and on two
@@ -163,8 +163,9 @@ update the numbers.
 
 ### 7. OCR: the built-in engine reads only unaccented Latin
 
-- **Missing:** every other script and accented Latin in the built-in engine (an installed Tesseract
-  joins it since #977 and reads 12 allow-listed languages as far as its language packs go; quality
+- **Missing:** every other script and accented Latin in the built-in engine (Tesseract can be chosen
+  as an engine since #977 and reads 12 allow-listed languages as far as its installed language data
+  goes; ocrs stays the default; quality
   beyond English is unproven); a cited end-to-end test of the opt-in deskew and rotation (both
   partial); despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
   the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
