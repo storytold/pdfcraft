@@ -16,8 +16,11 @@
   commits, 339 files), so `gh pr view 6622` now reports
   `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` for the pushed head
   `81035bf2`, and the `MERGEABLE` above is the state at the force-push. The
-  rebase onto the new `main` and the §6.6 gate re-run stay a separate session;
-  the local work below sits on `8d5d39ef`.
+  rebase onto the new `main` and the §6.6 gate re-run were done in the
+  2026-11-09 rebase session (§4, §6.6): the branch now sits on `origin/main`
+  `ca9e3c2c3` (which contains the requested `cde331fb7`), the local head before
+  the STATUS commit is `0e839a4b1`, all §6.6 gates are green, and nothing was
+  pushed, so PR #6622 still describes `81035bf2`.
   **§6.3 (web host bridge) is done locally in `81a92f32f`** — the transport trait,
   the browser transport and the five host messages (§4, §6.3) — and is not
   pushed either: the fork, PR #6622 and its body still describe `81035bf2`.
@@ -28,7 +31,8 @@
   Limitation 1 (crash recovery against the real process) is closed in
   `999da5ec` — a SIGKILL in the journal→base window, replayed on restart (§4);
   limitation 11 (commit publication outside the hub lock) in `a47641fb`. After
-  the rebase those commits are `2dfae0fe` and `e043c132`.
+  the rebases those commits are `d3e62ecf6`, `b5a67b098`, `2dfae0fe`/`e043c132`
+  being the intermediate pair from the `8d5d39ef` rebase (§4).
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs)
@@ -439,6 +443,75 @@ plus this STATUS commit, which is not pushed), `mergeable: MERGEABLE`,
 `git ls-remote fork` names the same `81035bf2`, `git rev-list --count
 origin/main..HEAD` is 0 behind, and
 `git merge-tree --write-tree origin/main HEAD` exits 0.
+
+### Rebase onto `origin/main` `ca9e3c2c3` (the requested `cde331fb7`) and the gate run at the rebased head (2026-11-09)
+
+The pushed head `81035bf2` had been rebased onto `8d5d39ef`; `main` then moved
+on, and the target named for this session, `cde331fb7`, was already behind it.
+`origin/main` was fetched and was `ca9e3c2c3` ("Merge pull request #6666 from
+storytold/merge/redact-forms-misc", 2026-11-09 11:50 +0800), with `cde331fb7`
+an ancestor. `git rebase origin/main` moved all 47 commits — the 40 from the
+`8d5d39ef` rebase plus the seven web-bridge, forced-commit and docs commits —
+onto the current `origin/main` with **one conflict**.
+
+`main` changed 371 files in `8d5d39ef..ca9e3c2c3` (37 181 insertions,
+2 382 deletions). Ten of them are also touched by the branch:
+
+| File | Merge |
+|---|---|
+| `Cargo.lock` | automatic |
+| `crates/annot/src/modify.rs` | automatic |
+| `crates/engine/src/document.rs` | automatic |
+| `crates/engine/src/edit/run.rs` | automatic |
+| `crates/engine/src/history.rs` | automatic |
+| `crates/engine/src/session/editing.rs` | automatic |
+| `crates/engine/src/tests.rs` | **conflict**, resolved by hand |
+| `crates/ui-egui/src/app.rs` | automatic |
+| `crates/ui-egui/src/canvas.rs` | automatic |
+| `crates/ui-egui/src/lib.rs` | automatic |
+
+The conflict is in `78d7b7d5c` "feat(engine): expose page and annotation
+references for collaboration". Both sides appended tests at the end of
+`crates/engine/src/tests.rs`: main added
+`a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_password`,
+the branch added `page_and_comment_references_survive_comment_edits` and
+`remote_edits_drop_the_local_snapshot_history`. The resolution keeps main's test
+first and both branch tests after it;
+`git diff origin/main..HEAD -- crates/engine/src/tests.rs` is exactly those two
+test functions and nothing else.
+
+The rebase moved the base and changed no feature content:
+`git diff --name-only backup/pre-rebase-2529c8c2..HEAD` names the same 371 files
+as `git diff --name-only 8d5d39ef..origin/main`, with the same 37 181/2 382 line
+counts; each of the nine auto-merged files is byte-identical to a plain
+`git merge-file` of base/old-branch/`origin/main`; every file the branch changes
+that main does not is byte-identical to the old tip, and every file main changes
+that the branch does not is byte-identical to `origin/main`. The pre-rebase head
+is kept as `backup/pre-rebase-2529c8c2` (`2529c8c2`); the rebased head before
+this STATUS commit is `0e839a4b1`. The hashes used in the header and below are
+pre-rebase; the current commits are `81a92f32f`→`0d3d9e11e`,
+`8fc898bae`→`d8ade8648`, `999da5ec`→`d3e62ecf6`, `a47641fb`→`b5a67b098`,
+`2529c8c2f`→`0e839a4b1` (and `81035bf2` stays the pushed fork head).
+
+Gates at the rebased head (host `agents`, rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **142**: proto 12, server 22, hub 5, client 12, client-pdf 13, session 5, ws 6 (unit), pdf 20, annot 10, daemon 28 + 1 (`tests/crash_recovery.rs`) + the 8 e2e below |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **8/8** (run inside the `cargo test` above) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no violations |
+| Mergeability | `git merge-tree --write-tree origin/main HEAD` | exit 0, no conflicted paths |
+
+The branch is 47 commits ahead of `ca9e3c2c3` and 0 behind. Nothing was pushed:
+the fork, PR #6622 and its body still describe `81035bf2`, so the PR stays
+`CONFLICTING` until the owner force-pushes the rebased branch. The UI suite was
+not re-run for this rebase; clippy with `--features collab` and
+`cargo check -p pdfcraft --features collab` are green on the merged
+`ui-egui` files, and the last full UI run is §6.6 below.
 
 ### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
 
@@ -978,6 +1051,21 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   `8d5d39ef` and the branch was rebased onto it on 2026-11-09 with **no
   conflicts** (§4). The rebased tip before the docs commits is `faad6b79`; the
   pre-rebase head is kept as `backup/pre-rebase-7628b605`.
+- **Rebase onto `origin/main` `ca9e3c2c3` (the requested `cde331fb7`), done in
+  the 2026-11-09 rebase session.** `git rebase origin/main` moved all 47 commits
+  onto the current `origin/main`; one conflict in `crates/engine/src/tests.rs`
+  (both sides appended tests at the end of the file) — main's test kept first,
+  both branch tests after it (§4). The rebased head before this STATUS commit is
+  `0e839a4b1`; the pre-rebase head is kept as
+  `backup/pre-rebase-2529c8c2`. Nothing was pushed, so the PR still describes
+  `81035bf2`.
+- **Gates at `0e839a4b1` are green** (§4): `cargo fmt --all --check`; clippy for
+  the nine collab crates plus the daemon and for `pdfcraft-ui-egui --features
+  collab`, `--all-targets -- -D warnings`; 142 collab/e2e tests (proto 12,
+  server 22, hub 5, client 12, client-pdf 13, session 5, ws 6 unit, pdf 20,
+  annot 10, daemon 28 + the crash-recovery test, e2e 8/8);
+  `cargo check -p pdfcraft --features collab`; `cargo xtask layers` (50 crates,
+  no violations); `git merge-tree --write-tree origin/main HEAD` exits 0.
 - **Gates at the rebased tip `faad6b79` are green** (§4): `cargo fmt --all
   --check`; clippy for the nine collab crates plus the daemon and for
   `pdfcraft-ui-egui --features collab`, `--all-targets -- -D warnings` (this
@@ -1002,7 +1090,10 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   commits, `e04ed03b` and `81035bf2` (both pushed), and this STATUS commit
   (local only). `git merge-tree --write-tree origin/main HEAD` exits 0 with no
   conflicted paths. Pushing this docs commit and editing the PR text remain
-  publication actions for the owner.
+  publication actions for the owner. **This paragraph describes the state before
+  the third rebase**: after it the local branch is 47 commits ahead of
+  `ca9e3c2c3` and 0 behind, and the PR is `CONFLICTING` again until the owner
+  force-pushes the rebased branch (the fork head stays `81035bf2`).
 - **The PR body was replaced** on 2026-11-09 with the text in
   `pdfcraft/PR-DRAFT.md` (from `## What` on); the body on the PR is byte for
   byte that text plus CodeRabbit's appended summary block. Every claim in it
