@@ -11846,3 +11846,53 @@ fn imported_bookmarks_undo_in_one_step() {
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
+
+/// ISO 32000-2 §7.6.6, Table 25: a document whose only encryption is for its embedded files,
+/// authorised when one is opened (`/AuthEvent /EFOpen`), opens without a password, lists its
+/// attachment, and saves with the attachment still encrypted.
+#[test]
+fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_password() {
+    // The password values of an AES-256 protection, as a save writes them.
+    let protected = protected("pw", "owner", -1);
+    let source = pdfcraft_cos::Document::open_with_password(protected, Some("pw")).unwrap();
+    let encrypt = source.resolve(source.trailer().get(b"Encrypt").unwrap());
+    let values: String = ["O", "U", "OE", "UE", "Perms"]
+        .iter()
+        .map(|k| {
+            let value = source.resolve(encrypt.as_dict().unwrap().get(k.as_bytes()).unwrap());
+            format!(" /{k} <{}>", value.as_string().unwrap().bytes.iter().map(|b| format!("{b:02X}")).collect::<String>())
+        })
+        .collect();
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
+        "<< /Type /EmbeddedFile /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream".to_string(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6{values} /P -4 /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>"
+        ),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+    );
+    let mut s = Session::new();
+    let id = s.open("efopen.pdf", None, Arc::new(pdf), None).expect("opens without a password");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.info.attachments.len(), 1);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+    assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
+}
