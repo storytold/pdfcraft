@@ -253,6 +253,11 @@ pub fn plan_with_root(os: &str, default: &DefaultMail, compose: &Compose, system
     let offer = |program: Option<String>, why: Why| Plan { program, route: Route::Fallback { why, fallback: fallback(compose) } };
     match (os, default) {
         ("macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", DefaultMail::Nothing) => Ok(offer(None, Why::NoProgram)),
+        // A path that isn't valid text can't be handed to a helper as it is (it would name another
+        // file, or none): the person attaches the file by hand.
+        ("macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", _) if compose.path.to_str().is_none() => {
+            Ok(offer(None, Why::CantAttach))
+        }
         ("macos", DefaultMail::AppleMail | DefaultMail::Outlook) => {
             let (program, script) = if *default == DefaultMail::Outlook { ("Microsoft Outlook", OUTLOOK_SCRIPT) } else { ("Mail", MAIL_APP_SCRIPT) };
             // The script is fixed text: the subject, body, file and recipients reach it as
@@ -1094,6 +1099,19 @@ mod tests {
         let p = plan_for("linux", &DefaultMail::XdgEmail("/usr/bin/xdg-email".into()), &c).unwrap();
         let args = run_of(&p).1;
         assert!(args.iter().any(|a| a == path) && args.iter().any(|a| a == subject), "{args:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_valid_text_is_left_for_the_person_to_attach() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut c = compose();
+        c.path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/bad\xff.pdf".to_vec()));
+        for (os, default) in [("macos", DefaultMail::AppleMail), ("linux", DefaultMail::XdgEmail("/usr/bin/xdg-email".into()))] {
+            let p = plan_for(os, &default, &c).unwrap();
+            assert_eq!(fallback_of(&p).0, &Why::CantAttach, "{os}");
+            assert_eq!(fallback_of(&p).1.reveal, c.path);
+        }
     }
 
     #[test]
