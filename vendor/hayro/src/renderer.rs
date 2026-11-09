@@ -411,16 +411,31 @@ fn area_shrink_premultiplied(
         let end = start.checked_add(width)?;
         let colors = samples.get(start.checked_mul(channels)?..end.checked_mul(channels)?)?;
         let alphas = alpha.get(start..end)?;
-        for ((out, px), a) in row.chunks_exact_mut(4).zip(colors.chunks_exact(channels)).zip(alphas) {
-            let [r, g, b] = match px {
-                [v] => [*v; 3],
-                [r, g, b] => [*r, *g, *b],
-                _ => return None,
-            };
-            out.copy_from_slice(&AlphaColor::from_rgba8(r, g, b, *a).premultiply().to_rgba8().to_u8_array());
+        let (out, _) = row.as_chunks_mut::<4>();
+        if channels == 1 {
+            for ((out, v), a) in out.iter_mut().zip(colors).zip(alphas) {
+                let p = premultiply_sample(*v, *a);
+                *out = [p, p, p, *a];
+            }
+        } else {
+            let (colors, _) = colors.as_chunks::<3>();
+            for ((out, [r, g, b]), a) in out.iter_mut().zip(colors).zip(alphas) {
+                *out = [premultiply_sample(*r, *a), premultiply_sample(*g, *a), premultiply_sample(*b, *a), *a];
+            }
         }
         Some(())
     })
+}
+
+/// PdfCraft patch: colour sample `c` premultiplied by alpha `a`, rounded to the nearest byte. The
+/// same byte as premultiplying through `AlphaColor`, without going through `f32` for every sample
+/// of an image: that was the largest single cost of drawing a page of many masked images, because
+/// it runs once per source pixel however small the image is drawn.
+#[inline]
+fn premultiply_sample(c: u8, a: u8) -> u8 {
+    // At most 255 × 255 + 128, so the sum fits in a u32 and the result in a u8.
+    let t = u32::from(c) * u32::from(a) + 128;
+    ((t + (t >> 8)) >> 8) as u8
 }
 
 /// PdfCraft patch: the area shrink behind [`area_shrink`], reading source row `s` through
@@ -537,12 +552,10 @@ fn area_resize(
 /// PdfCraft patch: premultiplies straight RGBA samples in place.
 fn premultiply_rgba(rgba: &mut [u8]) {
     let (chunks, _) = rgba.as_chunks_mut::<4>();
-    for chunk in chunks {
-        let [r, g, b, a] = *chunk;
-        *chunk = AlphaColor::from_rgba8(r, g, b, a)
-            .premultiply()
-            .to_rgba8()
-            .to_u8_array();
+    for [r, g, b, a] in chunks {
+        *r = premultiply_sample(*r, *a);
+        *g = premultiply_sample(*g, *a);
+        *b = premultiply_sample(*b, *a);
     }
 }
 
@@ -3132,8 +3145,8 @@ mod snap_tests {
 #[cfg(test)]
 mod area_shrink_tests {
     use super::{
-        AREA_ONE, AreaAxis, ImageData, LumaData, MAX_IMAGE_PIXELS, RgbData, area_shrink,
-        area_shrink_premultiplied, area_taps, mask_on_image_grid, premultiply_rgba,
+        AREA_ONE, AlphaColor, AreaAxis, ImageData, LumaData, MAX_IMAGE_PIXELS, RgbData, area_shrink,
+        area_shrink_premultiplied, area_taps, mask_on_image_grid, premultiply_rgba, premultiply_sample,
     };
 
     /// Deterministic samples that vary from one to the next.
@@ -3212,6 +3225,20 @@ mod area_shrink_tests {
             }
             let short = alpha.get(1..).unwrap_or_default();
             assert_eq!(area_shrink_premultiplied(&colors[0], short, source, target), None, "alpha shorter than the image");
+        }
+    }
+
+    /// Every colour and alpha premultiplies to the byte the `f32` path gives.
+    #[test]
+    fn premultiply_sample_matches_the_colour_crate_for_every_pair() {
+        for a in 0..=255u8 {
+            for c in 0..=255u8 {
+                let float = AlphaColor::from_rgba8(c, c, c, a).premultiply().to_rgba8().to_u8_array();
+                assert_eq!(premultiply_sample(c, a), float[0], "c = {c}, a = {a}");
+                let mut rgba = [c, c, c, a];
+                premultiply_rgba(&mut rgba);
+                assert_eq!(rgba, float, "c = {c}, a = {a}");
+            }
         }
     }
 
