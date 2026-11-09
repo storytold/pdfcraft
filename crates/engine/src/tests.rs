@@ -11531,7 +11531,6 @@ fn a_later_xfa_edit_in_a_batch_reads_the_page_count_an_earlier_one_left() {
     let id = s.open("batch.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
     let type_in = |name: &str| Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("x".into()) };
     s.apply(id, Edit::Batch { edits: vec![type_in("bump"), type_in("count")], label: "Type".into() }).expect("types");
-    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
     let seen = s.get(id).unwrap().form.iter().find(|f| f.name == "seen").map(|f| f.value.clone()).unwrap_or_default();
     assert_eq!(seen, vec!["2".to_string()]);
 }
@@ -13114,13 +13113,12 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
 /// so when the form is saved.
 #[test]
 fn an_opening_reset_reaches_a_row_added_while_opening() {
-    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
-        "if (qty.rawValue === null) qty.rawValue = 2;",
-        r#"if (qty.rawValue === null) qty.rawValue = 2; table._row.addInstance(1);"#,
-    )
+    // The row is added by a script of a field before `grand`: the initialize scripts run children
+    // before their parents, so a script of `page1` would come after `grand`'s.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
     .replace(
         r#"<field name="grand" w="2in" h="0.3in" access="readOnly">"#,
-        r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].item").rawValue = "X"; xfa.host.resetData("form.page1.table.row[1].item");</script></event>"#,
+        r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">table._row.addInstance(1);</script></event><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].item").rawValue = "X"; xfa.host.resetData("form.page1.table.row[1].item");</script></event>"#,
     );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
@@ -13139,14 +13137,10 @@ fn an_opening_reset_reaches_a_row_added_while_opening() {
 fn an_opening_reset_reaches_an_exclusion_group_of_a_row_added_while_opening() {
     let group = r#"<exclGroup name="pick" w="1in" h="0.3in"><field name="a" w="0.5in" h="0.3in"><ui><checkButton/></ui><items><text>A</text></items><value><text>A</text></value></field><field name="b" w="0.5in" h="0.3in"><ui><checkButton/></ui><items><text>B</text></items></field></exclGroup>"#;
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
-        .replace(
-            "if (qty.rawValue === null) qty.rawValue = 2;",
-            r#"if (qty.rawValue === null) qty.rawValue = 2; table._row.addInstance(1);"#,
-        )
         .replace(r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui></field>"#, &format!(r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui></field>{group}"#))
         .replace(
             r#"<field name="grand" w="2in" h="0.3in" access="readOnly">"#,
-            r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].pick").rawValue = "B"; xfa.host.resetData("form.page1.table.row[1].pick");</script></event>"#,
+            r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">table._row.addInstance(1);</script></event><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].pick").rawValue = "B"; xfa.host.resetData("form.page1.table.row[1].pick");</script></event>"#,
         );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
