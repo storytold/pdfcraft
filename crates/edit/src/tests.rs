@@ -10171,7 +10171,7 @@ fn editing_glyphless_ocr_text_substitutes_a_visible_font() {
                   [<0044> -27 <0065> -23 <0020> -22 <006B> -29 <0069> -28 <006E> -27 <0064> -29 <0065> -23 <0072> -28 <0065> -23 <006E>] TJ ET";
     for base in ["Glyphless", "CustomOCR"] {
         let mut doc = make_page(single, base);
-        assert!(text::text_editor_fonts(&doc, 0).unwrap().is_empty(), "{base} must not be loaded into the inline editor");
+        assert!(text::text_editor_fonts(&doc, 0).unwrap().iter().all(|f| f.choice_only), "{base} must not be loaded into the inline editor");
         let before = text::text_blocks(&doc, 0).unwrap();
         assert_eq!(before.len(), 1);
         assert_eq!(before[0].text, "De kinderen");
