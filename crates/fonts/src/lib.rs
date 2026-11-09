@@ -14,7 +14,9 @@ pub mod embedding;
 mod encodings;
 pub mod fallback;
 pub mod pdf;
+pub mod plan;
 mod script;
+pub mod shaped_text;
 mod shaping;
 pub mod source_shaping;
 mod std14;
@@ -24,11 +26,13 @@ pub use craft::{
     document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
     ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
+pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
-    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
+    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,
+    script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
 };
 pub use std14::Std14;
 
@@ -106,7 +110,6 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
     let space = measure(" ", size);
-    let mut buf = [0u8; 4];
     // A CRLF pair is one break, a lone CR or LF is one break each.
     for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let mut line = String::new();
@@ -132,14 +135,24 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
                 lines.push(std::mem::take(&mut line));
             }
             line_width = 0.0;
-            for ch in word.chars() {
-                let ch_width = measure(ch.encode_utf8(&mut buf), size);
-                if !line.is_empty() && line_width + ch_width > width {
+            // Broken between characters, but never before a Thai mark: it stays on its letter.
+            let mut start = 0;
+            let mut units = Vec::new();
+            for (i, ch) in word.char_indices().skip(1) {
+                if !shaped_text::joins_previous(ch) {
+                    units.extend(word.get(start..i));
+                    start = i;
+                }
+            }
+            units.extend(word.get(start..).filter(|u| !u.is_empty()));
+            for unit in units {
+                let unit_width = measure(unit, size);
+                if !line.is_empty() && line_width + unit_width > width {
                     lines.push(std::mem::take(&mut line));
                     line_width = 0.0;
                 }
-                line.push(ch);
-                line_width += ch_width;
+                line.push_str(unit);
+                line_width += unit_width;
             }
             fresh = line.is_empty();
         }
@@ -251,7 +264,23 @@ pub fn first_undrawable(s: &str) -> Option<char> {
 }
 
 /// Whether the bundled fallback font (`INTER_REGULAR`) has a glyph for `c`.
+/// Fallback is scoped to Latin/Central European characters and common symbols.
 pub fn fallback_has_char(c: char) -> bool {
+    let u = u32::from(c);
+    let is_latin_or_symbol = matches!(
+        u,
+        0x0000..=0x024F
+            | 0x0250..=0x02FF
+            | 0x0300..=0x036F
+            | 0x1E00..=0x1EFF
+            | 0x2000..=0x206F
+            | 0x20A0..=0x20CF
+            | 0x2100..=0x214F
+            | 0x2200..=0x22FF
+    );
+    if !is_latin_or_symbol {
+        return false;
+    }
     use skrifa::MetadataProvider;
     skrifa::FontRef::new(INTER_REGULAR).ok().and_then(|f| f.charmap().map(c)).is_some()
 }
@@ -294,6 +323,16 @@ pub fn set_undrawn_mark(d: &mut pdfcraft_cos::Dict, c: Option<char>) {
     }
 }
 
+/// The byte used by Unicode text plans, from the shared WinAnsi table (tabs become spaces).
+pub fn win_ansi_char(c: char) -> Option<u8> {
+    if c == '\t' { Some(b' ') } else { win_ansi_byte(c) }
+}
+
+/// Whether every character can be represented without substitution in WinAnsi.
+pub fn fits_win_ansi(s: &str) -> bool {
+    s.chars().all(win_ansi_encodable)
+}
+
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.
 pub fn literal(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + 2);
@@ -326,6 +365,15 @@ mod tests {
         let broken = wrap("  abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
         assert!(broken.len() > 1 && broken.iter().all(|l| !l.trim().is_empty()), "{broken:?}");
         assert_eq!(broken, wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0));
+    }
+
+    #[test]
+    fn a_broken_thai_word_keeps_its_marks_on_their_letters() {
+        // Every character one point wide: "น้ำ" (three characters) is one unit, never split.
+        let lines = wrap_with("น้ำปั้นบุญฤทธิ์", 1.0, 2.0, |s, _| s.chars().count() as f64);
+        assert_eq!(lines.concat(), "น้ำปั้นบุญฤทธิ์");
+        assert_eq!(lines, ["น้ำ", "ปั้", "น", "บุ", "ญฤ", "ท", "ธิ์"]);
+        assert!(lines.iter().all(|l| l.chars().next().is_some_and(|c| !shaped_text::joins_previous(c))), "{lines:?}");
     }
 
     #[test]

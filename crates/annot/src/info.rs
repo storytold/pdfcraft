@@ -105,7 +105,10 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let r = nums(b"Rect");
             let rect = if r.len() == 4 { [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])] } else { [0.0; 4] };
             let c = nums(b"C");
-            let mut color = (c.len() == 3).then(|| [c[0], c[1], c[2]]);
+            let rgb = (c.len() == 3).then(|| [c[0], c[1], c[2]]);
+            // Other comments report the stroke colour as it is drawn (grey, CMYK, a null entry
+            // read as 0), like `props`; three numbers, some given by reference, are still read.
+            let mut color = if subtype == "FreeText" { rgb } else { summary_color(doc, d).or(rgb) };
             if subtype == "FreeText"
                 && let Some(da) = text_value(doc, d, b"DA")
             {
@@ -117,7 +120,16 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                     color = Some([f(i - 3), f(i - 2), f(i - 1)]);
                 }
             }
-            let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
+            // Only usable quads, by the rule redaction apply reads them with, so a mark's outline
+            // is the area apply removes (and with none, the `/Rect` both fall back to).
+            let quads: Vec<[f32; 8]> = d
+                .get(b"QuadPoints")
+                .map(|o| doc.resolve(o))
+                .map(|a| {
+                    let entries = a.as_array().into_iter().flatten().map(|x| doc.resolve(x).as_f64());
+                    pdfcraft_geom::quad_points::usable_quads(entries).into_iter().map(|q| q.map(|v| v as f32)).collect()
+                })
+                .unwrap_or_default();
             // Keep in step with `pdfcraft_render::inspect`.
             let points = match subtype.as_str() {
                 "Line" => Some(nums(b"L")).filter(|l| l.len() == 4).map(|l| l.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
@@ -142,7 +154,13 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 grouped: d.name(b"RT") == Some(b"Group"),
                 rect,
                 color,
-                state: text_value(doc, d, b"State"),
+                // A reply that gives only `/StateModel` has the model's default state (ISO 32000-2
+                // Table 175), as `last_state_reply` and the inspector read it.
+                state: text_value(doc, d, b"State").or_else(|| match text_value(doc, d, b"StateModel").as_deref() {
+                    Some("Marked") => Some("Unmarked".into()),
+                    Some("Review") => Some("None".into()),
+                    _ => None,
+                }),
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
@@ -235,10 +253,12 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let p = page_ref(doc, page).ok()?;
     let entry = annots(doc, p).get(index).cloned()?;
     let obj = doc.resolve(&entry);
-    let d = obj.as_dict()?;
+    // Values given by reference (`/C 7 0 R`, `/BS 5 0 R`, ISO 32000-2 §7.3.10) read as the display draws them.
+    let raw = obj.as_dict()?;
+    let direct = crate::draw::with_direct_values(doc, raw);
+    let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
-    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
+    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { drawn_color(d, b"C") };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
         if subtype == "FreeText" {
             if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
@@ -260,7 +280,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
-        restylable: appearance::build(d).is_some(),
+        restylable: crate::draw::can_draw(doc, raw),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
@@ -275,16 +295,32 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     })
 }
 
-/// A shape’s `/IC` or FreeText `/C` as RGB. Grey and CMYK fills are converted.
+/// A shape’s `/IC` or FreeText `/C` as RGB, read as it is drawn. Grey and CMYK fills are converted.
 fn fill_of(d: &Dict) -> Option<Rgb> {
     let key: &[u8] = if d.name(b"Subtype") == Some(b"FreeText") { b"C" } else { b"IC" };
-    let c: Vec<f64> = d.get(key)?.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
-    let rgb = match c.as_slice() {
-        [g] => [*g; 3],
-        [r, g, b] => [*r, *g, *b],
-        [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
-        _ => return None,
-    };
+    drawn_color(d, key)
+}
+
+/// `/C` as [`drawn_color`] reads it, the array itself followed when it is given by reference.
+/// Only an array of at most four entries is copied out of the reference.
+fn summary_color(doc: &Document, d: &Dict) -> Option<[f32; 3]> {
+    let rgb = match d.get(b"C") {
+        Some(o @ Object::Ref(_)) => {
+            let held = doc.resolve(o);
+            let entries = held.as_array().filter(|a| a.len() <= 4)?;
+            let mut direct = Dict::new();
+            direct.set(b"C".to_vec(), Object::Array(entries.clone()));
+            drawn_color(&direct, b"C")
+        }
+        _ => drawn_color(d, b"C"),
+    }?;
+    Some(rgb.map(|x| x as f32))
+}
+
+/// The colour array at `key` as RGB, read as the appearance builder draws it: grey and CMYK are
+/// converted, and a four-entry array with a non-number in it is CMYK with that entry 0.
+fn drawn_color(d: &Dict, key: &[u8]) -> Option<Rgb> {
+    let rgb = appearance::color(d, key).flatten()?;
     finite(&rgb).then(|| rgb.map(|x| x.clamp(0.0, 1.0)))
 }
 
