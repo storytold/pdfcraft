@@ -1,29 +1,33 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`)
-- Base: `origin/main` `b6cbf9bb3` ("Merge pull request #6710 from
-  storytold/merge/forms-links-text2", 307 commits past `ca9e3c2c3`). The branch
-  was rebased onto it on 2026-11-09 (64 commits, four conflicts, each resolved
-  by hand; §4 records them) and was 0 behind, with
-  `git merge-tree --write-tree origin/main HEAD` exiting 0. **Observed at
-  2026-11-09T14:46Z:** `origin/main` has moved on to `fe3879bc8` (94 commits),
-  so the branch is now 94 behind and `merge-tree` against it exits 1 with two
-  conflicted paths (`crates/annot/src/lib.rs`, `crates/engine/src/lib.rs`).
-  This pass did not rebase — the drift is the next session's task.
-- Local head before this STATUS commit: `2a3b6e43e` (code: the idle forced
-  commit) on `171cbd0fb` (docs: the re-run at the rebased head and the PR body)
-  on `4bcb5b85b` (docs: the rebase record) on `e0d200af5` (the field-projection
-  fix on top of the 64 replayed commits). Commits named below and in §4 by
-  their pre-rebase hashes are mapped in the rebase section of §4.
+- Base: `origin/main` `d2139e58a` ("Merge pull request #6716 from
+  storytold/merge/xfa2", 2026-11-09 22:02 +0700). The pass's brief named
+  `fe3879bc8` (#6729), but by the time the tree was fetched `origin/main` had
+  moved 277 commits further; the branch was rebased onto the current tip
+  instead, because the goal is an empty `merge-tree` against `origin/main`
+  (`fe3879bc8` is an ancestor of it). All 69 branch commits were replayed with
+  **two conflicts** (`crates/annot/src/lib.rs`, `crates/engine/src/lib.rs`,
+  both export lists), each resolved by hand; §4 records them. The branch is 0
+  behind and `git merge-tree --write-tree origin/main HEAD` exits 0.
+- Local head before this STATUS commit: `5b76f7e99` (refactor: the `apply_edit`
+  dispatcher, which the merged `ui-egui` needed to stay under the clippy
+  complexity limit) on `4a691c53a` (style: the rustfmt wrap of the two merged
+  export lists) on `19f49f812` (docs: the idle forced commit) on `270e1c11e`
+  (code: the idle forced commit) — 71 commits on `d2139e58a`. Commits named
+  below and in §4 by their pre-rebase hashes are mapped in the rebase section
+  of §4.
 - PR #6622 on GitHub still has the pushed head `4eea573be` and reports
   `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` (observed 2026-11-09,
   13:59Z and 14:33Z). The `MERGEABLE` an earlier session saw belongs to the
   older push `81035bf2` and does not describe the branch. Nothing was pushed
   from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body was replaced (a body edit, not a push)
-  with the text of `pdfcraft/PR-DRAFT.md` updated to this base.
-- State: implemented behind the `collab` feature (off by default). The §6.6
-  gates are green at the head above (§4).
+  with the text of `pdfcraft/PR-DRAFT.md` at the previous base `b6cbf9bb3`; it
+  is not re-edited for `d2139e58a` in this pass (nothing is pushed, so the PR
+  still describes `4eea573be`).
+- State: implemented behind the `collab` feature (off by default). The gates in
+  §4 are green at the rebased head `5b76f7e99`.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -1227,6 +1231,77 @@ publication queue and the conflict-resolution endpoint moved out of the
 the body now names `main` `b6cbf9bb3` as the base. Nothing was pushed: PR
 #6622 still has the pushed head `4eea573be` and reads `CONFLICTING` / `DIRTY`
 until the owner or chair force-pushes this branch.
+
+### Rebase onto `origin/main` `d2139e58a` (the brief's `fe3879bc8`, moved on) and the gate run at the rebased head (2026-11-09)
+
+The pass was asked to rebase onto `origin/main` `fe3879bc8` (#6729) and predicted
+conflicts in `crates/annot/src/lib.rs` and `crates/engine/src/lib.rs`. By the
+time the tree was fetched, `origin/main` was `d2139e58a` ("Merge pull request
+#6716 from storytold/merge/xfa2"), 277 commits past `fe3879bc8`; a branch
+rebased onto `fe3879bc8` would not have an empty `merge-tree` against
+`origin/main`, so the rebase targeted the current tip. `git merge-tree
+--write-tree origin/main HEAD` at the old head named exactly the two predicted
+paths; nothing else conflicted.
+
+`git rebase origin/main` moved all **69 branch commits** from `b6cbf9bb3` with
+**two conflicts**:
+
+| File | Merge |
+|---|---|
+| `crates/annot/src/lib.rs` | **conflict** in the `pub use` lists. Main added the callout and custom-stamp names (`CALLOUT_KNEE_LINE`, `CUSTOM_LINE_BAND`, `CUSTOM_LINE_TEXT`, `Side`, `callout_knee`, `callout_knee_on`, `callout_side`, `custom_stamp_size`), `PopupInfo`, `is_group_subordinate`, `release_members` and `set_popup` (the comment-popup, callout-reshape and custom-stamp merges); the branch adds `add_annotation_named`, `add_reply_named`, `set_review_state_named` and `Restyle`. Kept main's lists with the branch's four names in alphabetical place. The same conflict fires twice, in `ebc8d7d55` (the named reply) and `115ccc87c` (the restyle), because each appends to the same lists. |
+| `crates/engine/src/lib.rs` | **conflict** in the `pdfcraft_annot` re-export: main added the callout names, the branch adds `Restyle`. Kept main's list with `Restyle` after `Props as CommentProps`. |
+
+`main` changed 126 files in `b6cbf9bb3..d2139e58a` (18 178 insertions, 1 029
+deletions); 17 of them are also touched by the branch, so 15 merged
+automatically and each is byte-identical to a plain `git merge-file` of
+base/old-branch/`origin/main`. Every file the branch changes that main does not
+is byte-identical to the old tip (49 files), and every file main changes that
+the branch does not is byte-identical to `origin/main` (109 files). The two
+hand-resolved files differ from a plain merge exactly by the branch's four and
+one names: `git diff origin/main..HEAD -- crates/annot/src/lib.rs
+crates/engine/src/lib.rs` is those names and nothing else. The rebase moved the
+base and changed no feature content.
+
+Rustfmt re-wrapped the two merged export lists differently from the local
+wrapping, so the style fix is its own commit at the tip, `4a691c53a`
+"style(collab): wrap the merged annot and engine export lists".
+
+The merged `ui-egui` then failed clippy under the `collab` feature: main's
+comment-popup growth made `PdfCraftApp::apply_edit` exactly
+`cognitive-complexity-threshold = 30`, and the branch's four-line
+pre-dispatch (the collab feature returns before the local path) took it to
+31/30. The fix keeps the dispatch and splits the function: `apply_edit` is now
+a thin dispatcher that asks the room (`collab_apply_edit`) and otherwise calls
+`apply_local_edit`, which is main's body unchanged. Commit `5b76f7e99`
+"refactor(collab): keep the edit path within the complexity limit". Nothing else
+in `apply_local_edit` changed; the single-document behaviour is the same.
+
+Backup of the pre-rebase head: `backup/pre-rebase-31bd4a7a` (= `31bd4a7a2`).
+Pre-rebase hashes used elsewhere in this file map to the rebased commits as
+follows: `2a3b6e43e`→`270e1c11e`, `31bd4a7a2`→`19f49f812`,
+`171cbd0fb`→`7ba1cd435`, `4bcb5b85b`→`2671b9dea`, `e0d200af5`→`526898a50`,
+`acae90c06`→`49f1cc41e`, `55a0c5101`→`def2723f9`, `91126fdb7`→`0336fd858`,
+`458ec5406`→`bf7947bec`, `bd058c8fe`→`5feeb883f`, `b4e9179d8`→`8c44a1918`,
+`ce5c38798`→`e58dfb09a`, `a639f30c0`→`34aaf7d10`,
+`115ccc87c`→`e58dfb09a`, `ebc8d7d55`→`cc32d2dff`.
+
+Gates at `5b76f7e99` (host `agents`, rustc 1.99.1, `-j 8`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass at `5b76f7e99`; the first run, at `4a691c53a`, failed `apply_edit` at 31/30 (the refactor commit above) |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **213**: proto 12, server 29 (unit) + 31 (bin), hub 5, client 13, client-pdf 28, session 5, ws 8 (unit) + 20 e2e, pdf 41, annot 18, daemon `conflict_resolve` 1 + `crash_recovery` 1 + `publication_retry` 1 |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **20/20** (inside the run above) |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no layering violations |
+
+Nothing was pushed, so the fork, PR #6622 and its body still describe
+`81035bf2` / `4eea573be` and the PR stays `CONFLICTING` / `DIRTY`. The full
+`ui-egui` suite was not re-run for this rebase; clippy with `--features collab`
+and `cargo check -p pdfcraft --features collab` are green on the merged files,
+and the last full run is §6.6 below.
 
 ### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
 
