@@ -25,12 +25,18 @@ log = { workspace = true }
 serde = { workspace = true }
 # Reads rendered pixel words as bytes; already in the tree through hayro.
 bytemuck = { version = "1" }
+# Tells combining marks (bidi class NSM: general categories Mn and Me) in extracted text; the
+# version pdfcraft-fonts already uses.
+unicode-bidi = "0.3"
 
 # lopdf (bootstrap) draws random bytes for encryption; on the web they come from the browser.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# The content crate's parser, compared operator by operator against hayro's in
+# `tests/content_differential.rs` (L3 may depend on L2).
+pdfcraft-content = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
