@@ -26,11 +26,14 @@
 //!
 //! Metadata, attachments, comments, scripts, private data, hidden layers, bookmarks and form
 //! fields are discarded by `pdfcraft-redact`'s Remove Hidden Information, which the engine
-//! runs alongside.
+//! runs alongside. Links that open another document, and bookmark actions that do, are discarded
+//! here (Discard User Data ▸ Discard external cross-references, see
+//! [`Settings::discard_external_refs`]).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod external_refs;
 mod form_actions;
 pub mod fragments;
 mod images;
@@ -44,7 +47,7 @@ pub use audit::{SpaceCategory, SpaceUse, audit_space};
 use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
-pub use images::effective_resolutions;
+pub use images::{ImageTarget, effective_resolutions, recolour_image};
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 
@@ -58,6 +61,8 @@ pub enum OptimizeError {
     IncompatibleEncryption { required: &'static str, chosen: &'static str },
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+    #[error("object {0} holds too many actions or bookmarks to take out its links to other documents")]
+    ExternalRefLimit(ObjRef),
     #[error("the optimization was cancelled")]
     Cancelled,
 }
@@ -221,6 +226,10 @@ pub struct Settings {
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
     pub remove_unreferenced_dests: bool,
+    /// Discard User Data: take `GoToR`, `GoToE`, `Launch` and `ImportData` actions, and `Thread`
+    /// actions with an `/F`, out of links and bookmarks; a link left with nothing to do is
+    /// removed. Links within the document and web links stay.
+    pub discard_external_refs: bool,
 }
 
 impl Settings {
@@ -252,6 +261,7 @@ impl Default for Settings {
             lzw_to_flate: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
+            discard_external_refs: false,
         }
     }
 }
@@ -322,6 +332,10 @@ pub struct Report {
     pub invalid_links: usize,
     pub invalid_bookmarks: usize,
     pub unreferenced_dests: usize,
+    /// Links removed (or kept for their other actions) and bookmarks whose action was changed or
+    /// cleared, because they opened another document (Discard external cross-references).
+    pub external_links: usize,
+    pub external_bookmarks: usize,
     /// Images and forms the pages listed but never drew, dropped (Clean Up).
     pub unused_xobjects: usize,
 }
@@ -428,26 +442,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     if settings.discard_print_settings
         && let Some(root) = root
     {
-        const PRINT: [&[u8]; 7] = [b"PrintScaling", b"Duplex", b"PickTrayByPDFSize", b"PrintPageRange", b"NumCopies", b"PrintArea", b"PrintClip"];
-        let vp = doc.get(root).as_dict().and_then(|c| c.get(b"ViewerPreferences").cloned());
-        let edit = |d: &mut pdfcraft_cos::Dict| PRINT.iter().filter(|k| d.remove(k).is_some()).count();
-        match vp {
-            Some(Object::Ref(r)) => {
-                let mut n = 0;
-                doc.update_dict(r, |d| n = edit(d))?;
-                report.print_settings += n;
-            }
-            Some(Object::Dict(_)) => {
-                let mut n = 0;
-                doc.update_dict(root, |c| {
-                    if let Some(Object::Dict(d)) = c.get_mut(b"ViewerPreferences") {
-                        n = edit(d);
-                    }
-                })?;
-                report.print_settings += n;
-            }
-            _ => {}
-        }
+        report.print_settings += discard_print_settings(doc, root)?;
     }
     if settings.discard_form_actions {
         report.form_actions = form_actions::discard(doc)?;
@@ -456,6 +451,11 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
         let (l, b) = links::remove_invalid(doc, &pages)?;
         report.invalid_links = l;
         report.invalid_bookmarks = b;
+    }
+    if settings.discard_external_refs {
+        let (l, b) = external_refs::discard(doc, &pages)?;
+        report.external_links = l;
+        report.external_bookmarks = b;
     }
     if settings.remove_unreferenced_dests {
         report.unreferenced_dests = links::remove_unreferenced_dests(doc)?;
@@ -633,6 +633,24 @@ pub(crate) fn stored_len(s: &Stream) -> Option<usize> {
     let mut out = Vec::new();
     serialize(&Object::Dict(dict), &mut out);
     out.len().checked_add(s.raw.len())
+}
+
+/// Removes the print entries from the catalog's /ViewerPreferences, returning how many went.
+fn discard_print_settings(doc: &mut Document, root: ObjRef) -> Result<usize, OptimizeError> {
+    const PRINT: [&[u8]; 7] = [b"PrintScaling", b"Duplex", b"PickTrayByPDFSize", b"PrintPageRange", b"NumCopies", b"PrintArea", b"PrintClip"];
+    let vp = doc.get(root).as_dict().and_then(|c| c.get(b"ViewerPreferences").cloned());
+    let edit = |d: &mut pdfcraft_cos::Dict| PRINT.iter().filter(|k| d.remove(k).is_some()).count();
+    let mut n = 0;
+    match vp {
+        Some(Object::Ref(r)) => doc.update_dict(r, |d| n = edit(d))?,
+        Some(Object::Dict(_)) => doc.update_dict(root, |c| {
+            if let Some(Object::Dict(d)) = c.get_mut(b"ViewerPreferences") {
+                n = edit(d);
+            }
+        })?,
+        _ => {}
+    }
+    Ok(n)
 }
 
 /// Remove the search index entries of the catalog's `/PieceInfo` ([`Settings::discard_search_index`])
