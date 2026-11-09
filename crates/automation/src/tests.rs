@@ -147,6 +147,84 @@ fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
 }
 
 #[test]
+fn stop_at_limit_ends_at_a_lone_match_without_reading_the_distant_tail() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 200);
+    // #5328: "Page 1" is only on page 1 (every other readable page reads "Page 2"), and the last
+    // page fails, so only a search that runs on to the end hears about it.
+    let requested = std::cell::RefCell::new(Vec::new());
+    let mut extract = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
+        requested.borrow_mut().extend_from_slice(pages);
+        let filler = extract_parallel(bytes, password.clone(), &[1]).remove(0).1;
+        let first = extract_parallel(bytes, password, &[0]).remove(0).1;
+        pages
+            .iter()
+            .map(|&p| {
+                (
+                    p,
+                    match p {
+                        0 => first.clone(),
+                        199 => Err("synthetic page 200 failure".into()),
+                        _ => filler.clone(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let looked_ahead = a.text_find_with(&Args(&json!({ "doc": id.0, "query": "Page 1", "limit": 1 })), &mut extract).unwrap();
+    assert_eq!((looked_ahead["count"].clone(), looked_ahead["warning_count"].clone()), (json!(1), json!(1)), "{looked_ahead}");
+    assert!(looked_ahead.get("next").is_none() && looked_ahead.get("stopped_at_limit").is_none());
+
+    a.texts.remove(&id);
+    requested.borrow_mut().clear();
+    let args = json!({ "doc": id.0, "query": "Page 1", "limit": 1, "stop_at_limit": true });
+    let stopped = a.text_find_with(&Args(&args), &mut extract).unwrap();
+    assert_eq!(stopped["matches"][0]["page"], 1);
+    assert_eq!((stopped["count"].clone(), stopped["warning_count"].clone()), (json!(1), json!(0)), "{stopped}");
+    assert_eq!((stopped["complete"].clone(), stopped["stopped_at_limit"].clone()), (json!(false), json!(true)));
+    assert_eq!(stopped["next"], json!({ "start_page": 1, "skip": 1 }));
+    assert_eq!(*requested.borrow(), [0], "a match on the first page reads only that page");
+
+    // Resuming finds nothing more and reaches the failing page, which it now reports.
+    let mut resume = args.clone();
+    resume["start_page"] = stopped["next"]["start_page"].clone();
+    resume["skip"] = stopped["next"]["skip"].clone();
+    let rest = a.text_find_with(&Args(&resume), &mut extract).unwrap();
+    assert_eq!((rest["count"].clone(), rest["stopped_at_limit"].clone(), rest["complete"].clone()), (json!(0), json!(false), json!(false)));
+    assert_eq!(rest["warnings"][0]["page"], 200);
+    assert!(rest.get("next").is_none());
+}
+
+#[test]
+fn stop_at_limit_continuations_return_every_match_once_and_end_complete() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 120);
+    let all = json(&mut a, "text_find", json!({ "doc": id.0, "query": "1", "limit": 10_000 }));
+    assert_eq!(all["complete"], true);
+    // "1" appears twice on pages like 11 and 111, so resuming has to skip within a page.
+    for limit in [1, 2, 3] {
+        let mut args = json!({ "doc": id.0, "query": "1", "limit": limit, "stop_at_limit": true });
+        let mut pieced = Vec::new();
+        for _ in 0..=all["count"].as_u64().unwrap() {
+            let part = json(&mut a, "text_find", args.clone());
+            assert_eq!(part["warning_count"], 0);
+            pieced.extend(part["matches"].as_array().unwrap().iter().cloned());
+            if part["stopped_at_limit"] == false {
+                assert_eq!(part["complete"], true);
+                assert!(part.get("next").is_none());
+                break;
+            }
+            assert_eq!((part["count"].clone(), part["complete"].clone()), (json!(limit), json!(false)));
+            args["start_page"] = part["next"]["start_page"].clone();
+            args["skip"] = part["next"]["skip"].clone();
+        }
+        assert_eq!(pieced, *all["matches"].as_array().unwrap(), "limit {limit}: no match lost or repeated");
+    }
+    let none = json(&mut a, "text_find", json!({ "doc": id.0, "query": "absent", "limit": 1, "stop_at_limit": true }));
+    assert_eq!((none["count"].clone(), none["complete"].clone(), none["stopped_at_limit"].clone()), (json!(0), json!(true), json!(false)));
+}
+
+#[test]
 fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-automation-find-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -193,6 +271,30 @@ fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
 }
 
 #[test]
+fn a_save_without_a_path_stays_inside_the_root() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-save-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let bytes = Arc::new(numbered_pages(1));
+    // Remembered path inside the root: still saves.
+    let inside = root.canonicalize().unwrap().join("in.pdf");
+    let id = a.session.open("in.pdf", Some(inside.to_string_lossy().into_owned()), bytes.clone(), None).unwrap();
+    json(&mut a, "doc_save", json!({ "doc": id.0 }));
+    assert!(inside.exists());
+    // Remembered path outside the root: refused, and nothing is written there.
+    let escaped = outside.join("out.pdf");
+    let id = a.session.open("out.pdf", Some(escaped.to_string_lossy().into_owned()), bytes, None).unwrap();
+    let error = a.call("doc_save", &json!({ "doc": id.0 })).unwrap_err();
+    assert!(error.to_string().contains("outside the allowed directory"), "{error}");
+    assert!(!escaped.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {
     let base = std::env::temp_dir();
     let l = |rel: &str| lexical(&base.join(rel));
@@ -219,6 +321,7 @@ fn names_from_documents_become_one_plain_file_name() {
 #[cfg(windows)]
 #[test]
 fn other_shares_and_device_paths_are_refused_by_name() {
+    use crate::file_access::foreign_share;
     let local = Path::new(r"\\?\C:\work\root");
     for p in [
         r"\\host\share\x.pdf",
@@ -240,6 +343,28 @@ fn other_shares_and_device_paths_are_refused_by_name() {
     assert!(!foreign_share(Path::new(r"\\?\UNC\SERVER\DOCS\x.pdf"), shared));
     assert!(foreign_share(Path::new(r"\\server\other\x.pdf"), shared));
     assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
+}
+
+/// Windows drops a trailing dot from a folder name when it opens a path (`root.` is `root`), so
+/// with a root, a path that names the root or a folder above it that way still reaches the file
+/// inside. A dotted name outside stays outside.
+#[cfg(windows)]
+#[test]
+fn a_trailing_dot_on_the_root_or_above_it_names_the_folder_windows_opens() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-dot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::create_dir_all(base.join("outside")).unwrap();
+    std::fs::write(base.join("root").join("a.pdf"), b"x").unwrap();
+    std::fs::write(base.join("outside").join("b.pdf"), b"x").unwrap();
+    let a = Automation::new().with_root(base.join("root")).unwrap();
+    let shown = base.to_string_lossy().into_owned();
+    for p in [format!(r"{shown}\root.\a.pdf"), format!(r"{shown}.\root\a.pdf")] {
+        let resolved = a.resolve(&p, false);
+        assert!(resolved.is_ok(), "{p}: {resolved:?}");
+    }
+    assert!(a.resolve(&format!(r"{shown}\outside.\b.pdf"), false).is_err());
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// A fresh, empty folder for one staging test.

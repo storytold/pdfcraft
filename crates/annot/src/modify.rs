@@ -1,5 +1,6 @@
 use super::create::{
-    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
+    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, polygon_rect,
+    rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{is_comment_subtype, line_endings_of, own_popup, popup_info, text_value};
@@ -23,6 +24,15 @@ pub(crate) fn refuse_foreign_text(doc: &Document, d: &Dict) -> Result<(), AnnotE
         )));
     }
     Ok(())
+}
+
+/// Thai typed into a text box (`free_text`) that this build can't draw (it has no Thai face): refused
+/// with what to do, rather than drawn as `?`.
+pub(crate) fn refuse_undrawable_thai(free_text: bool, text: &str) -> Result<(), AnnotError> {
+    match free_text.then(|| pdfcraft_fonts::shaped_text::thai_refusal(text)).flatten() {
+        Some(why) => Err(AnnotError::Undrawable(why)),
+        None => Ok(()),
+    }
 }
 
 /// Format a number for content streams and DA strings.
@@ -85,7 +95,7 @@ pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotE
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
     // answers either. Pop-ups follow their comment.
     for (_, e) in list.iter().enumerate().filter(|(i, e)| *i != index && goes_with(e, &doomed)) {
@@ -106,15 +116,28 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e.clone()).collect();
     Ok(set_annots(doc, p, kept)?)
 }
 
 /// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline
-/// comment (which has none to collect) the pop-up it names, which still goes.
-fn seed(target: &Object) -> Option<ObjRef> {
-    target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
+/// comment (which has none to collect) the pop-up it names, which still goes. The strikeout of a
+/// Replace Text proposal also takes the caret it is grouped under, so the two go together
+/// whichever is deleted.
+fn seed(doc: &Document, target: &Object) -> Vec<ObjRef> {
+    let own = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
+    own.into_iter().chain(replaced_by(doc, target)).collect()
+}
+
+/// The caret a Replace Text strikeout is grouped under (`/IT /StrikeOutTextEdit`, `/RT /Group`,
+/// `/IRT` to a caret): the proposal's primary, which holds the replacement.
+fn replaced_by(doc: &Document, strike: &Object) -> Option<ObjRef> {
+    let obj = doc.resolve(strike);
+    let d = obj.as_dict()?;
+    let edit = d.name(b"Subtype") == Some(b"StrikeOut") && d.name(b"IT") == Some(b"StrikeOutTextEdit") && d.name(b"RT") == Some(b"Group");
+    let caret = d.reference(b"IRT").filter(|_| edit)?;
+    (annot_dict(doc, caret).name(b"Subtype") == Some(b"Caret")).then_some(caret)
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
@@ -165,6 +188,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     let (_, r) = annot_ref(doc, page, index)?;
     let d = annot_dict(doc, r);
     let free_text = d.name(b"Subtype") == Some(b"FreeText");
+    refuse_undrawable_thai(free_text, text)?;
     let snug = free_text && is_snug(&d);
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
@@ -224,8 +248,8 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let height = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size);
+    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -237,8 +261,9 @@ pub fn add_reply(doc: &mut Document, page: usize, index: usize, text: &str, auth
     reply(doc, page, index, text, author, meta, None)
 }
 
-/// Set a comment's review status (Acrobat: "Set status ▸ Accepted"…). Like Acrobat this adds a
-/// state reply (`/State`, `/StateModel /Review`) by `author`; the latest one wins.
+/// Set a comment's review status ("Set status ▸ Accepted"…). This adds a hidden state reply
+/// (`/State`, `/StateModel /Review`) by `author`, in reply to `author`'s previous one when there is
+/// one; each reviewer's latest is their status.
 pub fn set_review_state(doc: &mut Document, page: usize, index: usize, state: ReviewState, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     let text = format!("{} set by {}", state.name(), if author.is_empty() { "unknown" } else { author });
     reply(doc, page, index, &text, author, meta, Some(state))
@@ -271,6 +296,11 @@ fn reply(
         d.set(b"State".to_vec(), PdfString::text(s.name()));
         d.set(b"StateModel".to_vec(), PdfString::text("Review"));
         d.set(b"Subj".to_vec(), PdfString::text("Status"));
+        // Hidden (Table 167, bit 2): the state "is not specified in the annotation itself but in a
+        // separate text annotation" (ISO 32000-2 §12.5.6.3), so this reply is a state record, not
+        // a note, and is neither drawn nor listed as one.
+        d.set(b"F".to_vec(), Object::Int(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
+        d.set(b"IRT".to_vec(), Object::Ref(last_state_reply(doc, p, parent, author, "Review").unwrap_or(parent)));
     }
     // An empty form: nothing is drawn for the reply itself.
     let mut fd = Dict::new();
@@ -384,8 +414,9 @@ pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -
     Ok(())
 }
 
-/// Mark or unmark a comment with a checkmark. Like Acrobat this adds a hidden state reply with
-/// `/StateModel /Marked` by `author`; the latest one wins. It's private bookkeeping, not a status.
+/// Mark or unmark a comment with a checkmark. This adds a hidden state reply with `/StateModel
+/// /Marked` by `author`, in reply to `author`'s previous one when there is one; their latest one
+/// wins. It's each reviewer's private bookkeeping, not a status.
 pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     let (p, parent) = annot_ref(doc, page, index)?;
     let pd = annot_dict(doc, parent);
@@ -396,7 +427,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let text = format!("{state} set by {}", if author.is_empty() { "unknown" } else { author });
     let mut d = base_dict("Text", [0.0; 4], p, &text, author, meta);
     d.set(b"Rect".to_vec(), pd.get(b"Rect").cloned().unwrap_or_else(|| num_array(&[0.0; 4])));
-    d.set(b"IRT".to_vec(), Object::Ref(parent));
+    d.set(b"IRT".to_vec(), Object::Ref(last_state_reply(doc, p, parent, author, "Marked").unwrap_or(parent)));
     d.set(b"F".to_vec(), Object::Int(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
     d.set(b"State".to_vec(), PdfString::text(state));
     d.set(b"StateModel".to_vec(), PdfString::text("Marked"));
@@ -406,6 +437,56 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let i = list.len() - 1;
     set_annots(doc, p, list)?;
     Ok(i)
+}
+
+/// `author`'s latest `model` state reply about `target` on page `p`, for the next change to reply
+/// to: ISO 32000-2 §12.5.6.3, "Additional state changes shall be made by adding text annotations
+/// in reply to the previous reply for a given user". A state reply is about the
+/// annotation its `/IRT` chain reaches past other state replies; a loop reaches nothing. Each
+/// reply's answer is kept, so a long history is walked once.
+fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, model: &str) -> Option<ObjRef> {
+    use std::collections::{HashMap, HashSet};
+    // As the readers see it: a readable `/State` (not null, empty or another type), or a known
+    // `/StateModel` whose default state applies.
+    let is_state = |r: ObjRef| {
+        doc.get(r).as_dict().is_some_and(|d| {
+            text_value(doc, d, b"State").is_some() || matches!(text_value(doc, d, b"StateModel").as_deref(), Some("Marked" | "Review"))
+        })
+    };
+    let irt = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref));
+    let mut reaches: HashMap<ObjRef, Option<ObjRef>> = HashMap::new();
+    let mut mine = Vec::new();
+    for r in annots(doc, p).iter().filter_map(Object::as_ref).filter(|&r| r != target) {
+        let d = annot_dict(doc, r);
+        if text_value(doc, &d, b"StateModel").as_deref() != Some(model) || text_value(doc, &d, b"T").unwrap_or_default() != author.trim() {
+            continue;
+        }
+        let (mut path, mut seen, mut at) = (vec![r], HashSet::from([r]), irt(r));
+        let about = loop {
+            let Some(up) = at else { break None };
+            if let Some(&known) = reaches.get(&up) {
+                break known;
+            }
+            if !is_state(up) {
+                break Some(up);
+            }
+            if !seen.insert(up) {
+                break None;
+            }
+            path.push(up);
+            at = irt(up);
+        };
+        for x in path {
+            reaches.insert(x, about);
+        }
+        if about == Some(target) {
+            mine.push(r);
+        }
+    }
+    // The end of the chain, whatever order the page lists it in: a reply none of the others
+    // replies to; among several (changes that don't chain), the last listed.
+    let answered: HashSet<ObjRef> = mine.iter().filter_map(|&r| irt(r)).collect();
+    mine.iter().rev().copied().find(|r| !answered.contains(r))
 }
 
 /// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.
@@ -536,7 +617,7 @@ fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let (_, size) = appearance::parse_da(d);
     let lines = appearance::wrap(&text, size, wrap.max(1.0));
     let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    [widest, lines.len().max(1) as f64 * size * 1.2]
+    [widest, appearance::text_lines_height(&lines, size)]
 }
 
 /// The width and height of FreeText `d`'s text box `tb` as displayed: swapped on a page turned by
@@ -622,22 +703,21 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     if points.len() > MAX_POINTS {
         return Err(AnnotError::Invalid(format!("at most {MAX_POINTS} points")));
     }
-    let style = Style { width: border_width_of(&d), ..Style::default() };
+    // The width the appearance draws with (`/BS`, else `/Border`), so the room is the drawn stroke's.
+    let style = Style { width: appearance::border_width(&d), ..Style::default() };
     let ends = line_endings_of(&d).unwrap_or_default();
     let (start, end) = (ends.first().copied().unwrap_or(LineEnding::None), ends.get(1).copied().unwrap_or(LineEnding::None));
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let (shape, key): (Shape, &[u8]) = match (subtype.as_str(), points) {
-        ("Line", [from, to]) => (Shape::Line { from: *from, to: *to, start, end }, b"L"),
+    // Each checks the points too: finite, and far enough apart to draw.
+    let (rect, key): ([f64; 4], &[u8]) = match (subtype.as_str(), points) {
+        ("Line", [from, to]) => (rect_for(&Shape::Line { from: *from, to: *to, start, end }, &style)?, b"L"),
         ("Line", _) => return Err(AnnotError::Invalid("a line has two ends".into())),
-        ("PolyLine", _) => (Shape::PolyLine { vertices: points.to_vec(), start, end }, b"Vertices"),
-        ("Polygon", _) => {
-            let cloud = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
-            (Shape::Polygon { vertices: points.to_vec(), cloud }, b"Vertices")
-        }
+        ("PolyLine", _) => (rect_for(&Shape::PolyLine { vertices: points.to_vec(), start, end }, &style)?, b"Vertices"),
+        // Room for the cloud as the appearance draws it: `/BE /S /C` at its own intensity
+        // (Table 169), which may reach further than a new cloud's intensity 1.
+        ("Polygon", _) => (polygon_rect(points, style.width, appearance::cloud_intensity(&d))?, b"Vertices"),
         (other, _) => return Err(AnnotError::Invalid(format!("{other} comments have no points to move"))),
     };
-    // Checks the points too: finite, and far enough apart to draw.
-    let rect = rect_for(&shape, &style)?;
     let before = d;
     doc.update_dict(r, |d| {
         d.set(key.to_vec(), num_array(&points.concat()));
@@ -780,14 +860,66 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 
 /// Change a comment's colour, opacity (of the whole comment), line width and/or line endings, and
 /// redraw it.
+///
+/// A Replace Text proposal is one look: colour and opacity are the group's (`/C` is read from
+/// the primary, ISO 32000-2 §12.5.6.2), so restyling either the caret or its strikeout restyles
+/// and redraws the other too, in the same edit. The strikeout takes no line width (a text markup
+/// annotation has no border) and neither part has line endings. All or nothing: if one member
+/// can't be restyled, none is.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
     let (_, r) = annot_ref(doc, page, index)?;
+    let others = replace_text_partners(doc, page, r)?;
+    // Check every partner before changing anything.
+    for &o in &others {
+        unlocked(doc, o)?;
+    }
+    let before: Vec<(ObjRef, Dict)> = others.iter().map(|&o| (o, annot_dict(doc, o))).collect();
+    let mut done: Vec<(ObjRef, Dict)> = vec![(r, annot_dict(doc, r))];
+    style_one(doc, r, change.clone(), meta)?;
+    for (o, d) in before {
+        let caret = d.name(b"Subtype") == Some(b"Caret");
+        let part = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None };
+        let unchanged = part.color.is_none() && part.opacity.is_none() && part.width.is_none();
+        if unchanged {
+            continue;
+        }
+        if let Err(e) = style_one(doc, o, part, meta) {
+            // Put the members already restyled back, the target included.
+            for (o, d) in done.into_iter().rev() {
+                doc.set(o, Object::Dict(d));
+            }
+            return Err(e);
+        }
+        done.push((o, d));
+    }
+    Ok(())
+}
+
+/// The other members of the Replace Text proposal `r` belongs to, on `page`: for its caret, the
+/// strikeouts grouped under it; for a strikeout, its caret and any other strikeout under it.
+/// Empty for anything else.
+fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<ObjRef>, AnnotError> {
+    let own = Object::Ref(r);
+    let caret = match replaced_by(doc, &own) {
+        Some(c) => c,
+        None if annot_dict(doc, r).name(b"Subtype") == Some(b"Caret") => r,
+        None => return Ok(Vec::new()),
+    };
+    let list = annots(doc, page_ref(doc, page)?);
+    let strikes = list.iter().filter(|e| replaced_by(doc, e) == Some(caret)).filter_map(Object::as_ref);
+    // `/Annots` may list one annotation twice: restyle each once.
+    let mut seen: HashSet<ObjRef> = HashSet::from([r]);
+    Ok(std::iter::once(caret).chain(strikes).filter(|&o| seen.insert(o)).collect())
+}
+
+/// [`set_style`] on one annotation.
+fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+    let StyleChange { color, opacity, width, endings } = change;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build(&d).is_none() {
+    if !crate::draw::can_draw(doc, &d) {
         return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
@@ -807,8 +939,12 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     // So does a text box inside an oval or a circle, which goes around it again.
     let shape = if free_text { BorderShape::of(&d) } else { BorderShape::Rectangle };
     let typewriter = free_text && (d.name(b"IT") == Some(b"FreeTextTypeWriter") || shape != BorderShape::Rectangle) && !d.contains(b"CL");
+    // A border style given by reference (`/BS 5 0 R`, ISO 32000-2 §7.3.10): its width and other
+    // entries, which a new width keeps.
+    let direct = crate::draw::with_direct_values(doc, &d);
+    let (old_width, old_bs) = (border_width_of(&direct), direct.get(b"BS").and_then(Object::as_dict).cloned());
     let regrow = width.filter(|_| typewriter).and_then(|w| {
-        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { old_width } else { 0.0 };
         let rect = grow(text_box_of(&d)?, by);
         (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some((rect, w.max(0.0)))
     });
@@ -832,9 +968,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
             set_part_keys(d, appearance::PartOpacity { line: o, fill: o, text: o });
         }
         if let Some(w) = width {
-            let old_w = border_width_of(d);
+            let old_w = old_width;
             let w = w.max(0.0);
-            let mut bs = d.get(b"BS").and_then(|b| b.as_dict()).cloned().unwrap_or_default();
+            let mut bs = old_bs.unwrap_or_default();
             bs.set(b"W".to_vec(), Object::Real(w));
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
@@ -948,7 +1084,7 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
-    if appearance::build(&d).is_none() {
+    if !crate::draw::can_draw(doc, &d) {
         return Err(AnnotError::Unsupported(subtype));
     }
     if fill.is_some_and(|c| !finite(&c)) {
@@ -989,7 +1125,7 @@ pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Opt
         return Err(AnnotError::Invalid("invalid opacity".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new opacity.
-    if appearance::build(&d).is_none() {
+    if !crate::draw::can_draw(doc, &d) {
         return Err(AnnotError::Unsupported(subtype));
     }
     refuse_foreign_text(doc, &d)?;
@@ -1061,8 +1197,13 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 }
 
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
-/// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
-/// move, list and delete as one. Returns the strikeout's index.
+/// struck text holding `replacement`, the two grouped so they move, list and delete as one.
+/// Returns the strikeout's index.
+///
+/// The caret is the group's primary (`/IT /Replace`) and the strikeout its subordinate (`/IRT` to
+/// the caret, `/RT /Group`, `/IT /StrikeOutTextEdit`): a group's text is read from its primary,
+/// and the subordinates' `Contents` are ignored (ISO 32000-2 §12.5.6.2), so the replacement has
+/// to be on the primary.
 ///
 /// The two annotations need their own `/NM`: XFDF names a reply by the `/NM` of what it replies
 /// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
@@ -1083,7 +1224,6 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
         meta,
     )?;
     let (_, sr) = annot_ref(doc, page, s)?;
-    doc.update_dict(sr, |d| d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit")))?;
     // The caret sits on the baseline at the end of the last line, its point at the text.
     let xs = [last[0], last[2], last[4], last[6]];
     let ys = [last[1], last[3], last[5], last[7]];
@@ -1098,9 +1238,13 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
     )?;
     let (_, cr) = annot_ref(doc, page, c)?;
     doc.update_dict(cr, |d| {
-        d.set(b"IRT".to_vec(), Object::Ref(sr));
-        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.set(b"IT".to_vec(), Object::name("Replace"));
         d.set(b"Subj".to_vec(), PdfString::text("Replace Text"));
+    })?;
+    doc.update_dict(sr, |d| {
+        d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit"));
+        d.set(b"IRT".to_vec(), Object::Ref(cr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
     })?;
     Ok(s)
 }

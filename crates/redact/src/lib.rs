@@ -185,6 +185,14 @@ pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
 }
 
+/// A mark's usable `/QuadPoints` quads ([`pdfcraft_geom::quad_points::usable_quads`]), the set the
+/// comment outlines show. Each one is finite, so the box it folds to is a real one.
+fn quad_points(doc: &Document, d: &Dict) -> Vec<[f64; 8]> {
+    let Some(q) = d.get(b"QuadPoints").map(|q| doc.resolve(q)) else { return Vec::new() };
+    let Some(a) = q.as_array() else { return Vec::new() };
+    pdfcraft_geom::quad_points::usable_quads(a.iter().map(|x| doc.resolve(x).as_f64()))
+}
+
 fn color(doc: &Document, d: &Dict, key: &[u8]) -> Option<Rgb> {
     let v: Vec<f64> = doc.resolve(d.get(key)?).as_array()?.iter().filter_map(Object::as_f64).collect();
     match v.len() {
@@ -229,13 +237,7 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
             if d.name(b"Subtype") != Some(b"Redact") {
                 continue;
             }
-            let quads: Vec<f64> = d
-                .get(b"QuadPoints")
-                .and_then(|q| doc.resolve(q).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
-                .unwrap_or_default();
-            let mut rects: Vec<[f64; 4]> = quads
-                .as_chunks::<8>()
-                .0
+            let mut rects: Vec<[f64; 4]> = quad_points(doc, d)
                 .iter()
                 .map(|q| {
                     let xs = [q[0], q[2], q[4], q[6]];
@@ -247,8 +249,9 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
                         ys.iter().copied().fold(f64::MIN, f64::max),
                     ]
                 })
-                .filter(|r| r.iter().all(|v| v.is_finite()))
                 .collect();
+            // No usable quad (all absent, malformed or non-finite): the mark's `/Rect`, else it
+            // is unreadable and apply refuses it.
             if rects.is_empty()
                 && let Some(r) = rect_of(doc, d.get(b"Rect"))
             {
@@ -852,7 +855,7 @@ fn redact_page_content(
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
         report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
         retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
+        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));

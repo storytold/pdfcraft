@@ -24,6 +24,7 @@ pub mod commands;
 mod comments;
 pub mod compare;
 mod copy_image;
+pub use copy_image::{PagePicture, picture_at};
 pub mod dates;
 mod document;
 mod edit;
@@ -36,6 +37,7 @@ pub mod js;
 mod layers;
 pub mod links;
 pub mod model3d;
+mod object_clip;
 pub mod ocr;
 mod open;
 pub mod optimizer;
@@ -56,6 +58,7 @@ mod stamp_preview;
 #[cfg(test)]
 mod test_hooks;
 pub mod text_fonts;
+pub mod text_links;
 mod text_preview;
 pub mod text_script;
 pub mod text_style_bookmarks;
@@ -85,7 +88,7 @@ pub use pdfcraft_organize::Standard;
 pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
-pub use pdfcraft_cos::Algorithm;
+pub use pdfcraft_cos::{Algorithm, civil_from_days};
 pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
 pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
@@ -93,8 +96,8 @@ pub use pdfcraft_edit::added::{
 };
 pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
-    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, Ink as TextInk,
-    MarkKind, Watermark,
+    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, Hairlines, HairlinesFixed,
+    HeaderFooter, Ink as TextInk, MarkKind, Watermark,
 };
 pub use pdfcraft_forms::{
     BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,
@@ -108,13 +111,14 @@ pub use pdfcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, T
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
+pub use object_clip::{ObjectClip, ObjectClipboard};
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
 pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
 
 /// Comment geometry helpers (text-box line breaking) for frontends.
 pub use pdfcraft_annot::appearance as annot_text;
-pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle};
+pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle, LinkZoom};
 pub use pdfcraft_annot::{
     Activation3d, AppearanceCache, AttachIcon, BorderShape, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont,
     OverlayLook, Props as CommentProps, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
@@ -147,7 +151,7 @@ pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
 pub use history::Label;
-use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
+use layers::{apply_layer_state, print_layer_states, print_preview_layers, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::{MarkFile, image_dimensions};
@@ -158,7 +162,10 @@ pub use session::Session;
 pub use sources::{CombineSource, Combined, combine_source_check, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
-use test_hooks::{check_refresh_panic, panic_on_refresh, record_link_scan, record_marker_scan, reset_secondary_scan_counts, secondary_scan_counts};
+use test_hooks::{
+    check_refresh_panic, panic_on_refresh, record_full_refresh, record_link_scan, record_marker_scan, reset_secondary_scan_counts,
+    secondary_scan_counts, take_full_refreshes,
+};
 use xfa_form::{
     XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, decode_data_file, image_content_type, is_xfa_data_file, note_warnings, strip_xfa, sync_xfa_state,
     undrawn_field_warnings, xfa_after_data_change, xfa_layout, xfa_redraw, xfa_sync_datasets, xfa_values_from_datasets,

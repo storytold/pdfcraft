@@ -1560,6 +1560,24 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
 }
 
 #[test]
+fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
+    let count = 100;
+    let kids = (0..count).map(|i| format!("{} 0 R", 8 + i)).collect::<Vec<_>>().join(" ");
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+        format!("({})", "a".repeat(512 << 10)),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R >>".to_string()));
+    let found = headings(&pdf(&objects, ""));
+    assert!(!found.is_empty() && found.len() < count, "{}", found.len());
+}
+
+#[test]
 fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();
     objs[0] = "<< /Type /Catalog /Pages 2 0 R >>".into();
@@ -1744,4 +1762,21 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), contents.clone())).unwrap();
     assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
+}
+
+#[test]
+fn autotag_text_refuses_pages_that_share_content_past_the_total_operator_allowance() {
+    // Each page is just under the per-page limit; sharing one stream makes the total 21 times it.
+    let content = format!("BT (a) Tj ET {}", "q Q ".repeat(49_990));
+    let pages = 21;
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 4 + i)).collect();
+    let mut bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 200] >>", kids.join(" ")),
+        stream(&content),
+    ];
+    bodies.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /Contents 3 0 R >>".to_string()));
+    let mut doc = pdf(&bodies, "");
+    let Err(AutoTagError::Unsupported { reason, .. }) = autotag_text(&mut doc) else { panic!("expected a refusal") };
+    assert!(reason.contains("too much content"), "{reason}");
 }

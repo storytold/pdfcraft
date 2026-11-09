@@ -484,6 +484,7 @@ fn history_search_view() -> DocView {
             }],
             line_of: vec![0],
             space_before: vec![false],
+            truncated: false,
         }
         .into(),
     );
@@ -509,7 +510,8 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         // Chrome refreshes the idle page box; navigation must not overwrite a draft
         // that may still be focused. DocView does not own the editor's focus state.
         assert_eq!(v.page_input, "draft in progress");
-        assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
         assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
@@ -520,6 +522,18 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         v.go_to_match(2);
         assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
         assert_eq!(v.back, vec![0]);
+    }
+}
+
+#[test]
+fn search_centres_the_match_on_a_rotated_view() {
+    // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+    for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+        let mut v = history_search_view();
+        v.rotation = rotation;
+        v.find_step(true);
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
     }
 }
 
@@ -550,6 +564,7 @@ fn find_test_text(s: &str) -> PageText {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     }
 }
 
@@ -1178,6 +1193,7 @@ fn select_all_of_the_document_only_while_scrolling_through_several_pages() {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     };
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     for p in 0..3 {
@@ -1208,6 +1224,7 @@ fn text_layers_keep_the_selection_page() {
         glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
         line_of: vec![0],
         space_before: vec![false],
+        truncated: false,
     };
     for p in 0..100 {
         v.texts.insert(p, Arc::new(text.clone()));
@@ -1429,6 +1446,64 @@ fn thumbnails_release_on_scroll_panel_close_and_request_again_after_eviction() {
 }
 
 #[test]
+fn closing_the_last_thumbnail_consumer_releases_thumbnails_while_a_visible_page_renders() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    let first = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = first.clone();
+    assert_eq!(v.receive_result(&ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
+    let main = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+    v.begin_render_frame();
+    v.need_thumbnail(0, true);
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(!v.thumbs.is_empty(), "a thumbnail still shown waits for the page");
+    v.begin_render_frame();
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    v.stale_thumbs.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.is_empty(), "nothing shows it any more, whatever the page is doing");
+    assert!(v.stale_thumbs.is_empty(), "nor is it remembered as out of date");
+    // Shown again once the page is drawn: the thumbnail is asked for afresh.
+    v.last_queue = vec![main];
+    assert!(v.receive_result(&ctx, solid_result(main, 100, 130)) > 0);
+    v.begin_render_frame();
+    v.frame_visible.insert(0);
+    v.need_thumbnail(0, true);
+    let queue = v.prepare_render_queue(&info, 1.0);
+    assert!(queue.iter().any(|r| r.page == 0 && r.tag & THUMB_TAG != 0), "the thumbnail is asked for again: {queue:?}");
+}
+
+/// While anything still shows a thumbnail, the thumbnails all wait for the visible page, as before:
+/// only the last consumer closing lets them go early.
+#[test]
+fn a_thumbnail_still_shown_keeps_the_others_while_a_visible_page_renders() {
+    let ctx = egui::Context::default();
+    // Pages 0 and 3 are the same size.
+    let info = thumbnail_info(4);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    v.need_thumbnail(3, true);
+    let first = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = first.clone();
+    for r in &first {
+        assert!(v.receive_result(&ctx, solid_result(*r, 132, 171)) > 0, "thumbnail of page {} taken", r.page);
+    }
+    assert_eq!(v.thumbs.len(), 2);
+    let main = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+    v.begin_render_frame();
+    v.need_thumbnail(0, true);
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.contains_key(&0) && v.thumbs.contains_key(&3), "both wait for the page");
+}
+
+#[test]
 fn stale_results_are_rejected_before_conversion_after_dpi_invalidation_and_suspend() {
     let ctx = egui::Context::default();
     let info = thumbnail_info(1);
@@ -1534,6 +1609,21 @@ fn continuous_view_prefetches_the_rows_ahead_of_the_way_it_moved() {
     let mut single = view(20, PageLayout::Single, false);
     single.scroll_dir = 1;
     assert!(scroll_prefetch(&single, &[9]).is_empty(), "single-page view keeps its own prefetch");
+}
+
+#[test]
+fn continuous_two_page_prefetch_counts_rows_from_the_end_of_the_row_shown() {
+    let mut two = view(20, PageLayout::TwoUp, true);
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[8]), [9, 10, 11, 12, 13], "the right page off to the side, then two rows");
+    two.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&two, &[9]), [8, 7, 6, 5, 4], "the left page off to the side, then two rows");
+    two.cover = true;
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[0]), [1, 2, 3, 4], "the cover is a row of its own");
+    assert_eq!(scroll_prefetch(&two, &[3]), [4, 5, 6, 7, 8]);
+    two.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&two, &[4]), [3, 2, 1, 0]);
 }
 
 #[test]
@@ -1989,6 +2079,59 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     let app = h.state();
     let generation = app.session.get(app.views[0].id).unwrap().edit_generation();
     assert_eq!(app.views[0].edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
+}
+
+/// A cut page (#623) is named in a bar of its own: a static XFA form's notice, which comes
+/// first among the form notices, still shows beside it instead of replacing it (review on #2113).
+#[test]
+fn a_cut_page_is_named_beside_an_xfa_form_notice() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
+        app.open_bytes("form.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("XFA data are kept in step");
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label_contains("XFA data are kept in step");
+}
+
+/// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the
+/// cut-page notice lasts until another page is found cut (review on #2113).
+#[test]
+fn a_page_found_cut_after_a_dismissal_is_still_named() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    // The reader dismissed the document's notice before the render found the cut page.
+    h.state_mut().views[0].notice_dismissed = true;
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the cut-page notice can be dismissed");
+    // Re-reading the same page (an undo, a layer toggle) doesn't bring it back.
+    h.state_mut().views[0].invalidate_content();
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the dismissed page stays dismissed");
+    h.state_mut().views[0].cut_pages.insert(1);
+    h.run_steps(2);
+    h.get_by_label_contains("2 pages hold more content than PdfCraft can read, page 1 first");
 }
 
 #[test]
@@ -2559,4 +2702,24 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     app.poll_scan_clean();
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
+}
+
+/// #5708 review: a page that fits is centred with nothing to scroll, so only pixel snapping may
+/// pass for fitting. A page half a pixel or more too tall scrolls, or its ends would be cut off.
+#[test]
+fn only_pixel_snapping_passes_for_fitting_the_view() {
+    let page = |height: f32| [Rect::from_min_size(pos2(0.0, MARGIN), vec2(300.0, height))];
+    for ppp in [1.0, 2.0] {
+        let slack = 0.5 / ppp;
+        let (_, content) = vertical_placement(false, &page(600.0 + slack), &[0], 600.0, ppp);
+        assert_eq!(content, 600.0, "at {ppp}x, snapping's half pixel still fits");
+        for over in [slack + 0.1, 1.0] {
+            let (shift, content) = vertical_placement(false, &page(600.0 + over), &[0], 600.0, ppp);
+            assert_eq!((shift, content), (0.0, 600.0 + over + 2.0 * MARGIN), "at {ppp}x, {over} pt too tall scrolls");
+        }
+    }
+    // A scale that isn't one has no slack and never panics.
+    for ppp in [0.0, f32::NAN, f32::INFINITY] {
+        assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
+    }
 }
