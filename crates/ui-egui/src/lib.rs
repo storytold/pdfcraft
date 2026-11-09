@@ -83,6 +83,7 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
+pub mod renderer;
 mod state;
 mod tools;
 mod workflows;
@@ -337,6 +338,8 @@ pub struct PdfCraftApp {
     pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
+    /// Preferences ▸ Graphics: the renderer the desktop app starts with next time.
+    pub renderer: renderer::RendererPreference,
     /// Whether the system asked for no animations, and how the desktop app asks it.
     pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].

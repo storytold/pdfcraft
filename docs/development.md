@@ -126,6 +126,38 @@ reach this retry instead of the uncaptured-error panic handler. This does not fi
 driver's shader compilation, and explicit `PDFCRAFT_RENDERER=wgpu` still disables the retry.
 `PDFCRAFT_RENDERER` skips it or chooses OpenGL from the start.
 
+## Flicker on displays with a variable refresh rate
+
+On Windows, a PdfCraft window can flicker on a display with G-SYNC, FreeSync or another variable
+refresh rate (VRR), most visibly on OLED and VA panels and in dark areas (#1560, #1719, #1868).
+It follows the pointer, as PdfCraft draws only when something changes, and screen recordings
+don't show it, because the frames are right: the display's brightness is not.
+
+wgpu presents through a Direct3D 12 (DXGI flip-model) swap chain, and the GPU driver gives the
+focused window that presents through one the display's variable refresh rate. The panel's
+refresh rate then follows the window's presents, from a few frames a second while idle to the
+full rate while the pointer moves, and these panels change brightness with their refresh rate.
+Observed on an RTX 5080 with an AW3425DW QD-OLED (240 Hz, G-SYNC Compatible), PdfCraft 0.7.1:
+
+| Renderer | Flicker |
+|---|---|
+| wgpu, Direct3D 12 (the default) | on every pointer move |
+| wgpu, Direct3D 12 through DirectComposition (`WGPU_DX12_PRESENTATION_SYSTEM=visual`) | as much, or more |
+| wgpu, Direct3D 12 drawing every frame (a test build) | all the time while the window has focus |
+| wgpu, Direct3D 12 without `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` (a patched wgpu-hal) | on every pointer move |
+| wgpu, Vulkan (`WGPU_BACKEND=vulkan`) | none |
+| OpenGL (`PDFCRAFT_RENDERER=gl`) | none |
+
+So nothing inside the Direct3D 12 path helps, and drawing more makes it worse. Vulkan is not
+an answer on Windows: PdfCraft never loads Vulkan drivers there unless asked, since a faulty one
+crashed it at start-up (#37). **Preferences ▸ Graphics ▸ OpenGL** starts PdfCraft with OpenGL,
+from the next start on; Auto keeps wgpu. The desktop app reads the choice from `app.ron` before
+it creates the window (`pdfcraft_ui_egui::renderer`), and `PDFCRAFT_RENDERER` still wins over it.
+The control channel sets it as `renderer` (`auto` or `gl`). Turning off G-SYNC or FreeSync, or
+setting the display to a fixed refresh rate for `pdfcraft.exe` in the GPU's control panel, also
+stops it. Only an NVIDIA GPU was observed; the AMD report (#1719) fits the same cause but is
+unconfirmed.
+
 ## Preferences
 
 Linux and FreeBSD store `app.ron` in `$XDG_CONFIG_HOME/pdfcraft/`, or
@@ -150,7 +182,7 @@ copies retain their current preferences locations.
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
 | `WGPU_DX12_PRESENTATION_SYSTEM` | Windows, Direct3D 12: `hwnd` presents through a swap chain on the window itself, which Windows stretches while the window is resized (#2738); unset or `visual`, PdfCraft presents through a DirectComposition visual |
 | `WGPU_VALIDATION_INDIRECT_CALL` | `1` turns wgpu's check of indirect draw arguments back on. PdfCraft draws nothing indirectly and turns it off, since the compute shader the check needs fails to compile on some drivers (Metal on an Intel Iris Pro), which lost the device at start-up |
-| `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)) |
+| `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset (or anything else), Preferences ▸ Graphics decides, and with Auto wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback) and [Flicker on displays with a variable refresh rate](#flicker-on-displays-with-a-variable-refresh-rate)) |
 | `PDFCRAFT_TITLEBAR` | Linux: `app` draws PdfCraft's own title bar (window buttons in the tab strip, in the order of GNOME's `button-layout`, and resize edges); `system` keeps the frame winit or the desktop draws; unset, PdfCraft draws its own when the Wayland compositor draws no frames (GNOME), and leaves it to the desktop otherwise (KDE, Sway, Hyprland, X11). Where PdfCraft draws it, Preferences ▸ Use system title bar switches back to winit's frame without a restart; `system` also hides that option |
 | `PDFCRAFT_BUILD_LABEL` | Build time: a label for a local or patched build (letters, digits, inner dots), shown after the version in `--version`, About and the log (`0.7.1 (titlebar)`). `packaging/linux/package.sh` also puts it in the file names and the .rpm/.deb release (`1.titlebar`), which upgrades over the release of the same version |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
