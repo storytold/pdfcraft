@@ -166,6 +166,24 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
     out.extend_from_slice(b"\nendstream");
 }
 
+/// A document opened without the password its embedded files need holds their data as stored and
+/// can't encrypt: a save keeps its `/Encrypt` as it is, and writes no edited or added stream that
+/// would have to be encrypted (an attached file put in, say), which would be written in the clear.
+fn keyless_check(doc: &Document) -> Result<(), CosError> {
+    if !doc.embedded_files_locked() {
+        return Ok(());
+    }
+    let refuse =
+        |what: &str| Err(CosError::Security(format!("{what} without the password of the document's embedded files: open it with the password")));
+    if doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none() {
+        return refuse("the document's security can't change");
+    }
+    if doc.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored(s))) {
+        return refuse("an edited or added embedded file can't be encrypted");
+    }
+    Ok(())
+}
+
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
 /// `o` has the document's numbers in its references ([`crate::security::transform`]).
@@ -242,6 +260,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
+    keyless_check(doc)?;
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
     if doc.reconstructed() || doc.encryption_changed() || doc.full_save_required() {
@@ -383,6 +402,14 @@ pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
 pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
+    }
+    keyless_check(doc)?;
+    // Renumbering breaks a key that mixes in the object number.
+    if doc.security().is_some_and(|h| !h.has_key() && !h.survives_renumbering()) {
+        return Err(CosError::Security(
+            "the embedded files are encrypted and the document was opened without their password: open it with the password to save it in full"
+                .into(),
+        ));
     }
     // A full traversal must not fill the editor's shared caches (which undo snapshots also
     // own). Parsed objects and decoded object streams are temporary working data here.
@@ -919,14 +946,14 @@ pub fn pdf_date(unix_secs: i64) -> String {
     format!("D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day). Total for any `i64` count:
+/// dates past `NaiveDate`'s ±262143-year range keep their proleptic Gregorian year instead of
+/// falling back to the epoch.
 ///
-/// A `from_timestamp` epoch fallback would change dates past `NaiveDate`'s ±262143-year range,
-/// which the old hand-rolled converter formatted directly. The Gregorian calendar repeats every
-/// 400 years (146_097 days), so chrono converts the day within one cycle and whole cycles go back
-/// into the year (an `i128` so the extremes can't overflow), keeping chrono as the only calendar
-/// logic and reproducing the old result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+/// The Gregorian calendar repeats every 400 years (146_097 days), so chrono converts the day
+/// within one cycle and whole cycles go back into the year (an `i128` so the extremes can't
+/// overflow), keeping chrono as the only calendar logic. 1970-01-01 is `num_days_from_ce` 719_163.
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     use chrono::Datelike;
     let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
     // `rest + 719_163` is 719_163..865_259, always a valid CE day.
@@ -1110,6 +1137,12 @@ mod tests {
         // its sign, exactly as before).
         assert_eq!(pdf_date(10_000_000_000_000), "D:3188570520174640Z");
         assert_eq!(pdf_date(-10_000_000_000_000), "D:-3149180813061320Z");
+        assert_eq!(crate::civil_from_days(0), (1970, 1, 1));
+        assert_eq!(crate::civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(crate::civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(crate::civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(crate::civil_from_days(i64::MAX), (25_252_734_927_768_524, 7, 27));
+        assert_eq!(crate::civil_from_days(i64::MIN), (-25_252_734_927_764_585, 6, 7));
     }
 
     #[test]
