@@ -161,30 +161,49 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(mut bytes) = budget.decode_within(stream, MAX_SFNT) else { continue };
+        let Ok(mut bytes) = budget.decode_within(&doc.with_direct_parms(stream), MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
         }
-        if face.charmap().mappings().next().is_some() {
+        let own_cmap = face.charmap().mappings().next().is_some();
+        // A legacy THSarabunPSK subset may keep a Latin-only cmap beside its Thai glyphs, which
+        // only the PDF's verified maps reach (`composite_glyph_maps`); other programs keep theirs.
+        let base_font = font.name(b"BaseFont").map(String::from_utf8_lossy).unwrap_or_default();
+        if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
             return Some(bytes);
         }
-        // Some PDF generators keep a Mac format-6 code→glyph cmap. egui accepts Unicode
-        // format-4/12 cmaps. Combine the PDF's Unicode meanings with the source glyph IDs;
-        // only this in-memory copy gets a new cmap, never the working PDF or a font asset.
-        let Ok(cmap) = face.cmap() else { continue };
+        // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
+        // cmap from ToUnicode and the actual CID-to-glyph map; source bytes stay unchanged.
         let metrics = Metrics::from_dict(doc, font);
-        if metrics.composite {
-            continue;
-        }
         let mut mappings = std::collections::BTreeMap::new();
-        for code in 0..=255 {
-            let Some(text) = metrics.unicode.text(code) else { continue };
-            let Some(ch) = only_char(&text) else { continue };
-            let Some(glyph) = cmap.map_codepoint(code).or_else(|| cmap.map_codepoint(code + 0xf000)) else { continue };
-            let glyph = glyph.to_u32();
-            if glyph > 0 {
-                mappings.entry(u32::from(ch)).or_insert(glyph);
+        if metrics.composite {
+            if let Some((map, _)) = composite_glyph_maps(doc, font, &bytes, &metrics, budget) {
+                mappings = map;
+            }
+            if own_cmap {
+                let charmap = face.charmap();
+                if mappings.keys().all(|&u| char::from_u32(u).is_some_and(|c| charmap.map(c).is_some())) {
+                    return Some(bytes);
+                }
+                // The program's own mappings stay; the PDF's fill only what they lack.
+                mappings.extend(charmap.mappings().filter(|(_, g)| g.to_u32() != 0).take(65_537).map(|(u, g)| (u, g.to_u32())));
+                let mut merged = bytes.clone();
+                let usable = append_editor_cmap(&mut merged, &mappings).is_some()
+                    && skrifa::FontRef::new(&merged).is_ok_and(|font| font.charmap().mappings().next().is_some());
+                return Some(if usable { merged } else { bytes });
+            }
+        } else if own_cmap {
+            return Some(bytes);
+        } else if let Ok(cmap) = face.cmap() {
+            for code in 0..=255 {
+                let Some(text) = metrics.unicode.text(code) else { continue };
+                let Some(ch) = only_char(&text) else { continue };
+                let Some(glyph) = cmap.map_codepoint(code).or_else(|| cmap.map_codepoint(code + 0xf000)) else { continue };
+                let glyph = glyph.to_u32();
+                if glyph > 0 {
+                    mappings.entry(u32::from(ch)).or_insert(glyph);
+                }
             }
         }
         if !mappings.is_empty()
@@ -209,13 +228,13 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     let Some(program) = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned()) else { return Vec::new() };
     let program = doc.resolve(&program);
     let Object::Stream(stream) = program.as_ref() else { return Vec::new() };
-    let Ok(bytes) = stream.decoded_within(16 << 20) else { return Vec::new() };
+    let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(16 << 20) else { return Vec::new() };
     let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
     let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
         None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
         Some(Object::Stream(map)) => {
-            let Ok(map) = map.decoded_within(1 << 17) else { return Vec::new() };
+            let Ok(map) = doc.with_direct_parms(map).decoded_within(1 << 17) else { return Vec::new() };
             bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
@@ -242,7 +261,7 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(bytes) = stream.decoded_within(16 << 20) else { continue };
+        let Ok(bytes) = doc.with_direct_parms(stream).decoded_within(16 << 20) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
         if upem == 0.0 {
@@ -267,14 +286,14 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
     }
 }
 
-/// Replace an existing cmap directory entry with a bounded Unicode format-12 table.
+/// Add or replace an editor-only cmap with a bounded Unicode format-12 table.
 /// Checked ranges prevent damaged sfnt offsets from indexing outside the source program.
 fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap<u32, u32>) -> Option<()> {
     if mappings.len() > 65536 {
         return None;
     }
     let count = u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?) as usize;
-    if count > 256 {
+    if count == 0 || count > 256 {
         return None;
     }
     let mut entry = None;
@@ -289,7 +308,10 @@ fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap
             head = Some(u32::from_be_bytes(record.get(8..12)?.try_into().ok()?) as usize);
         }
     }
-    let entry = entry?;
+    let (entry, head) = match entry {
+        Some(entry) => (entry, head),
+        None => insert_editor_cmap_slot(bytes, count, head)?,
+    };
     let mut cmap = Vec::with_capacity(28 + mappings.len() * 12);
     cmap.extend_from_slice(&[0, 0, 0, 1, 0, 3, 0, 10, 0, 0, 0, 12, 0, 12, 0, 0]);
     cmap.extend_from_slice(&(16_u32 + u32::try_from(mappings.len()).ok()? * 12).to_be_bytes());
@@ -317,12 +339,59 @@ fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap
     bytes.get_mut(entry + 8..entry + 12)?.copy_from_slice(&offset.to_be_bytes());
     bytes.get_mut(entry + 12..entry + 16)?.copy_from_slice(&u32::try_from(cmap.len()).ok()?.to_be_bytes());
     bytes.extend_from_slice(&cmap);
+    // SFNT directories are sorted by tag. Some readers tolerate the unsorted directory of
+    // a PDF subset, but shaping engines may binary-search it and otherwise miss the cmap.
+    // Adding a slot increased the directory count; include the new record in this sort.
+    let tables = usize::from(u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?));
+    let end = 12usize.checked_add(tables.checked_mul(16)?)?;
+    let mut records: Vec<[u8; 16]> = bytes.get(12..end)?.as_chunks::<16>().0.to_vec();
+    records.sort_by_key(|r| [r[0], r[1], r[2], r[3]]);
+    for (index, record) in records.iter().enumerate() {
+        let at = 12 + index * 16;
+        bytes.get_mut(at..at + 16)?.copy_from_slice(record);
+    }
     if let Some(head) = head {
         bytes.get_mut(head.checked_add(8)?..head.checked_add(12)?)?.fill(0);
         let adjustment = 0xb1b0afba_u32.wrapping_sub(checksum(bytes));
         bytes.get_mut(head + 8..head + 12)?.copy_from_slice(&adjustment.to_be_bytes());
     }
     Some(())
+}
+
+/// Reserve a new cmap directory slot, retaining every original table payload.
+fn insert_editor_cmap_slot(bytes: &mut Vec<u8>, mut count: usize, mut head: Option<usize>) -> Option<(usize, Option<usize>)> {
+    if count >= 256 {
+        return None;
+    }
+    let end = 12usize.checked_add(count.checked_mul(16)?)?;
+    bytes.get(..end)?;
+    // Keep all original table bytes, shifting them by one directory record.
+    for i in 0..count {
+        let at = 12 + i * 16;
+        let offset = u32::from_be_bytes(bytes.get(at + 8..at + 12)?.try_into().ok()?);
+        let len = u32::from_be_bytes(bytes.get(at + 12..at + 16)?.try_into().ok()?);
+        if (offset as usize) < end {
+            return None;
+        }
+        bytes.get(offset as usize..offset.checked_add(len)? as usize)?;
+    }
+    bytes.splice(end..end, [0; 16]);
+    for i in 0..count {
+        let at = 12 + i * 16;
+        let offset = u32::from_be_bytes(bytes.get(at + 8..at + 12)?.try_into().ok()?).checked_add(16)?;
+        bytes.get_mut(at + 8..at + 12)?.copy_from_slice(&offset.to_be_bytes());
+    }
+    head = head.and_then(|offset| offset.checked_add(16));
+    bytes.get_mut(end..end + 4)?.copy_from_slice(b"cmap");
+    count += 1;
+    let count = u16::try_from(count).ok()?;
+    let selector = count.ilog2() as u16;
+    let range = (1u16.checked_shl(u32::from(selector))?).checked_mul(16)?;
+    bytes.get_mut(4..6)?.copy_from_slice(&count.to_be_bytes());
+    bytes.get_mut(6..8)?.copy_from_slice(&range.to_be_bytes());
+    bytes.get_mut(8..10)?.copy_from_slice(&selector.to_be_bytes());
+    bytes.get_mut(10..12)?.copy_from_slice(&count.checked_mul(16)?.checked_sub(range)?.to_be_bytes());
+    Some((end, head))
 }
 
 fn descriptor_flags(doc: &Document, descriptor: &Dict) -> u32 {
@@ -747,7 +816,7 @@ impl Metrics {
             m.codes = Codes::Two;
             if let Some(e) = font.get(b"Encoding").map(|e| doc.resolve(e))
                 && let Object::Stream(s) = &*e
-                && let Ok(data) = s.decoded_within(MAX_CMAP_BYTES)
+                && let Ok(data) = doc.with_direct_parms(s).decoded_within(MAX_CMAP_BYTES)
             {
                 let (spaces, cids) = parse_cmap(&data);
                 if !spaces.is_empty() {
@@ -944,6 +1013,19 @@ impl Metrics {
             Some(w) => *w > 0.0 || code == 32,
             None => self.widths.is_empty() && !self.subset,
         }
+    }
+
+    /// Whether the embedded program draws an outline for `code`. Known (`Some`) only for a subset
+    /// Type 0 font over a readable TrueType program, where a dropped glyph is left empty; `None`
+    /// when the program can't tell, for example a simple or CFF font. [`Metrics::encode`] accepts
+    /// any code with a `/W` entry (#1443), so a caller that would rather use another subset of the
+    /// same face than draw nothing asks this too. An empty space glyph is normal.
+    pub fn has_outline(&self, code: u32) -> Option<bool> {
+        if !self.composite || self.outlined_cids.is_empty() {
+            return None;
+        }
+        let cid = self.cid(code);
+        Some(self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1))
     }
 
     /// Whether `code` shows exactly `c` and has a glyph for it.
@@ -1355,7 +1437,10 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
     }
     match font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref() {
         Some(Object::Stream(s)) => {
-            if let Ok(data) = s.decoded_within(MAX_CMAP_BYTES) {
+            // With `/DecodeParms` given by reference, as every stream of the font is read here,
+            // and as the redaction proof reads the map: the two must get the same text, or a copy
+            // redaction rightly left counts as a survivor.
+            if let Ok(data) = doc.with_direct_parms(s).decoded_within(MAX_CMAP_BYTES) {
                 parse_to_unicode(&data, &mut out);
             }
         }
@@ -1580,3 +1665,7 @@ mod encoding_tests {
         }
     }
 }
+
+mod thai;
+use thai::composite_glyph_maps;
+pub use thai::{ExistingThaiRun, LegacyThaiFont, recovered_thai_map};
