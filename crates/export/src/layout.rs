@@ -68,9 +68,10 @@ pub struct Table {
     pub rect: [f64; 4],
     pub cols: Vec<f64>,
     pub rows: Vec<Vec<Cell>>,
-    /// Whether the page's ruled lines separate every pair of neighbouring cells, so the writers
-    /// can draw the table's borders.
-    pub ruled: bool,
+    /// `Some` when the page's ruled lines separate every pair of neighbouring cells, so the
+    /// writers draw the inside borders; it holds which outer edges (top, left, bottom, right) the
+    /// lines also draw, as only those get a border.
+    pub ruled: Option<[bool; 4]>,
 }
 
 /// What goes into the output, in order.
@@ -144,19 +145,31 @@ const INLINE_GAP: f64 = 0.5;
 /// page laid out so that many end at the same place stays quick.
 const CONTINUATION_PROBE: usize = 64;
 
+/// How far (as a fraction of the font size) the block before may end past where a block starts
+/// and still be the one it continues: a slanted italic's box leans into the next word by about a
+/// quarter of its size.
+const OVERHANG: f64 = 0.3;
+
+/// [`OVERHANG`] in points for a block of `size`: at least a point (rounding), at most six.
+fn overhang(size: f64) -> f64 {
+    if size.is_finite() { (OVERHANG * size).clamp(1.0, 6.0) } else { 1.0 }
+}
+
 /// Per block, whether it continues another on the same line: it starts where that one ends (up to
-/// [`INLINE_GAP`] later, or a point earlier for rounding), so it is the same line of text running
-/// on (a link inside a sentence, a superscript), not a cell of its own.
+/// [`INLINE_GAP`] later, or up to [`overhang`] earlier, as a slanted italic leans into the word
+/// after it), so it is the same line of text running on (a link inside a sentence, a
+/// superscript), not a cell of its own.
 fn continuations(blocks: &[Block]) -> Vec<bool> {
     continued_from(blocks).into_iter().map(|from| from.is_some()).collect()
 }
 
 /// Per block, the block it continues on the same line (see [`continuations`]): of those it could
-/// continue, the one that ends nearest to where it starts.
+/// continue, the one that ends nearest to where it starts. A list item's text continues its
+/// bullet, a tab stop before it (`flow::bullet_items`).
 fn continued_from(blocks: &[Block]) -> Vec<Option<usize>> {
     let mut by_end: Vec<(f64, usize)> = blocks.iter().enumerate().map(|(i, b)| (b.rect[2], i)).collect();
     by_end.sort_by(|a, b| a.0.total_cmp(&b.0));
-    blocks
+    let mut from: Vec<Option<usize>> = blocks
         .iter()
         .enumerate()
         .map(|(bi, b)| {
@@ -165,14 +178,20 @@ fn continued_from(blocks: &[Block]) -> Vec<Option<usize>> {
                 .get(k..)
                 .unwrap_or_default()
                 .iter()
-                .take_while(|(end, _)| *end <= b.rect[0] + 1.0)
+                .take_while(|(end, _)| *end <= b.rect[0] + overhang(b.size))
                 .take(CONTINUATION_PROBE)
                 .filter_map(|(_, ai)| blocks.get(*ai).filter(|_| *ai != bi).map(|a| (*ai, a)))
                 .filter(|(_, a)| a.rect[3].min(b.rect[3]) - a.rect[1].max(b.rect[1]) > 0.5 * (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1]))
                 .min_by(|(_, a), (_, c)| (a.rect[2] - b.rect[0]).abs().total_cmp(&(c.rect[2] - b.rect[0]).abs()))
                 .map(|(ai, _)| ai)
         })
-        .collect()
+        .collect();
+    for (bullet, text) in super::flow::bullet_items(blocks) {
+        if let Some(slot @ None) = from.get_mut(text) {
+            *slot = Some(bullet);
+        }
+    }
+    from
 }
 
 /// A gap between two runs wider than this (as a fraction of the font size) is a word space the
@@ -240,6 +259,12 @@ pub(crate) fn paragraphs<'a>(blocks: &'a [Block], skip: &[bool]) -> Vec<Vec<Run<
         .collect()
 }
 
+/// [`paragraphs`] as the flowing writers lay them out, top to bottom: a paragraph that wraps onto
+/// the next line is joined to it (`flow::join_wrapped`). `body` is the body text size.
+pub(crate) fn flowing_paragraphs<'a>(blocks: &'a [Block], skip: &[bool], body: f64) -> Vec<Vec<Run<'a>>> {
+    super::flow::join_wrapped(paragraphs(blocks, skip), |runs| para_level(runs, body))
+}
+
 /// A paragraph's heading level: the lowest of its runs', so body text that runs on after a bold
 /// lead-in on the same line keeps the paragraph body text. A marker set smaller than the first run
 /// (a footnote number, "st" in "1st") does not count, so a heading keeps its footnote marker.
@@ -264,8 +289,11 @@ const RULE_BUDGET: usize = 4_000_000;
 /// Whether `rules` separate every pair of neighbouring cells of a table whose rows are `rows`
 /// (block indices, top to bottom) and whose columns start at `edges` and end at `right`: between
 /// two columns a vertical rule beside each row (unless a cell of that row spans across), and
-/// between two rows a horizontal rule under each column. Every check spends `budget`.
-fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64], right: f64, budget: &mut usize) -> bool {
+/// between two rows a horizontal rule under each column. Every check spends `budget`. When they
+/// do, says which outer edges (top, left, bottom, right) are ruled too: a rule over every column
+/// above the first row or below the last, or beside every row left of the first column or right
+/// of the last, no farther from the cells than the next row or column is.
+fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64], right: f64, budget: &mut usize) -> Option<[bool; 4]> {
     let vertical: Vec<&[f64; 4]> = rules.iter().filter(|r| r[2] - r[0] <= RULE_THICK && r[3] - r[1] > RULE_THICK).collect();
     let horizontal: Vec<&[f64; 4]> = rules.iter().filter(|r| r[3] - r[1] <= RULE_THICK && r[2] - r[0] > RULE_THICK).collect();
     let mut find = |set: &[&[f64; 4]], hit: &dyn Fn(&[f64; 4]) -> bool| -> bool {
@@ -295,7 +323,7 @@ fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64
                 let x = (r[0] + r[2]) / 2.0;
                 lo + COL_TOL < x && x <= hi + COL_TOL && r[1] <= mid && mid <= r[3] && clear(x)
             }) {
-                return false;
+                return None;
             }
         }
     }
@@ -307,11 +335,41 @@ fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64
                 let y = (r[1] + r[3]) / 2.0;
                 below_top - COL_TOL <= y && y <= above_bottom + COL_TOL && r[0] <= x && x <= r[2]
             }) {
-                return false;
+                return None;
             }
         }
     }
-    true
+    let (Some(first), Some(last), Some(&left), Some(&last_col)) = (spans.first(), spans.last(), edges.first(), edges.last()) else {
+        return Some([false; 4]);
+    };
+    // How far the next row or column is: an outer rule farther out than that frames something else.
+    let row_gap = |a: Option<&[f64; 2]>, b: Option<&[f64; 2]>, side: usize| a.zip(b).map_or(0.0, |(a, b)| (a[side] - b[side]).abs());
+    let top_gap = row_gap(Some(first), spans.get(1), 1);
+    let bottom_gap = row_gap(spans.len().checked_sub(2).and_then(|i| spans.get(i)), Some(last), 0);
+    let left_gap = edges.get(1).map_or(0.0, |e| e - left);
+    let right_gap = edges.len().checked_sub(2).and_then(|i| edges.get(i)).map_or(0.0, |e| last_col - e);
+    let mut over_columns = |lo: f64, hi: f64| {
+        mids.iter().all(|&x| {
+            find(&horizontal, &|r| {
+                let y = (r[1] + r[3]) / 2.0;
+                lo <= y && y <= hi && r[0] <= x && x <= r[2]
+            })
+        })
+    };
+    let top = over_columns(first[1] - COL_TOL, first[1] + top_gap + COL_TOL);
+    let bottom = over_columns(last[0] - bottom_gap - COL_TOL, last[0] + COL_TOL);
+    let mut beside_rows = |lo: f64, hi: f64| {
+        spans.iter().all(|span| {
+            let mid = (span[0] + span[1]) / 2.0;
+            find(&vertical, &|r| {
+                let x = (r[0] + r[2]) / 2.0;
+                lo <= x && x <= hi && r[1] <= mid && mid <= r[3]
+            })
+        })
+    };
+    let left_ruled = beside_rows(left - left_gap - COL_TOL, left + COL_TOL);
+    let right_ruled = beside_rows(right - COL_TOL, right.max(last_col + right_gap) + COL_TOL);
+    Some([top, left_ruled, bottom, right_ruled])
 }
 
 /// Detect tables in a page's blocks from their text layout: columns are left edges shared by
@@ -321,8 +379,16 @@ fn ruled(blocks: &[Block], rules: &[[f64; 4]], rows: &[Vec<usize>], edges: &[f64
 pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<bool>) {
     let mut budget = RULE_BUDGET;
     let mut consumed = vec![false; blocks.len()];
+    // A list's bullets are not cells: beside their items' text they read as a two-column table.
+    let mut bullet = vec![false; blocks.len()];
+    for (i, _) in super::flow::bullet_items(blocks) {
+        if let Some(b) = bullet.get_mut(i) {
+            *b = true;
+        }
+    }
+    let cell_like = |i: usize, b: &Block| is_cell_like(b) && !bullet.get(i).copied().unwrap_or(false);
     // Candidate columns: cluster the left edges of cell-like blocks.
-    let mut xs: Vec<(f64, usize)> = blocks.iter().enumerate().filter(|(_, b)| is_cell_like(b)).map(|(i, b)| (b.rect[0], i)).collect();
+    let mut xs: Vec<(f64, usize)> = blocks.iter().enumerate().filter(|(i, b)| cell_like(*i, b)).map(|(i, b)| (b.rect[0], i)).collect();
     xs.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut cols: Vec<(f64, Vec<usize>)> = Vec::new(); // (left edge, member block indices)
     for (x, i) in xs {
@@ -358,7 +424,7 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
     order.sort_by(|a, b| blocks[*b].rect[3].total_cmp(&blocks[*a].rect[3]).then(blocks[*a].rect[0].total_cmp(&blocks[*b].rect[0])));
     for &bi in &order {
         let b = &blocks[bi];
-        if !is_cell_like(b) {
+        if !cell_like(bi, b) {
             continue;
         }
         let Some(ci) = column_at(b.rect[0]) else { continue };
@@ -394,11 +460,13 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
         edges.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         let ncols = edges.len();
         let right = used.iter().map(|&i| blocks[i].rect[2]).fold(f64::MIN, f64::max) + COL_TOL;
-        let is_ruled = (2..=MAX_COLS).contains(&ncols) && !rules.is_empty() && {
+        let frame = if (2..=MAX_COLS).contains(&ncols) && !rules.is_empty() {
             let row_blocks: Vec<Vec<usize>> = run.iter().map(|row| row.iter().map(|(_, i)| *i).collect()).collect();
             ruled(blocks, rules, &row_blocks, &edges, right, budget)
+        } else {
+            None
         };
-        let ok = (ncols >= 3 || (ncols == 2 && (run.len() >= 3 || is_ruled))) && ncols <= MAX_COLS;
+        let ok = (ncols >= 3 || (ncols == 2 && (run.len() >= 3 || frame.is_some()))) && ncols <= MAX_COLS;
         if !ok {
             run.clear();
             return;
@@ -457,7 +525,7 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
             right,
             used.iter().map(|&i| blocks[i].rect[3]).fold(f64::MIN, f64::max),
         ];
-        out.push(Table { rect, cols: edges, rows: rows_out, ruled: is_ruled });
+        out.push(Table { rect, cols: edges, rows: rows_out, ruled: frame });
     };
     // Runs of consecutive multi-column rows are tables. Rows on either side of a run that
     // hold a single cell wide enough to span two columns (a header band, a totals row) join
@@ -522,8 +590,9 @@ pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
         }
         let (tables, consumed) = tables(&p.blocks, &p.rules);
         // Blocks and images by their top edge, top to bottom.
-        // A paragraph sits where its first run does: its other runs follow along the same line.
-        let mut parts: Vec<(f64, f64, Item)> = paragraphs(&p.blocks, &consumed)
+        // A paragraph sits where its first run does: its other runs follow along its line and the
+        // lines it wraps onto.
+        let mut parts: Vec<(f64, f64, Item)> = flowing_paragraphs(&p.blocks, &consumed, body)
             .into_iter()
             .filter_map(|runs| {
                 let first = runs.first()?.block;

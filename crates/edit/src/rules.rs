@@ -1,7 +1,7 @@
 //! A page's ruled lines: the horizontal and vertical strokes (and thin filled bars) its content
 //! draws, so exports can tell a ruled table from text that merely lines up (#5149).
 
-use pdfcraft_content::{Matrix, Pieces};
+use pdfcraft_content::Matrix;
 use pdfcraft_cos::Document;
 
 use crate::EditError;
@@ -30,7 +30,7 @@ pub fn page_rules(doc: &Document, page: usize) -> Result<Vec<[f64; 4]>, EditErro
     if streams.iter().any(|stream| stream.read != crate::text::Read::Whole) {
         return Err(EditError::Invalid("page content could not be completely decoded; cannot extract its ruled lines safely".into()));
     }
-    let pieces = Pieces::join(&streams.iter().map(|stream| stream.data.as_slice()).collect::<Vec<_>>());
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
 
     let mut out: Vec<[f64; 4]> = Vec::new();
