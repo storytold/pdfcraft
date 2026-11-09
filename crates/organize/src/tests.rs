@@ -636,7 +636,7 @@ fn document_info_edits_update_the_xmp_packet() {
     set_info(&mut doc, "Author", "Demo Consulting").unwrap();
     set_info(&mut doc, "Subject", "").unwrap();
     set_info(&mut doc, "Keywords", "alpha, beta").unwrap();
-    set_info(&mut doc, "Rating", "5").unwrap(); // no XMP counterpart: /Info only
+    set_info(&mut doc, "Rating", "5").unwrap(); // a custom property: pdfx:Rating
     let doc = save_and_reopen(&doc);
     assert_eq!(info(&doc, "Title").as_deref(), Some("Sales Guide v1.0 & <draft>"));
     let xmp = xmp_text(&doc).unwrap();
@@ -644,6 +644,7 @@ fn document_info_edits_update_the_xmp_packet() {
     assert_eq!(xmp_values(&xmp, "dc:creator"), ["Demo Consulting"]);
     assert!(xmp_values(&xmp, "dc:description").is_empty(), "{xmp}");
     assert_eq!(xmp_values(&xmp, "pdf:Keywords"), ["alpha, beta"]);
+    assert_eq!(xmp_values(&xmp, "pdfx:Rating"), ["5"]);
     assert_eq!(xmp_values(&xmp, "pdf:Producer"), ["Writer 1.0"]);
     assert!(xmp.starts_with("<?xpacket begin=") && xmp.ends_with("<?xpacket end=\"w\"?>"), "{xmp}");
     // Stored unfiltered, still typed as metadata.
@@ -690,9 +691,10 @@ fn document_info_falls_back_to_the_xmp_packet() {
 
 #[test]
 fn document_info_edits_leave_files_without_usable_xmp_alone() {
-    // No packet: none is added.
+    // No packet: none is added, for a custom property either.
     let mut doc = open(fixture());
     set_info(&mut doc, "Title", "New").unwrap();
+    set_info(&mut doc, "Project", "Apollo").unwrap();
     assert_eq!(xmp_text(&save_and_reopen(&doc)), None);
     // A packet that isn't UTF-8 is not rewritten.
     let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
@@ -702,6 +704,96 @@ fn document_info_edits_leave_files_without_usable_xmp_alone() {
     let doc = save_and_reopen(&doc);
     assert_eq!(info(&doc, "Title").as_deref(), Some("New"));
     assert_eq!(xmp_stream(&doc).unwrap().decoded().unwrap(), latin1);
+}
+
+/// Acrobat keeps each custom property in the XMP packet too, as `pdfx:<name>` (the
+/// http://ns.adobe.com/pdfx/1.3/ schema), so tools that read XMP see the same properties as
+/// Document Properties ▸ Custom.
+#[test]
+fn custom_document_properties_are_kept_in_the_xmp_packet_as_pdfx() {
+    // An Acrobat-style packet already holding one, in a description of its own.
+    let acrobat = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>Sales</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(acrobat.as_bytes());
+    set_info(&mut doc, "Project", "Apollo & <X>").unwrap();
+    set_info(&mut doc, "Größe", "A4").unwrap();
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    let mut doc = save_and_reopen(&doc);
+    assert_eq!((info(&doc, "Project").as_deref(), info(&doc, "Dept").as_deref()), (Some("Apollo & <X>"), Some("R&D")));
+    let xmp = xmp_text(&doc).unwrap();
+    assert_eq!(xmp_values(&xmp, "pdfx:Project"), ["Apollo &amp; &lt;X&gt;"], "{xmp}");
+    assert_eq!(xmp_values(&xmp, "pdfx:Größe"), ["A4"], "{xmp}");
+    assert!(xmp.contains("<rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Project>"), "{xmp}");
+    // One already there changes where it stands; the rest of the packet is as it was.
+    assert!(xmp.contains("xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>R&amp;D</pdfx:Dept></rdf:Description>"), "{xmp}");
+    assert_eq!(xmp_values(&xmp, "dc:title"), ["Untitled 1"]);
+    assert_eq!(xmp_values(&xmp, "pdf:Producer"), ["Writer 1.0"]);
+    // Changed again, then removed with the property.
+    set_info(&mut doc, "Project", "Gemini").unwrap();
+    let xmp = xmp_text(&doc).unwrap();
+    assert_eq!((xmp.matches("<pdfx:Project>").count(), xmp_values(&xmp, "pdfx:Project")), (1, vec!["Gemini".to_string()]), "{xmp}");
+    for key in ["Project", "Größe", "Dept"] {
+        set_info(&mut doc, key, "").unwrap();
+    }
+    let xmp = xmp_text(&save_and_reopen(&doc)).unwrap();
+    assert!(!xmp.contains("<pdfx:"), "{xmp}");
+
+    // A name that can't be an XML element name stays in /Info only, and the packet is untouched.
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+    for key in ["1st", "Q&A", "a:b"] {
+        set_info(&mut doc, key, "v").unwrap();
+        assert_eq!(info(&doc, key).as_deref(), Some("v"));
+    }
+    // So do the standard entries XMP doesn't mirror here.
+    set_info(&mut doc, "Trapped", "False").unwrap();
+    assert_eq!(xmp_text(&save_and_reopen(&doc)).unwrap(), LIBREOFFICE_XMP);
+}
+
+/// PDF/A-1 to -3 allow an XMP schema only when the packet describes it (ISO 19005-2 §6.6.2.3), so
+/// a PDF/A file gets no new `pdfx:` property, while one it already has still follows `/Info`. A
+/// packet that binds `pdfx` to another namespace keeps that namespace's properties.
+#[test]
+fn custom_properties_add_nothing_to_pdfa_packets_or_another_schemas_pdfx() {
+    let pdfa = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"2\" pdfaid:conformance=\"B\"/>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(pdfa.as_bytes());
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(info(&doc, "Project").as_deref(), Some("Apollo"));
+    assert_eq!(xmp_text(&doc).unwrap(), pdfa, "no undescribed schema in a PDF/A packet");
+    // The declaration counts however its value is written (here CDATA, which isn't read as text).
+    let cdata = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part><![CDATA[2]]></pdfaid:part></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(cdata.as_bytes());
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), cdata);
+    // One the packet already has (described, as an Acrobat PDF/A file would) is changed and removed.
+    let described = pdfa.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"><pdfx:Dept>Sales</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(described.as_bytes());
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), described.replace(">Sales<", ">R&amp;D<"));
+    set_info(&mut doc, "Dept", "").unwrap();
+    assert_eq!(xmp_text(&doc).unwrap(), described.replace("<pdfx:Dept>Sales</pdfx:Dept>", ""));
+
+    // `pdfx` bound to the PDF/X identification namespace: neither changed nor added to.
+    let other = LIBREOFFICE_XMP.replace(
+        " </rdf:RDF>",
+        "  <rdf:Description rdf:about=\"\" xmlns:pdfx = 'http://www.npes.org/pdfx/ns/id/'><pdfx:Dept>keep</pdfx:Dept></rdf:Description>\n </rdf:RDF>",
+    );
+    let mut doc = doc_with_xmp(other.as_bytes());
+    set_info(&mut doc, "Dept", "R&D").unwrap();
+    set_info(&mut doc, "Project", "Apollo").unwrap();
+    assert_eq!((info(&doc, "Dept").as_deref(), info(&doc, "Project").as_deref()), (Some("R&D"), Some("Apollo")));
+    assert_eq!(xmp_text(&save_and_reopen(&doc)).unwrap(), other);
 }
 
 #[test]
@@ -1384,6 +1476,28 @@ fn removing_the_pdfx_identification_keeps_the_output_intent_and_other_claims() {
     let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001)", None);
     remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
     assert_eq!((info(&x1a, "GTS_PDFXVersion"), info(&x1a, "GTS_PDFXConformance")), (None, None));
+
+    // Those information entries are custom properties, so XMP may also hold them as pdfx: (an
+    // element or an attribute); the copies go with them, and other custom properties stay.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description \
+               rdf:about=\"\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\" pdfx:GTS_PDFXConformance=\"PDF/X-1a:2001\">\
+               <pdfx:GTS_PDFXVersion>PDF/X-1:2001</pdfx:GTS_PDFXVersion><pdfx:Dept>Print</pdfx:Dept></rdf:Description></rdf:RDF></x:xmpmeta>";
+    let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001)", Some(xmp));
+    remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
+    let x = pdfx_of(&full_roundtrip(&x1a));
+    assert!(x.xmp.as_deref().is_some_and(|x| !x.contains("GTS_") && x.contains("<pdfx:Dept>Print</pdfx:Dept>")), "{:?}", x.xmp);
+
+    // A copy alone declares nothing: refused, and the copy stays.
+    let mut copy_only = doc_print("CGATS TR 001", "icc", "/Title (Flyer)", Some(xmp));
+    assert!(matches!(remove_standard_id(&mut copy_only, Standard::PdfX), Err(OrganizeError::Invalid(_))));
+    assert!(!copy_only.is_modified(), "a refused removal changes nothing");
+
+    // `pdfx` bound to another namespace: the declaration in /Info goes, that namespace's property stays.
+    let foreign = xmp.replace("http://ns.adobe.com/pdfx/1.3/", "http://example.com/other/");
+    let mut x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001)", Some(foreign.as_str()));
+    remove_standard_id(&mut x1a, Standard::PdfX).unwrap();
+    assert_eq!(info(&x1a, "GTS_PDFXVersion"), None);
+    assert_eq!(pdfx_of(&full_roundtrip(&x1a)).xmp.as_deref(), Some(foreign.as_str()));
 }
 
 #[test]
@@ -1591,13 +1705,12 @@ fn inserting_a_file_brings_its_bookmarks_under_one_named_after_it() {
     let page_of = |title: &str| marks.iter().find(|b| b.title == title).and_then(|b| b.page);
     assert_eq!((page_of("annex"), page_of("Chapter one"), page_of("Section"), page_of("End")), (Some(1), Some(1), Some(2), Some(4)));
     assert!(!marks.iter().find(|b| b.title == "annex").unwrap().open, "the file's bookmarks start collapsed");
-    // Inserted last, after every bookmark; only the pages chosen keep a destination.
+    // Inserted last, after every bookmark; a bookmark to a page left out stays behind with it.
     let mut host = open(fixture());
     add_bookmark(&mut host, &[], 0, "Start", 0).unwrap();
     insert_file_pages(&mut host, &doc_c(), "annex", &[0], 9, FieldConflicts::Rename).unwrap();
     let marks = bookmarks(&host);
-    assert_eq!(titles(&marks), ["Start", "annex[Chapter one[Section]]"]);
-    assert_eq!(marks.iter().find(|b| b.title == "Section").unwrap().page, None, "its page was left out");
+    assert_eq!(titles(&marks), ["Start", "annex[Chapter one]"], "Section's page was left out");
     // A file without bookmarks adds none, and a host without an outline gets one only when needed.
     let mut host = open(fixture());
     insert_file_pages(&mut host, &doc_b(), "plain", &[0], 0, FieldConflicts::Rename).unwrap();
@@ -1632,6 +1745,63 @@ fn bookmarks_report_the_view_their_destination_asks_for() {
             ("Nowhere".into(), None, None),
         ]
     );
+}
+
+#[test]
+fn malformed_resource_categories_preserve_annotation_identity_when_combining_and_inserting() {
+    for typed in [true, false] {
+        for with_popups in [false, true] {
+            let mut source = doc_a();
+            let page = pages(&source).unwrap()[0].obj;
+            let mut annot = Dict::new();
+            if typed {
+                annot.set(b"Type".to_vec(), Object::name("Annot"));
+            }
+            annot.set(b"Subtype".to_vec(), Object::name("Text"));
+            annot.set(b"Rect".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            let first = source.add(Object::Dict(annot.clone()));
+            let second = source.add(Object::Dict(annot.clone()));
+            if with_popups {
+                annot.set(b"Subtype".to_vec(), Object::name("Popup"));
+                let popup1 = source.add(Object::Dict(annot.clone()));
+                let popup2 = source.add(Object::Dict(annot));
+                source.update_dict(first, |d| d.set(b"Popup".to_vec(), Object::Ref(popup1))).unwrap();
+                source.update_dict(second, |d| d.set(b"Popup".to_vec(), Object::Ref(popup2))).unwrap();
+            }
+            source
+                .update_dict(page, |d| {
+                    let mut font_map = Dict::new();
+                    font_map.set(b"F1".to_vec(), Object::Ref(first));
+                    font_map.set(b"F2".to_vec(), Object::Ref(second));
+                    let mut resources = Dict::new();
+                    resources.set(b"Font".to_vec(), Object::Dict(font_map));
+                    resources.set(b"ExtGState".to_vec(), Object::Ref(second));
+                    d.set(b"Resources".to_vec(), Object::Dict(resources));
+                    d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]));
+                })
+                .unwrap();
+            let combined = crate::combine(&[("source", &source)]).unwrap();
+            let mut inserted = doc_a();
+            crate::import_pages(&mut inserted, &source, &[0], 0).unwrap();
+            for doc in [combined, inserted] {
+                let doc = full_roundtrip(&doc);
+                let page = pages(&doc).unwrap()[0].obj;
+                let refs = doc.get(page).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().clone();
+                assert_eq!(refs.len(), 2);
+                assert_ne!(refs[0], refs[1], "equal annotations retain their separate identities");
+                if with_popups {
+                    let popups: Vec<_> = refs.iter().map(|r| doc.resolve(r).as_dict().unwrap().reference(b"Popup").unwrap()).collect();
+                    assert_ne!(popups[0], popups[1], "malformed category entries must not merge distinct popups");
+                    for popup in popups {
+                        assert_eq!(doc.get(popup).as_dict().unwrap().name(b"Subtype"), Some(b"Popup".as_slice()));
+                    }
+                }
+                for r in refs {
+                    assert_eq!(doc.resolve(&r).as_dict().unwrap().name(b"Subtype"), Some(b"Text".as_slice()));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -4452,4 +4622,43 @@ fn a_form_action_brings_no_field_from_a_page_left_behind() {
     assert!(aa.get(b"U").is_some_and(|u| part.resolve(u).as_dict().is_some()));
     // With every page, the actions still list it.
     assert!(holds_value(&full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap()), "90000"));
+}
+
+/// The titles of a bookmark's children, each with its own children's titles.
+fn bookmark_titles(doc: &Document, first: Option<pdfcraft_cos::ObjRef>) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut at = first;
+    while let Some(r) = at {
+        let item = doc.get(r).as_dict().cloned().unwrap();
+        let title = item.get(b"Title").and_then(|t| t.as_string()).map(|t| t.to_text()).unwrap_or_default();
+        let children = bookmark_titles(doc, item.reference(b"First")).into_iter().map(|(t, _)| t).collect();
+        out.push((title, children));
+        at = item.reference(b"Next");
+    }
+    out
+}
+
+/// Combining some of a file's pages brings only the bookmarks that lead to them (and those above
+/// them), and none of the file's attachments.
+#[test]
+fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
+    let source_bookmarks = |out: &Document| {
+        let outlines = out.get(catalog(out).reference(b"Outlines").unwrap()).as_dict().cloned().unwrap();
+        let file = out.get(outlines.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+        bookmark_titles(out, file.reference(b"First"))
+    };
+    let attachments = |out: &Document| {
+        catalog(out).get(b"Names").map(|n| out.resolve(n)).is_some_and(|n| n.as_dict().is_some_and(|d| d.contains(b"EmbeddedFiles")))
+    };
+    // Page 1 only: "Section" leads to page 2.
+    let first = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[0]))]).unwrap());
+    assert_eq!(source_bookmarks(&first), [("Chapter one".to_string(), vec![])]);
+    assert!(!attachments(&first), "an attachment came along with a selection of pages");
+    // Page 2 only: "Chapter one" stays, as the way to "Section".
+    let second = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[1]))]).unwrap());
+    assert_eq!(source_bookmarks(&second), [("Chapter one".to_string(), vec!["Section".to_string()])]);
+    // Every page: all of it, attachments too.
+    let all = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[0, 1]))]).unwrap());
+    assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
+    assert!(attachments(&all));
 }
