@@ -8,6 +8,7 @@ mod check;
 mod edit;
 mod extract;
 mod help;
+mod info_repairs;
 mod info_standards;
 mod mcp_compact;
 mod options;
