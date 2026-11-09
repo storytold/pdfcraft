@@ -49,7 +49,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::SetInfo { .. } => Scope::Metadata,
         Edit::AddPrinterMarks { .. } => Scope::Full,
         // The Attachments list is read from the whole document.
-        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
+        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } | Edit::EditAttachmentDescription { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)

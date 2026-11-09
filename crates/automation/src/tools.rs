@@ -181,6 +181,8 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
+        t("attachment_edit", "Edit an attachment description", "Change the description of a document attachment by its exact key from doc_info, or by a unique displayed name. An empty description clears it. The file and other attachment data are preserved. Undoable.")
+            .with(schema(json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "description"])),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),

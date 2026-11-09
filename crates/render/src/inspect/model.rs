@@ -656,6 +656,8 @@ pub struct Layer {
 pub struct Attachment {
     pub name: String,
     pub description: Option<String>,
+    /// Whether the file specification contained `/Desc`, including an empty value.
+    pub has_description: bool,
     pub size: Option<usize>,
     pub source: AttachmentSource,
 }

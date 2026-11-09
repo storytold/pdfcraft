@@ -144,6 +144,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
         | Edit::ConvertColours { .. }
+        | Edit::EditAttachmentDescription { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -637,6 +638,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             if done.colours == 0 && done.images == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("nothing on those pages needed converting".into())));
             }
+        }
+        Edit::EditAttachmentDescription { key, description } => {
+            pdfcraft_organize::set_attachment_description(doc, key, description.as_deref())?;
         }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
             // One `/NM` each: the strikeout is grouped under the caret, and XFDF names that link by

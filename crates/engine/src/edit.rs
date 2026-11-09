@@ -380,6 +380,11 @@ pub enum Edit {
         pages: Vec<usize>,
         settings: pdfcraft_edit::ConvertColours,
     },
+    /// Change or clear only `/Desc` on a document-level attachment's file specification.
+    EditAttachmentDescription {
+        key: String,
+        description: Option<String>,
+    },
     /// Build a tagged structure tree for an untagged, text-only document.
     AutoTagText,
     /// Add alternate text: set (or clear, with `None`) a figure's alternate text. `figure` is
