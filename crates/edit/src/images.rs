@@ -1884,6 +1884,24 @@ fn crop_image_impl(
     Ok(())
 }
 
+/// The `Do` of each image `indexes` (from [`page_images`]) on `page`, as an index among the
+/// page's joined operators: what Copy takes of them.
+pub(crate) fn image_ops(doc: &Document, page: usize, indexes: &[usize]) -> Result<Vec<usize>, EditError> {
+    if indexes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let images = page_images(doc, page)?;
+    indexes
+        .iter()
+        .map(|i| {
+            images
+                .get(*i)
+                .map(|image| image.op)
+                .ok_or_else(|| EditError::Invalid("a selected image no longer exists; select the objects again".into()))
+        })
+        .collect()
+}
+
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.
 /// Splice only the chosen Do operators and preserve all other bytes and stream dictionaries.
 pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {

@@ -36,13 +36,13 @@ mod interp;
 mod lines;
 mod rewrite;
 
-use blocks::paragraph_separator;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
+use blocks::{paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
 use editor::{builtin_thai_choice, layout_draft};
 #[cfg(test)]
@@ -63,9 +63,9 @@ pub(crate) use lines::{
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
+pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
-pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]

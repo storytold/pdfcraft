@@ -50,7 +50,6 @@ use serde_json::{Value, json};
 pub use pdfcraft_render::Pixels;
 pub use tools::{ToolDef, tools};
 
-use file_access::foreign_share;
 use text_cache::TextCache;
 
 mod assemble;
@@ -107,6 +106,8 @@ pub struct Automation {
     /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
     ocr_reviews: HashMap<DocId, OcrReview>,
     next_ocr_review: u64,
+    /// What object_copy copied, for object_paste into any open document.
+    objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
 }
 
 impl Default for Automation {
@@ -129,6 +130,7 @@ impl Automation {
             hot_folder_admin: true,
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
+            objects_clipboard: None,
         }
     }
 
