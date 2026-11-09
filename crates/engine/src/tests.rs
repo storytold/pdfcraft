@@ -7241,11 +7241,11 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let names = vec!["probe".to_string()];
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
-    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, time_scale: 1 };
+    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
-    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1 };
+    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }

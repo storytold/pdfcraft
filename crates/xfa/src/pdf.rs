@@ -1526,6 +1526,8 @@ mod tests {
             field_count: 0,
             warnings: Vec::new(),
             signed: Default::default(),
+            groups: [None; 2],
+            used: [false; 2],
             taken: Default::default(),
             nodes: HashMap::new(),
         };

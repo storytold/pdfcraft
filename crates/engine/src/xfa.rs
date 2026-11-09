@@ -948,10 +948,11 @@ impl<'a, 'b> Runner<'a, 'b> {
         #[cfg(test)]
         self.check_live();
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
+        let tpl = self.tpl;
         let root = match &self.js_root {
             Some(r) => Arc::clone(r),
             None => {
-                let r = Arc::new(to_js(&self.live().root, self.tpl));
+                let r = Arc::new(to_js(&self.live().root, tpl));
                 self.js_root = Some(Arc::clone(&r));
                 r
             }
@@ -1345,7 +1346,9 @@ pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::F
 
 /// Does the live form give SOM path `som` an `activity` script?
 pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
-    let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
+    // Page-master copies have a SOM path of their own on each page (`master[1]…`).
+    let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == activity)
 }
 

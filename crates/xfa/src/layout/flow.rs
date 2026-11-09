@@ -35,7 +35,7 @@ impl Layouter<'_> {
         // doesn't fit here can turn out so. The item count goes back with the items taken off the
         // page; the measurement budget doesn't, as that work was done. (A text field draws no
         // picture, so the picture budget is untouched.)
-        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone(), self.items));
+        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone(), self.taken.clone(), self.items));
         self.leaves.clear();
         self.field_border = None;
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
@@ -58,7 +58,7 @@ impl Layouter<'_> {
             return Ok(());
         }
         let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom() - self.frames_bottom()) } else { None }) else {
-            if let Some((fields, names, items)) = undo {
+            if let Some((fields, names, taken, items)) = undo {
                 // Not split after all (a value, or no room for a line of it here): undone, and
                 // placed as before, moving to the next content area whole.
                 if let Some(p) = self.pages.last_mut() {
@@ -66,6 +66,7 @@ impl Layouter<'_> {
                 }
                 self.fields = fields;
                 self.names = names;
+                self.taken = taken;
                 self.items = items;
                 self.leaves.clear();
                 return self.place_block(node, x, (w, h), ctx, depth, sib, false);

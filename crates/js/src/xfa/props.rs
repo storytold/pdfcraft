@@ -734,7 +734,7 @@ pub(crate) fn resolve_into_props(h: &XHost, from: usize, expr: &str) -> Vec<(usi
             .filter(|&n| !(first == "value" && h.nodes.get(n).is_some_and(|x| x.kind == XfaKind::Draw)))
             .flat_map(|n| {
                 let named = !by_class
-                    && h.nodes.get(n).is_some_and(|x| x.children.iter().any(|&c| h.nodes.get(c).is_some_and(|c| !c.gone && c.name == first)));
+                    && h.nodes.get(n).is_some_and(|x| x.children.iter().any(|&c| h.nodes.get(c).is_some_and(|c| !c.gone && &*c.name == first)));
                 // The child shadows the property for the whole rest: what the child lacks names nothing
                 // here (a property of the child is found where the head names the child).
                 if named {
@@ -1367,9 +1367,9 @@ pub(crate) fn get_attribute(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &m
     let h = host(ctx)?.borrow();
     let v = if path.is_empty() {
         match (h.nodes.get(node), name.as_str()) {
-            (Some(n), "name") => n.name.clone(),
-            (Some(n), "presence") => n.presence.clone(),
-            (Some(n), "access") => n.access.clone(),
+            (Some(n), "name") => n.name.to_string(),
+            (Some(n), "presence") => n.presence.to_string(),
+            (Some(n), "access") => n.access.to_string(),
             _ => template_attrs(&h, node, &path).iter().find(|(k, _)| *k == name).map(|(_, v)| v.clone()).unwrap_or_default(),
         }
     } else {
@@ -1446,7 +1446,7 @@ pub(crate) fn list_object(ctx: &mut Context, items: Vec<(usize, String)>) -> JsR
         let found = {
             let h = host(ctx)?.borrow();
             let named = |(n, p): &&(usize, String)| {
-                if p.is_empty() { h.nodes.get(*n).is_some_and(|x| x.name == name) } else { attr(&h, *n, p, "name").is_some_and(|v| v == name) }
+                if p.is_empty() { h.nodes.get(*n).is_some_and(|x| &*x.name == name) } else { attr(&h, *n, p, "name").is_some_and(|v| v == name) }
             };
             items.iter().find(named).or_else(|| items.iter().find(|(_, p)| !p.is_empty() && tag_of(p) == name)).cloned()
         };
