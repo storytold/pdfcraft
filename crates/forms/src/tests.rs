@@ -6572,6 +6572,26 @@ fn a_read_only_button_is_not_turned_on_by_number() {
     assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
 }
 
+/// A reset of named fields costs the same per field however many are named: resetting 60,000
+/// fields by name is not 3.6 billion name comparisons.
+#[test]
+fn resetting_many_named_fields_is_not_quadratic() {
+    const N: usize = 60_000;
+    let kids: String = (0..N).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        format!("<< /Fields [{kids}] >>"),
+    ];
+    objs.extend((0..N).map(|i| format!("<< /FT /Tx /T (f{i}) /V (a) /DV (a) >>")));
+    let mut doc = document(&objs);
+    let names: Vec<String> = (0..N).map(|i| format!("f{i}")).collect();
+    let started = std::time::Instant::now();
+    assert_eq!(reset(&mut doc, Some(&names)).unwrap(), 0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert!(matches!(reset(&mut doc, Some(&["f0".to_string(), "nope".to_string()])), Err(FormError::NoSuchField(n)) if n == "nope"));
+}
+
 /// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`
 /// colours are read (PDFBOX-2699), not RGB from the three numbers left; three numbers stay RGB.
 #[test]

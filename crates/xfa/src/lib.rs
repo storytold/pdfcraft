@@ -106,7 +106,7 @@ pub use picture::typed_date;
 pub use script::{
     FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
     field_grows_with_text, field_is_embedded, fields_by_som, form_tree, has_focus_scripts, has_scripts, overrides, path_is_embedded, refresh_value,
-    rerender, set_overrides, template_of,
+    rerender, reset_default, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]

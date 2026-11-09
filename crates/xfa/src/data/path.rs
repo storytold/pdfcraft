@@ -133,6 +133,16 @@ fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
 /// as the form counts it ([`named_at`]). `None` when the template has no such field, or it is
 /// a button of an exclusion group (whose buttons take their value from the group).
 pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
+    match template_object(tpl, som)? {
+        Node::Field(f) => Some(f),
+        _ => None,
+    }
+}
+
+/// The template object (field, exclusion group, subform...) the object at a SOM path is an
+/// instance of, found as [`template_field`] finds a field. `None` for the root and for a button
+/// of an exclusion group.
+pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a Node> {
     let path = som_to_path(som);
     let ((root, _), rest) = path.split_first()?;
     if tpl.root.common.name.as_deref() != Some(root.as_str()) {
@@ -147,10 +157,7 @@ pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Fie
             _ => return None,
         };
     }
-    match named_at(children, last, *last_index, 0)? {
-        Node::Field(f) => Some(f),
-        _ => None,
-    }
+    named_at(children, last, *last_index, 0)
 }
 
 /// Every field with an `id`, with the SOM path the layout gives it: the root subform's

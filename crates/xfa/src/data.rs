@@ -35,7 +35,7 @@ pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use passwords::{clear_password_values, has_password_values};
 pub use path::{data_path, parse_datasets, som_to_path};
-pub(crate) use path::{fields_with_ids, template_field};
+pub(crate) use path::{fields_with_ids, template_field, template_object};
 pub use values::{FieldData, FieldDatum, is_on, name_text, radio_dataset_value, radio_state_for_item, read_values, read_values_with};
 #[cfg(test)]
 pub(crate) use write::ENSURED;
@@ -112,11 +112,25 @@ impl DataNode {
     /// elements (one way a multi-select list's picks are stored), those on separate lines.
     pub fn value_at(&self, path: &[(String, usize)]) -> Option<String> {
         let n = self.get(path)?;
-        if n.children.is_empty() || !n.children.iter().all(|c| c.name == "value") {
+        if !n.holds_picks() {
             return Some(n.text.clone());
         }
-        Some(n.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).take(1000).collect::<Vec<_>>().join("\n"))
+        Some(picks_of(n.children.iter().map(|c| c.text.as_str())).collect::<Vec<_>>().join("\n"))
     }
+
+    /// Whether this node holds a multi-select list's picks: children, all `value` elements.
+    pub(crate) fn holds_picks(&self) -> bool {
+        !self.children.is_empty() && self.children.iter().all(|c| c.name == "value")
+    }
+}
+
+/// Most picks a multi-select value is read or written with.
+pub(crate) const MAX_PICKS: usize = 1000;
+
+/// The picks among `texts` (`value` elements, or the lines of a value): non-empty, trimmed, at
+/// most [`MAX_PICKS`].
+pub(crate) fn picks_of<'a>(texts: impl Iterator<Item = &'a str>) -> impl Iterator<Item = &'a str> {
+    texts.map(str::trim).filter(|t| !t.is_empty()).take(MAX_PICKS)
 }
 
 /// One change to the data, for [`write_data_ops`].

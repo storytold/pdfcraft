@@ -6269,6 +6269,90 @@ fn a_field_split_into_areas_smaller_than_its_sections_margins_still_moves_on() {
     }
 }
 
+/// A template for the reset defaults: a choice list showing `Label` and saving `code`, with
+/// `Label` its default, and an exclusion group whose second button is on by default.
+fn reset_defaults_template() -> Template {
+    let xml = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form"><subform name="page1">
+<field name="kind"><ui><choiceList/></ui><items><text>Label</text><text>Other</text></items><items save="1"><text>code</text><text>other</text></items><value><text>Label</text></value></field>
+<exclGroup name="pick"><field name="a"><ui><checkButton/></ui><items><text>A</text></items></field><field name="b"><ui><checkButton/></ui><items><text>B</text></items><value><text>B</text></value></field></exclGroup>
+<exclGroup name="none"><field name="a"><ui><checkButton/></ui><items><text>A</text></items></field></exclGroup>
+<field name="go"><ui><button/></ui></field>
+</subform></subform></template>"#;
+    crate::parse::parse(xml).unwrap().0
+}
+
+/// A reset gives a choice list the default it saves (the item value), not the text it shows,
+/// as the live form reads it.
+#[test]
+fn a_choice_list_resets_to_its_saved_default() {
+    let tpl = reset_defaults_template();
+    assert_eq!(reset_default(&tpl, "form[0].page1[0].kind[0]").as_deref(), Some("code"));
+}
+
+/// An exclusion group resets to the on value of the button that is on by default, or to
+/// nothing; its buttons, and push buttons, restore no value of their own.
+#[test]
+fn an_exclusion_group_resets_to_its_default_button() {
+    let tpl = reset_defaults_template();
+    assert_eq!(reset_default(&tpl, "form[0].page1[0].pick[0]").as_deref(), Some("B"));
+    assert_eq!(reset_default(&tpl, "form[0].page1[0].none[0]").as_deref(), Some(""));
+    assert_eq!(reset_default(&tpl, "form[0].page1[0].pick[0].b[0]"), None);
+    assert_eq!(reset_default(&tpl, "form[0].page1[0].go[0]"), None);
+    assert_eq!(reset_default(&tpl, "form[0].page1[0]"), None);
+    assert_eq!(reset_default(&tpl, "form[0].page1[0].missing[0]"), None);
+}
+
+/// A reset writes a multi-select list's default picks as `value` elements, in the packet and in
+/// the copy scripts read, as any value write does; other structured content (rich text) is left
+/// as it is, with a warning.
+#[test]
+fn a_reset_replaces_structured_multi_select_picks() {
+    let xdp = template_with_data(1, "<form><tags><value>a</value><value>b</value></tags><body><p>rich</p></body></form>");
+    let path = som_to_path("form[0].tags[0]");
+    let value_at = |doc: &Document| data_of(doc).and_then(|d| d.value_at(&path)).unwrap_or_default();
+
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    write_data_ops(
+        &mut doc,
+        &[DataOp::Value {
+            path: path.clone(),
+            text: "c
+d&e"
+            .into(),
+        }],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        value_at(&doc),
+        "c
+d&e"
+    );
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(packets.xdp.contains("<value>c</value><value>d&amp;e</value></tags>"), "{}", packets.xdp);
+    let mut copy = data_of(&Document::open(Arc::new(shell(&xdp))).unwrap()).unwrap();
+    copy.apply(&DataOp::Value {
+        path: path.clone(),
+        text: "c
+d&e"
+        .into(),
+    });
+    assert_eq!(
+        copy.value_at(&path).as_deref(),
+        Some(
+            "c
+d&e"
+        )
+    );
+
+    let body = som_to_path("form[0].body[0]");
+    let r = write_data_ops(&mut doc, &[DataOp::Value { path: body.clone(), text: String::new() }], None).unwrap();
+    assert!(!r.warnings.is_empty());
+    assert_eq!(data_of(&doc).unwrap().get(&body).map(|n| n.children.len()), Some(1));
+    copy.apply(&DataOp::Value { path: body.clone(), text: String::new() });
+    assert_eq!(copy.get(&body).map(|n| n.children.len()), Some(1));
+}
+
 /// Only a template that is a packet of the XDP is the form's: one inside imported data (a
 /// dataset holding XML that looks like a template) is not read, and neither are its scripts.
 #[test]
