@@ -341,7 +341,11 @@ impl<'a> Lexer<'a> {
         let s = std::str::from_utf8(tok).map_err(|_| self.err("bad number"))?;
         if s.contains('.') {
             // Tolerate forms like "--5", "5-" or "1.2.3" by parsing the longest valid prefix.
-            let cleaned: String = s.trim_start_matches('+').replacen("--", "-", 1);
+            // Only a doubled sign needs a cleaned copy: a page of InDesign `/PieceInfo` is
+            // thousands of plain reals, and building a copy and a substring search for each
+            // was a large part of reading one (#5873).
+            let t = s.trim_start_matches('+');
+            let cleaned = if t.as_bytes().windows(2).any(|w| w == b"--") { std::borrow::Cow::Owned(t.replacen("--", "-", 1)) } else { t.into() };
             let v = cleaned.get(..real_prefix_len(cleaned.as_bytes())).and_then(|p| parse_counted::<f64>(p).ok());
             return Ok(Object::Real(v.unwrap_or(0.0)));
         }
@@ -498,14 +502,19 @@ fn parse_indirect_in(
             let mut after = Lexer::new(data, end);
             after.eat_keyword(b"endstream")
         };
+        // A /Length that fits in the file, for a stream whose `endstream` is missing or misspelt.
+        let fits = declared.and_then(|l| usize::try_from(l).ok()).filter(|l| start.checked_add(*l).is_some_and(|end| end <= data.len()));
         let len = match declared {
             Some(l) if valid(l) => l as usize,
-            // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery).
-            _ => {
-                find_endstream(data, start, endstreams)
-                    .ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })?
-                    - start
-            }
+            // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery). With none
+            // left in the file, a /Length that fits is the stream's extent, "how many bytes of the
+            // PDF file are used for the stream's data" (ISO 32000-2 §7.3.8.2), as other readers
+            // take it: a producer that wrote `endstrea` after every stream lost every font and
+            // every page's content.
+            _ => match find_endstream(data, start, endstreams) {
+                Some(end) => end - start,
+                None => fits.ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })?,
+            },
         };
         let range = start..start + len;
         let raw = match shared {
@@ -656,6 +665,24 @@ mod tests {
         assert_eq!(s.dict.int(b"Length"), Some(5));
     }
 
+    /// With no `endstream` left in the file, as a producer that writes `endstrea` leaves every
+    /// stream, a stream is the bytes its /Length gives, "how many bytes of the PDF file are used
+    /// for the stream's data" (ISO 32000-2 §7.3.8.2): it was an error, and the object null, so
+    /// such a file lost every font and page content. A /Length past the file, or none, is still
+    /// no stream.
+    #[test]
+    fn indirect_stream_without_endstream_is_its_length() {
+        for end in [&b"\r\nendstrea\rendobj\r\n"[..], b"\nendobj\n", b""] {
+            let mut data = b"7 0 obj\n<< /Length 5 >>\nstream\r\nHELLO".to_vec();
+            data.extend_from_slice(end);
+            let (_, o) = parse_indirect(&data, 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(&s.raw[..], b"HELLO", "{end:?}");
+        }
+        assert!(parse_indirect(b"7 0 obj\n<< /Length 6 >>\nstream\nHELLO", 0, &|_| None).is_err(), "past the file");
+        assert!(parse_indirect(b"7 0 obj\n<< >>\nstream\nHELLO\nendstrea\nendobj\n", 0, &|_| None).is_err(), "no /Length");
+    }
+
     #[test]
     fn indirect_stream_with_a_space_before_the_line_break() {
         // `stream \r\n` as Microsoft Reporting Services writes it: the data starts after the
@@ -706,5 +733,14 @@ mod tests {
         let two = wide(MAX_NODES - 1).repeat(2);
         let mut lx = Lexer::new(two.as_bytes(), 0);
         assert!(lx.object().is_ok() && lx.object().is_ok());
+    }
+
+    /// A plain real is read without a cleaned copy of its token; the forms that need one read
+    /// as they did (#5873).
+    #[test]
+    fn reals_read_the_same_with_and_without_a_doubled_sign() {
+        for (token, want) in [("1.5", 1.5), ("-375.993", -375.993), ("+2.25", 2.25), ("--5.5", -5.5), ("1.2.3", 1.2), ("-.5", -0.5), ("0.0", 0.0)] {
+            assert_eq!(Lexer::new(token.as_bytes(), 0).object().unwrap(), Object::Real(want), "{token}");
+        }
     }
 }

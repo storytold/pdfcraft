@@ -26,9 +26,13 @@ pub(crate) const NEXT_VIEW: Shortcut = Shortcut::cmd("]");
 pub(crate) const FIND_NEXT: Shortcut = Shortcut::cmd("G");
 pub(crate) const FIND_PREV: Shortcut = Shortcut::cmd_shift("G");
 pub(crate) const COPY: Shortcut = Shortcut::cmd("C");
+pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
+/// Go to first / last page beside Home and End (`canvas::navigation`).
+pub(crate) const FIRST_PAGE: Shortcut = Shortcut::cmd_shift("↑");
+pub(crate) const LAST_PAGE: Shortcut = Shortcut::cmd_shift("↓");
 
 /// Whether shortcuts are written the macOS way (`⇧⌘S`) rather than `Ctrl+Shift+S`. egui knows the
 /// platform from the build target, and on the web from the browser's user agent.
@@ -95,6 +99,8 @@ impl PdfCraftApp {
                     .is_some_and(|v| !v.organize && (v.all_text || v.selected_text().is_some_and(|t| !t.is_empty()))))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
+                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
+                "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
                 _ => true,
@@ -110,6 +116,9 @@ impl PdfCraftApp {
         match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
+                // A command stopped part way through closing or replacing a tab must not leave
+                // the next frame pointing past the last one (#3914).
+                self.keep_active_valid();
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
@@ -259,6 +268,8 @@ impl PdfCraftApp {
                     self.notify(error);
                 }
             }
+            "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
+            "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
@@ -520,7 +531,9 @@ impl PdfCraftApp {
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
+            "ocr.correct" => self.ocr_verify.open = true,
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
                 self.left = crate::LeftPanel::Tool("edit");
@@ -566,6 +579,14 @@ impl PdfCraftApp {
                     return Some(self.copy_selected_text(i, &ctx));
                 }
                 return Some(false);
+            }
+            "comment.copy" => {
+                let Some(i) = active else { return Some(false) };
+                return Some(self.copy_selected_comments(i));
+            }
+            "comment.paste" => {
+                let Some(i) = active else { return Some(false) };
+                return Some(self.paste_comments(i, None, None));
             }
             "comment.hide_all" => {
                 if let Some(i) = active {
@@ -695,6 +716,7 @@ impl PdfCraftApp {
             }
             fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
                 let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return Some(false) };
+                self.fill_tool = tool;
                 self.quick_tool = crate::QuickTool::Fill(tool);
                 let initials = tool == crate::fill_sign::FillTool::Initials;
                 if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
@@ -876,6 +898,9 @@ mod tests {
 
     #[test]
     fn localized_shortcut_labels_follow_language_and_platform() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         let ctx = egui::Context::default();
         for os in [OperatingSystem::Windows, OperatingSystem::Nix] {

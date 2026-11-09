@@ -39,7 +39,20 @@ pub(super) const THUMB_H: f32 = 320.0;
 
 pub(super) const THUMB_BYTES: usize = 24 * 1024 * 1024;
 
+/// The smallest whole-page allowance ([`page_budget`]).
 pub(super) const PAGE_BYTES: usize = 128 * 1024 * 1024;
+
+/// The largest whole-page allowance ([`page_budget`]).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PAGE_BYTES: usize = 384 * 1024 * 1024;
+
+/// The web build's largest whole-page allowance ([`page_budget`]).
+#[cfg(target_arch = "wasm32")]
+const MAX_PAGE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Rasters the size of the largest whole page on screen that the allowance holds between its
+/// limits: the pages on screen and the pages just behind and ahead of them.
+const BUDGET_PAGES: usize = 8;
 
 pub(super) const TILE_BYTES: usize = 128 * 1024 * 1024;
 
@@ -105,6 +118,14 @@ pub(super) fn thumbnail_scale(width: f32, height: f32, density: f32) -> f32 {
     (THUMB_W / width.max(1.0)).min(THUMB_H / height.max(1.0)) * density
 }
 
+/// The whole-page byte allowance when the largest whole-page raster on screen takes `largest`
+/// bytes: [`BUDGET_PAGES`] such rasters, kept between [`PAGE_BYTES`] and [`MAX_PAGE_BYTES`].
+/// The raster's size follows the zoom, the display density and the page; a tiled page is on
+/// screen as a small backdrop, so it does not raise the allowance.
+pub(super) fn page_budget(largest: usize) -> usize {
+    largest.saturating_mul(BUDGET_PAGES).clamp(PAGE_BYTES, MAX_PAGE_BYTES)
+}
+
 impl DocView {
     pub fn raster_memory(&self) -> RasterMemory {
         RasterMemory {
@@ -135,6 +156,13 @@ impl DocView {
         let mut k: Vec<(u64, u32, u32)> = self.tiles.keys().filter(|key| key.0 == page).map(|key| (key.1, key.2, key.3)).collect();
         k.sort_unstable();
         k
+    }
+
+    /// The pages with a cached whole-page raster, in page order (diagnostics and tests).
+    pub fn cached_pages_debug(&self) -> Vec<usize> {
+        let mut pages: Vec<usize> = self.pages.keys().copied().collect();
+        pages.sort_unstable();
+        pages
     }
 
     /// Re-render every page and text layer (the document's appearance changed, e.g. a layer
@@ -239,6 +267,12 @@ impl DocView {
         self.texts.get(&page).cloned()
     }
 
+    /// Whether `page`'s text layer has arrived from the renderer. Selecting text, the I-beam and
+    /// find matches on a page all wait for it (tests and automation).
+    pub fn has_page_text(&self, page: usize) -> bool {
+        self.texts.contains_key(&page)
+    }
+
     pub fn thumb(&self, page: usize) -> Option<&TextureHandle> {
         self.thumbs.get(&page).map(|t| &t.tex)
     }
@@ -335,6 +369,17 @@ impl DocView {
         let mut tile_tags = HashSet::new();
         let mut grid = Vec::new();
         let (mut page_bytes, mut tile_bytes) = (0usize, 0usize);
+        let demand = requests
+            .iter()
+            .filter(|r| {
+                r.kind == RequestKind::Pixels && r.tile.is_none() && r.tag & (GRID_TAG | PRINT_TAG) == 0 && self.frame_visible.contains(&r.page)
+            })
+            .filter_map(|r| {
+                let p = info.pages.get(r.page)?;
+                Some(rgba_bytes(device_pixels(p.width, r.scale) as usize, device_pixels(p.height, r.scale) as usize))
+            })
+            .fold(0, usize::max);
+        let page_limit = self.on_screen_page_budget(demand, None);
         for req in requests.iter().filter(|r| r.kind == RequestKind::Pixels) {
             let Some(p) = info.pages.get(req.page) else { continue };
             // Organize-grid renders: only the cells in view that need one (organize_grid).
@@ -367,7 +412,7 @@ impl DocView {
                 }
             } else {
                 let bytes = rgba_bytes(device_pixels(p.width, req.scale) as usize, device_pixels(p.height, req.scale) as usize);
-                if (!visible && (page_bytes.saturating_add(bytes) > PAGE_BYTES || pages.len() >= MAX_CACHED_PAGES)) || !pages.insert(req.page) {
+                if (!visible && (page_bytes.saturating_add(bytes) > page_limit || pages.len() >= MAX_CACHED_PAGES)) || !pages.insert(req.page) {
                     continue;
                 }
                 page_bytes = page_bytes.saturating_add(bytes);
@@ -380,10 +425,11 @@ impl DocView {
         // current page first, so turning back a page shows it at once instead of rendering.
         let mut undemanded: Vec<usize> = self.pages.keys().copied().filter(|p| !pages.contains(p)).collect();
         undemanded.sort_by_key(|p| p.abs_diff(self.current));
+        self.frame_demanded = pages.clone();
         let mut kept = pages.len();
         for page in undemanded {
             let bytes = self.pages.get(&page).map_or(0, |p| texture_bytes(&p.tex));
-            if kept < MAX_CACHED_PAGES && page_bytes.saturating_add(bytes) <= PAGE_BYTES {
+            if kept < MAX_CACHED_PAGES && page_bytes.saturating_add(bytes) <= page_limit {
                 page_bytes = page_bytes.saturating_add(bytes);
                 kept += 1;
                 pages.insert(page);
@@ -412,7 +458,12 @@ impl DocView {
                 && !self.errors.contains_key(&r.page)
         });
         if visible_mains_pending {
-            // Caches are kept; demand is re-evaluated next frame once pixels arrive.
+            // Caches are kept; demand is re-evaluated next frame once pixels arrive. Thumbnails
+            // nothing shows any more (their panel closed) go now, though: no consumer is waiting.
+            if self.thumb_demand.is_empty() {
+                self.thumbs.clear();
+                self.stale_thumbs.clear();
+            }
             return queue;
         }
         let thumbs = self.thumbnail_requests(info, ppp);
@@ -625,14 +676,21 @@ impl DocView {
             visible || bytes <= TILE_BYTES.saturating_sub(retained)
         } else {
             let thumb = req.tag & THUMB_TAG != 0;
-            let (cache, limit) = if thumb { (&mut self.thumbs, THUMB_BYTES) } else { (&mut self.pages, PAGE_BYTES) };
+            let page_limit = self.on_screen_page_budget(if visible { bytes } else { 0 }, Some(req.page));
+            let (cache, limit) = if thumb { (&mut self.thumbs, THUMB_BYTES) } else { (&mut self.pages, page_limit) };
             cache.remove(&req.page);
             let mut retained = cache.values().fold(0usize, |n, p| n.saturating_add(texture_bytes(&p.tex)));
             // A zoom/DPI change can temporarily retain larger stale images than the new
             // demand estimates. Evict those first, then let the current demand refill them.
             let on_screen = |p: &usize| !thumb && self.frame_visible.contains(p);
             while retained.saturating_add(bytes) > limit {
-                let Some(page) = cache.keys().copied().filter(|p| !on_screen(p)).max_by_key(|p| p.abs_diff(self.current)) else { break };
+                // Pages this frame does not ask for go first, then those behind the scroll, the
+                // farthest from the current page first.
+                let evict_order = |p: &usize| {
+                    let demanded = !thumb && self.frame_demanded.contains(p);
+                    (!demanded, !thumb && super::behind_scroll(self.continuous, self.scroll_dir, self.current, *p), p.abs_diff(self.current))
+                };
+                let Some(page) = cache.keys().copied().filter(|p| !on_screen(p)).max_by_key(evict_order) else { break };
                 if let Some(old) = cache.remove(&page) {
                     retained = retained.saturating_sub(texture_bytes(&old.tex));
                 }
@@ -645,6 +703,19 @@ impl DocView {
         // Exactly the device scale: a raster at any other scale is resampled on screen, which
         // blurs every line and glyph (#260).
         self.zoom * PT * ppp
+    }
+
+    /// The whole-page allowance ([`page_budget`]) for the larger of `demand` and the rasters held
+    /// for the pages on screen other than `except`. A held raster counts while a zoom hold keeps
+    /// it on screen without a request.
+    fn on_screen_page_budget(&self, demand: usize, except: Option<usize>) -> usize {
+        page_budget(
+            self.pages
+                .iter()
+                .filter(|(p, _)| Some(**p) != except && self.frame_visible.contains(p))
+                .map(|(_, p)| texture_bytes(&p.tex))
+                .fold(demand, usize::max),
+        )
     }
 
     /// Set whether the print preview rasters become luminance before upload. Toggling it drops

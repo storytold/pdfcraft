@@ -13,7 +13,7 @@ use std::sync::Arc;
 use base64::Engine;
 
 use crate::XfaError;
-use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
+use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
     Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
@@ -32,7 +32,7 @@ use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
 pub(crate) use items::UNDERLINE_DROP;
-pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetBorder, WidgetKind};
+pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
 /// Most pages a form may lay out to.
 pub const MAX_PAGES: usize = 500;
@@ -137,7 +137,7 @@ struct Layouter<'t> {
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
     /// Field values by `id`, for embedded fields in rich text.
-    values: HashMap<String, String>,
+    values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
     warned: HashSet<String>,
     fields: usize,
@@ -179,10 +179,9 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             occur_min: 0,
         }],
     };
-    let mut values = HashMap::new();
+    let values = collect_values(tpl, data);
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
-    collect_values(std::slice::from_ref(&root_node), &mut values, 0);
     let mut l = Layouter {
         tpl,
         data,
@@ -212,15 +211,20 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     let total = l.pages.len();
     let count = total.to_string();
     for p in &mut l.pages {
-        for it in &mut p.items {
-            if let Item::Text(s) = it
-                && s.text.contains(PAGE_COUNT_MARK)
-            {
-                s.text = s.text.replace(PAGE_COUNT_MARK, &count);
-            }
-        }
+        fill_page_count(&mut p.items, &count);
     }
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
+}
+
+/// Puts the page count, known once every page is, where `items` left room for it.
+fn fill_page_count(items: &mut [Item], count: &str) {
+    for it in items {
+        match it {
+            Item::Text(s) if s.text.contains(PAGE_COUNT_MARK) => s.text = s.text.replace(PAGE_COUNT_MARK, count),
+            Item::Turned(t) => fill_page_count(&mut t.items, count),
+            _ => {}
+        }
+    }
 }
 
 // Bytes of embedded field values copied out on this thread, for tests that bound layout work.

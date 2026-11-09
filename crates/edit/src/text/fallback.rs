@@ -5,7 +5,27 @@ use super::{
 };
 
 /// Text → the runs that show it: each run's font resource name and the bytes shown in that font.
-pub(super) type Encoder = Box<dyn Fn(&str) -> Option<Vec<(String, Vec<u8>)>>>;
+pub(super) type Encoder = Box<dyn Fn(&str) -> Option<Vec<Type3Run>>>;
+
+/// One run a rewrite shows: bytes drawn in one generated font. `spacing` set (a variation
+/// selector's run) shows at that character spacing: its empty glyph advances nothing, and the
+/// spacing in force must not add to it either.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Type3Run {
+    pub(super) name: String,
+    pub(super) bytes: Vec<u8>,
+    pub(super) spacing: Option<f64>,
+}
+
+/// A Unicode variation selector (U+FE00..U+FE0F): it picks a variant of the character before it
+/// and has no glyph of its own. The Type 3 fallback gives it an empty zero-width glyph instead of
+/// failing the edit on it.
+pub(super) fn is_variation_selector(ch: char) -> bool {
+    matches!(u32::from(ch), 0xFE00..=0xFE0F)
+}
+
+/// A variation selector's glyph procedure: nothing painted, zero advance.
+const SELECTOR_GLYPH_PROC: &[u8] = b"0 0 0 0 0 0 d1\n";
 
 fn is_win_ansi_char(c: char) -> bool {
     c == '\t' || pdfcraft_fonts::win_ansi_byte(c).is_some()
@@ -24,13 +44,13 @@ const HEBREW_FONT_NAME: &str = "PCHebrew";
 /// The `/Name` of the Type 3 fonts generated from the bundled Latin (Inter) face.
 const LATIN_FONT_NAME: &str = "PCLatin";
 
-/// Whether `font` is one of those generated fonts (Latin, Japanese or Hebrew): a replacement longer
+/// Whether `font` is one of those generated fonts (Latin, Japanese, Hebrew or Thai): a replacement longer
 /// than one of them is split across several, which read back as one line (see [`same_font`]).
 pub(super) fn is_type3_fallback(font: &Dict) -> bool {
     font.name(b"Subtype") == Some(b"Type3")
-        && font
-            .name(b"Name")
-            .is_some_and(|n| n == JAPANESE_FONT_NAME.as_bytes() || n == HEBREW_FONT_NAME.as_bytes() || n == LATIN_FONT_NAME.as_bytes())
+        && font.name(b"Name").is_some_and(|n| {
+            n == JAPANESE_FONT_NAME.as_bytes() || n == HEBREW_FONT_NAME.as_bytes() || n == LATIN_FONT_NAME.as_bytes() || n == b"PCThai"
+        })
 }
 
 /// The generated font's `/Name` and its resource prefix: the bundled Latin face, Hebrew, or the
@@ -163,7 +183,7 @@ pub(crate) fn same_base_font(a: &str, b: &str) -> bool {
 }
 
 /// `ABCDEF+Arial` → `Arial`. A name without a subset tag is returned unchanged.
-pub(crate) fn strip_subset_tag(name: &str) -> &str {
+pub fn strip_subset_tag(name: &str) -> &str {
     let bytes = name.as_bytes();
     let is_tag = bytes.get(6) == Some(&b'+') && bytes.get(..6).is_some_and(|tag| tag.iter().all(u8::is_ascii_uppercase));
     if is_tag { name.get(7..).unwrap_or(name) } else { name }
@@ -377,7 +397,13 @@ pub(super) fn type3_font(
     // The faces differ in coverage (e.g. of Cyrillic), so use the best face that has every
     // character. When none has them all, the best face reports the character it lacks. Hebrew
     // text keeps the Hebrew face and takes each character it lacks from the next face that has it.
-    let face = if hebrew { faces.first().copied() } else { fallback_face(&faces, &chars, |face, ch| japanese_glyph_from(face, ch).is_ok()) }
+    // A variation selector has no outline anywhere: it takes a glyph slot of its own below, so the
+    // face is chosen by the characters that have outlines.
+    let named: Vec<char> = chars.iter().copied().filter(|ch| !is_variation_selector(*ch)).collect();
+    if named.is_empty() {
+        return Err(EditError::Invalid("replacement text is empty".into()));
+    }
+    let face = if hebrew { faces.first().copied() } else { fallback_face(&faces, &named, |face, ch| japanese_glyph_from(face, ch).is_ok()) }
         .ok_or_else(|| no_fallback_font(text))?;
     let others: &[&CraftFont] = if hebrew { faces.get(1..).unwrap_or_default() } else { &[] };
     // Every outline is read before the document is touched, so a character that fails leaves it
@@ -385,15 +411,21 @@ pub(super) fn type3_font(
     let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
     let mut glyphs = Vec::with_capacity(chars.len());
     for (i, ch) in chars.into_iter().enumerate() {
-        // The chosen face first, then the faces after it (Hebrew text takes a character the Hebrew
-        // face lacks from the next face that has it); a character no face draws is reported once.
-        let mut drawn = type3_glyph(face, ch)?;
-        for f in others.iter().copied() {
-            if drawn.is_some() {
-                break;
+        let drawn = if is_variation_selector(ch) {
+            Some((SELECTOR_GLYPH_PROC.to_vec(), 0.0))
+        } else {
+            // The chosen face first, then the faces after it (Hebrew text takes a character the
+            // Hebrew face lacks from the next face that has it); a character no face draws is
+            // reported once.
+            let mut drawn = type3_glyph(face, ch)?;
+            for f in others.iter().copied() {
+                if drawn.is_some() {
+                    break;
+                }
+                drawn = type3_glyph(f, ch)?;
             }
-            drawn = type3_glyph(f, ch)?;
-        }
+            drawn
+        };
         let Some((path, width)) = drawn else { return Err(no_glyph_for(face, ch)) };
         let code = u8::try_from((i % per_font).saturating_add(1))
             .map_err(|_| EditError::Invalid("replacement text has too many unique characters".into()))?;
@@ -493,18 +525,109 @@ pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &Cr
     name
 }
 
+/// A glyph's CharProc body at 1000 units per em, with a six-operand `d1` and its actual ink box.
+pub(crate) fn glyph_path(glyph: &pdfcraft_fonts::GlyphOutline) -> Vec<u8> {
+    let scale = 1000.0;
+    let b = if glyph.contours.is_empty() { [0.0; 4] } else { glyph.bbox };
+    let mut out = format!(
+        "{} 0 {} {} {} {} d1\n",
+        pdf_num(glyph.width * scale),
+        pdf_num((b[0] * scale).floor()),
+        pdf_num((b[1] * scale).floor()),
+        pdf_num((b[2] * scale).ceil()),
+        pdf_num((b[3] * scale).ceil())
+    )
+    .into_bytes();
+    for contour in &glyph.contours {
+        let Some(first) = contour.first() else { continue };
+        out.extend_from_slice(format!("{} {} m\n", pdf_num(first[0] * scale), pdf_num(first[1] * scale)).as_bytes());
+        for p in contour.iter().skip(1) {
+            out.extend_from_slice(format!("{} {} l\n", pdf_num(p[0] * scale), pdf_num(p[1] * scale)).as_bytes());
+        }
+        out.extend_from_slice(b"h\n");
+    }
+    out.extend_from_slice(b"f\n");
+    out
+}
+
+/// A resource name free in `fonts_res`: `base`, then `base1`, `base2`, … (a page that was
+/// OCR'd twice keeps both layers' fonts distinct).
+pub(crate) fn unique_font_name(fonts_res: &Dict, base: &str) -> String {
+    let mut name = String::from(base);
+    let mut suffix = 0usize;
+    while fonts_res.contains(name.as_bytes()) {
+        suffix = suffix.saturating_add(1);
+        name = format!("{base}{suffix}");
+    }
+    name
+}
+
+/// The Type3 font dictionary for `(character, CharProc body, advance in em)` glyphs, codes from
+/// 1: one CharProc per code, `/Differences` glyph names, real `/Widths`, and a `/ToUnicode` CMap
+/// so the text extracts back (this is what makes the output Unicode-correct, not just visible).
+pub(crate) fn type3_font_dict(doc: &mut Document, glyphs: &[(char, Vec<u8>, f64)]) -> Result<Dict, EditError> {
+    let mut charprocs = Dict::new();
+    let mut differences = vec![Object::Int(1)];
+    let mut widths = Vec::with_capacity(glyphs.len());
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
+    );
+    cmap.push_str(&format!("{} beginbfchar\n", glyphs.len()));
+    let mut codes = Vec::with_capacity(glyphs.len());
+    for (i, (ch, path, width)) in glyphs.iter().enumerate() {
+        let code = u8::try_from(i + 1).map_err(|_| EditError::Invalid("too many unique characters for one font".into()))?;
+        let glyph_name = format!("g{code:02X}");
+        let mut pd = Dict::new();
+        pd.set(b"Length".to_vec(), path.len() as i64);
+        let proc_ref = doc.add(Object::Stream(Stream::from_raw(pd, path.clone())));
+        charprocs.set(glyph_name.as_bytes().to_vec(), Object::Ref(proc_ref));
+        differences.push(Object::name(&glyph_name));
+        widths.push(Object::Real((width * 1000.0).round()));
+        cmap.push_str(&format!("<{code:02X}> <{}>\n", unicode_hex(*ch)));
+        codes.push((*ch, code, *width));
+    }
+    cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let mut cmap_dict = Dict::new();
+    cmap_dict.set(b"Length".to_vec(), cmap.len() as i64);
+    let cmap_ref = doc.add(Object::Stream(Stream::from_raw(cmap_dict, cmap.into_bytes())));
+    let mut encoding = Dict::new();
+    encoding.set(b"Type".to_vec(), Object::name("Encoding"));
+    encoding.set(b"Differences".to_vec(), Object::Array(differences));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type3"));
+    font.set(b"Name".to_vec(), Object::name("PCFallback"));
+    font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));
+    font.set(
+        b"FontMatrix".to_vec(),
+        Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
+    );
+    font.set(b"FirstChar".to_vec(), Object::Int(1));
+    font.set(b"LastChar".to_vec(), Object::Int(codes.len() as i64));
+    font.set(b"Widths".to_vec(), Object::Array(widths));
+    font.set(b"Encoding".to_vec(), Object::Dict(encoding));
+    font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(cmap_ref));
+    Ok(font)
+}
+
 /// The runs that show `text` in the fallback: consecutive characters in one font form one run, so
-/// a font is switched only where the text moves to another font. `None` if a character has no code.
-pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<(String, Vec<u8>)>> {
-    let mut runs: Vec<(usize, Vec<u8>)> = Vec::new();
+/// a font is switched only where the text moves to another font. A variation selector forms its
+/// own run, drawn at character spacing zero (see [`Type3Run`]). `None` if a character has no code.
+pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<Type3Run>> {
+    let mut runs: Vec<(usize, Vec<u8>, Option<f64>)> = Vec::new();
     for ch in text.chars() {
         let (font, code) = *fallback.codes.get(&ch)?;
+        if is_variation_selector(ch) {
+            runs.push((font, vec![code], Some(0.0)));
+            continue;
+        }
         match runs.last_mut() {
-            Some((last, bytes)) if *last == font => bytes.push(code),
-            _ => runs.push((font, vec![code])),
+            Some((last, bytes, None)) if *last == font => bytes.push(code),
+            _ => runs.push((font, vec![code], None)),
         }
     }
-    runs.into_iter().map(|(font, bytes)| Some((fallback.names.get(font)?.clone(), bytes))).collect()
+    runs.into_iter().map(|(font, bytes, spacing)| Some(Type3Run { name: fallback.names.get(font)?.clone(), bytes, spacing })).collect()
 }
 
 /// The source font's own TrueType/OpenType program, when the document embeds a complete one whose
@@ -598,4 +721,27 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variation_selectors_show_an_empty_glyph_at_zero_spacing() {
+        assert!(is_variation_selector('\u{FE0F}'));
+        assert!(!is_variation_selector('\u{27A1}'));
+        let fallback = Type3Fallback {
+            family: "Inter",
+            names: vec!["PCLat".into()],
+            widths: vec![('1', 0.556), ('\u{FE0F}', 0.0)],
+            codes: [('1', (0, 1)), ('\u{FE0F}', (0, 2))].into_iter().collect(),
+        };
+        let runs = type3_encode(&fallback, "1\u{FE0F}").expect("the selector after a drawn base is kept, not an error");
+        assert_eq!(runs.len(), 2, "the selector forms its own run");
+        assert_eq!(runs[0], Type3Run { name: "PCLat".into(), bytes: vec![1], spacing: None });
+        assert_eq!(runs[1], Type3Run { name: "PCLat".into(), bytes: vec![2], spacing: Some(0.0) }, "the selector draws at spacing zero");
+        let runs = type3_encode(&fallback, "\u{FE0F}").expect("a lone selector keeps its empty glyph rather than failing");
+        assert_eq!(runs, vec![Type3Run { name: "PCLat".into(), bytes: vec![2], spacing: Some(0.0) }]);
+    }
 }
