@@ -14795,3 +14795,102 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+#[test]
+fn ocr_adaptive_compress_binarizes_near_bilevel_scans() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let dir = workdir("adaptive-compress");
+    let (sw, sh) = (100usize, 100usize);
+    let mut scan_samples = vec![245u8; sw * sh];
+    for s in scan_samples.iter_mut().take(500) {
+        *s = 25;
+    }
+
+    let (cw, ch) = (10usize, 10usize);
+    let mut color_samples = vec![0u8; cw * ch * 3];
+    for (i, chunk) in color_samples.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+        chunk[0] = (i * 17 % 256) as u8;
+        chunk[1] = (i * 37 % 256) as u8;
+        chunk[2] = (i * 73 % 256) as u8;
+    }
+
+    let mut doc = Document::new_empty();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+
+    let mut scan_dict = Dict::new();
+    scan_dict.set(b"Type".to_vec(), Object::name("XObject"));
+    scan_dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    scan_dict.set(b"Width".to_vec(), Object::Int(sw as i64));
+    scan_dict.set(b"Height".to_vec(), Object::Int(sh as i64));
+    scan_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    scan_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let im_scan = doc.add(Object::Stream(Stream::flate(scan_dict, &scan_samples)));
+
+    let mut color_dict = Dict::new();
+    color_dict.set(b"Type".to_vec(), Object::name("XObject"));
+    color_dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    color_dict.set(b"Width".to_vec(), Object::Int(cw as i64));
+    color_dict.set(b"Height".to_vec(), Object::Int(ch as i64));
+    color_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    color_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let im_color = doc.add(Object::Stream(Stream::flate(color_dict, &color_samples)));
+
+    let mut xobjects = Dict::new();
+    xobjects.set(b"ImScan".to_vec(), Object::Ref(im_scan));
+    xobjects.set(b"ImColor".to_vec(), Object::Ref(im_color));
+    let mut res_dict = Dict::new();
+    res_dict.set(b"XObject".to_vec(), Object::Dict(xobjects));
+
+    let page = doc.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Page")),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 400.into(), 400.into()])),
+        (b"Resources".to_vec(), Object::Dict(res_dict)),
+    ])));
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+
+    let pdf_bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    std::fs::write(dir.join("input.pdf"), &pdf_bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "input.pdf" }))["doc"].as_u64().unwrap();
+    let res = ok(
+        &mut a,
+        "ocr_adaptive_compress",
+        json!({
+            "doc": doc,
+            "path": "compressed.pdf",
+            "binarize_scans": true,
+        }),
+    );
+
+    assert_eq!(res["compressed"], 1);
+    assert_eq!(res["skipped"], 1);
+
+    let out_bytes = std::fs::read(dir.join("compressed.pdf")).unwrap();
+    let parsed = pdfcraft_cos::Document::open(std::sync::Arc::new(out_bytes)).unwrap();
+
+    let mut found_bilevel = false;
+    let mut found_color = false;
+
+    for (_, obj) in parsed.scan_objects() {
+        if let pdfcraft_cos::Object::Stream(s) = &*obj
+            && s.dict.name(b"Subtype") == Some(b"Image")
+        {
+            let bpc = s.dict.int(b"BitsPerComponent");
+            let cs = s.dict.name(b"ColorSpace");
+            if bpc == Some(1) && cs == Some(b"DeviceGray".as_slice()) {
+                found_bilevel = true;
+            } else if bpc == Some(8) && cs == Some(b"DeviceRGB".as_slice()) {
+                found_color = true;
+            }
+        }
+    }
+
+    assert!(found_bilevel, "near-bilevel scan image must be binarized to 1-bit monochrome");
+    assert!(found_color, "color photo image must be preserved as 8-bit");
+}

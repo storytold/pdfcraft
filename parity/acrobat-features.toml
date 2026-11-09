@@ -6932,11 +6932,11 @@ title = "Adaptive (MRC) compression of scans"
 area = "I"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.adaptive_compress"]
+tools = ["ocr_adaptive_compress"]
+evidence = ["crates/automation/tests/it/automation.rs::ocr_adaptive_compress_binarizes_near_bilevel_scans"]
+notes = "Adaptive compression of scans (Acrobat Scan & OCR): detects near-bilevel 8-bit grayscale and RGB scans of text documents, applies heuristic dual-guard (chroma and bimodal histogram) Otsu thresholding with content-loss prevention, and packs samples to 1-bit monochrome bitmaps compressed via CCITT Group 4 or Flate. Prepress assets (SMask, OPI, Mask) and colored content are strictly guarded and preserved."
 
 [[feature]]
 id = "ocr.scan-pdfa"
