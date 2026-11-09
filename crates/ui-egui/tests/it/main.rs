@@ -63,6 +63,7 @@ mod pdf_links;
 mod pickers;
 mod pinned_tools;
 mod pointer;
+mod portfolio;
 mod preferences_layout;
 mod prepare;
 mod print;
