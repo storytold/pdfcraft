@@ -161,11 +161,21 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
     alt::elements(doc)
         .into_iter()
         .filter_map(|e| {
+            // Each read's own answer, taken before the next read resets it: a property the
+            // allowance dropped reads as left out, not as absent, whichever property it was.
             let title = budget.text(doc, &e.dict, b"T");
+            let title_dropped = budget.refused();
             let actual_text = budget.text(doc, &e.dict, b"ActualText");
+            let actual_dropped = budget.refused();
             let alt = budget.text(doc, &e.dict, b"Alt");
-            // The alt read's own answer: refused for the allowance, so nothing reads as no text.
-            let truncated = budget.refused();
+            let alt_dropped = budget.refused();
+            let language = budget.text(doc, &e.dict, b"Lang");
+            let language_dropped = budget.refused();
+            let summary = table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().and_then(|s| budget.string(s)));
+            // A missing attribute leaves `refused` from the read before it; that one is counted
+            // already, so a stale answer here can only keep `truncated` true.
+            let summary_dropped = budget.refused();
+            let truncated = title_dropped || actual_dropped || alt_dropped || language_dropped || summary_dropped;
             Some(TagInfo {
                 object: e.object,
                 parent: e.parent,
@@ -174,8 +184,8 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 title,
                 actual_text,
                 alt,
-                language: budget.text(doc, &e.dict, b"Lang"),
-                summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().and_then(|s| budget.string(s))),
+                language,
+                summary,
                 scope: table_attribute(doc, &e.dict, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
                 truncated,
