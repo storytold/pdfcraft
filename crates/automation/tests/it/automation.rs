@@ -12287,6 +12287,49 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
 
+/// A bitmap Type 3 font drawn with a flipped font matrix under a flipped text matrix (as TeX's
+/// bitmap fonts are): `text_lines` boxes a line by its glyphs' `d1` boxes (ISO 32000-2 §9.6.4),
+/// as high as the ink, not a 0.09-point sliver.
+#[test]
+fn text_lines_box_a_flipped_type3_line_by_its_glyphs() {
+    let content = "BT /F1 1 Tf 0.15 0 0 -0.15 10 20 Tm (ab) Tj ET";
+    let glyph_a = "46 0 3 -1 42 57 d1 3 -1 39 58 re f";
+    let glyph_b = "42 0 2 -18 40 38 d1 2 -18 38 56 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type3 /FontMatrix [1 0 0 -1 0 0] /FontBBox [-4 -18 51 57] /FirstChar 97 /LastChar 98 \
+         /Widths [46 42] /Encoding << /Differences [97 /a /b] >> /CharProcs << /a 6 0 R /b 7 0 R >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{glyph_a}\nendstream", glyph_a.len()),
+        format!("<< /Length {} >>\nstream\n{glyph_b}\nendstream", glyph_b.len()),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let dir = workdir("type3-text-lines");
+    std::fs::write(dir.join("type3.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "type3.pdf" }))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 }));
+    // Glyph space y -18..57, turned over twice: 57 × 0.15 above the baseline at y 20 (8.55) and
+    // 18 × 0.15 below it (2.7). Top-left origin on a 50-point page: 21.45 down to 32.7.
+    assert_eq!(lines["count"], 1, "{lines}");
+    assert_eq!(lines["lines"][0]["text"], "ab");
+    assert_eq!(lines["lines"][0]["rect"], json!([10.0, 21.45, 23.2, 32.7]), "{lines}");
+}
+
 #[test]
 fn explicit_bundled_thai_font_choice_layout_edit_undo_and_reopen() {
     let temp = tempfile::tempdir().unwrap();

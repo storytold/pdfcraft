@@ -1521,6 +1521,45 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+/// ISO 32000-2 §9.6.4: an Edit-text line set in a Type 3 bitmap font is as high as the boxes its
+/// glyphs declare with `d1`, whatever its `/FontBBox` says and whichever way its font matrix
+/// turns glyph space, so two lines 8 points apart are two lines with 7-point boxes, not slivers.
+#[test]
+fn edit_lines_in_a_type3_font_are_as_high_as_their_glyphs() {
+    // Glyph `a` is drawn 60 units wide, from 20 below the baseline to 50 above it, at 0.1 Tf:
+    // 7 points high, 2 below the baseline.
+    for (matrix, flip) in [("1 0 0 1 0 0", 1), ("1 0 0 -1 0 0", -1)] {
+        for bbox in ["[0 0 0 0]", "[0 0 1 1]"] {
+            let mut doc = text_page(&format!("BT /T3 0.1 Tf 1 0 0 {flip} 72 700 Tm (aa) Tj 1 0 0 {flip} 72 692 Tm (aa) Tj ET"));
+            let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"60 0 0 -20 60 50 d1 0 -20 60 70 re f".to_vec())));
+            let font = doc.add(
+                pdfcraft_cos::parse_indirect(
+                    format!(
+                        "1 0 obj << /Type /Font /Subtype /Type3 /FontMatrix [{matrix}] /FontBBox {bbox} /FirstChar 97 /LastChar 97 /Widths [60] /Encoding << /Differences [97 /a] >> /CharProcs << /a {} 0 R >> >> endobj",
+                        glyph.num
+                    )
+                    .as_bytes(),
+                    0,
+                    &|_| None,
+                )
+                .unwrap()
+                .1,
+            );
+            let p = pdfcraft_model::pages(&doc)[0].obj;
+            doc.update_dict(p, |d| {
+                d.set(
+                    b"Resources".to_vec(),
+                    Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(font))])))])),
+                )
+            })
+            .unwrap();
+            let lines = text::text_lines(&doc, 0).unwrap();
+            let rects: Vec<_> = lines.iter().map(|l| (l.text.as_str(), l.rect.map(|v| (v * 100.0).round() / 100.0))).collect();
+            assert_eq!(rects, [("aa", [72.0, 698.0, 84.0, 705.0]), ("aa", [72.0, 690.0, 84.0, 697.0])], "{matrix} {bbox}");
+        }
+    }
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";

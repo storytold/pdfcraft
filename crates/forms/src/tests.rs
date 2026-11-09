@@ -1684,7 +1684,7 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
         fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
-            ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
+            ScriptResult { rc: true, value: "ran".into(), value_set: true, changes: Vec::new(), message: None }
         }
     }
     let mut doc = one_page();
@@ -3151,6 +3151,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                 ScriptResult {
                     rc: true,
                     value: "calc1".into(),
+                    value_set: true,
                     changes: vec![FieldChange {
                         name: "agree".into(),
                         value: Some(vec!["Yes".into()]),
@@ -3163,9 +3164,9 @@ fn recalc_chain_where_script_changes_checkbox() {
                 }
             } else if script == "read_box" {
                 let box_val = fields.iter().find(|f| f.name == "agree").and_then(|f| f.value.first()).cloned().unwrap_or_default();
-                ScriptResult { rc: true, value: format!("box_was_{box_val}"), changes: Vec::new(), message: None }
+                ScriptResult { rc: true, value: format!("box_was_{box_val}"), value_set: true, changes: Vec::new(), message: None }
             } else {
-                ScriptResult { rc: true, value: String::new(), changes: Vec::new(), message: None }
+                ScriptResult { rc: true, value: String::new(), value_set: false, changes: Vec::new(), message: None }
             }
         }
     }
@@ -3184,6 +3185,61 @@ fn recalc_chain_where_script_changes_checkbox() {
     let all = fields(&doc);
     assert_eq!(field(&all, "agree").value, ["Yes"], "checkbox was set by script in recalc chain");
     assert_eq!(field(&all, "result").value, ["box_was_Yes"], "second recalc saw the normalized checkbox value");
+}
+
+/// A calculation returning a combo option's display text stores the option's export value in /V
+/// and selects it in /I, as choosing it does.
+#[test]
+fn a_calculated_combo_stores_the_export_value_of_the_option_it_names() {
+    struct Pick;
+    impl Scripts for Pick {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("ca", "Canada"), pair("fr", "France")]))).unwrap();
+    set_field_script(&mut doc, "country", "calculate", Some("France")).unwrap();
+    assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 1);
+    let dict = doc.get(obj).as_dict().cloned().unwrap();
+    assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
+    assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
+    assert_eq!(field(&fields(&doc), "country").value, ["fr"]);
+    assert_eq!(recalculate_with(&mut doc, &mut Pick).unwrap(), 0, "the display text names the value it already has");
+}
+
+/// An export value names its own option even when an earlier option shows that text, whether a
+/// calculation or the user sets it.
+#[test]
+fn an_export_value_wins_over_an_earlier_options_display_text() {
+    struct Pick;
+    impl Scripts for Pick {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let mut objs = Vec::new();
+    for (name, y) in [("calculated", 10.0), ("chosen", 40.0)] {
+        let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+        add_field(&mut doc, 0, [10.0, y, 100.0, y + 20.0], &kind, Some(name)).unwrap();
+        let obj = field(&fields(&doc), name).obj;
+        doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("ca", "fr"), pair("fr", "France")]))).unwrap();
+        objs.push(obj);
+    }
+    set_field_script(&mut doc, "calculated", "calculate", Some("fr")).unwrap();
+    recalculate_with(&mut doc, &mut Pick).unwrap();
+    set_value(&mut doc, "chosen", &FieldValue::Choice(vec!["fr".into()])).unwrap();
+    for obj in objs {
+        let dict = doc.get(obj).as_dict().cloned().unwrap();
+        assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
+        assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
+    }
 }
 
 #[test]

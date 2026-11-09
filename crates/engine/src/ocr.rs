@@ -1198,10 +1198,23 @@ impl Session {
     pub fn ocr_job(&self, id: DocId, pages: &[usize], settings: OcrSettings) -> Option<OcrJob> {
         let doc = self.get(id)?;
         let all = doc.info.pages.len();
-        let pages: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.iter().copied().filter(|p| *p < all).collect() };
+        let mut seen = vec![false; all];
+        let pages: Vec<usize> = if pages.is_empty() {
+            seen.fill(true);
+            (0..all).collect()
+        } else {
+            let mut deduped = Vec::new();
+            for &p in pages {
+                if seen.get(p) == Some(&false) {
+                    seen[p] = true;
+                    deduped.push(p);
+                }
+            }
+            deduped
+        };
         let native = (0..all)
             .map(|p| {
-                if !pages.contains(&p) {
+                if seen.get(p) != Some(&true) {
                     return None;
                 }
                 doc.page_images(p)
@@ -2515,6 +2528,59 @@ mod tests {
         assert!((job.render_scale(0) - 600.0 / 72.0).abs() < 1e-4, "a text page has no image, so the wanted dpi wins");
         let page = job.pages[0];
         assert_eq!(page, 0);
+    }
+
+    /// A scan selected explicitly is rendered at its native scale, like the same page in an
+    /// all-pages job: selecting pages must not lose the native-resolution lookup and render
+    /// the scan above its own resolution at a higher chosen dpi.
+    #[test]
+    fn selected_scan_page_uses_native_scale_like_all_pages() {
+        let mut s = Session::new();
+        let page = export::encode_png(2480, 3508, &vec![255; (2480 * 3508 * 4) as usize]).unwrap();
+        let bytes = s.create_from_images(&[("a4.png".into(), page)]).unwrap();
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        let settings = OcrSettings { dpi: 300.0, ..Default::default() };
+        let all = s.ocr_job(id, &[], settings.clone()).unwrap();
+        let selected = s.ocr_job(id, &[0], settings).unwrap();
+        assert_eq!(selected.pages, vec![0]);
+        let wanted = 300.0 / 72.0;
+        assert!(all.render_scale(0) < wanted, "native resolution limits the all-pages job: {}", all.render_scale(0));
+        assert!(
+            (selected.render_scale(0) - all.render_scale(0)).abs() < 1e-4,
+            "selected page {} vs all-pages {}",
+            selected.render_scale(0),
+            all.render_scale(0)
+        );
+    }
+
+    /// A job requested with the same page twice carries each page once: a duplicate would
+    /// otherwise be recognized twice.
+    #[test]
+    fn ocr_job_deduplicates_requested_pages() {
+        let mut s = Session::new();
+        let id = s.open("t.pdf", None, Arc::new(fixture(3)), None).unwrap();
+        let job = s.ocr_job(id, &[2, 0, 2, 1, 0, 2], OcrSettings::default()).unwrap();
+        assert_eq!(job.pages, vec![2, 0, 1], "each requested page appears once, in request order");
+    }
+
+    #[test]
+    fn ocr_job_bounds_page_vector_reservation_by_page_count() {
+        let mut s = Session::new();
+        let id = s.open("t.pdf", None, Arc::new(fixture(3)), None).unwrap();
+        let requested = vec![999usize; 1024];
+        let job = s.ocr_job(id, &requested, OcrSettings::default()).unwrap();
+        assert!(job.pages.is_empty());
+        assert!(job.pages.capacity() <= 3, "reservation {} exceeds the 3 pages that can survive deduplication", job.pages.capacity());
+    }
+
+    #[test]
+    fn ocr_job_does_not_reserve_capacity_for_invalid_pages() {
+        let mut s = Session::new();
+        let id = s.open("t.pdf", None, Arc::new(fixture(1024)), None).unwrap();
+        let requested = vec![4096usize; 1024];
+        let job = s.ocr_job(id, &requested, OcrSettings::default()).unwrap();
+        assert!(job.pages.is_empty());
+        assert_eq!(job.pages.capacity(), 0, "no valid pages were found, so no capacity should be reserved");
     }
 
     /// #1848: an A4 scan at 300 dpi whose page box is its pixel size (2480 x 3508 pt, one pixel
