@@ -222,7 +222,8 @@ impl Automation {
     }
 
     /// The strict text and recovered layer of `pages` (0-based) for HTML extraction, one pass per
-    /// page through `extract`; the strict text is cached as a text request would cache it. A page
+    /// page through `extract`; both are cached (the strict text as a text request would cache it),
+    /// so a page read for HTML before, in this version of the document, isn't read again. A page
     /// whose recovered-text pass fails fails the call, as a failed text pass does: reading the
     /// strict text again would cost the same interpretation (a crash, a stuck page) once more.
     fn page_layers(
@@ -242,11 +243,21 @@ impl Automation {
         wanted.sort_unstable();
         wanted.dedup();
         let mut read = HashMap::new();
-        for (p, layers) in extract(&bytes, password, &wanted) {
-            if let Ok((text, _)) = &layers {
-                self.texts.insert(id, p, &bytes, text.clone());
+        // Pages whose layers an earlier HTML extraction of this version read are not read again.
+        wanted.retain(|&p| match self.texts.get_layers(id, p) {
+            Some(layers) => {
+                read.insert(p, Ok(layers));
+                false
             }
-            read.insert(p, layers);
+            None => true,
+        });
+        if !wanted.is_empty() {
+            for (p, layers) in extract(&bytes, password, &wanted) {
+                if let Ok((text, recovered)) = &layers {
+                    self.texts.insert_layers(id, p, &bytes, text.clone(), Some(recovered.clone()));
+                }
+                read.insert(p, layers);
+            }
         }
         let mut out = Vec::with_capacity(pages.len());
         for &p in pages {

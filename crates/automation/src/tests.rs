@@ -734,6 +734,24 @@ fn html_extraction_reads_each_page_in_one_pass() {
     assert_eq!(plain["pages"].as_array().unwrap().len(), 3);
 }
 
+/// Review on #6733: a second `text_extract` with HTML reuses the pages' layers read by the first,
+/// and gives the same result.
+#[test]
+fn html_extraction_reuses_the_layers_it_read() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let args = json!({ "doc": id.0, "format": "html" });
+    let mut asked = Vec::new();
+    let mut count = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
+        asked.extend_from_slice(pages);
+        pages::extract_recovering(bytes, password, pages)
+    };
+    let first = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
+    let again = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
+    assert_eq!(asked, [0, 1, 2], "each page is read once");
+    assert_eq!(first, again);
+}
+
 /// Review finding: a page whose recovered-text pass failed fails `text_extract` with HTML, as a
 /// failed text pass does, instead of paying for the same interpretation again (a crash, a
 /// stuck page) to read its strict text alone.
