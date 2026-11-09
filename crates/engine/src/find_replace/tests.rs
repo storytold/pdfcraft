@@ -237,17 +237,19 @@ fn a_longer_replacement_grows_one_row_to_the_margin() {
 }
 
 /// A match can run over a row's end hyphen, typed as the find bar reads it (the break is a space);
-/// Replace all then folds case, joins the rows and counts what the find bar counts. The word as
-/// it would read unhyphenated is no match for either of them.
+/// Replace all then folds case, joins the rows and counts what the find bar counts. The word read
+/// unhyphenated is also a find-bar match, but no paragraph's text holds it: left alone and counted.
 #[test]
 fn case_insensitive_replace_all_takes_a_match_across_a_hyphenated_row_end() {
     let content = "BT /F1 12 Tf 14 TL 72 700 Td (An EXAM-) Tj T* (PLE and an Exam-) Tj T* (ple to end) Tj ET";
     let (mut s, id) = open(pdf(content));
     assert_eq!(texts(&s, id, 0), ["An EXAMPLE and an Example to end"]);
     let text = page_text(&s, id, 0);
-    assert_eq!(text.find_opts("example", false, false).len(), 0);
-    let none = s.get(id).unwrap().plan_replace(&[0], &query("example", "sample"), Which::All, Some(&BTreeMap::from([(0, 0)]))).unwrap();
-    assert_eq!((none.replaced, none.skipped_total(), none.edit.is_none()), (0, 0, true));
+    let whole = query("example", "sample");
+    let found = BTreeMap::from([(0, text.find_opts(&whole.find, false, false).len())]);
+    assert_eq!(found[&0], 2);
+    let none = s.get(id).unwrap().plan_replace(&[0], &whole, Which::All, Some(&found)).unwrap();
+    assert_eq!((none.replaced, none.skipped_total(), none.edit.is_none()), (0, 2, true));
     let q = query("exam- ple", "sample");
     let found = BTreeMap::from([(0, text.find_opts(&q.find, false, false).len())]);
     assert_eq!(found[&0], 2);
