@@ -2335,6 +2335,62 @@ fn page_boxes_default_inherit_and_set() {
 }
 
 #[test]
+fn page_boxes_remove_uninherited_crop_clip_disjoint_boxes_and_reject_overflow() {
+    let mut doc = open(fixture());
+    set_page_box(&mut doc, &[0], PageBox::Crop, BoxSpec::Margins([10.0, 20.0, 30.0, 40.0])).unwrap();
+    set_page_box(&mut doc, &[0], PageBox::Crop, BoxSpec::Remove).unwrap();
+    assert!(!page_dict(&doc, 0).contains(b"CropBox"), "removing an uninherited CropBox deletes the key instead of pinning the old MediaBox");
+    set_page_box(&mut doc, &[0], PageBox::Media, BoxSpec::Rect([0.0, 0.0, 400.0, 500.0])).unwrap();
+    assert_eq!(page_boxes(&doc).unwrap()[0][1], [0.0, 0.0, 400.0, 500.0], "CropBox tracks the resized MediaBox after removal");
+
+    // When /Pages itself carries an inherited /CropBox, removing a page's CropBox pins the page's MediaBox
+    // even when the page also had its own /CropBox and omitted /Parent.
+    let mut d = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] /CropBox [20 20 280 380] >>".into(),
+            "<< /Type /Page /CropBox [40 40 260 360] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    assert_eq!(page_boxes(&d).unwrap()[0][1], [40.0, 40.0, 260.0, 360.0]);
+    set_page_box(&mut d, &[0], PageBox::Crop, BoxSpec::Remove).unwrap();
+    assert_eq!(page_boxes(&d).unwrap()[0][1], [0.0, 0.0, 300.0, 400.0]);
+
+    // An inherited /CropBox that is currently disjoint from the page's /MediaBox still causes removal to pin the MediaBox.
+    let mut d_disjoint_inh = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] /CropBox [350 350 450 450] >>".into(),
+            "<< /Type /Page /CropBox [40 40 260 360] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    set_page_box(&mut d_disjoint_inh, &[0], PageBox::Crop, BoxSpec::Remove).unwrap();
+    set_page_box(&mut d_disjoint_inh, &[0], PageBox::Media, BoxSpec::Rect([0.0, 0.0, 500.0, 500.0])).unwrap();
+    assert_eq!(page_boxes(&d_disjoint_inh).unwrap()[0][1], [0.0, 0.0, 300.0, 400.0]);
+
+    // Disjoint or zero-area boxes in a file fall back to MediaBox/CropBox instead of producing inverted rectangles.
+    let disjoint = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /CropBox [500 500 600 600] /TrimBox [700 700 800 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /CropBox [10 20 290 380] /TrimBox [500 500 600 600] /ArtBox [50 50 50 100] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let boxes = page_boxes(&disjoint).unwrap();
+    assert_eq!(boxes[0][1], [0.0, 0.0, 300.0, 400.0], "disjoint CropBox falls back to MediaBox");
+    assert_eq!(boxes[0][3], [0.0, 0.0, 300.0, 400.0], "disjoint TrimBox falls back to CropBox");
+    assert_eq!(boxes[1][3], [10.0, 20.0, 290.0, 380.0], "disjoint TrimBox falls back to page's CropBox");
+    assert_eq!(boxes[1][4], [10.0, 20.0, 290.0, 380.0], "zero-width ArtBox falls back to page's CropBox");
+
+    // Finite coordinates whose span overflows f64 are rejected.
+    assert!(matches!(set_page_box(&mut doc, &[0], PageBox::Media, BoxSpec::Rect([-1e308, 0.0, 1e308, 100.0])), Err(OrganizeError::InvalidBox(_))));
+}
+
+#[test]
 fn duplicate_pages_inserts_copies_after_the_last() {
     let mut doc = open(fixture());
     duplicate_pages(&mut doc, &[0, 1], None).unwrap();
