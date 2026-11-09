@@ -6980,11 +6980,11 @@ title = "Scan from TWAIN/WIA/ICA/SANE scanners"
 area = "I"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["create.scanner", "ocr.scanner"]
+tools = ["scanners", "doc_scan"]
+evidence = ["crates/platform/src/scanner.rs::tests::test_scan_resolution_values", "crates/platform/src/scanner.rs::tests::test_scan_options_default"]
+notes = "Hardware scanning support: Windows Image Acquisition (WIA) on Windows, SANE (scanimage) on Linux, with native UI and direct acquisition modes."
 
 [[feature]]
 id = "ocr.scan-presets"

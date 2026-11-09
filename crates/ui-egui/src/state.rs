@@ -166,6 +166,8 @@ pub enum Dialog {
     FieldTable,
     /// Check for accessibility ▸ Accessibility Checker Options.
     AccessibilityOptions,
+    /// Scan & OCR / Create ▸ Scan from scanner.
+    ScanAcquire,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
     /// Scan & OCR ▸ Enhance scanned file.

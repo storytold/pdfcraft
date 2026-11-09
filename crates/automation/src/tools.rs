@@ -713,6 +713,23 @@ pub fn tools() -> Vec<ToolDef> {
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
+        t("scanners", "List scanners", "Physical and network scanner devices available on the system (WIA on Windows, SANE on Linux).").ro().with(schema(json!({}), &[])),
+        t(
+            "doc_scan",
+            "Scan from scanner",
+            "Scan a page from a scanner into a new or active PDF document. Takes optional device ID or name, color (color/gray/bw), dpi (75/150/300/600), doc (id of active document to append to), and out (file path to save directly).",
+        )
+        .with(schema(
+            json!({
+                "device": { "type": "string", "description": "Scanner device ID or name from scanners tool." },
+                "color": { "type": "string", "enum": ["color", "gray", "bw"], "description": "Color acquisition mode." },
+                "dpi": { "type": "integer", "enum": [75, 150, 300, 600], "description": "Scan resolution." },
+                "doc": doc(),
+                "out": { "type": "string", "description": "Optional output path to save the generated PDF." },
+                "ui": { "type": "boolean", "description": "Whether to invoke system scanner dialog (Windows only)." }
+            }),
+            &[],
+        )),
         t("printer_options", "List printer options", "A printer driver's own job options (CUPS: from its PPD), such as the paper tray, paper type or finishing: key, label, group, default and choices. Pass chosen values to doc_print as options. Empty on Windows, where the driver's preferences window holds them.")
             .ro()
             .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),

@@ -6,5 +6,6 @@
 
 pub mod desktop_theme;
 pub mod owner_only;
+pub mod scanner;
 pub mod staging;
 pub mod zone;

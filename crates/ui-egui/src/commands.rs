@@ -251,6 +251,7 @@ impl PdfCraftApp {
             "create.file" => self.open_dialog(),
             "create.multiple" => self.create_multiple_dialog(),
             "create.multiple_separate" => self.create_multiple_separate_dialog(),
+            "create.scanner" => self.open_scanner_dialog(),
             "create.images" => self.create_from_images_dialog(),
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
@@ -532,6 +533,7 @@ impl PdfCraftApp {
             }
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
+            "ocr.scanner" => self.open_scanner_dialog(),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
             "ocr.recognize_batch" => self.ocr_files_dialog(),

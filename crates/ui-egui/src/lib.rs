@@ -198,6 +198,7 @@ use workflows::ocr_verify;
 use workflows::ocr_web;
 use workflows::optimize_ui;
 use workflows::print_ui;
+use workflows::scan_acquire_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
 
@@ -630,6 +631,9 @@ pub struct PdfCraftApp {
     pub optimize_draft: OptimizeDraft,
     /// The running optimization (Optimize PDF ▸ Advanced optimization).
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
+    /// Scan from scanner: the dialog's choices and active acquisition run.
+    pub scan_acquire_draft: scan_acquire_ui::ScanAcquireDraft,
+    pub scan_acquire_run: Option<scan_acquire_ui::ScanAcquireRun>,
     /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
     pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,

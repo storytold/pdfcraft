@@ -253,6 +253,8 @@ impl PdfCraftApp {
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
             optimize_run: None,
+            scan_acquire_draft: scan_acquire_ui::ScanAcquireDraft::default(),
+            scan_acquire_run: None,
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
             progress_notice: None,
@@ -692,6 +694,7 @@ impl PdfCraftApp {
         self.poll_ocr();
         self.poll_optimize();
         self.poll_scan_clean();
+        self.poll_scan_acquire();
         self.poll_action();
         // The OCR Verify screen's worker may have finished while no frame was drawn.
         if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
