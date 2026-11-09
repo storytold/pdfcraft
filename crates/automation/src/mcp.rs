@@ -153,7 +153,7 @@ impl McpServer {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
-                    "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
+                    "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": pdfcraft_engine::build_info::version(), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
                     "instructions": if self.compact { format!("{INSTRUCTIONS}{COMPACT_INSTRUCTIONS}") } else { INSTRUCTIONS.to_string() },
                 }))
             }
@@ -633,6 +633,17 @@ mod tests {
         drain_line(&mut overlong).unwrap();
         assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::Line);
         assert_eq!(buf, b"after", "the next line after an overlong line is read cleanly");
+    }
+
+    #[test]
+    fn initialize_reports_the_build_label_with_the_version() {
+        // A labelled build (PDFCRAFT_BUILD_LABEL at compile time) must be told apart from the release over MCP too,
+        // the same way the About dialog shows it.
+        let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }).to_string();
+        let mut out = Vec::new();
+        McpServer::new(Automation::new()).serve(BufReader::new(format!("{init}\n").as_bytes()), &mut out).unwrap();
+        let reply: Value = serde_json::from_str(String::from_utf8(out).unwrap().lines().next().unwrap()).unwrap();
+        assert_eq!(reply["result"]["serverInfo"]["version"], pdfcraft_engine::build_info::version());
     }
 
     #[test]
