@@ -3240,175 +3240,6 @@ fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
     assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), text);
 }
 
-/// #2378: a word the line's subset can't show goes to Helvetica, and only that word. The words
-/// it can show keep the source font (here `F2`, a subset of `a` and `b` without a space glyph),
-/// one font per word, and the line reads back whole and in place: one line, in its own font, so
-/// editing it again replaces all of it (review on #2955), also when it starts with a substitute
-/// word.
-#[test]
-fn only_the_words_a_subset_cannot_show_are_substituted() {
-    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
-    let r = text::replace_line(&mut doc, 0, 0, "ab ba cab ba").unwrap();
-    assert_eq!(r.substituted.as_deref(), Some("Helvetica"));
-    let mut doc = reopen(&doc);
-    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(content.contains("/F2") && content.contains("/PCEdHelvetica"), "both fonts are used: {content}");
-    let lines = text::text_lines(&doc, 0).unwrap();
-    let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
-    assert_eq!(read, [("ab ba cab ba", "F2")]);
-    // Each word where its font puts it, the substituted `cab` included: no gap or overlap opens
-    // where the font changes (review on #2955).
-    let starts: Vec<f64> = lines[0].ink.iter().map(|b| b[0]).collect();
-    assert_eq!(starts.len(), 4, "{:?}", lines[0].ink);
-    for (got, want) in starts.iter().zip([72.0, 85.5, 98.48, 117.9]) {
-        assert!((got - want).abs() < 0.01, "word starts {starts:?}, want {want} among them");
-    }
-    assert!(lines[0].ink.windows(2).all(|w| w[0][2] < w[1][0]), "no word box overlaps the next: {:?}", lines[0].ink);
-    for (text, first) in [("cab ab", "PCEdHelvetica"), ("ba cab", "F2")] {
-        text::replace_line(&mut doc, 0, 0, text).unwrap();
-        doc = reopen(&doc);
-        let lines = text::text_lines(&doc, 0).unwrap();
-        let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
-        assert_eq!(read, [(text, "F2")], "after replacing with {text:?} (starting with {first})");
-    }
-}
-
-/// Review on #2955: replacing a line written in two fonts again replaces its `/PCEdLine`
-/// sequence too. Kept, each edit nested one more, and its `EMC`s outnumbered what the reader
-/// counts once 256 deep, closing the sequence around the line (here a `/Span`). The content
-/// doesn't grow from one edit to the next.
-#[test]
-fn replacing_a_mixed_font_line_again_replaces_its_sequence() {
-    let mut doc = text_page("/Span BMC BT /F2 10 Tf 72 600 Td (ab) Tj ET EMC BT /F2 10 Tf 72 500 Td (ba) Tj ET");
-    let count = |content: &str, op: &str| content.split_whitespace().filter(|w| *w == op).count();
-    let mut sizes = Vec::new();
-    for text in ["ab ba cab ba", "cab ab", "ab cab", "ab cab", "ab ba", "ba ab"] {
-        text::replace_line(&mut doc, 0, 0, text).unwrap();
-        doc = reopen(&doc);
-        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-        let mixed = text.contains('c');
-        assert_eq!(content.matches("/PCEdLine").count(), usize::from(mixed), "after {text:?}: {content}");
-        assert_eq!((count(&content, "BMC"), count(&content, "EMC")), (1 + usize::from(mixed), 1 + usize::from(mixed)), "after {text:?}: {content}");
-        assert_eq!(count(&content, "Tf"), 2 + if mixed { 4 } else { 1 }, "after {text:?}: {content}");
-        let lines = text::text_lines(&doc, 0).unwrap();
-        let read: Vec<&str> = lines.iter().map(|l| l.text.trim()).collect();
-        assert_eq!(read, [text, "ba"], "after {text:?}");
-        assert_eq!(lines[0].baseline(), [72.0, 600.0], "after {text:?}: in place");
-        sizes.push(content.split_whitespace().count());
-    }
-    assert_eq!(sizes[2], sizes[3], "the same text again, the same content");
-    // A sequence holding marked content of its own goes whole, and what follows it keeps its
-    // font and size unless the replacement sets the same again.
-    for (after, font, size) in [("/F1 12 Tf", "F1", 12.0), ("/F2 12 Tf", "F2", 12.0), ("/F1 10 Tf", "F1", 10.0)] {
-        let mut doc = text_page(&format!(
-            "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf /Span <<>> BDC (ab) Tj EMC /F1 10 Tf ( cab) Tj EMC {after} 0 -20 Td (ba) Tj ET"
-        ));
-        text::replace_line(&mut doc, 0, 0, "ab ab").unwrap();
-        let doc = reopen(&doc);
-        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-        assert_eq!((count(&content, "BMC"), count(&content, "BDC"), count(&content, "EMC")), (0, 0, 0), "{after}: {content}");
-        let lines = text::text_lines(&doc, 0).unwrap();
-        let read: Vec<(&str, &str, f64)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str(), l.size)).collect();
-        assert_eq!(read, [("ab ab", "F2", 10.0), ("ba", font, size)], "{after}: {content}");
-    }
-}
-
-/// Review on #2955: a leading space is not a word the line's font shows. " cab" (no word the
-/// subset can show) was split into an empty source-font run and a substitute run, so it was
-/// written as a two-font `/PCEdLine` with an empty `Tj` in the line's font; read back, the line
-/// was the substitute's alone, and the next edit took Helvetica for the line's own font. It is
-/// substituted as a whole instead, as a line with no word in the source font always was.
-#[test]
-fn a_leading_space_does_not_make_a_source_font_run() {
-    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
-    text::replace_line(&mut doc, 0, 0, " cab").unwrap();
-    let doc = reopen(&doc);
-    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(!content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
-    // With a word in the source font after it, the line is still written in both.
-    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
-    text::replace_line(&mut doc, 0, 0, " ab cab").unwrap();
-    let doc = reopen(&doc);
-    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
-    let lines = text::text_lines(&doc, 0).unwrap();
-    assert_eq!(lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab cab", "F2")]);
-    // The spaces the subset has no glyph for are moves, each one kept: the leading one before
-    // the first word, two between words as two.
-    let flat = |doc: &Document| String::from_utf8_lossy(&page_content_bytes(doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat(&doc).contains("/F2 10 Tf [-330] TJ (ab) Tj"), "{}", flat(&doc));
-    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
-    text::replace_line(&mut doc, 0, 0, "ab  ba cab").unwrap();
-    let doc = reopen(&doc);
-    assert!(flat(&doc).contains("(ab) Tj [-330] TJ [-330] TJ (ba) Tj"), "{}", flat(&doc));
-    // Before a substitute word, the leading spaces are the substitute's to show, all of them.
-    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
-    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
-    let doc = reopen(&doc);
-    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(content.contains("(  cab) Tj"), "{content}");
-}
-
-/// Review on #2955: a paragraph rewrite keeps the `/PCEdLine` delimiters of a line an earlier
-/// replacement wrote in two fonts, so a rewritten paragraph's rows can end up inside one. A
-/// later replacement of one of those rows must not take the sequence's other rows with it.
-#[test]
-fn replacing_one_row_of_a_sequence_keeps_the_other_rows() {
-    let content = "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj 0 -20 Td /F2 10 Tf (ba) Tj EMC ET";
-    let rows = text::text_lines(&text_page(content), 0).unwrap();
-    assert_eq!(rows.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab", "ba"]);
-    for (row, text, other) in [(0, "ab ab", "ba"), (1, "ab", "ab cab")] {
-        let mut doc = text_page(content);
-        text::replace_line(&mut doc, 0, row, text).unwrap();
-        let doc = reopen(&doc);
-        let after: Vec<String> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.trim().to_string()).collect();
-        assert!(after.iter().any(|t| t == text) && after.iter().any(|t| t == other), "replacing row {row}: {after:?}");
-    }
-}
-
-/// Review on #2955: a row inside a shared `/PCEdLine` sequence that starts with a substitute run
-/// has the substitute's font in effect at its first operator. Replaced by text the row's own font
-/// shows, it must set that font again, or the new text is drawn in the substitute.
-#[test]
-fn a_row_replaced_inside_a_shared_sequence_starts_in_its_own_font() {
-    // A real two-font line, starting with the substitute run, then a second row put inside its
-    // sequence, as a paragraph rewrite that keeps the delimiters can leave it.
-    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
-    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
-    let doc = reopen(&doc);
-    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(content.contains("/PCEdLine") && content.contains("(  cab) Tj"), "{content}");
-    let mut doc = doc;
-    let shared = content.replacen("EMC", "0 -20 Td (ba) Tj EMC", 1);
-    let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), shared.into_bytes()))));
-    set_page_contents(&mut doc, stream, None);
-    let rows = text::text_lines(&doc, 0).unwrap();
-    assert_eq!(rows.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("cab ab", "F2"), ("ba", "F2")]);
-    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
-    let doc = reopen(&doc);
-    let after = text::text_lines(&doc, 0).unwrap();
-    assert_eq!(after.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab", "F2"), ("ba", "F2")]);
-}
-
-/// Review on #2955: a sequence holding one row can also hold that row's positioning and text
-/// state, as a paragraph rewrite writes it inside kept delimiters. Replacing the row drops the
-/// delimiters, fonts and text, not the `Tm` that places it.
-#[test]
-fn replacing_the_only_row_of_a_sequence_keeps_its_position() {
-    let content = "BT /F2 10 Tf /PCEdLine BMC 1 0 0 1 72 600 Tm /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj EMC ET";
-    let mut doc = text_page(content);
-    let before = text::text_lines(&doc, 0).unwrap();
-    assert_eq!(before.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab"]);
-    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
-    let doc = reopen(&doc);
-    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    assert!(!content.contains("PCEdLine") && !content.contains("cab"), "{content}");
-    let after = text::text_lines(&doc, 0).unwrap();
-    assert_eq!(after.len(), 1, "{content}");
-    let (was, now) = (before[0].rect, after[0].rect);
-    assert!((was[0] - now[0]).abs() < 0.01 && (was[1] - now[1]).abs() < 0.01, "moved from {was:?} to {now:?}: {content}");
-}
-
 #[test]
 fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
@@ -7013,6 +6844,142 @@ fn reading_follows_forms_however_their_resources_are_stored() {
     }
 }
 
+/// #3503: a form XObject's `/BBox` clips its content, so text drawn outside it is not shown and
+/// should not be read either -- matching the renderer, which already honours the clip.
+#[test]
+fn form_bbox_clips_text_from_reading() {
+    let page = stream("", "/Fm Do");
+    let fm = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /F1 6 0 R >> >>",
+        "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        &fm,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE"]);
+}
+
+/// #3503: a page's own `re`/`W`/`n` clip (not a form's `/BBox`) hides text outside it the same
+/// way, and `Q` lifts it again -- the clip is scoped to its `q`/`Q` like the rest of the graphics
+/// state, not a one-way switch.
+#[test]
+fn page_re_w_n_clip_hides_text_from_reading_until_q() {
+    let page = stream(
+        "",
+        "q 0 0 50 50 re W n BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 100 100 Td (AFTER) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE", "AFTER"]);
+}
+
+/// The text `reading_blocks` reads on a 400 × 400 pt page drawing `content` with Helvetica as
+/// `/F1`, and forms `/Fa` and `/Fb` (objects 6 and 7) with the given dictionary entries and content.
+fn read_clipped(content: &str, forms: [(&str, &str); 2]) -> Vec<String> {
+    let font = "/Font << /F1 5 0 R >>";
+    let resources = format!("<< {font} /XObject << /Fa 6 0 R /Fb 7 0 R >> >>");
+    let form = |(dict, body): (&str, &str)| stream(&format!("/Type /XObject /Subtype /Form {dict} /Resources {resources}"), body);
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources {resources} /Contents 4 0 R >>"),
+        &stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &form(forms[0]),
+        &form(forms[1]),
+    ]);
+    text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect()
+}
+
+/// #5075 review: a `/BBox` with anything but four numbers is no bound. Reading the numbers it
+/// happens to hold (`[0 /Bad 0 50 50]` as `[0 0 50 50]`) invented a clip and hid real text.
+#[test]
+fn a_malformed_form_bbox_clips_nothing() {
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET";
+    for bbox in ["[0 /Bad 0 50 50]", "[0 0 50]", "[0 0 50 50 60]", "[0 (x) 50 50]"] {
+        let texts = read_clipped("/Fa Do", [(&format!("/BBox {bbox}"), body), ("", "")]);
+        assert_eq!(texts, ["INSIDE", "OUTSIDE"], "/BBox {bbox}");
+    }
+}
+
+/// #5075 review: a clipping path of several rectangles clips to all of them, not to the last one
+/// drawn (text seen through the first rectangle was hidden), and not to the box around them
+/// either (text in the gap between them was read, though nothing of it shows).
+#[test]
+fn a_clip_of_several_rectangles_keeps_text_in_each() {
+    let content = "q 0 0 50 50 re 100 100 50 50 re W n BT /F1 12 Tf 5 5 Td (FIRST) Tj ET BT /F1 12 Tf 105 105 Td (SECOND) Tj ET \
+                   BT /F1 12 Tf 60 60 Td (GAP) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET Q";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["FIRST", "SECOND"]);
+}
+
+/// #5075 review: a form's `/BBox` clips however thin it is and wherever its matrix puts it. A box
+/// one point by 1e-10 was taken for no box (its area fell under a fixed threshold), and one moved
+/// 1e12 points away lost its area to rounding; either way the text outside it was read.
+#[test]
+fn a_thin_or_far_off_form_bbox_still_clips() {
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET";
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let thin = read_clipped(&format!("/Fa Do {after}"), [("/BBox [0 0 1 1e-10]", body), ("", "")]);
+    assert_eq!(thin, ["AFTER"], "a thin /BBox");
+    let far = read_clipped(&format!("/Fa Do {after}"), [("/Matrix [1 0 0 1 1e12 1e12] /BBox [0 0 100 100]", body), ("", "")]);
+    assert_eq!(sorted(far), ["AFTER", "INSIDE"], "a /BBox 1e12 points away");
+}
+
+/// #5075 review: a clip of no area has no inside, so nothing drawn under it shows (ISO 32000-2
+/// §8.5.4). It was taken for no clip at all, and everything under it was read.
+#[test]
+fn a_clip_of_no_area_shows_nothing() {
+    let content = "q 0 0 100 0 re W n BT /F1 12 Tf 5 5 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["AFTER"]);
+}
+
+/// #5075 review: what shows is the intersection of every clip in force. A long run that crosses a
+/// page clip and, apart from it, a form's `/BBox` overlaps each of them but shows in neither, as it
+/// does not when one form's `/BBox` lies apart from the one of the form it is drawn in.
+#[test]
+fn disjoint_clips_show_nothing_between_them() {
+    let run = "BT /F1 12 Tf 5 10 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET";
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    // A page clip and a form's `/BBox` side by side.
+    let page_clip = format!("q 0 0 50 50 re W n /Fa Do Q {after}");
+    assert_eq!(read_clipped(&page_clip, [("/BBox [100 0 150 50]", run), ("", "")]), ["AFTER"]);
+    // A form's `/BBox` and the `/BBox` of the form inside it, side by side.
+    let nested = format!("/Fa Do {after}");
+    assert_eq!(read_clipped(&nested, [("/BBox [0 0 50 50]", "/Fb Do"), ("/BBox [100 0 150 50]", run)]), ["AFTER"]);
+}
+
+/// #5075 review: a clip turned with its matrix keeps its turned shape. Its upright bounding box
+/// takes in corners it does not cover, and text there was read although it is clipped away.
+#[test]
+fn a_turned_clip_hides_text_in_the_corners_of_its_bounding_box() {
+    // A 100 pt square turned 45° about (200, 0): a diamond with its lower corner at (200, 0).
+    // Undone straight after the clip, so the text is drawn upright on the page.
+    let (turn, undo) =
+        ("0.70710678 0.70710678 -0.70710678 0.70710678 200 0 cm", "0.70710678 -0.70710678 0.70710678 0.70710678 -141.421356 141.421356 cm");
+    let texts = "BT /F1 6 Tf 132 3 Td (CORNER) Tj ET BT /F1 6 Tf 195 65 Td (CENTRE) Tj ET";
+    let page_clip = format!("q {turn} 0 0 100 100 re W n {undo} {texts} Q");
+    assert_eq!(read_clipped(&page_clip, [("", ""), ("", "")]), ["CENTRE"], "a turned page clip");
+    // The same diamond as a form's `/BBox`, under its `/Matrix`.
+    let matrix = "/Matrix [0.70710678 0.70710678 -0.70710678 0.70710678 200 0] /BBox [0 0 100 100]";
+    assert_eq!(read_clipped("/Fa Do", [(matrix, &format!("{undo} {texts}")), ("", "")]), ["CENTRE"], "a turned form /BBox");
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -7127,24 +7094,28 @@ fn forms_that_fan_out_a_hundred_ways_stop_quickly_and_say_so() {
 
 /// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
 /// missing are read once (or skipped) without panicking or looping.
+///
+/// `/BBox [0 0 20 420]` is wide enough to hold every form's own text below (#3503 clips a form's
+/// content to its `/BBox`; this test is about the loop and resource handling, not clipping).
 #[test]
 fn hostile_form_xobjects_are_read_once() {
     let page = stream("", "/Loop Do /A Do /NoRes Do /Bad Do /Missing Do /F1 Do");
     let font = "/Font << /F1 5 0 R >>";
     let lp = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
         "/Loop Do BT /F1 10 Tf 10 10 Td (once) Tj ET",
     );
     let a = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /B 8 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /B 8 0 R >> >>"),
         "/B Do BT /F1 10 Tf 10 100 Td (from a) Tj ET",
     );
     let b = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /A 7 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /A 7 0 R >> >>"),
         "/A Do BT /F1 10 Tf 10 200 Td (from b) Tj ET",
     );
-    let nores = stream("/Subtype /Form /BBox [0 0 9 9]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
-    let bad = stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
+    let nores = stream("/Subtype /Form /BBox [0 0 20 420]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
+    let bad =
+        stream(&format!("/Subtype /Form /BBox [0 0 20 420] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
     let doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",

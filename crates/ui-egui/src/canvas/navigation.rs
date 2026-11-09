@@ -365,7 +365,7 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
 
 /// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
 /// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
-/// registered commands' do).
+/// registered commands' do). An open form field keeps the paging and scrolling keys for itself.
 pub(crate) fn shortcuts(
     view: &mut DocView,
     ctx: &egui::Context,
@@ -373,16 +373,17 @@ pub(crate) fn shortcuts(
     chords: bool,
     speed: crate::scroll_speed::ScrollSpeed,
 ) {
-    if let Some(arrows) = view_chords(view, ctx, chords) {
-        view_keys(view, ctx, keys, speed, arrows);
+    if let Some((arrows, field_open)) = view_chords(view, ctx, chords) {
+        view_keys(view, ctx, keys, speed, arrows, field_open);
     }
 }
 
 /// The view's chords: Find and its steps, rotation, zoom and the view history, unless a menu of the
-/// menu bar has the keyboard or something covers the pages (`chords`). `None` while a text field has the keyboard, and then it
-/// has the plain keys too; else whether the arrows are the view's (a focused radio button keeps
-/// them).
-fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<bool> {
+/// menu bar has the keyboard or something covers the pages (`chords`). `None` while a text field
+/// has the keyboard, and then it has the plain keys too; else whether the arrows are the view's (a
+/// focused radio button keeps them), and whether an open form field (a drop-down's or a list box's
+/// items) keeps the plain keys.
+fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<(bool, bool)> {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
@@ -425,16 +426,29 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<
     if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
-    Some(arrows)
+    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
+    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
+    // page keys still work there.
+    let field_open = view.forms.focus.is_some() && form_box.is_none();
+    Some((arrows, field_open))
 }
 
 /// The view's plain keys: Escape, Home and End, full screen's keys, the arrows and Page Up / Page
-/// Down. Not while something is over the pages.
-fn view_keys(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::PageKeys, speed: crate::scroll_speed::ScrollSpeed, arrows: bool) {
+/// Down. Not while something is over the pages or a form field is open (`field_open`), which keeps
+/// them.
+fn view_keys(
+    view: &mut DocView,
+    ctx: &egui::Context,
+    keys: crate::page_keys::PageKeys,
+    speed: crate::scroll_speed::ScrollSpeed,
+    arrows: bool,
+    field_open: bool,
+) {
     use egui::Key;
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+    // So does an open field, whose list closes.
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() || view.all_text {
@@ -443,6 +457,10 @@ fn view_keys(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::Pa
         } else {
             view.find = None;
         }
+    }
+    // The open field's keys leave the page under it where it is.
+    if field_open {
+        return;
     }
     // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
     // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434), taken so that the arrows and

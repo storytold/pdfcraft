@@ -10,14 +10,14 @@
 use std::collections::HashSet;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
+use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform, SignTab};
 use crate::page_cursor::Layer;
 use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner, PagePress};
-use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Background of the in-place text field editor, the same in every theme.
@@ -27,6 +27,10 @@ const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focus {
     pub name: String,
+    /// The focused field's object. Same-name twins are one field (ISO 32000-2 §12.7.3.1) but come
+    /// as separate fields here, each with its own widgets and option order, and this says which
+    /// one has the focus. `None` goes by the name: the first field with it.
+    pub obj: Option<ObjRef>,
     /// Which of the field's widgets (a field can appear on several pages).
     pub widget: usize,
     /// Text being typed (text fields).
@@ -45,9 +49,28 @@ pub struct Focus {
     /// The text the calendar last saw, so it moves to a typed date once, when the typing becomes
     /// a whole date, and otherwise keeps the month its arrows turned to.
     pub calendar_text: Option<String>,
+    /// Drop-downs: where the open list is scrolled to and which item is current.
+    pub list: ChoiceList,
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`crate::edit_text_ui::lost_focus_once`]).
     pub(crate) had_focus: bool,
+}
+
+/// A drop-down's open list: the first item shown, the item the keys or the pointer are on, and
+/// where on the scroll bar's thumb a drag took hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChoiceList {
+    pub first: usize,
+    pub current: Option<usize>,
+    pub grab: Option<f32>,
+    /// Wheel movement not yet a whole row.
+    pub wheel: f32,
+    /// Where the pointer was last frame: only a pointer that moves makes the item under it
+    /// current, so a resting one keeps no claim on the highlight when the keys scroll the list
+    /// beneath it.
+    pub pointer_at: Option<egui::Pos2>,
+    /// Set on the first frame, from the field's value.
+    pub placed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -74,6 +97,10 @@ pub struct FormView {
     /// The widget holding egui's keyboard focus for the focused check box or radio button, and
     /// whether it takes the arrows (radio buttons). The page keys still work around it.
     pub(crate) keys: Option<(egui::Id, bool)>,
+    /// The list box row clicked last, without Shift: (its field name, the row). A Shift-click picks
+    /// the rows from it to the one clicked; the field's value can't say which row came last when
+    /// rows share an export value, and `/I` lists them in ascending order.
+    pub(crate) list_anchor: Option<(String, usize)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -146,9 +173,40 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+impl Focus {
+    /// Whether this is the focus of widget `widget` of `f` (of that twin, for same-name fields).
+    fn is_on(&self, f: &FormField, widget: usize) -> bool {
+        self.name == f.name && self.widget == widget && self.obj.is_none_or(|o| o == f.obj)
+    }
+}
+
+/// The field `focus` is on: the twin with its field object, or else the first field with its name.
+pub(crate) fn focused_field<'a>(focus: &Focus, form: &'a [FormField]) -> Option<&'a FormField> {
+    focus.obj.and_then(|o| form.iter().find(|f| f.obj == o && f.name == focus.name)).or_else(|| form.iter().find(|f| f.name == focus.name))
+}
+
+/// The edit picking the options at `picked` (positions in `f`'s options) in the list box `f`.
+/// The edit names the field, and positions are read in the first field of that name: a same-name
+/// twin listing its options in another order gives its picks as positions there. One option
+/// missing there goes by export value.
+fn list_pick_edit(form: &[FormField], f: &FormField, picked: Vec<usize>) -> Edit {
+    let first = form.iter().find(|x| x.name == f.name).filter(|x| x.obj != f.obj);
+    let value = match first {
+        None => FieldValue::ChoiceIndices(picked),
+        Some(first) => match f.positions_in(first, &picked) {
+            Some(there) => FieldValue::ChoiceIndices(there),
+            None => FieldValue::Choice(picked.iter().filter_map(|&i| f.options.get(i)).map(|(e, _)| e.clone()).collect()),
+        },
+    };
+    Edit::SetFieldValue { name: f.name.clone(), value }
+}
+
+/// Editor state for opening widget `widget` of `f`: it starts from the field's value, asks
+/// for keyboard focus, and gives a drop-down a fresh list that places itself from that value.
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
+        obj: Some(f.obj),
         widget,
         text: draft_text(f),
         picked: f.value.clone(),
@@ -158,6 +216,7 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar: None,
         calendar_rect: None,
         calendar_text: None,
+        list: ChoiceList::default(),
         had_focus: false,
     }
 }
@@ -174,8 +233,16 @@ fn select_edit(f: &FormField, wi: usize) -> Option<Edit> {
 
 /// What clicking widget `wi` of a check box or radio button does.
 fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
+    let w = f.widgets.get(wi)?;
     let value = match f.kind {
-        FormFieldKind::CheckBox => FieldValue::Check(f.value.is_empty()),
+        // A check box's kids can have different on states (ISO 32000-2 §12.7.5.2.3, Table 230):
+        // clicking one that is off turns on its state (it, and any kid sharing that state, on;
+        // the others off); clicking one that is on turns the field off.
+        FormFieldKind::CheckBox => match &w.on_state {
+            Some(s) if !f.widget_on(wi) => FieldValue::Text(s.clone()),
+            Some(_) => FieldValue::Check(false),
+            None => FieldValue::Check(f.value.is_empty()),
+        },
         // Clicking the selected button again turns it off unless the group forbids it
         // (NoToggleToOff, Table 229).
         FormFieldKind::Radio if f.widget_on(wi) => {
@@ -190,6 +257,17 @@ fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
+fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(usize, &'a FormWidget)> {
+    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+}
+
+/// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
+/// overlap, the one painted last is on top.
+pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Option<&'a str> {
+    tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
+}
+
 /// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
 /// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
 /// be read-only on its own.
@@ -199,19 +277,22 @@ fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
 }
 
 /// The form widget under `p` on `page`: the one hit test of the fields, for the cursor and the
-/// press. Over the page's text too: a check box drawn with a glyph, or set on printed text, is a
-/// button, not text to select.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], allowed: bool, p: Pos2) -> Option<Hit> {
+/// press. It is the first widget under the pointer in the form's order, except on a sign tab
+/// (`tabs`, with the signature field each one signs), which is drawn over every field and so is
+/// on its own field. Over the page's text too: a check box drawn with a glyph, or set on printed
+/// text, is a button, not text to select.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, p: Pos2) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
-    let (field, f, widget, w) = form.iter().enumerate().find_map(|(fi, f)| {
-        f.widgets
-            .iter()
+    let under = |only: Option<&str>| {
+        form.iter()
             .enumerate()
-            .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
-            .map(|(wi, w)| (fi, f, wi, w))
-    })?;
+            .filter(|(_, f)| only.is_none_or(|name| f.name == name && f.kind == FormFieldKind::Signature))
+            .find_map(|(fi, f)| widget_at(xf, info, page, f, p).map(|(wi, w)| (fi, f, wi, w)))
+    };
+    // A tab lies inside its field's widget, so that widget is under the pointer too.
+    let (field, f, widget, w) = tab_under(tabs, p).and_then(|name| under(Some(name))).or_else(|| under(None))?;
     let icon = match (usable(f, w, allowed), f.kind) {
         (false, _) => egui::CursorIcon::NotAllowed,
         (true, FormFieldKind::Text) => egui::CursorIcon::Text,
@@ -251,7 +332,7 @@ pub(crate) fn page_input(
     if f.kind == FormFieldKind::Text
         && usable
         && let Some(at) = ptr.pressed()
-        && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi)
+        && view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi))
     {
         commit(view, form);
         view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
@@ -276,7 +357,7 @@ pub(crate) fn page_input(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay
             // toggles it, after the edit for any text this commits.
-            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+            if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
@@ -288,12 +369,12 @@ pub(crate) fn page_input(
         FormFieldKind::Text if ptr.pressed().is_none() => {
             // An editor opened by the press cannot be hit until a frame has laid it out: the
             // release lands on the page and would take its focus away.
-            if let Some(x) = view.forms.focus.as_mut().filter(|x| x.name == f.name && x.widget == wi) {
+            if let Some(x) = view.forms.focus.as_mut().filter(|x| x.is_on(f, wi)) {
                 x.request_focus = true;
             }
         }
         FormFieldKind::Text | FormFieldKind::Combo => {
-            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+            if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
@@ -307,31 +388,39 @@ pub(crate) fn page_input(
             let zoom = (r.height() as f64) / height_pt;
             let y_pt = (p.y - r.min.y) as f64 / zoom;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let top = form_appearance::ListRows::top_showing(rows.top, &f.selected, rows.visible(height_pt), f.options.len());
             if let Some(opt_idx) = rows.option_at(top, y_pt).filter(|&i| i < f.options.len()) {
-                let export = &f.options[opt_idx].0;
                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                 let shift = ui.input(|i| i.modifiers.shift);
                 let multi = f.has(field_flags::MULTI_SELECT);
-                let new_value = if multi && ctrl {
-                    let mut picked = f.value.clone();
-                    if let Some(pos) = picked.iter().position(|x| x == export) {
+                // Options by position: two options can share an export value (ISO 32000-2
+                // Table 234, `/I`), and the click picks the row, not the first option with its value.
+                let in_order = f.picked_in_order();
+                let picked: Vec<usize> = if multi && ctrl {
+                    let mut picked = in_order.clone();
+                    if let Some(pos) = picked.iter().position(|&x| x == opt_idx) {
                         picked.remove(pos);
                     } else {
-                        picked.push(export.clone());
+                        picked.push(opt_idx);
                     }
-                    FieldValue::Choice(picked)
-                } else if multi && shift && !f.value.is_empty() {
-                    let anchor = f.value.last().and_then(|last| f.options.iter().position(|(e, _)| e == last)).unwrap_or(opt_idx);
+                    picked
+                } else if multi
+                    && shift
+                    && let Some(anchor) =
+                        view.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map(|(_, row)| *row).or_else(|| in_order.last().copied())
+                {
                     let (min, max) = (anchor.min(opt_idx), anchor.max(opt_idx));
-                    let picked = f.options[min..=max].iter().map(|(e, _)| e.clone()).collect();
-                    FieldValue::Choice(picked)
+                    (min..=max).collect()
                 } else {
-                    FieldValue::Choice(vec![export.clone()])
+                    vec![opt_idx]
                 };
-                if new_value != FieldValue::Choice(f.value.clone()) {
-                    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: new_value });
+                if !(multi && shift) {
+                    view.forms.list_anchor = Some((f.name.clone(), opt_idx));
+                }
+                // A single-select list holding an array is written as one value even when its shown
+                // row is clicked again.
+                if picked != in_order || f.single_value_is_array {
+                    view.pending_edit = Some(list_pick_edit(form, f, picked));
                 }
             }
         }
@@ -341,7 +430,7 @@ pub(crate) fn page_input(
 
 /// The edit the focused field's draft makes, if it differs from the field's value.
 pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
-    let f = form.iter().find(|f| f.name == focus.name)?;
+    let f = focused_field(focus, form)?;
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
@@ -556,7 +645,7 @@ pub(crate) fn paint_page(
     for (fi, f) in form.iter().enumerate() {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
-            let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
+            let focused = view.forms.focus.as_ref().is_some_and(|x| x.is_on(f, wi));
             if focused {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
@@ -565,8 +654,25 @@ pub(crate) fn paint_page(
             } else if fillable(f) && hovered == Some((fi, wi)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
+            if f.kind == FormFieldKind::Combo && fillable(f) {
+                paint_drop_down_arrow(painter, r);
+            }
         }
     }
+}
+
+/// A drop-down's arrow at the right of its box, which says the field opens a list (its page
+/// appearance shows only the value). Drawn on screen only, not into the file.
+fn paint_drop_down_arrow(painter: &egui::Painter, r: Rect) {
+    let width = (r.height() * 0.45).clamp(5.0, 12.0);
+    let inset = (r.height() * 0.25).clamp(2.0, 6.0);
+    // Too narrow a box keeps its value visible instead.
+    if r.width() < width * 3.0 {
+        return;
+    }
+    let (x, y, half) = (r.max.x - inset - width / 2.0, r.center().y, width / 2.0);
+    let points = vec![egui::pos2(x - half, y - half / 2.0), egui::pos2(x + half, y - half / 2.0), egui::pos2(x, y + half / 2.0)];
+    painter.add(egui::Shape::convex_polygon(points, Color32::BLACK, Stroke::NONE));
 }
 
 /// The size, in points, a text field shows `text` at on screen: its `/DA` size, or for auto size
@@ -651,19 +757,19 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
             let zoom = (xf.rect.width() / unrotated_w.max(1.0)) as f64;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
             let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let top = form_appearance::ListRows::top_showing(rows.top, &f.selected, rows.visible(height_pt), f.options.len());
             let font_size = (rows.size * zoom).clamp(6.0, 64.0) as f32;
             let row_h = (rows.row * zoom) as f32;
             let inset = (rows.inset * zoom) as f32;
             let p = painter.with_clip_rect(r);
             let mut y = r.min.y + inset;
-            for (export, display) in f.options.iter().skip(top) {
+            for (i, (_, display)) in f.options.iter().enumerate().skip(top) {
                 if y + row_h > r.max.y {
                     break;
                 }
                 let row_rect = Rect::from_min_size(egui::pos2(r.min.x + 1.0, y), egui::vec2(r.width() - 2.0, row_h));
-                if f.value.contains(export) {
+                // By position: options can share an export value.
+                if f.selected.contains(&i) {
                     p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
                 }
                 p.text(
@@ -679,7 +785,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
         FormFieldKind::CheckBox => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let checked = f.value.first().is_some_and(|v| v != "Off" && !v.is_empty());
+            let checked = if w.on_state.is_some() { f.widget_on(wi) } else { f.value.first().is_some_and(|v| v != "Off" && !v.is_empty()) };
             if checked {
                 let sz = (r.height() * 0.75).clamp(8.0, 32.0);
                 painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
@@ -771,7 +877,7 @@ fn tab_to_next_field(
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
     let order = tab_order(form, info);
-    let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget));
+    let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.obj == f.obj && *wi == widget));
     let same_field = order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name));
     let next_after_removed = if exact.is_none() && same_field.is_none() {
         form.iter().position(|field| field.name == f.name).and_then(|fi| {
@@ -831,6 +937,19 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
     edit
 }
 
+/// A focused radio button's arrow keys: → or ↓ steps to the next button in its group (`true`), ← or
+/// ↑ to the one before.
+fn arrow_step(ctx: &egui::Context, keys: PageKeys) -> Option<bool> {
+    let pressed = |a, b| keys.pressed(ctx, a) || keys.pressed(ctx, b);
+    if pressed(egui::Key::ArrowRight, egui::Key::ArrowDown) {
+        Some(true)
+    } else if pressed(egui::Key::ArrowLeft, egui::Key::ArrowUp) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 /// `text_box`, for a text field that doesn't scroll, is how its widget lays text out: the editor
 /// then takes no more than fits.
@@ -852,7 +971,7 @@ pub(crate) fn overlay(
     let toggle = std::mem::take(&mut view.forms.toggle);
     view.forms.keys = None;
     let focus = view.forms.focus.clone()?;
-    let Some(f) = form.iter().find(|f| f.name == focus.name) else {
+    let Some(f) = focused_field(&focus, form) else {
         view.forms.focus = None;
         return None;
     };
@@ -873,7 +992,6 @@ pub(crate) fn overlay(
     // winit reports Windows pen input as touch), which clears `hover_pos`.
     let clicked_outside = || ctx.input(|i| i.pointer.any_click() && !i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
     let zoom = xf.zoom();
-    let t = Tokens::get(ctx);
     let mut edit = None;
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
@@ -960,28 +1078,21 @@ pub(crate) fn overlay(
         }
         FormFieldKind::Combo => {
             // An editable combo box has a text box over the field as well as its list (ISO
-            // 32000-2 Table 233, Edit).
+            // 32000-2 Table 233, Edit); the keys are the text box's then, and the list takes
+            // the pointer.
             if editable_combo(f) {
                 combo_editor(ctx, view, ComboEditor { form, field: f, widget: w, rect, zoom, index: focus.widget });
             }
-            let resp = egui::Area::new(egui::Id::unique(("form-choices", view.view_key())))
-                .order(egui::Order::Foreground)
-                .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(rect.width().max(160.0));
-                        ui.label(egui::RichText::new(&f.name).small().color(t.text_faint));
-                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                            for (export, display) in &f.options {
-                                let on = f.value.first() == Some(export);
-                                if ui.selectable_label(on, display).clicked() {
-                                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export.clone()]) });
-                                    close = true;
-                                }
-                            }
-                        });
-                    });
-                });
+            let mut st = view.forms.focus.as_ref().map(|x| x.list).unwrap_or_default();
+            let list = DropDownList { view: view.view_key(), field: f, widget: w, rect, zoom, keys: !editable_combo(f), page_keys: keys };
+            let (chosen, resp) = choice_list(ctx, list, &mut st);
+            if let Some(fx) = view.forms.focus.as_mut() {
+                fx.list = st;
+            }
+            if let Some((export, _)) = chosen.and_then(|i| f.options.get(i)) {
+                edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export.clone()]) });
+                close = true;
+            }
             let clicked_away = !resp.response.contains_pointer() && clicked_outside();
             let (tab, shift) = (keys.pressed(ctx, egui::Key::Tab), ctx.input(|i| i.modifiers.shift));
             if keys.pressed(ctx, egui::Key::Escape) {
@@ -1003,11 +1114,12 @@ pub(crate) fn overlay(
             } else if tab {
                 next = Some(!shift);
             } else if (up || down) && !f.options.is_empty() {
-                let current_idx = f.value.last().and_then(|v| f.options.iter().position(|(e, _)| e == v)).unwrap_or(0);
-                let next_idx = if up { current_idx.saturating_sub(1) } else { (current_idx + 1).min(f.options.len().saturating_sub(1)) };
+                let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
+                let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
                 if next_idx != current_idx && next_idx < f.options.len() {
-                    let export = f.options[next_idx].0.clone();
-                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export]) });
+                    // By position, so the arrows step through options that share an export value,
+                    // in the focused twin's own order.
+                    edit = Some(list_pick_edit(form, f, vec![next_idx]));
                 }
             }
             if clicked_outside() {
@@ -1037,16 +1149,7 @@ pub(crate) fn overlay(
             let shift = ctx.input(|i| i.modifiers.shift);
             let space = has_focus && keys.take(ctx, egui::Key::Space);
             let arrow = has_focus && f.kind == FormFieldKind::Radio;
-            let pressed = |a, b| keys.pressed(ctx, a) || keys.pressed(ctx, b);
-            let step = if !arrow {
-                None
-            } else if pressed(egui::Key::ArrowRight, egui::Key::ArrowDown) {
-                Some(true)
-            } else if pressed(egui::Key::ArrowLeft, egui::Key::ArrowUp) {
-                Some(false)
-            } else {
-                None
-            };
+            let step = if arrow { arrow_step(ctx, keys) } else { None };
             if esc || clicked_outside() {
                 close = true;
             } else if tab {
@@ -1072,6 +1175,204 @@ pub(crate) fn overlay(
         edit = tab_to_next_field(view, info, form, f, focus.widget, forward, edit);
     }
     edit.or_else(|| view.pending_edit.take())
+}
+
+/// Where a drop-down's open list ([`choice_list`]) goes and what it lists.
+struct DropDownList<'a> {
+    /// The document view's pane key, which the list's own ids are made from.
+    view: u64,
+    field: &'a FormField,
+    widget: &'a FormWidget,
+    /// The field's rectangle on screen; the list opens under it.
+    rect: Rect,
+    zoom: f32,
+    /// Whether the list takes the arrow keys and Enter: not for an editable combo box, whose
+    /// text box has them.
+    keys: bool,
+    /// The pages' keys, which the list's are: none while a dialog or a menu is over the pages.
+    page_keys: PageKeys,
+}
+
+/// Items a drop-down's list shows before it scrolls.
+const LIST_ROWS: usize = 9;
+
+/// A drop-down's open list, under the field and drawn like it, as other viewers draw theirs: as
+/// wide as the box, its items in the field's text size and alignment, black on white with a blue
+/// highlight that follows the pointer and the arrow keys, and a scroll bar with step buttons when
+/// there are more than nine items. Returns the item chosen (a click, or Enter on the current one)
+/// and the list's response. With `keys` off (an editable combo box, whose text box has the keys)
+/// only the pointer moves through and picks from it.
+fn choice_list(ctx: &egui::Context, list: DropDownList<'_>, st: &mut ChoiceList) -> (Option<usize>, egui::InnerResponse<()>) {
+    let DropDownList { view, field: f, widget: w, rect, zoom, keys, page_keys } = list;
+    let n = f.options.len();
+    let shown = n.min(LIST_ROWS);
+    let max_first = n.saturating_sub(shown);
+    // Auto-sized text is fitted to what the field shows (its chosen item's shown name), so the
+    // list's items come out at the size the field's value is drawn at.
+    let value_text = f.value.first().map_or("", |v| f.options.iter().find(|(e, _)| e == v).map_or(v.as_str(), |(_, d)| d.as_str()));
+    let size = (field_text_size(&ctx.layer_painter(egui::LayerId::background()), f, w, value_text) * zoom).clamp(6.0, 48.0);
+    let row = (size * 1.45).round().max(8.0);
+    let bar = if n > shown { (row * 0.7).round().clamp(12.0, 22.0) } else { 0.0 };
+    let width = rect.width().max(24.0 + bar);
+    if !st.placed {
+        st.current = f.value.first().and_then(|v| f.options.iter().position(|(e, _)| e == v));
+        st.first = st.current.map_or(0, |c| c.min(max_first));
+        st.placed = true;
+    }
+    // Consumed, so the keys move through the list rather than the page.
+    let key = |k| keys && page_keys.take(ctx, k);
+    let moved = if n == 0 {
+        None
+    } else if key(egui::Key::ArrowUp) {
+        Some(st.current.map_or(0, |c| c.saturating_sub(1)))
+    } else if key(egui::Key::ArrowDown) {
+        Some(st.current.map_or(0, |c| (c + 1).min(n - 1)))
+    } else if key(egui::Key::PageUp) {
+        Some(st.current.map_or(0, |c| c.saturating_sub(shown)))
+    } else if key(egui::Key::PageDown) {
+        Some(st.current.map_or(0, |c| (c + shown).min(n - 1)))
+    } else if key(egui::Key::Home) {
+        Some(0)
+    } else if key(egui::Key::End) {
+        Some(n - 1)
+    } else {
+        None
+    };
+    if let Some(m) = moved {
+        st.current = Some(m);
+        st.first = if m < st.first {
+            m
+        } else if m >= st.first + shown {
+            m + 1 - shown
+        } else {
+            st.first
+        };
+    }
+    let mut chosen = key(egui::Key::Enter).then_some(st.current).flatten();
+    let align = match f.quadding {
+        1 => egui::Align::Center,
+        2 => egui::Align::Max,
+        _ => egui::Align::Min,
+    };
+    let resp =
+        egui::Area::new(egui::Id::unique(("form-choices", view))).order(egui::Order::Foreground).fixed_pos(rect.left_bottom()).show(ctx, |ui| {
+            let (outer, area) = ui.allocate_exact_size(vec2(width, shown as f32 * row + 2.0), egui::Sense::hover());
+            let p = ui.painter();
+            // The list is drawn as the form's own, a white list in the field's font with a blue
+            // highlight, in light and dark themes alike, so its colors are fixed, not the app's tokens.
+            p.rect_filled(outer, CornerRadius::ZERO, Color32::WHITE);
+            // The wheel scrolls the list, a row at a time, and not the page under it.
+            if area.contains_pointer() && n > shown {
+                st.wheel += ctx.input(|i| i.smooth_scroll_delta.y);
+                ctx.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+                let steps = (st.wheel / row).trunc();
+                if steps != 0.0 {
+                    st.wheel -= steps * row;
+                    st.first = (st.first as f32 - steps).clamp(0.0, max_first as f32) as usize;
+                }
+            }
+            let pointer = ctx.input(|i| i.pointer.hover_pos());
+            let pointer_moved = pointer != st.pointer_at;
+            let font = egui::FontId::proportional(size);
+            for k in 0..shown {
+                let i = st.first + k;
+                let Some((_, display)) = f.options.get(i) else { break };
+                let r = Rect::from_min_size(outer.min + vec2(1.0, 1.0 + k as f32 * row), vec2(width - 2.0 - bar, row));
+                let item = ui.interact(r, ui.scope_id().with(("choice", i)), egui::Sense::click());
+                item.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, st.current == Some(i), display));
+                if item.hovered() && pointer_moved {
+                    st.current = Some(i);
+                }
+                if item.clicked() {
+                    chosen = Some(i);
+                }
+                let on = st.current == Some(i);
+                if on {
+                    p.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0x1F, 0x65, 0xD6));
+                }
+                let galley = p.layout_no_wrap(display.clone(), font.clone(), if on { Color32::WHITE } else { Color32::BLACK });
+                let inner = r.shrink2(vec2(3.0, 0.0));
+                let x = match align {
+                    egui::Align::Center => inner.center().x - galley.size().x / 2.0,
+                    egui::Align::Max => inner.max.x - galley.size().x,
+                    egui::Align::Min => inner.min.x,
+                };
+                p.with_clip_rect(r).galley(egui::pos2(x, r.center().y - galley.size().y / 2.0), galley, Color32::BLACK);
+            }
+            st.pointer_at = pointer;
+            if bar > 0.0 {
+                scroll_bar(ui, Rect::from_min_max(egui::pos2(outer.max.x - 1.0 - bar, outer.min.y + 1.0), outer.max - vec2(1.0, 1.0)), shown, n, st);
+            }
+            p.rect_stroke(outer, CornerRadius::ZERO, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
+        });
+    (chosen, resp)
+}
+
+/// A list's classic scroll bar: step buttons at each end, a thumb sized to the share of the
+/// items shown that can be dragged, and a track that pages when clicked.
+fn scroll_bar(ui: &egui::Ui, track: Rect, shown: usize, n: usize, st: &mut ChoiceList) {
+    let max_first = n.saturating_sub(shown);
+    if max_first == 0 {
+        return;
+    }
+    let side = track.width();
+    let up = Rect::from_min_size(track.min, vec2(side, side));
+    let down = Rect::from_min_max(egui::pos2(track.min.x, track.max.y - side), track.max);
+    let trough = Rect::from_min_max(egui::pos2(track.min.x, up.max.y), egui::pos2(track.max.x, down.min.y));
+    let thumb_len = (trough.height() * shown as f32 / n as f32).max(side * 0.75).min(trough.height());
+    let travel = (trough.height() - thumb_len).max(1.0);
+    let thumb_at = |first: usize| trough.min.y + travel * first as f32 / max_first as f32;
+    let id = ui.scope_id().with("choice-bar");
+    let p = ui.painter();
+    p.rect_filled(track, CornerRadius::ZERO, Color32::from_gray(240));
+    for (r, step, pointing_up) in [(up, -1i64, true), (down, 1, false)] {
+        let b = ui.interact(r, id.with(pointing_up), egui::Sense::click());
+        if b.clicked() {
+            st.first = (st.first as i64 + step).clamp(0, max_first as i64) as usize;
+        }
+        p.rect_filled(r.shrink(1.0), CornerRadius::ZERO, if b.hovered() { Color32::from_gray(205) } else { Color32::from_gray(222) });
+        p.rect_stroke(r.shrink(1.0), CornerRadius::ZERO, Stroke::new(1.0, Color32::from_gray(150)), egui::StrokeKind::Inside);
+        let (c, h) = (r.center(), (side * 0.18).max(2.0));
+        let tip = if pointing_up { -h } else { h };
+        let points = vec![egui::pos2(c.x - h * 1.4, c.y - tip / 2.0), egui::pos2(c.x + h * 1.4, c.y - tip / 2.0), egui::pos2(c.x, c.y + tip / 2.0)];
+        p.add(egui::Shape::convex_polygon(points, Color32::from_gray(40), Stroke::NONE));
+    }
+    let thumb = Rect::from_min_size(egui::pos2(trough.min.x, thumb_at(st.first)), vec2(side, thumb_len));
+    let t = ui.interact(thumb, id.with("thumb"), egui::Sense::drag());
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    // The primary button only: a right-button drag moves nothing (AGENTS.md "Page presses").
+    if t.drag_started_by(egui::PointerButton::Primary) {
+        st.grab = pointer.map(|q| q.y - thumb.min.y);
+    }
+    if t.dragged()
+        && let (Some(q), Some(grab)) = (pointer, st.grab)
+    {
+        let share = ((q.y - grab - trough.min.y) / travel).clamp(0.0, 1.0);
+        st.first = (share * max_first as f32).round() as usize;
+    }
+    if t.drag_stopped() {
+        st.grab = None;
+    }
+    let page = ui.interact(trough, id.with("trough"), egui::Sense::click());
+    if page.clicked()
+        && let Some(q) = pointer
+        && !thumb.contains(q)
+    {
+        st.first = if q.y < thumb.min.y { st.first.saturating_sub(shown) } else { (st.first + shown).min(max_first) };
+    }
+    let thumb = Rect::from_min_size(egui::pos2(trough.min.x, thumb_at(st.first)), vec2(side, thumb_len)).shrink2(vec2(1.0, 0.5));
+    p.rect_filled(thumb, CornerRadius::ZERO, if t.dragged() || t.hovered() { Color32::from_gray(176) } else { Color32::from_gray(196) });
+    p.rect_stroke(thumb, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_gray(140)), egui::StrokeKind::Inside);
+    // Grip lines across the middle of the thumb.
+    if thumb.height() > side {
+        for k in -1..=1 {
+            let y = thumb.center().y + k as f32 * 3.0;
+            p.line_segment(
+                [egui::pos2(thumb.min.x + side * 0.3, y), egui::pos2(thumb.max.x - side * 0.3, y)],
+                Stroke::new(1.0, Color32::from_gray(120)),
+            );
+        }
+    }
 }
 
 /// Where a field's widget is on screen (tests and automation).
