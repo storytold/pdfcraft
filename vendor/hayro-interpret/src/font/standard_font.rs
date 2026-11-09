@@ -4,7 +4,7 @@ use crate::font::generated::{glyph_names, metrics, standard, symbol, zapf_dings}
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
     Encoding, FontData, FontQuery, glyph_name_to_unicode, normalized_glyph_name, stretch_glyph,
-    strip_subset_prefix,
+    strip_subset_prefix, unicode_from_name,
 };
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
@@ -201,6 +201,32 @@ impl StandardFont {
     }
 }
 
+/// PdfCraft patch (98): the style names that may follow `Symbol` or `SymbolMT` after a `,` or
+/// `-` and still name the Symbol font (any case).
+const SYMBOL_STYLES: [&str; 9] = [
+    "Bold",
+    "Italic",
+    "BoldItalic",
+    "Oblique",
+    "BoldOblique",
+    "Regular",
+    "Roman",
+    "Normal",
+    "Plain",
+];
+
+/// PdfCraft patch (98): whether `name` (without a subset prefix) is `Symbol` or `SymbolMT`, alone
+/// or followed by `,` or `-` and a style from [`SYMBOL_STYLES`]. Another name after the
+/// separator (`Symbol-Helvetica`) is a different font.
+fn is_symbol_name(name: &str) -> bool {
+    let (family, style) = match name.split_once([',', '-']) {
+        Some((family, style)) => (family, Some(style)),
+        None => (name, None),
+    };
+    matches!(family, "Symbol" | "SymbolMT")
+        && style.is_none_or(|style| SYMBOL_STYLES.iter().any(|s| s.eq_ignore_ascii_case(style)))
+}
+
 enum StandardFontFamily {
     Helvetica,
     Courier,
@@ -231,6 +257,13 @@ pub(crate) fn select_standard_font(
         "Symbol" => return Some((StandardFont::Symbol, true)),
         "ZapfDingbats" => return Some((StandardFont::ZapfDingBats, true)),
         _ => {}
+    }
+
+    // PdfCraft patch (98): `SymbolMT` (the name Symbol has as a TrueType font) and the style
+    // variants `Symbol,Bold`, `SymbolMT,Italic` or `Symbol-Bold` are the Symbol font, drawn with
+    // its built-in encoding like `Symbol` itself, whatever `/Encoding` and flags they declare.
+    if is_symbol_name(name) {
+        return Some((StandardFont::Symbol, true));
     }
 
     // Now, we bruteforce, trying to determine a suitable font based on the
@@ -808,7 +841,11 @@ fn accented_parts(name: &str) -> Option<(&'static str, &'static str, Place)> {
             .map(|&(_, base, accent, place)| (base, accent, place))
     };
     by_name(name).or_else(|| {
-        let c = glyph_name_to_unicode(name)?;
+        // Drawing keeps upstream's lenient reading of `uni` names; text goes by the glyph list
+        // specification (PdfCraft patch 92).
+        let c = glyph_names::get(name)
+            .and_then(|s| s.chars().next())
+            .or_else(|| unicode_from_name(name))?;
         match COMMA_BELOW_BY_CHAR.iter().find(|(letter, _)| *letter == c) {
             Some((_, comma_below)) => by_name(comma_below),
             None => by_name(glyph_names::get_reverse(c)?),
