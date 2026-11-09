@@ -486,3 +486,23 @@ fn destructured_for_of_targets_keep_regex_iterables_opaque() {
         }
     }
 }
+
+#[test]
+fn simple_calculations_fold_a_repeated_group_without_collecting_it() {
+    let group = |_: &str| vec!["2".to_string(); 3];
+    let list = |op, n: usize| Calculate::Simple { op, fields: vec!["g".to_string(); n] };
+    assert_eq!(calculate(&list(CalcOp::Sum, 4), &group).as_deref(), Some("24"));
+    assert_eq!(calculate(&list(CalcOp::Average, 4), &group).as_deref(), Some("2"));
+    assert_eq!(calculate(&list(CalcOp::Product, 2), &group).as_deref(), Some("64"));
+    assert_eq!(calculate(&list(CalcOp::Maximum, 2), &group).as_deref(), Some("2"));
+    assert_eq!(calculate(&list(CalcOp::Sum, 0), &group).as_deref(), Some("0"));
+}
+
+#[test]
+fn a_simple_calculation_that_expands_past_the_allowance_is_not_calculated() {
+    let thousand = |_: &str| vec!["1".to_string(); 1000];
+    let within = Calculate::Simple { op: CalcOp::Sum, fields: vec!["g".to_string(); 1000] };
+    let past = Calculate::Simple { op: CalcOp::Sum, fields: vec!["g".to_string(); 2000] };
+    assert_eq!(calculate(&within, &thousand).as_deref(), Some("1000000"));
+    assert_eq!(calculate(&past, &thousand), None);
+}
