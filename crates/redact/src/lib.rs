@@ -923,7 +923,7 @@ fn redact_page_content(
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
         report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
         retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
+        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -1080,4 +1080,16 @@ pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize,
         }
     }
     Ok(targets.len())
+}
+
+/// The name to save a document under after [`apply`]: `_Redacted` before the extension, as
+/// Acrobat appends it ("contract.pdf" gives "contract_Redacted.pdf"). The `.pdf` extension is
+/// matched in any letter case. A name that already ends in `_Redacted` keeps it once.
+pub fn redacted_file_name(name: &str) -> String {
+    let cut = name.len().saturating_sub(4);
+    let stem = match (name.get(..cut), name.get(cut..)) {
+        (Some(stem), Some(ext)) if ext.eq_ignore_ascii_case(".pdf") => stem,
+        _ => name,
+    };
+    if stem.ends_with("_Redacted") { format!("{stem}.pdf") } else { format!("{stem}_Redacted.pdf") }
 }

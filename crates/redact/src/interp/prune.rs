@@ -1,6 +1,6 @@
 use super::{
-    CosError, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
-    overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
+    is_vertical, num, overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
@@ -56,33 +56,231 @@ fn extgstate_mentions_doomed(doc: &Document, val: &Object, doomed: &HashSet<ObjR
     false
 }
 
-/// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or
-/// through a form that has no /Resources of its own (such a form draws through its caller's).
-/// `None` when that cannot be told (a form that will not decode, or nesting past the limit).
-fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], depth: usize, seen: &mut HashSet<ObjRef>) -> Option<bool> {
-    let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    for op in ops.iter().filter(|op| op.is("Do")) {
-        let Some(n) = op.last_name() else { continue };
-        if n == name {
-            return Some(true);
-        }
-        let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
-        let obj = doc.get(r);
-        let Object::Stream(s) = &*obj else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
-            continue;
-        }
-        if depth >= MAX_DEPTH {
-            return None;
-        }
-        let Ok(data) = s.decoded() else { return None };
-        match content_draws(doc, std::slice::from_ref(&data), xo, name, depth + 1, seen) {
-            Some(false) => {}
-            other => return other,
+/// The XObject names of the resource dictionary `xo` that `content` draws: directly, or through
+/// a form that has no /Resources of its own (such a form draws through its caller's). Each such
+/// form is read once, however many names are asked about. The flag says whether some of what
+/// `content` draws could not be read (a form that will not decode, or nesting past the limit), so
+/// a name missing from the set may still be drawn.
+fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
+    let mut drawn = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut pending = vec![(Pieces::join(content).parse().ops, 0)];
+    // A form that will not decode makes the answer uncertain, but it does not stop the forms
+    // already queued from being read: a name drawn only inside one of those need not be unknown.
+    let mut unknown = false;
+    while let Some((ops, depth)) = pending.pop() {
+        for n in ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name) {
+            if !drawn.insert(n.to_vec()) {
+                continue;
+            }
+            let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
+            let obj = doc.get(r);
+            let Object::Stream(s) = &*obj else { continue };
+            if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
+                continue;
+            }
+            match s.decoded() {
+                Ok(data) if depth < MAX_DEPTH => pending.push((pdfcraft_content::parse(&data).ops, depth + 1)),
+                _ => unknown = true,
+            }
         }
     }
-    Some(false)
+    (drawn, unknown)
+}
+
+/// Whether any of `drawn` (from [`names_content_draws`]) draws `name`: `None` when none is known to and
+/// one could not be read in full.
+fn any_draws(drawn: &[(HashSet<Vec<u8>>, bool)], name: &[u8]) -> Option<bool> {
+    if drawn.iter().any(|(names, _)| names.contains(name)) {
+        Some(true)
+    } else if drawn.iter().any(|(_, unknown)| *unknown) {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// Every page-tree node with a /Resources of its own, and the pages that draw through it (the
+/// nearest such node above a page, or the page itself). Cycles are cut as in
+/// `pdfcraft_model::pages`. The flag is false when a node was reached twice (listed under two
+/// parents, or in a cycle) or the walk stopped early: a page may then draw through a holder it
+/// isn't listed under.
+fn resource_holders(doc: &Document) -> (Vec<(ObjRef, Vec<ObjRef>)>, bool) {
+    let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
+    let mut whole = true;
+    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return (holders, whole) };
+    let mut seen = HashSet::new();
+    let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
+    while let Some((node, mut holder)) = stack.pop() {
+        if !seen.insert(node) || seen.len() > 1_000_000 {
+            whole = false;
+            continue;
+        }
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { continue };
+        if d.contains(b"Resources") {
+            holders.push((node, Vec::new()));
+            holder = Some(holders.len() - 1);
+        }
+        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+        if is_pages {
+            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
+        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
+            h.1.push(node);
+        }
+    }
+    (holders, whole)
+}
+
+/// Unlink the image and form XObjects nothing draws from the page-tree resource dictionaries
+/// that still name them: Delete Image and Replace Image take an image off the page but leave it
+/// listed there, and so in a full-rewrite save. A name stays when anything that draws through the
+/// dictionary uses it ([`names_drawn`]), and a dictionary whose use can't be told is left as it
+/// is, as is every one when a page is listed twice in the page tree. A dictionary that loses an
+/// entry is replaced by a private copy on its node, as in [`unlink_doomed`]. Returns how many
+/// names went.
+pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
+    let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let (holders, whole) = resource_holders(doc);
+    if !whole {
+        return Ok(0);
+    }
+    let mut n = 0;
+    for (node, users) in holders {
+        let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
+            continue;
+        };
+        let mut xo = res_dict(doc, &res, b"XObject");
+        let listed: Vec<Vec<u8>> = xo
+            .iter()
+            .filter(|(_, v)| {
+                v.as_ref().is_some_and(|r| matches!(&*doc.get(r), Object::Stream(s) if matches!(s.dict.name(b"Subtype"), Some(b"Image" | b"Form"))))
+            })
+            .map(|(name, _)| name.to_vec())
+            .collect();
+        if listed.is_empty() {
+            continue;
+        }
+        let mut pruned = false;
+        // A form that goes may have been all that drew another name: look again while names go.
+        for _ in 0..MAX_DEPTH {
+            let Some(drawn) = names_drawn(doc, &res, &users, &index) else { break };
+            let mut gone = 0;
+            for name in listed.iter().filter(|name| !drawn.contains(*name)) {
+                gone += usize::from(xo.remove(name).is_some());
+            }
+            if gone == 0 {
+                break;
+            }
+            n += gone;
+            pruned = true;
+            res.set(b"XObject".to_vec(), Object::Dict(xo.clone()));
+        }
+        if pruned {
+            doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+        }
+    }
+    Ok(n)
+}
+
+/// Every name used with `Do` by what draws through `res`, the resource dictionary of `pages`:
+/// their content, their annotations' appearances, and every form, tiling pattern, Type 3 glyph
+/// and soft mask those can reach, with /Resources of their own or not. A name such a stream
+/// doesn't define is looked up in the resources of whatever draws it, up to the page's, so a `Do`
+/// anywhere in there may draw from `res`. Going by name keeps more than it must, never less.
+/// Each stream is read once, against one budget. `None` when that can't be told: a page or
+/// stream that won't decode, or the budget spent.
+fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<ObjRef, usize>) -> Option<HashSet<Vec<u8>>> {
+    let mut drawn = HashSet::new();
+    let mut note = |data: &[u8]| {
+        for op in pdfcraft_content::parse(data).ops.iter().filter(|op| op.is("Do")) {
+            if let Some(name) = op.last_name() {
+                drawn.insert(name.to_vec());
+            }
+        }
+    };
+    // Streams still to read, and resource dictionaries still to look through.
+    let mut streams: Vec<ObjRef> = Vec::new();
+    let mut dicts: Vec<Dict> = vec![res.clone()];
+    for page in pages {
+        let dict = doc.get(*page).as_dict().cloned().unwrap_or_default();
+        let (_, content) = page_streams(doc, &dict, index.get(page).copied().unwrap_or(0)).ok()?;
+        // One stream may end with a name its `Do` begins the next with: read them as one.
+        note(Pieces::join(&content).data());
+        let annots = dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        for annot in annots {
+            let ap = doc.resolve(&annot).as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().cloned());
+            // Each of /N, /R and /D is an appearance, or a dictionary of them by state.
+            for (_, look) in ap.unwrap_or_default().iter() {
+                match look.as_ref() {
+                    Some(r) if matches!(&*doc.resolve(look), Object::Stream(_)) => streams.push(r),
+                    _ => streams.extend(doc.resolve(look).as_dict().into_iter().flat_map(|states| states.iter().filter_map(|(_, v)| v.as_ref()))),
+                }
+            }
+        }
+    }
+    let mut budget = DecodeBudget::page();
+    let mut read = HashSet::new();
+    let mut looked = 0;
+    loop {
+        while let Some(dict) = dicts.get(looked) {
+            let (found, fonts) = drawn_through(doc, dict);
+            looked += 1;
+            streams.extend(found);
+            // Type 3 fonts' own resources, each look charged like a form so fonts naming each
+            // other can't go round for ever.
+            for font_res in fonts {
+                if !budget.enter_form() {
+                    return None;
+                }
+                dicts.push(font_res);
+            }
+        }
+        let Some(r) = streams.pop() else { break };
+        if !read.insert(r) {
+            continue;
+        }
+        let obj = doc.resolve(&Object::Ref(r));
+        let Object::Stream(s) = &*obj else { continue };
+        if !budget.enter_form() {
+            return None;
+        }
+        note(&budget.decode_strict(doc, s).ok()?);
+        if let Some(own) = s.dict.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
+            dicts.push(own);
+        }
+    }
+    Some(drawn)
+}
+
+/// The content streams the resource dictionary `res` lists: its form XObjects, its tiling
+/// patterns, its Type 3 fonts' glyph procedures and its soft masks' groups. Then the /Resources
+/// of those Type 3 fonts, which their glyphs look names up in first. An object that holds only a
+/// reference stands for what it names, as the renderer reads it.
+fn drawn_through(doc: &Document, res: &Dict) -> (Vec<ObjRef>, Vec<Dict>) {
+    let is_stream = |r: &ObjRef| matches!(&*doc.resolve(&Object::Ref(*r)), Object::Stream(_));
+    let mut found: Vec<ObjRef> = Vec::new();
+    let mut fonts: Vec<Dict> = Vec::new();
+    for (_, x) in res_dict(doc, res, b"XObject").iter() {
+        found.extend(x.as_ref().filter(|_| matches!(&*doc.resolve(x), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))));
+    }
+    for (_, p) in res_dict(doc, res, b"Pattern").iter() {
+        found.extend(p.as_ref().filter(|_| matches!(&*doc.resolve(p), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1))));
+    }
+    for (_, f) in res_dict(doc, res, b"Font").iter() {
+        let font = doc.resolve(f);
+        let Some(font) = font.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+        let procs = font.get(b"CharProcs").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default();
+        found.extend(procs.iter().filter_map(|(_, v)| v.as_ref()).filter(is_stream));
+        fonts.extend(font.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()));
+    }
+    for (_, g) in res_dict(doc, res, b"ExtGState").iter() {
+        let gs = doc.resolve(g);
+        let mask = gs.as_dict().and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
+        found.extend(mask.as_ref().and_then(|m| m.as_dict()).and_then(|m| m.reference(b"G")).filter(is_stream));
+    }
+    (found, fonts)
 }
 
 /// Unlink the XObjects a rewrite dropped or replaced (`doomed`) from every page-tree resource
@@ -103,31 +301,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         return Ok(());
     }
     let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
-    // Every page-tree node with a /Resources of its own, and the pages that draw through it
-    // (the nearest such node above a page, or the page itself). Cycles are cut as in
-    // `pdfcraft_model::pages`.
-    let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
-    while let Some((node, mut holder)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > 1_000_000 {
-            continue;
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        if d.contains(b"Resources") {
-            holders.push((node, Vec::new()));
-            holder = Some(holders.len() - 1);
-        }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
-        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
-            h.1.push(node);
-        }
-    }
+    let (holders, _) = resource_holders(doc);
     let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
     for (node, users) in holders {
@@ -150,15 +324,11 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             contents.push(page_streams(doc, &page, index.get(user).copied().unwrap_or(0))?.1);
         }
         let mut pruned = false;
+        // What each page draws through this dictionary, worked out once for all the names.
+        let drawn: Vec<_> =
+            if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
         for n in names {
-            let mut drawn = Some(false);
-            for content in &contents {
-                drawn = content_draws(doc, content, &xo, &n, 0, &mut HashSet::new());
-                if drawn != Some(false) {
-                    break;
-                }
-            }
-            match drawn {
+            match any_draws(&drawn, &n) {
                 Some(true) => {}
                 Some(false) => {
                     xo.remove(&n);
@@ -294,8 +464,12 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
 
 fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
     let mut pruned = false;
+    if doomed_names.is_empty() {
+        return Ok(false);
+    }
+    let drawn = [names_content_draws(doc, content, xo)];
     for name in doomed_names {
-        match content_draws(doc, content, xo, name, 0, &mut HashSet::new()) {
+        match any_draws(&drawn, name) {
             Some(true) => {}
             Some(false) => pruned |= xo.remove(name).is_some(),
             None => return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() }),
