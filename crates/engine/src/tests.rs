@@ -7168,6 +7168,25 @@ fn xfa_check_buttons_open_with_the_mark_their_template_asks_for() {
     assert_eq!(style("round"), CheckStyle::Circle, "a round button's default mark");
     assert_eq!(style("star"), CheckStyle::Star, "the template's mark");
     assert_eq!(style("pick"), CheckStyle::Cross, "a square radio button's default mark");
+    // And the on state is drawn with that mark: a cross is two separate strokes (a check is one
+    // line with round joins), a filled circle is filled curves, a star a filled polygon.
+    let drawn = |name: &str, state: &[u8]| {
+        let w = all.iter().find(|f| f.name.ends_with(name)).unwrap_or_else(|| panic!("no field {name}")).widgets[0].obj;
+        let wd = cos.get(w).as_dict().cloned().unwrap();
+        let n = cos.resolve(wd.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+        let r = n.as_dict().unwrap().reference(state).unwrap_or_else(|| panic!("{name} has no {} state", String::from_utf8_lossy(state)));
+        let pdfcraft_cos::Object::Stream(st) = &*cos.get(r) else { panic!("a stream") };
+        String::from_utf8_lossy(&st.decoded().unwrap()).into_owned()
+    };
+    let cross = |on: &str| on.matches(" l S").count() == 2 && !on.contains("1 j");
+    let plain = drawn("plain", b"1");
+    assert!(cross(&plain), "a square button draws a cross: {plain}");
+    let radio = drawn("pick", b"Y");
+    assert!(cross(&radio), "a square radio button draws a cross: {radio}");
+    let round = drawn("round", b"1");
+    assert!(round.contains(" c f"), "a round button draws a filled circle: {round}");
+    let star = drawn("star", b"1");
+    assert!(star.contains(" h f") && !cross(&star), "the star is a filled polygon: {star}");
 }
 
 #[test]
