@@ -35,16 +35,19 @@ fn target_ref(doc: &Document, obj: &Object) -> Option<ObjRef> {
     last
 }
 
-/// Named destinations: the `/Names /Dests` tree (entries) and the old `/Dests` dictionary.
-fn named_dests(doc: &Document) -> HashSet<Vec<u8>> {
+/// Named destinations whose target page exists: the `/Names /Dests` tree and the old `/Dests`
+/// dictionary.
+fn named_dests(doc: &Document, pages: &HashSet<ObjRef>, count: usize) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     let Some(cat) = doc.root().and_then(|r| doc.get(r).as_dict().cloned()) else { return out };
     if let Some(d) = cat.get(b"Dests").and_then(|d| resolve(doc, d).as_dict().cloned()) {
-        out.extend(d.iter().map(|(k, _)| k.clone()));
+        out.extend(d.iter().filter(|(_, v)| valid_explicit(doc, v, pages, count)).map(|(k, _)| k.clone()));
     }
     if let Some(tree) = names_tree(doc, &cat) {
-        for (k, _) in tree_entries(doc, &tree) {
-            out.insert(k);
+        for (k, v) in tree_entries(doc, &tree) {
+            if valid_explicit(doc, &v, pages, count) {
+                out.insert(k);
+            }
         }
     }
     out
@@ -104,27 +107,38 @@ fn dest_name(o: &Object) -> Option<Vec<u8>> {
     }
 }
 
-fn valid(doc: &Document, o: &Object, pages: &HashSet<ObjRef>, count: usize, names: &HashSet<Vec<u8>>) -> bool {
-    match o {
-        Object::Array(a) => match a.first() {
-            Some(first) => {
-                if let Some(i) = resolve(doc, first).as_int() {
-                    usize::try_from(i).is_ok_and(|i| i < count)
-                } else {
-                    target_ref(doc, first).is_some_and(|r| pages.contains(&r))
-                }
-            }
-            None => false,
-        },
-        other => dest_name(other).is_some_and(|n| names.contains(&n)),
+/// The `[page /Fit …]` array of an explicit destination (an array or a `<< /D […] >>` dictionary).
+fn explicit_array(doc: &Document, o: &Object) -> Option<Vec<Object>> {
+    match resolve(doc, o) {
+        Object::Array(a) => Some(a),
+        Object::Dict(d) => d.get(b"D").and_then(|x| resolve(doc, x).as_array().cloned()),
+        _ => None,
     }
+}
+
+/// Whether an explicit destination targets one of the document's pages.
+fn valid_explicit(doc: &Document, o: &Object, pages: &HashSet<ObjRef>, count: usize) -> bool {
+    explicit_array(doc, o).is_some_and(|a| match a.first() {
+        Some(first) => {
+            if let Some(i) = resolve(doc, first).as_int() {
+                usize::try_from(i).is_ok_and(|i| i < count)
+            } else {
+                target_ref(doc, first).is_some_and(|r| pages.contains(&r))
+            }
+        }
+        None => false,
+    })
+}
+
+fn valid(doc: &Document, o: &Object, pages: &HashSet<ObjRef>, count: usize, names: &HashSet<Vec<u8>>) -> bool {
+    valid_explicit(doc, o, pages, count) || dest_name(o).is_some_and(|n| names.contains(&n))
 }
 
 /// Remove links whose destination is missing, and clear the destination of such bookmarks
 /// (they stay, so their children do too). Returns (links, bookmarks).
 pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(usize, usize), pdfcraft_cos::CosError> {
     let set: HashSet<ObjRef> = pages.iter().copied().collect();
-    let names = named_dests(doc);
+    let names = named_dests(doc, &set, pages.len());
     let mut links = 0;
     for p in pages {
         let Some(pd) = doc.get(*p).as_dict().cloned() else { continue };
@@ -181,15 +195,15 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
 fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     let mut seen = HashSet::new();
-    let mut stack: Vec<Object> = doc.trailer().iter().map(|(_, v)| v.clone()).collect();
+    let mut stack = vec![Object::Dict(doc.trailer().clone())];
     if let Some(r) = doc.root() {
         stack.push(Object::Ref(r));
     }
     while let Some(o) = stack.pop() {
         match o {
             Object::Ref(r) => {
-                if seen.insert(r.num) {
-                    stack.push((*doc.get(r)).clone());
+                if seen.insert(r) {
+                    stack.push(doc.get(r).as_ref().clone());
                 }
             }
             Object::Dict(d) => {
@@ -208,7 +222,7 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
                 stack.extend(d.iter().map(|(_, v)| v.clone()));
             }
             Object::Array(a) => stack.extend(a),
-            Object::Stream(s) => stack.push(Object::Dict(s.dict.clone())),
+            Object::Stream(s) => stack.push(Object::Dict(s.dict)),
             _ => {}
         }
     }

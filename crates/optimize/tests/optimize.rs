@@ -1951,8 +1951,17 @@ fn black_and_white_images_become_jbig2() {
     assert!(r.image_bytes_after < as_g4.image_bytes_after, "JBIG2 {} bytes, Group 4 {}", r.image_bytes_after, as_g4.image_bytes_after);
     let images: Vec<Stream> = image_refs(&jbig2).into_iter().map(|i| stream(&jbig2, i)).collect();
     assert_eq!(images.len(), 3);
+    // The same text three times: the grey image and the mask share one symbol dictionary, and the
+    // indexed image, which only those share, is coded alone.
+    let globals_of = |s: &Stream| s.dict.get(b"DecodeParms").and_then(Object::as_dict).map(|d| (d.len(), d.reference(b"JBIG2Globals")));
+    let is_indexed = |s: &Stream| s.dict.get(b"ColorSpace").and_then(Object::as_array).is_some();
+    let shared: Vec<_> = images.iter().filter(|s| !is_indexed(s)).map(globals_of).collect();
+    assert!(shared.len() == 2 && shared[0].is_some_and(|(n, g)| n == 1 && g.is_some()) && shared[0] == shared[1], "{shared:?}");
     for s in &images {
-        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+        assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+        if is_indexed(s) {
+            assert!(!s.dict.contains(b"DecodeParms"));
+        }
     }
     assert!(images.iter().any(|s| s.dict.get(b"Decode") == Some(&decode)), "the decode array stays");
     let indexed_kept =
@@ -1999,6 +2008,11 @@ fn a_catalog_version_given_by_reference_is_read() {
 /// `#` a 3 × 3 block, three columns apart with a wider gap between words, every copy of a letter
 /// the same to the pixel.
 fn rendered_text(w: u32, h: u32) -> Vec<u8> {
+    rendered_text_from(w, h, 0x2545_F491_4F6C_DD1D)
+}
+
+/// [`rendered_text`], its letters picked from `seed`, which isn't 0.
+fn rendered_text_from(w: u32, h: u32, mut seed: u64) -> Vec<u8> {
     const LETTERS: [&[&str]; 5] = [
         &["##", "##", "##", "##", "##", "##", "##", "##", "##", "##"],
         &["......", ".####.", "##..##", "##..##", "##..##", "##..##", ".####."],
@@ -2008,7 +2022,6 @@ fn rendered_text(w: u32, h: u32) -> Vec<u8> {
     ];
     let stride = (w as usize).div_ceil(8);
     let mut data = vec![0xFF; stride * h as usize];
-    let mut seed = 0x2545_F491_4F6C_DD1Du64;
     let mut next = move || {
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -2053,7 +2066,192 @@ fn rendered_text_becomes_jbig2_symbols() {
     assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
     let generic = pdfcraft_filters::encode_jbig2_generic(&text, w, h).unwrap();
     assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, generic {}", s.raw.len(), generic.len());
+    assert!(!s.dict.contains(b"DecodeParms"), "alone, it shares no dictionary");
     assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Page `index` of `doc`, saved and opened again, rendered at scale 1.
+fn render_page(doc: &Document, index: usize) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: index, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    out.rgba.to_vec()
+}
+
+/// Text in a font of 26 letters, about 10 pt at 300 dpi: each letter 32 rows of a run from a stem
+/// down its left side, of 2 to 24 pixels, every copy the same to the pixel; lines 44 rows apart,
+/// the letters picked from `seed`, which isn't 0.
+fn font_text(w: u32, h: u32, mut seed: u64) -> Vec<u8> {
+    let mut font_seed = 0x2545_F491_4F6C_DD1Du64;
+    let next = |seed: &mut u64| {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    };
+    let letters: Vec<Vec<usize>> = (0..26).map(|_| (0..16).map(|_| 1 + (next(&mut font_seed) % 12) as usize).collect()).collect();
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for top in (8..(h as usize).saturating_sub(40)).step_by(44) {
+        let mut x = 8;
+        while x + 32 < w as usize {
+            let letter = &letters[(next(&mut seed) % 26) as usize];
+            for (row, run) in letter.iter().enumerate() {
+                for y in [top + 2 * row, top + 2 * row + 1] {
+                    for px in x..x + 2 * run {
+                        data[y * stride + px / 8] &= !(0x80 >> (px % 8));
+                    }
+                }
+            }
+            x += 2 * letter.iter().max().unwrap() + 4 + if next(&mut seed) % 6 == 0 { 14 } else { 0 };
+        }
+    }
+    data
+}
+
+/// The `/JBIG2Globals` an image names in its `/DecodeParms`.
+fn globals_of(doc: &Document, image: ObjRef) -> Option<ObjRef> {
+    stream(doc, image).dict.get(b"DecodeParms")?.as_dict()?.reference(b"JBIG2Globals")
+}
+
+/// Pages of text in one font, each letter the same to the pixel on every page, stored as JBIG2
+/// share one symbol dictionary (`/JBIG2Globals`): together they take less than each page coded
+/// alone, and every page looks the same, the last one, whose crosses no other page has, placing
+/// them from a dictionary of its own beside the shared one. The report counts the bytes they
+/// take, the globals once.
+#[test]
+fn jbig2_pages_share_one_symbol_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let pages: Vec<Vec<u8>> = (1..=4u64)
+        .map(|k| {
+            let mut text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            if k == 4 {
+                // Crosses down the right margin, three pixels a stroke.
+                for top in (40..440).step_by(40) {
+                    for (dx, dy) in (0..9).map(|i| (i, 4)).chain((0..9).map(|i| (4, i))) {
+                        let (x, y) = (580 + dx, top + dy);
+                        text[y * stride + x / 8] &= !(0x80 >> (x % 8));
+                    }
+                }
+            }
+            text
+        })
+        .collect();
+    let images: Vec<ObjRef> = pages
+        .iter()
+        .map(|text| {
+            let im = mono_image(&mut doc, w, h, text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let before: Vec<Vec<u8>> = (0..pages.len()).map(|p| render_page(&doc, p)).collect();
+    let alone: usize = pages.iter().map(|text| pdfcraft_filters::encode_jbig2(text, w, h).unwrap().len()).sum();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    let globals = globals_of(&doc, images[0]).expect("the first page names the globals");
+    assert!(images.iter().all(|im| globals_of(&doc, *im) == Some(globals)), "every page names the same globals");
+    let shared = stream(&doc, globals).raw.len() + images.iter().map(|im| stream(&doc, *im).raw.len()).sum::<usize>();
+    assert!(shared * 4 < alone * 3, "shared {shared} bytes, alone {alone}");
+    assert_eq!(report.image_bytes_after, shared);
+    for (p, before) in before.iter().enumerate() {
+        assert!(render_page(&doc, p) == *before, "page {p} looks the same");
+        let s = stream(&doc, images[p]);
+        assert_eq!(decoded_image(&doc, &s).unwrap(), pages[p], "page {p} decodes to its samples");
+    }
+    // Optimized again, each page would come out larger alone than it is beside the globals: the
+    // sharing stays.
+    let streams: Vec<Stream> = images.iter().map(|im| stream(&doc, *im)).collect();
+    let again = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((again.images_recompressed, again.images_resampled), (0, 0));
+    assert!(images.iter().zip(&streams).all(|(im, s)| stream(&doc, *im) == *s));
+}
+
+/// Images share a dictionary only where that saves more than it takes: two pages of five small
+/// letters save less than their globals would take, and stay as they are coded alone.
+#[test]
+fn a_dictionary_that_saves_less_than_it_takes_isnt_shared() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let images: Vec<ObjRef> = (1..=2u64)
+        .map(|k| {
+            let text = rendered_text_from(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_recompressed, 2);
+    for im in &images {
+        let s = stream(&doc, *im);
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+    // Optimized again, they code to what they are, no smaller: they stay.
+    let streams: Vec<Stream> = images.iter().map(|im| stream(&doc, *im)).collect();
+    assert_eq!(optimize(&mut doc, &settings).unwrap().images_recompressed, 0);
+    assert!(images.iter().zip(&streams).all(|(im, s)| stream(&doc, *im) == *s));
+}
+
+/// Only JBIG2 asked for shares: under Retain, JBIG2 pages drawn at 600 ppi are averaged and stored
+/// as JBIG2 again, each alone, as Retain changes nothing but their resolution.
+#[test]
+fn retained_jbig2_shares_nothing() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 960u32);
+    let images: Vec<ObjRef> = (1..=4u64)
+        .map(|k| {
+            let text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut d = Dict::new();
+            for (key, value) in [("Type", Object::name("XObject")), ("Subtype", Object::name("Image")), ("ColorSpace", Object::name("DeviceGray"))] {
+                d.set(key.as_bytes().to_vec(), value);
+            }
+            for (key, value) in [("Width", i64::from(w)), ("Height", i64::from(h)), ("BitsPerComponent", 1)] {
+                d.set(key.as_bytes().to_vec(), Object::Int(value));
+            }
+            d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            let im = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_jbig2(&text, w, h).unwrap())));
+            // 1200 samples over 144 pt: 600 ppi.
+            page(&mut doc, &[("Im", im)], "q 144 0 0 115.2 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Retain, ..MonoSettings::REDUCE }, ..Settings::default() };
+    assert_eq!(optimize(&mut doc, &settings).unwrap().images_resampled, 4);
+    for im in images {
+        let s = stream(&doc, im);
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+}
+
+/// Sixteen images at most share one dictionary, and two are enough: of eighteen, the first
+/// sixteen share one and the other two another.
+#[test]
+fn sixteen_images_at_most_share_a_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let texts: Vec<Vec<u8>> = (1..=18u64).map(|k| font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15))).collect();
+    let images: Vec<ObjRef> = texts
+        .iter()
+        .map(|text| {
+            let im = mono_image(&mut doc, w, h, text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    optimize(&mut doc, &settings).unwrap();
+    let globals: Vec<Option<ObjRef>> = images.iter().map(|im| globals_of(&doc, *im)).collect();
+    assert!(globals.iter().all(Option::is_some), "{globals:?}");
+    assert!(globals[..16].iter().all(|g| *g == globals[0]) && globals[16..].iter().all(|g| *g == globals[16]), "{globals:?}");
+    assert_ne!(globals[0], globals[16]);
+    for (k, (im, text)) in images.iter().zip(&texts).enumerate() {
+        assert!(decoded_image(&doc, &stream(&doc, *im)).unwrap() == *text, "image {k} decodes to its samples");
+    }
 }
 
 /// A JBIG2 scan goes through Monochrome Images like any black-and-white image. Above 450 ppi it
@@ -2250,6 +2448,347 @@ fn discards_and_clean_up() {
     assert!(!c.contains(b"StructTreeRoot") && !c.contains(b"MarkInfo"));
     let vp = c.get(b"ViewerPreferences").and_then(|v| v.as_dict().cloned()).unwrap();
     assert!(vp.contains(b"HideToolbar") && !vp.contains(b"Duplex"), "other preferences stay");
+}
+
+fn action(kind: &str) -> Dict {
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name(kind));
+    a
+}
+
+fn with(mut d: Dict, key: &str, value: impl Into<Object>) -> Dict {
+    d.set(key.as_bytes().to_vec(), value);
+    d
+}
+
+/// The kinds of the actions `o` runs, in order: each action, then its `/Next` actions.
+fn kinds(doc: &Document, o: Option<&Object>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(o) = o else { return out };
+    match &*doc.resolve(o) {
+        Object::Array(items) => {
+            for item in items {
+                out.extend(kinds(doc, Some(item)));
+            }
+        }
+        Object::Dict(a) => {
+            out.push(String::from_utf8_lossy(a.name(b"S").unwrap_or_default()).into_owned());
+            out.extend(kinds(doc, a.get(b"Next")));
+        }
+        _ => {}
+    }
+    out
+}
+
+fn dict(doc: &Document, r: ObjRef) -> Dict {
+    doc.get(r).as_dict().cloned().unwrap()
+}
+
+#[test]
+fn form_submit_import_and_reset_actions_are_discarded_and_the_fields_stay() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    let triggers = with(Dict::new(), "U", action("ResetForm"));
+    let triggers = with(triggers, "E", with(action("JavaScript"), "JS", Object::String(pdfcraft_cos::PdfString::literal("app.alert(1)"))));
+    let button = with(with(with(Dict::new(), "Subtype", Object::name("Widget")), "FT", Object::name("Btn")), "A", action("SubmitForm"));
+    let button = doc.add(Object::Dict(with(button, "AA", triggers)));
+    let import = doc.add(Object::Dict(action("ImportData")));
+    let field = with(with(Dict::new(), "Subtype", Object::name("Widget")), "FT", Object::name("Tx"));
+    let field = doc.add(Object::Dict(with(field, "AA", with(Dict::new(), "K", Object::Ref(import)))));
+    let link = with(with(Dict::new(), "Subtype", Object::name("Link")), "A", with(action("GoTo"), "Next", action("SubmitForm")));
+    let link = doc.add(Object::Dict(with(link, "D", Object::Array(vec![Object::Ref(p), Object::name("Fit")]))));
+    let reset = doc.add(Object::Dict(action("ResetForm")));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(button), Object::Ref(field), Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(reset))).unwrap();
+
+    let mut kept = doc.clone();
+    assert_eq!(optimize(&mut kept, &Settings::default()).unwrap().form_actions, 0, "the option is off by default");
+    assert_eq!(kinds(&kept, dict(&kept, button).get(b"A")), ["SubmitForm"]);
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 5, "{r:?}");
+    let annots = dict(&doc, p).get(b"Annots").and_then(|a| a.as_array().cloned()).unwrap();
+    assert_eq!(annots.len(), 3, "the fields and the link stay");
+    let b = dict(&doc, button);
+    assert_eq!(b.name(b"FT"), Some(&b"Btn"[..]));
+    assert!(!b.contains(b"A"), "{b:?}");
+    let aa = b.get(b"AA").and_then(|a| a.as_dict().cloned()).unwrap();
+    assert_eq!((aa.contains(b"U"), kinds(&doc, aa.get(b"E"))), (false, vec!["JavaScript".to_string()]), "other triggers stay");
+    assert!(!dict(&doc, field).contains(b"AA"), "an emptied /AA goes");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn a_discarded_form_action_hands_its_place_to_the_actions_after_it() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    // A reset whose /S is an indirect name.
+    let name = doc.add(Object::name("ResetForm"));
+    let reset = doc.add(Object::Dict(with(with(Dict::new(), "S", Object::Ref(name)), "Next", action("URI"))));
+    let submit = with(
+        action("SubmitForm"),
+        "Next",
+        Object::Array(vec![Object::Dict(action("JavaScript")), Object::Ref(reset), Object::Dict(action("Named"))]),
+    );
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", submit)));
+    // A reset whose chain comes back to itself.
+    let looped = doc.add(Object::Dict(action("ResetForm")));
+    doc.update_dict(looped, |a| a.set(b"Next".to_vec(), Object::Ref(looped))).unwrap();
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(looped))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 3, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["JavaScript", "URI", "Named"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn a_form_action_listed_twice_in_a_chain_gives_way_both_times() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let reset = doc.add(Object::Dict(with(action("ResetForm"), "Next", action("JavaScript"))));
+    let submit = with(action("SubmitForm"), "Next", Object::Array(vec![Object::Ref(reset), Object::Ref(reset)]));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", submit)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    // An indirect submit that holds a direct reset in its /Next.
+    let root = doc.root().unwrap();
+    let opening = doc.add(Object::Dict(with(action("SubmitForm"), "Next", action("ResetForm"))));
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(opening))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 4, "each action counts once: {r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["JavaScript", "JavaScript"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn form_actions_chained_past_the_limit_stop_the_optimization() {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    let mut chain = action("ResetForm");
+    for _ in 0..80 {
+        chain = with(action("SubmitForm"), "Next", chain);
+    }
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), chain)).unwrap();
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() });
+    assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(at)) if at == root), "{r:?}");
+}
+
+#[test]
+fn a_next_array_that_lists_itself_is_left_as_it_is() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let looped = doc.add(Object::Null);
+    doc.set(looped, Object::Array(vec![Object::Ref(looped)]));
+    let (first, second) = (doc.add(Object::Null), doc.add(Object::Null));
+    doc.set(first, Object::Array(vec![Object::Ref(second)]));
+    doc.set(second, Object::Array(vec![Object::Ref(first)]));
+    let link = |doc: &mut Document, next: ObjRef| {
+        let a = with(action("GoTo"), "Next", Object::Ref(next));
+        doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)))
+    };
+    let (own, pair) = (link(&mut doc, looped), link(&mut doc, first));
+    let submit = with(action("SubmitForm"), "Next", Object::Ref(looped));
+    let button = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", submit)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(own), Object::Ref(pair), Object::Ref(button)]))).unwrap();
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+
+    let mut cleaned = doc.clone();
+    let r = optimize(&mut cleaned, &settings).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    for (l, next) in [(own, looped), (pair, first)] {
+        let a = dict(&cleaned, l).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+        assert_eq!(a.get(b"Next"), Some(&Object::Ref(next)), "{l:?}");
+    }
+    assert_eq!(dict(&cleaned, button).get(b"A"), Some(&Object::Ref(looped)), "the submit's /Next takes its place");
+
+    // An array that lists itself and a submit, directly or in an array inside it: a cleaned copy
+    // would still reach the submit.
+    for submit in [Object::Dict(action("SubmitForm")), Object::Array(vec![Object::Dict(action("SubmitForm"))])] {
+        let mut mixed = doc.clone();
+        mixed.set(first, Object::Array(vec![Object::Ref(second), submit]));
+        let r = optimize(&mut mixed, &settings);
+        assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(_))), "{r:?}");
+    }
+}
+
+/// `referrers` actions whose `/Next` is one shared array of 2,000 actions, a submit among them.
+fn shared_next_array(referrers: usize) -> Document {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "");
+    let script = doc.add(Object::Dict(action("JavaScript")));
+    let mut items = vec![Object::Ref(script); 1_999];
+    items.push(Object::Dict(action("SubmitForm")));
+    let shared = doc.add(Object::Array(items));
+    for _ in 0..referrers {
+        doc.add(Object::Dict(with(action("GoTo"), "Next", Object::Ref(shared))));
+    }
+    doc
+}
+
+#[test]
+fn a_shared_next_array_cleaned_for_too_many_actions_stops_the_optimization() {
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+    let mut doc = shared_next_array(400);
+    assert_eq!(optimize(&mut doc, &settings).unwrap().form_actions, 1);
+    // Each referrer is under the limit for one object; together they pass the document's.
+    let mut doc = shared_next_array(600);
+    let r = optimize(&mut doc, &settings);
+    assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(_))), "{r:?}");
+}
+
+/// 80 direct dictionaries nested in each other under `/Deep`, the innermost one being `inner`.
+fn nested(inner: Dict) -> Object {
+    let mut o = Object::Dict(inner);
+    for _ in 0..80 {
+        o = Object::Dict(with(Dict::new(), "Deep", o));
+    }
+    o
+}
+
+#[test]
+fn deep_nesting_stops_the_optimization_only_when_a_form_action_is_past_the_limit() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let plain = doc.add(nested(with(action("GoTo"), "Next", action("URI"))));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", action("SubmitForm"))));
+    doc.update_dict(p, |d| {
+        d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]));
+        d.set(b"PieceInfo".to_vec(), Object::Ref(plain));
+    })
+    .unwrap();
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+    let mut ok = doc.clone();
+    let r = optimize(&mut ok, &settings).unwrap();
+    assert_eq!(r.form_actions, 1, "deep nesting with no form action in it is left as it is: {r:?}");
+
+    let reset = doc.add(Object::Dict(action("ResetForm")));
+    for (n, inner) in [
+        action("SubmitForm"),
+        with(Dict::new(), "A", Object::Ref(reset)),
+        with(Dict::new(), "Next", Object::Ref(doc.add(Object::Array(vec![Object::Ref(reset)])))),
+        with(Dict::new(), "AA", Object::Ref(doc.add(Object::Dict(with(Dict::new(), "U", action("ImportData")))))),
+        with(Dict::new(), "AA", with(Dict::new(), "U", Object::Ref(reset))),
+        with(Dict::new(), "Next", Object::Array(vec![Object::Ref(reset)])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut deep = doc.clone();
+        let held = deep.add(nested(inner));
+        deep.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(held))).unwrap();
+        let r = optimize(&mut deep, &settings);
+        assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(at)) if at == held), "case {n}: {r:?}");
+    }
+}
+
+#[test]
+fn a_shared_additional_actions_dictionary_is_cleaned_for_each_field_that_uses_it() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let triggers = with(with(Dict::new(), "U", action("SubmitForm")), "E", action("JavaScript"));
+    let shared = doc.add(Object::Dict(triggers));
+    let widget = |doc: &mut Document| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "AA", Object::Ref(shared))));
+    let (first, second) = (widget(&mut doc), widget(&mut doc));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    for w in [first, second] {
+        assert_eq!(dict(&doc, w).get(b"AA"), Some(&Object::Ref(shared)), "the widgets still share one dictionary: {w:?}");
+    }
+    let aa = dict(&doc, shared);
+    assert_eq!((aa.contains(b"U"), kinds(&doc, aa.get(b"E"))), (false, vec!["JavaScript".to_string()]));
+}
+
+#[test]
+fn shared_indirect_actions_and_next_arrays_are_cleaned_once_and_stay_shared() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // A shared submit whose /Next is a script that resets the form after it runs.
+    let script = with(action("JavaScript"), "Next", action("ResetForm"));
+    let submit = doc.add(Object::Dict(with(action("SubmitForm"), "Next", script)));
+    let next = doc.add(Object::Array(vec![Object::Dict(action("ImportData")), Object::Dict(action("URI")), Object::Dict(action("Named"))]));
+    let link = |doc: &mut Document| {
+        let a = with(action("GoTo"), "Next", Object::Ref(next));
+        doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)))
+    };
+    let widget = |doc: &mut Document| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", Object::Ref(submit))));
+    let (w1, w2, l1, l2) = (widget(&mut doc), widget(&mut doc), link(&mut doc), link(&mut doc));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array([w1, w2, l1, l2].map(Object::Ref).to_vec()))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 3, "{r:?}");
+    for w in [w1, w2] {
+        assert_eq!(dict(&doc, w).get(b"A"), Some(&Object::Ref(submit)), "{w:?}");
+        assert_eq!(kinds(&doc, dict(&doc, w).get(b"A")), ["JavaScript"], "{w:?}");
+    }
+    for l in [l1, l2] {
+        let a = dict(&doc, l).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+        assert_eq!(a.get(b"Next"), Some(&Object::Ref(next)), "{l:?}");
+        assert_eq!(kinds(&doc, dict(&doc, l).get(b"A")), ["GoTo", "URI", "Named"], "{l:?}");
+    }
+}
+
+#[test]
+fn a_form_action_in_an_array_inside_an_indirect_next_array_is_counted() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let next = doc.add(Object::Array(vec![Object::Array(vec![Object::Dict(action("ResetForm"))]), Object::Dict(action("URI"))]));
+    let a = with(action("GoTo"), "Next", Object::Ref(next));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo", "URI"]);
+}
+
+#[test]
+fn a_shared_action_run_as_a_next_action_and_as_an_a_entry_stays_a_dictionary() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // A reset before two actions, run by one link after a GoTo and by another as its /A.
+    let reset = doc.add(Object::Dict(with(
+        action("ResetForm"),
+        "Next",
+        Object::Array(vec![Object::Dict(action("JavaScript")), Object::Dict(action("URI"))]),
+    )));
+    let link = |doc: &mut Document, a: Object| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    let after = link(&mut doc, Object::Dict(with(action("GoTo"), "Next", Object::Ref(reset))));
+    let runs = link(&mut doc, Object::Ref(reset));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array([after, runs].map(Object::Ref).to_vec()))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(dict(&doc, reset).name(b"S"), Some(&b"JavaScript"[..]), "the reset's place is taken by a dictionary");
+    assert_eq!(dict(&doc, runs).get(b"A"), Some(&Object::Ref(reset)));
+    assert_eq!(kinds(&doc, dict(&doc, runs).get(b"A")), ["JavaScript", "URI"]);
+    let a = dict(&doc, after).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+    assert_eq!(a.get(b"Next"), Some(&Object::Ref(reset)));
+    assert_eq!(kinds(&doc, dict(&doc, after).get(b"A")), ["GoTo", "JavaScript", "URI"]);
+}
+
+#[test]
+fn a_shared_submit_whose_script_runs_it_again_gives_way_to_the_script() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // The widget comes first, so the walk reaches the submit through it.
+    let widget = doc.add(Object::Null);
+    let submit = doc.add(Object::Null);
+    doc.set(widget, Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", Object::Ref(submit))));
+    doc.set(submit, Object::Dict(with(action("SubmitForm"), "Next", with(action("JavaScript"), "Next", Object::Ref(submit)))));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(dict(&doc, widget).get(b"A"), Some(&Object::Ref(submit)));
+    let script = dict(&doc, submit);
+    assert_eq!((script.name(b"S"), script.get(b"Next")), (Some(&b"JavaScript"[..]), Some(&Object::Ref(submit))), "the script runs itself again");
 }
 
 #[test]
@@ -2449,7 +2988,9 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
     };
     let mut seen = Vec::new();
     let report = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
-        seen.push(s);
+        if !matches!(s, Stage::Reading { .. }) {
+            seen.push(s);
+        }
         true
     })
     .unwrap();
@@ -2467,7 +3008,10 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
 
     // Stopping after the first image.
     let mut calls = 0;
-    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |_| {
+    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
+        if matches!(s, Stage::Reading { .. }) {
+            return true;
+        }
         calls += 1;
         calls < 2
     });
@@ -2893,6 +3437,52 @@ fn drawn_images(doc: &Document) -> Vec<Stream> {
         .collect()
 }
 
+/// A tolerated row must not be regrouped after its highest tile moves during X sorting.
+#[test]
+fn fragment_row_tolerance_preserves_every_tiles_pixels() {
+    for aligned in [true, false] {
+        for merge_fragments in [false, true] {
+            let mut doc = Document::new_empty();
+            let mut refs = Vec::new();
+            for gray in [20u8, 80, 140, 220] {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("XObject"));
+                d.set(b"Subtype".to_vec(), Object::name("Image"));
+                d.set(b"Width".to_vec(), Object::Int(10));
+                d.set(b"Height".to_vec(), Object::Int(10));
+                d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                refs.push(doc.add(Object::Stream(Stream::flate(d, &[gray; 100]))));
+            }
+            let content = if aligned {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 10 10 0 cm /T1 Do Q q 10 0 0 10 20 0 cm /T2 Do Q q 10 0 0 10 30 0 cm /T3 Do Q"
+            } else {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 9.992 10 0.009 cm /T1 Do Q q 10 0 0 9.982 20 0.018 cm /T2 Do Q q 10 0 0 9.991 30 0.009 cm /T3 Do Q"
+            };
+            page(&mut doc, &[("T0", refs[0]), ("T1", refs[1]), ("T2", refs[2]), ("T3", refs[3])], content);
+            let off = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+            let report = optimize(&mut doc, &Settings { merge_fragments, color: off, gray: off, ..Settings::default() }).unwrap();
+            // Save and reopen, then inspect only images still drawn by the optimized page.
+            let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let drawn = drawn_images(&doc);
+            if report.fragments_merged == 0 {
+                assert_eq!(report.merged_images, 0);
+                assert_eq!(drawn.len(), 4);
+                for (image, gray) in drawn.iter().zip([20u8, 80, 140, 220]) {
+                    assert_eq!(image.decoded().unwrap(), [gray; 100]);
+                }
+            } else {
+                assert!(merge_fragments);
+                assert_eq!((report.fragments_merged, report.merged_images, drawn.len()), (4, 1, 1));
+                let image = &drawn[0];
+                assert_eq!((image.dict.int(b"Width"), image.dict.int(b"Height")), (Some(40), Some(10)));
+                let row: Vec<_> = [20u8, 80, 140, 220].into_iter().flat_map(|gray| [gray; 10]).collect();
+                assert_eq!(image.decoded().unwrap(), row.repeat(10), "aligned={aligned}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image() {
     // 120 strips, every other one JPEG and half as wide (as one PDF printer writes them).
@@ -2957,6 +3547,87 @@ fn images_that_do_not_tile_a_picture_are_left_alone() {
     unmerged(&mut few, &all);
     let (mut off, _) = printed_page(40, |_| false, |_, s| s);
     unmerged(&mut off, &Settings { merge_fragments: false, ..Settings::default() });
+}
+
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    Stream::from_raw(dict, raw)
+}
+
+/// A page whose content is damaged partway isn't all known: its strips aren't merged, which would
+/// write its content again without what follows the damage.
+#[test]
+fn strips_on_a_page_damaged_partway_are_left_as_they_are() {
+    let (mut doc, _) = printed_page(40, |_| false, |_, s| s);
+    let p = pdfcraft_annot::page_refs(&doc).unwrap()[0];
+    let bad = damaged_flate(b"0 g\n", b"q 1000 0 0 1 0 0 cm /R0 Do Q");
+    let damaged = doc.add(Object::Stream(bad.clone()));
+    let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+    let contents = Object::Array(vec![first, Object::Ref(damaged)]);
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+    assert_eq!(doc.get(p).as_dict().unwrap().get(b"Contents"), Some(&contents));
+    assert_eq!(stream(&doc, damaged), bad);
+}
+
+/// An image may be drawn larger past the damage in a page's or a form's content, so no image is
+/// resampled for the uses before it.
+#[test]
+fn content_damaged_partway_leaves_every_image_at_its_resolution() {
+    for in_form in [false, true] {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 720, 720, 1, false, None);
+        let p = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+        assert_eq!(effective_resolutions(&doc, &[p])[&img], 720.0);
+        let mut bad = damaged_flate(b"q 72 0 0 72 0 0 cm /Im Do Q\n", b"q 720 0 0 720 0 0 cm /Im Do Q");
+        let added = if in_form {
+            bad.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            bad.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            bad.dict.set(b"Resources".to_vec(), Object::Dict(resources(xobjects(&[("Im", img)]))));
+            let f = doc.add(Object::Stream(bad));
+            let res = Object::Dict(resources(xobjects(&[("Im", img), ("F", f)])));
+            doc.update_dict(p, |d| d.set(b"Resources".to_vec(), res)).unwrap();
+            content(&mut doc, "/F Do")
+        } else {
+            doc.add(Object::Stream(bad))
+        };
+        let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![first, Object::Ref(added)]))).unwrap();
+        // Not measured, or measured as never resampled: the image pass reads only what was measured.
+        let ppi = effective_resolutions(&doc, &[p]).get(&img).copied().unwrap_or(f64::INFINITY);
+        assert_eq!(ppi, f64::INFINITY, "in a form: {in_form}");
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(r.images_resampled, 0, "{r:?}");
+    }
+}
+
+/// One page damaged partway stops resampling for the whole document: another page drawing the same
+/// image at its full resolution, whole, doesn't get it resampled either.
+#[test]
+fn content_damaged_partway_on_one_page_leaves_the_image_another_page_draws() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 720, 720, 1, false, None);
+    let damaged = page(&mut doc, &[("Im", img)], "");
+    let bad = doc.add(Object::Stream(damaged_flate(b"0 g\n", b"q 720 0 0 720 0 0 cm /Im Do Q")));
+    doc.update_dict(damaged, |d| d.set(b"Contents".to_vec(), Object::Ref(bad))).unwrap();
+    let whole = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+    assert_eq!(effective_resolutions(&doc, &[whole])[&img], 720.0);
+    let ppi = effective_resolutions(&doc, &[damaged, whole]).get(&img).copied().unwrap_or(f64::INFINITY);
+    assert_eq!(ppi, f64::INFINITY);
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 0, "{r:?}");
+    assert_eq!(doc.get(img).as_dict().and_then(|d| d.int(b"Width")), Some(720));
 }
 
 /// `levels` nested forms with their own resources, the innermost drawing `img` over the unit square.
@@ -3621,6 +4292,129 @@ fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
     }
 }
 
+/// An image past what the JBIG2 decoder takes on a side stays as it is: JBIG2 can state the size,
+/// but PdfCraft's decoder refuses such a stream, so stored as JBIG2 it drew nothing here. At 65,535
+/// on a side, the same bars do become JBIG2, so the fixture does reach that choice, and the coding
+/// stored (symbols, here) reads back through that decoder.
+#[test]
+fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
+    for (w, h, stored) in
+        [(65_535u32, 16u32, &b"JBIG2Decode"[..]), (16, 65_535, b"JBIG2Decode"), (65_536, 16, b"FlateDecode"), (16, 65_536, b"FlateDecode")]
+    {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
+        let before = stream(&doc, image).raw.clone();
+        let settings =
+            Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, downsample: false, ..MonoSettings::REDUCE }, ..Settings::default() };
+        optimize(&mut doc, &settings).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}");
+        if stored == b"FlateDecode" {
+            assert_eq!(s.raw, before, "{w} × {h}");
+        } else {
+            // The decoder gives padding bits as 0; the bars have them 1.
+            let mut bits = bars(w, h);
+            if w % 8 != 0 {
+                for row in bits.chunks_mut((w as usize).div_ceil(8)) {
+                    if let Some(last) = row.last_mut() {
+                        *last &= 0xFFu8 << (8 - w % 8);
+                    }
+                }
+            }
+            assert!(decoded_image(&doc, &s).unwrap() == bits, "{w} × {h} reads back");
+        }
+    }
+}
+
+/// The colour and grey steps leave an image over 80 million pixels as it is, whatever their settings
+/// (memory): 10,000 × 8,000 grey, the limit itself, drawn at 600 ppi, is resampled, and a row more
+/// stays as it is.
+#[test]
+fn grey_images_are_resampled_up_to_the_pixel_limit() {
+    for (h, resampled) in [(8_000u32, true), (8_001, false)] {
+        let mut doc = Document::new_empty();
+        let grey = image(&mut doc, 10_000, h, 1, false, None);
+        let before = stream(&doc, grey).raw.clone();
+        let (pw, ph) = (10_000.0 * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+        page(&mut doc, &[("G", grey)], &format!("q {pw} 0 0 {ph} 0 0 cm /G Do Q"));
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled, usize::from(resampled), "10,000 × {h}: {report:?}");
+        let s = stream(&doc, grey);
+        if resampled {
+            assert_eq!(s.dict.int(b"Width"), Some(2_500), "10,000 × {h}");
+        } else {
+            assert!(s.dict.int(b"Width") == Some(10_000) && s.raw == before, "10,000 × {h} stays as it is");
+        }
+    }
+}
+
+/// Dark bars of irregular lengths across the long side of a `w` × `h` 1-bit image, which Flate
+/// shrinks less than JBIG2.
+fn bars(w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut state = 0x1234_5678u32;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        state as usize
+    };
+    let long = w.max(h) as usize;
+    let mut at = 10;
+    while at + 60 < long {
+        let len = 5 + next() % 50;
+        for along in at..at + len {
+            for across in 0..12 {
+                let (x, y) = if w > h { (along, across) } else { (across, along) };
+                data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+        at += len + 5 + next() % 50;
+    }
+    data
+}
+
+/// Past what the JBIG2 decoder takes on either side, an image packed from more bits, or one
+/// averaged to a size still past it, isn't stored as JBIG2 either: it becomes 1-bit Flate. Within
+/// the bound the same pictures do become JBIG2, so the fixtures reach that choice.
+#[test]
+fn what_is_too_large_for_jbig2_is_stored_another_way() {
+    let settings = |downsample| Settings {
+        mono: MonoSettings { compression: MonoCompression::Jbig2, downsample, ..MonoSettings::REDUCE },
+        ..Settings::default()
+    };
+    let (jbig2, flate) = (&b"JBIG2Decode"[..], &b"FlateDecode"[..]);
+    // Eight-bit grey of only black and white, packed to one bit first, wide and tall.
+    for (w, h, stored) in [(65_535u32, 16u32, jbig2), (65_536, 16, flate), (16, 65_535, jbig2), (16, 65_536, flate)] {
+        let (bits, stride) = (bars(w, h), (w as usize).div_ceil(8));
+        let grey: Vec<u8> = (0..h as usize)
+            .flat_map(|y| (0..w as usize).map(move |x| (y, x)))
+            .map(|(y, x)| if bits[y * stride + x / 8] & (0x80 >> (x % 8)) == 0 { 0 } else { 255 })
+            .collect();
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &grey, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
+        optimize(&mut doc, &settings(false)).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}, packed");
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{w} × {h}, packed");
+    }
+    // One bit, drawn at 600 ppi and averaged to 300: half the size, so 140,000 is still past it.
+    for (w, h, stored) in [(70_000u32, 16u32, jbig2), (140_000, 16, flate), (16, 70_000, jbig2), (16, 140_000, flate)] {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+        page(&mut doc, &[("Im", image)], &format!("q {pw} 0 0 {ph} 0 0 cm /Im Do Q"));
+        optimize(&mut doc, &settings(true)).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}, averaged");
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{w} × {h}, averaged");
+        assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(i64::from(w / 2)), Some(i64::from(h / 2))), "{w} × {h}, averaged");
+    }
+}
+
 /// An indexed image also drawn where the optimizer doesn't read (an annotation's appearance, where
 /// other default colour spaces may be in force and change which palette entry is darker) keeps its
 /// resolution, as black-and-white RGB keeps its colour space; drawn only on the page, it is
@@ -3789,6 +4583,107 @@ fn mixed_text_and_small_halftone_regions_keep_their_tones_with_wide_white_margin
     }
 }
 
+#[test]
+fn dictionary_destinations_broken_named_destinations_and_both_dest_tables() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let dict_dest = |target: ObjRef| {
+        let mut d = Dict::new();
+        d.set(b"D".to_vec(), Object::Array(vec![Object::Ref(target), Object::name("Fit")]));
+        Object::Dict(d)
+    };
+    let link = |doc: &mut Document, dest: Object| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        d.set(b"Dest".to_vec(), dest);
+        Object::Ref(doc.add(Object::Dict(d)))
+    };
+    let missing = ObjRef::new(999, 0);
+    // Links: (1) explicit dictionary destination to `p` (valid), (2) explicit dictionary
+    // destination to `missing` (invalid), (3) named destination "dict_ok" whose value is
+    // `<< /D [p /Fit] >>` (valid), (4) named destination "broken_tree" whose target page is
+    // `missing` (invalid).
+    let annots = vec![
+        link(&mut doc, dict_dest(p)),
+        link(&mut doc, dict_dest(missing)),
+        link(&mut doc, Object::Array(vec![Object::Int(i64::from(u32::MAX) + 1), Object::name("Fit")])),
+        link(&mut doc, s("dict_ok")),
+        link(&mut doc, s("broken_tree")),
+    ];
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    // Bookmark with an indirect GoTo action pointing to "broken_old" in catalog /Dests (whose
+    // page is `missing`), and a second bookmark pointing to "old_ok" in catalog /Dests.
+    let outlines = doc.add(Object::Null);
+    let mut goto_broken = Dict::new();
+    goto_broken.set(b"S".to_vec(), Object::name("GoTo"));
+    goto_broken.set(b"D".to_vec(), Object::name("broken_old"));
+    let goto_broken = doc.add(Object::Dict(goto_broken));
+    let mut bm_broken = Dict::new();
+    bm_broken.set(b"Title".to_vec(), s("Broken"));
+    bm_broken.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_broken.set(b"A".to_vec(), Object::Ref(goto_broken));
+    let bm_broken = doc.add(Object::Dict(bm_broken));
+    let mut bm_ok = Dict::new();
+    bm_ok.set(b"Title".to_vec(), s("Ok"));
+    bm_ok.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_ok.set(b"Dest".to_vec(), Object::name("old_ok"));
+    let bm_ok = doc.add(Object::Dict(bm_ok));
+    doc.update_dict(bm_broken, |d| d.set(b"Next".to_vec(), Object::Ref(bm_ok))).unwrap();
+    let mut o = Dict::new();
+    o.set(b"First".to_vec(), Object::Ref(bm_broken));
+    o.set(b"Last".to_vec(), Object::Ref(bm_ok));
+    doc.set(outlines, Object::Dict(o));
+
+    // /Names /Dests has "broken_tree" (pointing to `missing`) and "dict_ok" (`<< /D [p /Fit] >>`).
+    let broken_dest = doc.add(dict_dest(missing));
+    let ok_dest = doc.add(dict_dest(p));
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("broken_tree"), Object::Ref(broken_dest), s("dict_ok"), Object::Ref(ok_dest)]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+
+    // Catalog /Dests has "broken_old" (pointing to `missing`) and "old_ok" (`<< /D [p /Fit] >>`).
+    let mut old_dests = Dict::new();
+    old_dests.set(b"broken_old".to_vec(), Object::Array(vec![Object::Ref(missing), Object::name("Fit")]));
+    old_dests.set(b"old_ok".to_vec(), dict_dest(p));
+    let old_dests = doc.add(Object::Dict(old_dests));
+
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"Names".to_vec(), Object::Dict(names));
+        c.set(b"Dests".to_vec(), Object::Ref(old_dests));
+        c.set(b"Outlines".to_vec(), Object::Ref(outlines));
+    })
+    .unwrap();
+
+    // Space audit claims both /Names /Dests and catalog /Dests under NamedDestinations.
+    let only_tree = {
+        let mut d = doc.clone();
+        d.update_dict(root, |c| {
+            c.remove(b"Dests");
+        })
+        .unwrap();
+        audit_space(&d, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes
+    };
+    let both_tables = audit_space(&doc, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes;
+    assert!(both_tables > only_tree, "catalog /Dests is counted alongside /Names /Dests: {both_tables} vs {only_tree}");
+
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((report.invalid_links, report.invalid_bookmarks, report.unreferenced_dests), (3, 1, 2), "{report:?}");
+    let left_links = doc.get(p).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(left_links, 2, "the two valid dictionary/named links remain");
+    assert!(doc.get(bm_broken).as_dict().unwrap().get(b"A").is_none(), "broken bookmark action is cleared");
+    assert!(doc.get(bm_ok).as_dict().unwrap().get(b"Dest").is_some(), "valid bookmark destination stays");
+    assert_eq!(named_dest_keys(&doc), vec![b"dict_ok".to_vec()]);
+    let left_old = doc.get(old_dests).as_dict().cloned().unwrap();
+    assert!(left_old.contains(b"old_ok") && !left_old.contains(b"broken_old"), "{left_old:?}");
+}
+
 /// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.
 fn stencil(doc: &mut Document, w: u32, h: u32) -> ObjRef {
     let row = (w as usize).div_ceil(8);
@@ -3886,4 +4781,136 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
         assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
         assert_eq!(stream(&doc, img), before, "{what}");
     }
+}
+
+/// Pictures run on several threads: what comes out doesn't depend on how many.
+#[test]
+fn the_same_file_comes_out_with_any_number_of_threads() {
+    let build = || {
+        let mut doc = Document::new_empty();
+        let shared_mask = image(&mut doc, 1200, 1200, 1, false, None);
+        // Under a soft mask they share, at different sizes on the page: the second must start from
+        // the mask the first left. Each needs the mask at a different size.
+        let first = image(&mut doc, 1200, 1200, 3, true, Some(shared_mask));
+        let second = image(&mut doc, 1000, 1000, 3, true, Some(shared_mask));
+        page(&mut doc, &[("Im0", first)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        page(&mut doc, &[("Im0", second)], "q 180 0 0 180 100 100 cm /Im0 Do Q");
+        // Enough others for the threads.
+        for page_no in 0..22u32 {
+            let img = image(&mut doc, 500 + page_no, 500, 3, true, None);
+            page(&mut doc, &[("Im0", img)], "q 72 0 0 72 100 100 cm /Im0 Do Q");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        assert_eq!(report.images, 24, "{report:?}");
+        assert!(report.images_resampled + report.images_recompressed > 16, "{report:?}");
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// A table that disagrees with an object's header leaves it reachable under two generations, as
+/// one object: each use decides from what the one before it left, with any number of threads.
+#[test]
+fn one_object_under_two_generations_comes_out_the_same_with_any_number_of_threads() {
+    let picture = |size: usize, extra: &str| {
+        let samples: Vec<u8> = (0..size * size).map(|i| ((i % size) * 255 / size) as u8 ^ ((i / size) as u8 & 7)).collect();
+        let dict = format!(
+            "<< /Type /XObject /Subtype /Image /Width {size} /Height {size} /BitsPerComponent 8 /ColorSpace /DeviceGray{extra} /Length {} >>\nstream\n",
+            samples.len()
+        );
+        [dict.as_bytes(), &samples, b"\nendstream"].concat()
+    };
+    let build = || {
+        // 1 the catalog, 2 the pages, 3 the mask, 4 and 5 under it, 6 the picture, 7 a picture that is
+        // also 8's mask, then the others.
+        let mut objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), Vec::new()];
+        objects.push(picture(1200, ""));
+        objects.push(picture(1200, " /SMask 3 0 R"));
+        objects.push(picture(1000, " /SMask 3 1 R"));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1000, " /SMask 7 1 R"));
+        // Small under one generation, large under the other: they want different sizes.
+        let mut draws = vec![
+            ("4 0 R".to_string(), 144),
+            ("5 0 R".to_string(), 180),
+            ("6 0 R".to_string(), 72),
+            ("6 1 R".to_string(), 576),
+            ("7 0 R".to_string(), 72),
+            ("8 0 R".to_string(), 180),
+        ];
+        for i in 0..22 {
+            objects.push(picture(500 + i, ""));
+            draws.push((format!("{} 0 R", objects.len()), 72));
+        }
+        let mut kids = String::new();
+        for (drawn, size) in &draws {
+            let content = format!("q {size} 0 0 {size} 10 10 cm /Im0 Do Q");
+            objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes());
+            let contents = objects.len();
+            objects.push(
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {contents} 0 R /Resources << /XObject << /Im0 {drawn} >> >> >>"
+                )
+                .into_bytes(),
+            );
+            kids.push_str(&format!("{} 0 R ", objects.len()));
+        }
+        objects[1] = format!("<< /Type /Pages /Kids [{kids}] /Count {} >>", draws.len()).into_bytes();
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+        for (i, object) in objects.iter().enumerate() {
+            let num = i + 1;
+            // Headers say generation 0, and the table says 1 of these three.
+            let generation = u8::from(num == 3 || num == 6 || num == 7);
+            table.push_str(&format!("{:010} {generation:05} n \n", bytes.len()));
+            bytes.extend(format!("{num} 0 obj\n").as_bytes());
+            bytes.extend(object);
+            bytes.extend(b"\nendobj\n");
+        }
+        let start = bytes.len();
+        bytes.extend(table.as_bytes());
+        bytes.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        for (num, generation) in [(3, 0), (3, 1), (6, 0), (6, 1), (7, 0), (7, 1)] {
+            assert!(matches!(&*doc.get(ObjRef { num, generation }), Object::Stream(_)), "{num} {generation} finds the object");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// Pages too small for a run aren't read, and that must not cost the smallest run there can be.
+#[test]
+fn the_fewest_strips_that_make_a_picture_are_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let (mut doc, _) = printed_page(MIN_FRAGMENTS as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (1, MIN_FRAGMENTS), "{r:?}");
+    let (mut doc, _) = printed_page((MIN_FRAGMENTS - 1) as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }

@@ -174,6 +174,11 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(layout_page0), js_string!("absPage"), 1)
         .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("pageCount"), 0)
         .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("absPageCount"), 0)
+        // On screen every page is a sheet of its own: the sheet is the page, counted from 0
+        // as absPage counts (a form shows `sheet(this) + 1` as the sheet number), and the
+        // sheet count is the page count.
+        .function(NativeFunction::from_fn_ptr(layout_page0), js_string!("sheet"), 1)
+        .function(NativeFunction::from_fn_ptr(layout_page_count), js_string!("sheetCount"), 0)
         .function(NativeFunction::from_fn_ptr(relayout), js_string!("relayout"), 0)
         .function(NativeFunction::from_fn_ptr(relayout), js_string!("relayoutPageArea"), 0)
         .function(NativeFunction::from_fn_ptr(zero), js_string!("h"), 2)
