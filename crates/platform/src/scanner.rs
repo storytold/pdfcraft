@@ -228,12 +228,18 @@ try {{
         if ($p.Name -eq 'Vertical Resolution') {{ $p.Value = {dpi} }}
         if ($p.Name -eq 'Current Intent') {{ $p.Value = {intent} }}
     }}
-    $image = $item.Transfer('{{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}}')
+    $image = $item.Transfer('{{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}}')
     if ($image -eq $null) {{
         Write-Output "CANCELLED"
         exit 0
     }}
-    $image.SaveFile('{out_path}')
+    $tempBmp = [System.IO.Path]::GetTempFileName() + '.bmp'
+    $image.SaveFile($tempBmp)
+    Add-Type -AssemblyName System.Drawing
+    $bmp = [System.Drawing.Bitmap]::FromFile($tempBmp)
+    $bmp.Save('{out_path}', [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    Remove-Item $tempBmp -Force
     Write-Output "OK"
 }} catch {{
     Write-Error $_.Exception.Message
@@ -396,3 +402,4 @@ mod tests {
         assert!(err_cancel.to_string().contains("cancelled"));
     }
 }
+
