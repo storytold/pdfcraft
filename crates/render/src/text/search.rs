@@ -11,6 +11,7 @@
 //! hit in any reading counts; where hits from different readings overlap, the one that starts
 //! first is kept (the longer on a tie). A soft hyphen needs no second reading: it draws nothing,
 //! and a line that ends in one always runs on.
+use super::device::ligature_letters;
 use super::{PageText, fold_case};
 use std::ops::Range;
 
@@ -23,31 +24,6 @@ enum Hyphen {
     Joined,
     /// A hyphenated compound: the hyphen, but no break.
     Kept,
-}
-
-/// The letters of a Latin compatibility ligature (U+FB00–U+FB06), their compatibility decomposition.
-fn ligature(c: char) -> Option<&'static str> {
-    match c {
-        '\u{FB00}' => Some("ff"),
-        '\u{FB01}' => Some("fi"),
-        '\u{FB02}' => Some("fl"),
-        '\u{FB03}' => Some("ffi"),
-        '\u{FB04}' => Some("ffl"),
-        '\u{FB05}' | '\u{FB06}' => Some("st"),
-        _ => None,
-    }
-}
-
-/// `s` with each Latin compatibility ligature written as its letters. Nothing else is normalised.
-fn letters(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match ligature(c) {
-            Some(l) => out.push_str(l),
-            None => out.push(c),
-        }
-    }
-    out
 }
 
 /// A visible hyphen that can divide a word at a line end: HYPHEN-MINUS and HYPHEN. A SOFT HYPHEN
@@ -65,7 +41,7 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| if sensitive { letters(s) } else { fold_case(&letters(s)) };
+    let fold = |s: &str| if sensitive { ligature_letters(s.to_owned()) } else { fold_case(&ligature_letters(s.to_owned())) };
     let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
     let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
@@ -377,15 +353,4 @@ fn unspaced_script(c: char) -> bool {
         // to J, compatibility supplement).
         | 0x20000..=0x3FFFF
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::letters;
-
-    #[test]
-    fn ligatures_read_as_their_letters() {
-        assert_eq!(letters("o\u{FB03}ce \u{FB00}\u{FB01}\u{FB02}\u{FB04}\u{FB05}\u{FB06}"), "office fffiflfflstst");
-        assert_eq!(letters("\u{FB13}é\u{FF21}\u{2460}"), "\u{FB13}é\u{FF21}\u{2460}", "nothing else is normalised");
-    }
 }
