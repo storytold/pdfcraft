@@ -195,9 +195,10 @@ fn redraws_of_a_long_replacement_share_a_text_budget() {
 fn text_after_an_inline_image_survives_a_non_ascii_byte_before_a_later_ei() {
     // Everyday content both ways: a string with a byte above 0x7F, and a later word holding
     // a capital "EI". The end-of-data look-ahead used to read the string's bytes as image
-    // data, so the image swallowed the rest of the page.
+    // data, so the image swallowed the rest of the page. The image is filtered, so its
+    // length isn't known up front and the look-ahead decides.
     let pdf = marked_pages(&[
-        "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \0 EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
+        "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray /F /AHx ID 00> EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
     ]);
 
     assert!(marked_text(&pdf, 0).plain_text().contains("EINGANG"), "the text after the inline image was not extracted");
@@ -2141,30 +2142,128 @@ fn text_outside_the_crop_box_is_clipped() {
         }
     }
 
-    // A CropBox that is zero-area or disjoint from the MediaBox leaves an empty visible region,
-    // even when a glyph straddles the clamped intersection point.
-    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+    // A CropBox that is zero-area or disjoint from the MediaBox is read as a missing one
+    // (vendored hayro-syntax patch 38): the visible region is the MediaBox, as on a page without
+    // a CropBox, not a region of no area.
+    let text_with = |crop: Option<[i64; 4]>| {
         let mut doc = Document::with_version("1.7");
         let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
         let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
         let pages = doc.new_object_id();
-        let page = doc.add_object(dictionary! {
+        let mut page = dictionary! {
             "Type" => "Page",
             "Parent" => pages,
             "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
-            "CropBox" => crop.map(Object::Integer).to_vec(),
             "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
             "Contents" => content,
-        });
+        };
+        if let Some(crop) = crop {
+            page.set("CropBox", crop.map(Object::Integer).to_vec());
+        }
+        let page = doc.add_object(page);
         doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
         let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
         doc.trailer.set("Root", catalog);
         let mut bytes = Vec::new();
         doc.save_to(&mut bytes).unwrap();
         let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
-        assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
+        extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+    };
+    let media = text_with(None);
+    assert!(media.contains("LeftOut") && media.contains("AboveOut") && !media.contains("OutSpan"), "{media:?}");
+    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+        assert_eq!(text_with(Some(crop)), media, "{crop:?}");
     }
+}
+
+/// A page box that encloses no area is read as a missing one (vendored hayro-syntax patch 38,
+/// ISO 32000-2 §14.11.2): a `/MediaBox [0 0 0 0]` as the default page, a `/CropBox [0 0 0 0]`,
+/// or one with nothing in common with the media box, as the media box. The page's visible region
+/// had no area, so its text was all outside it and none was extracted (pdf.js
+/// `boundingBox_invalid`). Each case is checked on both paths: the text is extracted, and the page
+/// renders at the size of the box that stands in, with the text's ink on it. A page's own box
+/// without area gives way to an inherited one with area; an inherited box without area falls
+/// through to the default as an own one does.
+#[test]
+fn text_on_a_page_whose_box_has_no_area_is_extracted() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    type Boxes = &'static [(&'static str, [i64; 4])];
+    /// (case, inherited boxes, the page's own boxes, where the word goes, expected size).
+    type Case = (&'static str, Boxes, Boxes, (i64, i64), (u32, u32));
+    /// A one-page document whose `/Pages` node carries `inherited`, and whose page carries `own`
+    /// and draws "Boxed" at `(x, y)` in Helvetica 30 pt.
+    fn boxed(inherited: Boxes, own: Boxes, (x, y): (i64, i64)) -> Vec<u8> {
+        let rect = |r: &[i64; 4]| r.iter().map(|v| Object::Integer(*v)).collect::<Vec<_>>();
+        let mut doc = Document::with_version("1.7");
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let pages = doc.new_object_id();
+        let ops = format!("BT /F1 30 Tf {x} {y} Td (Boxed) Tj ET");
+        let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+        let mut page = dictionary! { "Type" => "Page", "Parent" => pages, "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content };
+        for (key, r) in own {
+            page.set(*key, rect(r));
+        }
+        let page = doc.add_object(page);
+        let mut node = dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1};
+        for (key, r) in inherited {
+            node.set(*key, rect(r));
+        }
+        doc.objects.insert(pages, node.into());
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
+    // US Letter (612 × 792 pt, hayro-syntax patch 44) covers 612 × 792 device pixels at scale 1.
+    const LETTER_PX: (u32, u32) = (612, 792);
+    let cases: [Case; 7] = [
+        ("own MediaBox without area", &[], &[("MediaBox", [0, 0, 0, 0])], (25, 500), LETTER_PX),
+        ("own CropBox without area", &[], &[("MediaBox", [0, 0, 800, 600]), ("CropBox", [0, 0, 0, 0])], (25, 500), (800, 600)),
+        (
+            "CropBox touching the media box at a corner",
+            &[],
+            &[("MediaBox", [0, 0, 600, 800]), ("CropBox", [600, 800, 1000, 1000])],
+            (25, 500),
+            (600, 800),
+        ),
+        // Text past US Letter but inside the inherited box is kept.
+        (
+            "own MediaBox without area, inherited one with area",
+            &[("MediaBox", [0, 0, 1200, 1200])],
+            &[("MediaBox", [0, 0, 0, 0])],
+            (700, 900),
+            (1200, 1200),
+        ),
+        (
+            "own CropBox without area, inherited one with area",
+            &[("CropBox", [0, 0, 300, 300])],
+            &[("MediaBox", [0, 0, 600, 800]), ("CropBox", [0, 0, 0, 0])],
+            (25, 100),
+            (300, 300),
+        ),
+        ("inherited MediaBox without area", &[("MediaBox", [0, 0, 0, 0])], &[], (25, 500), LETTER_PX),
+        ("inherited CropBox outside the media box", &[("CropBox", [600, 600, 900, 900])], &[("MediaBox", [0, 0, 500, 500])], (25, 400), (500, 500)),
+    ];
+    let mut failures = Vec::new();
+    for (case, inherited, own, at, size) in cases {
+        let bytes = boxed(inherited, own, at);
+        let pdf = Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).map(|t| t.plain_text().trim().to_string());
+        if text.as_deref() != Some("Boxed") {
+            failures.push(format!("{case}: text {text:?}"));
+        }
+        let mut renderer = crate::PageRenderer::new(std::sync::Arc::new(bytes), crate::RenderConfig::default());
+        let out = renderer.render(crate::RenderRequest { page: 0, kind: crate::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        let ink = out.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128 && p[1] < 128 && p[2] < 128).count();
+        if out.error.is_some() || (out.width, out.height) != size || ink < 50 {
+            failures.push(format!(
+                "{case}: rendered {}×{} with {ink} dark pixels ({:?}), expected {}×{} with ink",
+                out.width, out.height, out.error, size.0, size.1
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 /// The glyph under a point is the first whose box holds it, edges included; between glyphs, none.

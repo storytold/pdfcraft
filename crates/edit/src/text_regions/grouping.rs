@@ -366,10 +366,13 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         if !block.rows.is_empty() {
             block.editor_text.push('\n');
         }
+        // The run placed before this one in the row, tracked rather than searched for: rows
+        // don't share runs, so it is the last one this loop pushed.
+        let mut prev_in_row: Option<&TextLine> = None;
         for &index in row {
             let Some(line) = lines.get(index) else { continue };
             // Some producers position separate words without encoding a space.
-            if let Some(prev) = block.lines.last().filter(|i| row.contains(i)).and_then(|i| lines.get(*i))
+            if let Some(prev) = prev_in_row
                 && !row_text.ends_with(char::is_whitespace)
                 && !line.text.starts_with(char::is_whitespace)
                 && line.frame_rect()[0] - prev.frame_rect()[2] > line.size * 0.12
@@ -383,6 +386,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             row_text.push_str(&line.text);
             block.invisible &= line.origin.state.render_mode == 3;
             block.lines.push(index);
+            prev_in_row = Some(line);
         }
         if !block.text.is_empty() {
             if block.text.ends_with('-') {

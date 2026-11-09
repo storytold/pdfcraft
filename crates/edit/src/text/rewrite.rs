@@ -1,7 +1,7 @@
-use super::blocks::{BlockStyle, TextBlock, paragraph_separator, wrap};
+use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
-    source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, needs_type3, no_japanese_font,
+    source_encodes, source_family, source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, joined, page_dict, rewritten_contents, splice, text_lines};
@@ -42,7 +42,7 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
-    let text = text.replace(['\n', '\r'], " ");
+    let text = text.replace(row_break, " ");
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
@@ -94,9 +94,18 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 let runs = type3_encode(&fallback, &fallback_shown)
                     .ok_or_else(|| EditError::Invalid(format!("\"{text}\" can't be shown by the {} fallback", fallback.family)))?;
                 let size = font_size_before(&ops, first).unwrap_or(target.size);
-                for (name, bytes) in runs {
-                    replacement.push(Op::new("Tf", vec![Object::name(&name), pdfcraft_content::num(size)]));
-                    replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+                let spacing = target.origin.state.char_spacing;
+                for run in runs {
+                    replacement.push(Op::new("Tf", vec![Object::name(&run.name), pdfcraft_content::num(size)]));
+                    if let Some(tc) = run.spacing {
+                        // A variation selector's empty glyph: shown at spacing zero, then the
+                        // line's own spacing back, so it adds no advance.
+                        replacement.push(Op::new("Tc", vec![pdfcraft_content::num(tc)]));
+                        replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(run.bytes))]));
+                        replacement.push(Op::new("Tc", vec![pdfcraft_content::num(spacing)]));
+                    } else {
+                        replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(run.bytes))]));
+                    }
                 }
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(format!("{} Type3", fallback.family));
@@ -240,7 +249,7 @@ fn choose_rewrite_path(
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
     let has_special_text = text.is_some_and(|draft| {
-        draft.contains(['\n', '\r'])
+        draft.contains(row_break)
             || pdfcraft_fonts::source_shaping::required(draft)
             || !pdfcraft_fonts::embedding::matching_faces(&block.base_font).is_empty()
     });
@@ -259,15 +268,15 @@ fn choose_rewrite_path(
 }
 
 /// The paragraph's text for writing back: explicit line breaks stay (#1443), and so does each typed
-/// U+0020 space: a run of them is not folded into one (#4199, #3797). `\r\n` and a lone `\r` are
-/// breaks too; other white space is written as one space. A line break also starts a paragraph,
-/// with the paragraph spacing before it.
+/// U+0020 space: a run of them is not folded into one (#4199, #3797). Every [`row_break`] is a break
+/// too; other white space is written as one space. A line break also starts a paragraph, with the
+/// paragraph spacing before it.
 fn paragraph_text(text: &str) -> String {
     text.replace("\r\n", "\n")
         .chars()
         .map(|c| match c {
-            '\r' => '\n',
-            c if c != '\n' && paragraph_separator(c) => ' ',
+            c if row_break(c) => '\n',
+            c if paragraph_separator(c) => ' ',
             c => c,
         })
         .collect()
@@ -376,7 +385,8 @@ struct Advance<'a> {
 
 impl Advance<'_> {
     fn of(&self, s: &str) -> f64 {
-        let extra = s.chars().count() as f64 * self.char_spacing;
+        // A variation selector draws nothing and adds no spacing: it takes no room.
+        let extra = s.chars().filter(|ch| !is_variation_selector(*ch)).count() as f64 * self.char_spacing;
         let t = match (self.source, self.type3) {
             (Some(m), _) => {
                 let visual_s = if m.visual_order { crate::indic::to_visual(s) } else { s.to_owned() };
@@ -424,7 +434,7 @@ fn choose_font(inputs: &FontInputs<'_>, fonts_res: &mut Dict) -> Result<FontChoi
         let name = inputs.font_name.to_owned();
         return Ok(FontChoice {
             show_font: name.clone(),
-            encode: Box::new(move |s: &str| m.encode(s).map(|bytes| vec![(name.clone(), bytes)])),
+            encode: Box::new(move |s: &str| m.encode(s).map(|bytes| vec![Type3Run { name: name.clone(), bytes, spacing: None }])),
             substituted: None,
         });
     }
@@ -451,7 +461,11 @@ fn choose_font(inputs: &FontInputs<'_>, fonts_res: &mut Dict) -> Result<FontChoi
     fonts_res.set(name.clone().into_bytes(), Object::Dict(f));
     let substituted = (!inputs.family_requested).then(|| base.to_string());
     let shown = name.clone();
-    Ok(FontChoice { show_font: name, encode: Box::new(move |s: &str| Some(vec![(shown.clone(), pdfcraft_fonts::win_ansi(s))])), substituted })
+    Ok(FontChoice {
+        show_font: name,
+        encode: Box::new(move |s: &str| Some(vec![Type3Run { name: shown.clone(), bytes: pdfcraft_fonts::win_ansi(s), spacing: None }])),
+        substituted,
+    })
 }
 
 /// The paragraph's move in the space it is drawn in: the move is in page space, so it is taken
@@ -697,12 +711,20 @@ impl LineWriter<'_> {
             ops.extend(source_show(metrics, &indic_piece, self.size, self.space, self.char_spacing, tw)?);
             return Ok(());
         }
-        for (font, bytes) in (self.encode)(piece).ok_or_else(|| EditError::Invalid(format!("\"{line}\" can't be shown")))? {
-            if font != cursor.shown_font {
-                ops.push(Op::new("Tf", vec![Object::name(&font), n(self.size)]));
-                cursor.shown_font = font;
+        for run in (self.encode)(piece).ok_or_else(|| EditError::Invalid(format!("\"{line}\" can't be shown")))? {
+            if run.name != cursor.shown_font {
+                ops.push(Op::new("Tf", vec![Object::name(&run.name), n(self.size)]));
+                cursor.shown_font = run.name;
             }
-            ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+            if let Some(tc) = run.spacing {
+                // A variation selector's empty glyph: shown at spacing zero, then the paragraph's
+                // own spacing back, so it adds no advance.
+                ops.push(Op::new("Tc", vec![n(tc)]));
+                ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(run.bytes))]));
+                ops.push(Op::new("Tc", vec![n(self.char_spacing)]));
+            } else {
+                ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(run.bytes))]));
+            }
         }
         Ok(())
     }
