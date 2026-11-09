@@ -195,8 +195,9 @@ fn unescape(text: &str) -> String {
             _ => entity
                 .strip_prefix("#x")
                 .or_else(|| entity.strip_prefix("#X"))
+                .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .or_else(|| entity.strip_prefix('#').filter(|d| d.bytes().all(|b| b.is_ascii_digit())).and_then(|d| d.parse().ok()))
                 .and_then(char::from_u32),
         };
         match c {
@@ -294,24 +295,31 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
 /// start and end of its value, and its quote character. Only matches inside a start tag.
 fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
     let mut from = 0;
-    // The last `<` and `>` before the match, found by one pass over the packet rather than by
-    // searching back from every match.
-    let (mut scanned, mut last_open, mut last_close) = (0, None, None);
+    // Track tag and quote state in one pass rather than searching back from every match.
+    let (mut scanned, mut in_tag, mut quote) = (0, false, None);
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
         from = i + name.len();
         let before = xmp.get(..i)?;
         let gap = xmp.get(scanned..i)?;
         #[cfg(test)]
         crate::work(gap.len());
-        if let Some(at) = gap.rfind('<') {
-            last_open = Some(scanned + at);
-        }
-        if let Some(at) = gap.rfind('>') {
-            last_close = Some(scanned + at);
+        for c in gap.chars() {
+            if let Some(q) = quote {
+                if c == q {
+                    quote = None;
+                }
+            } else {
+                match c {
+                    '<' => in_tag = true,
+                    '>' if in_tag => in_tag = false,
+                    '\'' | '\"' if in_tag => quote = Some(c),
+                    _ => {}
+                }
+            }
         }
         scanned = i;
-        // Preceded by whitespace, and inside a tag (the last `<` comes after the last `>`).
-        if !before.ends_with(char::is_whitespace) || last_open < last_close || last_open.is_none() {
+        // Preceded by whitespace, and inside a start tag.
+        if !before.ends_with(char::is_whitespace) || !in_tag || quote.is_some() {
             continue;
         }
         let rest = xmp.get(from..)?;
@@ -340,6 +348,13 @@ mod tests {
    <dc:creator><rdf:Seq><rdf:li>Old Author</rdf:li></rdf:Seq></dc:creator>\n\
    <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Old subject</rdf:li></rdf:Alt></dc:description>\n\
   </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
+
+    #[test]
+    fn unescape_rejects_signs_in_numeric_references() {
+        assert_eq!(unescape("a&#x+41;b&#+66;"), "a&#x+41;b&#+66;");
+        assert_eq!(unescape("&#x;&#;"), "&#x;&#;");
+        assert_eq!(unescape("&#x41;&#65;"), "AA");
+    }
 
     #[test]
     fn values_are_read_back_unescaped() {
@@ -415,6 +430,19 @@ mod tests {
         let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
         assert!(out.contains("<dc:titles>keep</dc:titles>") && out.contains("say dc:title=\"no\""), "{out}");
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title></rdf:Description>"), "{out}");
+    }
+
+    #[test]
+    fn attribute_like_text_inside_another_quoted_attribute_is_not_a_property() {
+        let packet = "<rdf:Description note='someone wrote dc:title=\"forged\" here'/>";
+        assert_eq!(attribute_span(packet, "dc:title"), None);
+    }
+
+    #[test]
+    fn apostrophe_in_text_does_not_hide_a_later_attribute() {
+        let packet = "<rdf:Description>don't</rdf:Description><rdf:Description dc:title='real'/>";
+        let found = attribute_span(packet, "dc:title").and_then(|(_, start, end, quote)| packet.get(start..end).map(|value| (value, quote)));
+        assert_eq!(found, Some(("real", '\'')));
     }
 
     #[test]

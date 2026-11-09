@@ -334,6 +334,9 @@ pub struct Common {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub anchor: Anchor,
+    /// Quarter turns counter-clockwise about the anchor (`rotate`), 0 to 3. Only a draw placed by
+    /// position is turned.
+    pub rotate: u8,
     pub w: Option<f64>,
     pub h: Option<f64>,
     pub min_w: Option<f64>,
@@ -366,6 +369,26 @@ impl Common {
 }
 
 impl Node {
+    /// The box a positioned object of `w` by `h` stands in, in its parent: from `x`, `y` and the
+    /// anchor, and for a draw, the only object that turns, turned about the anchor.
+    pub fn standing_box(&self, w: f64, h: f64) -> Rect {
+        let c = self.common();
+        let (x, y) = c.top_left(w, h);
+        let upright = Rect::new(x, y, w, h);
+        if !matches!(self, Node::Draw(_)) {
+            return upright;
+        }
+        let (ax, ay) = (c.x.unwrap_or(0.0), c.y.unwrap_or(0.0));
+        let (left, top, right, bottom) = (x - ax, y - ay, x + w - ax, y + h - ay);
+        // Counter-clockwise on a page whose y grows down, from the anchor.
+        match c.rotate {
+            1 => Rect::new(ax + top, ay - right, h, w),
+            2 => Rect::new(ax - right, ay - bottom, w, h),
+            3 => Rect::new(ax - bottom, ay + left, h, w),
+            _ => upright,
+        }
+    }
+
     pub fn common(&self) -> &Common {
         match self {
             Node::Subform(s) => &s.common,
@@ -737,6 +760,12 @@ pub struct Template {
     /// Fields that compute the page number or the page count on layout, by `id`, so text that
     /// embeds them can show the numbers.
     pub page_roles: Vec<(String, PageRole)>,
+    /// The `id`s of the fields some rich text embeds (`xfa:embed="#id"`, XFA 3.3 p. 1222): a new
+    /// value in one changes text shown elsewhere, so the form is laid out again.
+    pub embedded: std::collections::BTreeSet<String>,
+    /// The data paths of those fields, by name alone (any instance of a repeating subform), as
+    /// a script writes them: a write there changes text shown elsewhere.
+    pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
