@@ -212,6 +212,7 @@ mod tests {
             ],
             images: Vec::new(),
             background: None,
+            rules: Vec::new(),
         };
         let out = html(&[page], "Clean");
         assert!(out.contains("<p style=\"color:#008000\">Hello</p>"), "{out}");
@@ -243,6 +244,7 @@ mod tests {
                 Cell { text: "\u{1}".into(), size: 11.0, bold: true, italic: true, color: [0.0; 3], span: 1 },
                 Cell { text: "Val".into(), size: 11.0, bold: true, italic: false, color: [0.0; 3], span: 1 },
             ]],
+            ruled: None,
         };
         assert_eq!(table_html(&table, true), "<table>\n<tr><td></td><td><strong>Val</strong></td></tr>\n</table>\n");
     }
