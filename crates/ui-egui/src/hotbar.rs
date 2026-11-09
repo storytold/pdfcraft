@@ -30,14 +30,15 @@ pub(crate) struct Hotbar {
 
 impl Hotbar {
     /// The Hotbar tools window is over the pages: open, and drawn on the last pass. Read mode, full
-    /// screen and Organize don't draw the hotbar, and a window they hide holds no keys.
+    /// screen, Organize and a document that hides the toolbars don't draw the hotbar, and a window
+    /// they hide holds no keys.
     pub(crate) fn picker_over_pages(&self, ctx: &egui::Context) -> bool {
         self.picker_open && self.picker_shown.is_some_and(|pass| pass.saturating_add(1) >= ctx.cumulative_pass_nr())
     }
 
     /// Closes the Hotbar tools window when the hotbar is `hidden` on this pass (Read mode or full
     /// screen, which a native menu's click may have turned on just now), or the last pass didn't
-    /// draw it (Organize). Left open, it would hold the keys of the pass that hides it, and come
+    /// draw it (Organize, or a document that hides the toolbars). Left open, it would hold the keys of the pass that hides it, and come
     /// back over the pages on the pass that shows the hotbar again, after that pass's page keys
     /// had been read without it.
     pub(crate) fn close_hidden_picker(&mut self, ctx: &egui::Context, hidden: bool) {

@@ -9589,6 +9589,68 @@ fn test_cropped_image_selection_and_bounding_box() {
     assert!(h.state().views[0].picked_image.is_none(), "clicking cropped-away region must not hit-test or select the image");
 }
 
+/// Print production ▸ Add printer marks: the dialog adds removable marks around
+/// the trim box, widening the page to make room; Remove printer marks takes them off.
+#[test]
+fn printer_marks_are_added_from_the_dialog_and_removed() {
+    let mut h = harness(2, |_| {});
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().info.pages[0].width;
+    assert!(h.state_mut().execute("prepress.marks"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::PrinterMarks));
+    h.get_by_label("All marks");
+    h.get_by_label("Add").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Add printer marks"));
+    assert!(doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
+    // No trim box: the whole page is the trim box, so the page grew 36 pt a side for the marks.
+    assert!((doc.info.pages[0].width - (before + 72.0)).abs() < 0.5, "{} → {}", before, doc.info.pages[0].width);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Printer marks added");
+    assert!(h.state_mut().execute("prepress.marks.remove"));
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert!(!doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
+    assert_eq!(doc.can_undo(), Some("Remove printer marks"));
+}
+
+/// Print production ▸ Convert colours: the dialog converts the page's colours
+/// and says how many; with nothing to convert it says so and changes nothing.
+#[test]
+fn convert_colours_from_the_dialog() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let cs = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"1 0 0 rg 10 10 50 50 re f 0 0 1 RG 0 0 m 100 100 l S",
+    )));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("colours.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("prepress.convert_colors"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::ConvertColours));
+    h.get_by_label("Grayscale");
+    // The mode bar has a "Convert" too: the dialog's button is the last one.
+    h.query_all_by_label("Convert").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Converted 2 colours and 0 pictures on 1 pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Convert colours"));
+    assert!(h.state_mut().execute("prepress.convert_colors"));
+    h.run_steps(2);
+    h.query_all_by_label("Convert").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Nothing on those pages needed converting");
+}
+
 /// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
 /// strokes and says how many; with nothing to fix it says so and changes nothing.
 #[test]
