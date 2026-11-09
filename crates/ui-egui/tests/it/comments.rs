@@ -3599,7 +3599,8 @@ fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
     click(&mut h, p);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
     // #4358 review: a right-click on the Circle selects the group too, so the menu is the
-    // comment's, and a double-click there edits the group's text, which is the Square's.
+    // comment's, and a double-click there opens the group's pop-up window, which is the Square's
+    // (comment.popups).
     h.state_mut().views[0].comments.selected = None;
     let p = at(&h, 220.0, 150.0);
     h.hover_at(p);
@@ -3612,8 +3613,11 @@ fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
     h.run_steps(2);
     h.state_mut().views[0].comments.selected = None;
     crate::support::input::double_click(&mut h, p);
-    let composer = h.state().views[0].comments.composer.as_ref().map(|c| c.text.clone());
-    assert_eq!(composer.as_deref(), Some("Primary"), "a double-click on the Circle edits its group's text");
+    h.run_steps(4);
+    let c = comments(&h);
+    let primary = c.iter().find(|a| a.contents.as_deref() == Some("Primary")).expect("the primary");
+    assert_eq!(primary.popup.map(|w| w.open), Some(true), "a double-click on the Circle opens its group's window");
+    assert_eq!(h.state().views[0].comments.popup_rects.len(), 1, "one window");
 }
 
 /// As in Acrobat desktop, Delete deletes the group member clicked and keeps the rest of its
