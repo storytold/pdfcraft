@@ -129,7 +129,7 @@ fn stream(body: &[u8]) -> Vec<u8> {
     v
 }
 
-fn open(bytes: Vec<u8>) -> Document {
+pub(crate) fn open(bytes: Vec<u8>) -> Document {
     Document::open(Arc::new(bytes)).expect("opens")
 }
 
@@ -155,7 +155,7 @@ fn labels(doc: &Document) -> Vec<String> {
 
 /// Save incrementally, verify the prefix is untouched, and reopen — both with our reader and with
 /// an independent parser (hayro-syntax) that must agree on the page count.
-fn save_and_reopen(doc: &Document) -> Document {
+pub(crate) fn save_and_reopen(doc: &Document) -> Document {
     let original = doc.bytes().clone();
     let bytes = write_incremental(doc, &SaveOptions::default()).expect("saves");
     assert_eq!(&bytes[..original.len()], &original[..], "incremental save must not modify existing bytes");
@@ -861,7 +861,7 @@ fn deleting_a_page_drops_the_named_destinations_to_it() {
 // ── Combine / extract / split ──────────────────────────────────────────────────────────────────
 
 /// Build a classic-xref PDF from object bodies (object i+1 = bodies[i]).
-fn build(bodies: &[String], trailer: &str) -> Vec<u8> {
+pub(crate) fn build(bodies: &[String], trailer: &str) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, b) in bodies.iter().enumerate() {
@@ -921,7 +921,7 @@ fn doc_b() -> Document {
 }
 
 /// Write in full, reopen with our reader, and require hayro to agree on the page count.
-fn full_roundtrip(doc: &Document) -> Document {
+pub(crate) fn full_roundtrip(doc: &Document) -> Document {
     let bytes = write_full(doc, &SaveOptions::default()).expect("writes");
     let reopened = open(bytes.clone());
     let hay = hayro_syntax::Pdf::new(bytes).expect("hayro opens");

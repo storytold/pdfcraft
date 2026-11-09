@@ -17,6 +17,7 @@ mod attachments;
 mod boxes;
 mod comments;
 mod dedupe;
+mod dests;
 mod import;
 mod labels;
 mod outline;
@@ -31,6 +32,10 @@ pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_f
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
+pub use dests::{
+    MAX_DESTINATION_NAME, NamedDestination, add_named_destination, delete_named_destination, named_destinations, rename_named_destination,
+    set_named_destination,
+};
 pub use import::{
     CombineOutcome, Combiner, FieldConflicts, ImportOutcome, Run, SplitBy, combine, combine_field_conflicts, combine_grouped, combine_grouped_with,
     combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, import_value,
@@ -790,5 +795,7 @@ fn take_work() -> usize {
     WORK.with(|w| w.replace(0))
 }
 
+#[cfg(test)]
+mod dests_tests;
 #[cfg(test)]
 mod tests;
