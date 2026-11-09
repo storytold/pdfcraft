@@ -17,10 +17,14 @@
   `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` for the pushed head
   `81035bf2`, and the `MERGEABLE` above is the state at the force-push. The
   rebase onto the new `main` and the §6.6 gate re-run were done in the
-  2026-11-09 rebase session (§4, §6.6): the branch now sits on `origin/main`
-  `ca9e3c2c3` (which contains the requested `cde331fb7`), the local head before
-  the STATUS commit is `0e839a4b1`, all §6.6 gates are green, and nothing was
-  pushed, so PR #6622 still describes `81035bf2`.
+  2026-11-09 rebase session (§4, §6.6): the branch then sat on `origin/main`
+  `ca9e3c2c3` (which contains the requested `cde331fb7`), with the local head
+  before that STATUS commit at `0e839a4b1`. A later session rebased it again
+  onto `origin/main` `b6cbf9bb3` (307 commits on; 64 branch commits moved, four
+  conflicts; §4) with the field-projection fix `e0d200af5` at the tip: the
+  local head before this STATUS commit is `e0d200af5`, 65 ahead and 0 behind,
+  all §6.6 gates are green, and nothing was pushed, so PR #6622 still describes
+  `81035bf2`.
   **§6.3 (web host bridge) is done locally in `81a92f32f`** — the transport trait,
   the browser transport and the five host messages (§4, §6.3) — and is not
   pushed either: the fork, PR #6622 and its body still describe `81035bf2`.
@@ -1081,6 +1085,89 @@ not re-run for this rebase; clippy with `--features collab` and
 `cargo check -p pdfcraft --features collab` are green on the merged
 `ui-egui` files, and the last full UI run is §6.6 below.
 
+### Rebase onto `origin/main` `b6cbf9bb3` and the gate run at the rebased head (2026-11-09)
+
+The pushed head `4eea573be` (PR #6622) had been rebased onto `ca9e3c2c3`; `main`
+then moved on by **307 commits** to `b6cbf9bb3` ("Merge pull request #6710 from
+storytold/merge/forms-links-text2", 2026-11-09 19:45 +0800), and the PR reported
+`CONFLICTING`. `git rebase origin/main` moved all **64 branch commits** onto it
+with **four conflicts**, each resolved by hand:
+
+| File | Merge |
+|---|---|
+| `Cargo.lock` | **conflict**: main upgraded `zip` 9.1.0 → 9.1.3, which dropped `zopfli`; the branch's lock still had 9.1.0 + `zopfli`. Kept main's 9.1.3 block, dropped the `zopfli` package, kept the branch's new package entries |
+| `crates/annot/src/modify.rs` | **conflict**: both sides added before `set_review_state` — main reworded its doc comment, the branch added `add_reply_named`. Kept main's comment and the branch's function |
+| `crates/ui-egui/src/app.rs` | **conflict**: in `App::new()` main replaced the `session` field with `panes: Default::default()`, the branch adds the two `collab` fields. Kept both, collab fields first |
+| `crates/engine/src/edit.rs` | **conflict**: the `use crate::{…}` list — main added `Hairlines`, the branch `Restyle` (and their rustfmt wrapping differed). Kept main's list with `Restyle` in alphabetical place |
+
+`main` changed 325 files in `ca9e3c2c3..b6cbf9bb3` (27 562 insertions, 1 950
+deletions); 19 of them are also touched by the branch, so 15 merged
+automatically and each is byte-identical to a plain `git merge-file` of
+base/old-branch/`origin/main`. Every file the branch changes that main does not
+is byte-identical to the old tip, except the two the field fix touches
+(`crates/collab-client-pdf/src/lib.rs`, `crates/collab-pdf/src/lib.rs`), and
+every file main changes that the branch does not is byte-identical to
+`origin/main`. The session's brief expected conflicts in
+`crates/engine/src/session/editing.rs` (the
+`apply`/`prepare_text`/`apply_remote`/`apply_reporting(id, edit, record_undo)`
+split) and `crates/engine/src/tests.rs` merged **without** conflicts: main's
+changes there sit in different hunks, and both sides' tests survive —
+`git diff origin/main..HEAD -- crates/engine/src/tests.rs` is the two branch
+tests and nothing else.
+
+One compile break did come out of main's `forms` work and is fixed at the tip
+in `e0d200af5` "fix(collab): carry a button's on state and a list pick on the
+wire": `FieldValue` gained `Widget(usize)` (pick one button of a group) and
+`ChoiceIndices(Vec<usize>)` (pick an option by position), and a check box's
+kids each got their own on state. The projection now sends a `Widget` pick as
+the widget's on state and a single `ChoiceIndices` pick as that option's export
+value; a pick of several options (or of none) is refused with `Unsupported`,
+because the v1 wire carries one string and the replicas would otherwise
+diverge. The wire's check-box string is now read back as
+`FieldValue::Text(text)` on **both** the client (`collab-client-pdf`) and the
+adapter (`collab-pdf`), which the engine accepts for `Yes`/`true`/custom
+states alike (the old `Check(bool)` mapping read a capitalised or custom
+on-state as off), and the inverse of `field.set_value` now names the field's
+stored value instead of normalising a check box to `true`/`false`, so the
+`expect` compare sees the state the file holds.
+
+The fix sits at the tip rather than inside `281aaaed2`, the commit that
+introduced the projection: folding it in with `--autosquash` conflicted,
+because later commits rewrote `field_text`; as a separate commit the tree at
+`e0d200af5` is what the gates below ran on, while the intermediate commits
+before it do not build against the new `main` on their own.
+
+Backup of the pre-rebase head: `backup/pre-rebase-4eea573b` (= `4eea573b`).
+Rebased head before the STATUS commit: `e0d200af5` (the 64 replayed commits
+plus the field fix). The branch is 65 commits ahead of `b6cbf9bb3` and 0
+behind; `git merge-tree --write-tree origin/main HEAD` exits 0 with no
+conflicted paths. Nothing was pushed, so the fork, PR #6622 and its body still
+describe `81035bf2` and the PR stays `CONFLICTING`/`DIRTY` until the owner
+force-pushes.
+
+Gates at `e0d200af5` (host `agents`, rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, collab crates + daemon | `cargo clippy -p pdfcraft-collab-{proto,server,hub,client,client-pdf,session,ws,pdf,annot} -p pdfcraft-collab-daemon --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, collab crates + daemon | `cargo test` on the same package list | pass — **209**: proto 12, server 27 (unit), hub 5, client 13, client-pdf 28, session 5, ws 8 (unit) + 18 e2e, pdf 41, annot 18, daemon 31 (unit) + `tests/conflict_resolve.rs` 1 + `tests/crash_recovery.rs` 1 + `tests/publication_retry.rs` 1 |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+| Layering | `cargo xtask layers` | pass — 50 crates, no layering violations |
+| Mergeability | `git merge-tree --write-tree origin/main HEAD` | exit 0, no conflicted paths |
+
+The test numbers this session was asked to expect (142, e2e 8) are the
+`ca9e3c2c3` figures from the previous rebase; the commits added since then
+(page insert/duplicate, restyle/status reply, publication queue, presence
+selections, conflict resolution, line endings/font size/info, page
+replace/blank insert) added their tests. The counts above match the `#[test]`
+functions in the tree (proto 12, server 27, hub 5, client 13, client-pdf 28,
+session 5, ws 26, pdf 41, annot 18, daemon 34), so no test is duplicated by
+the rebase. The UI suite was not re-run for this rebase; the last full run is
+§6.6 below, and clippy with `--features collab` plus
+`cargo check -p pdfcraft --features collab` are green on the merged files.
+
 ### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
 
 `apps/pdfcraft-collab-server/tests/crash_recovery.rs`
@@ -1765,7 +1852,25 @@ comments, per-line range geometry, caret).
   `0e839a4b1`; the pre-rebase head is kept as
   `backup/pre-rebase-2529c8c2`. Nothing was pushed, so the PR still describes
   `81035bf2`.
-- **Gates at `0e839a4b1` are green** (§4): `cargo fmt --all --check`; clippy for
+- **Rebase onto `origin/main` `b6cbf9bb3`, done in the 2026-11-09 session.**
+  `git rebase origin/main` moved all 64 commits; four conflicts (`Cargo.lock` —
+  main's `zip` 9.1.3 without `zopfli`; `annot/src/modify.rs`; `ui-egui/src/app.rs`;
+  `engine/src/edit.rs`) were resolved by hand, and one compile fix at the tip
+  `e0d200af5` covers main's new `FieldValue::Widget`/`ChoiceIndices` and the
+  per-kid check-box on states (§4). The pre-rebase head is kept as
+  `backup/pre-rebase-4eea573b`; the rebased head before this STATUS commit is
+  `e0d200af5`, 65 ahead of `origin/main` and 0 behind. Nothing was pushed, so
+  the fork, PR #6622 and its body still describe `81035bf2`.
+- **Gates at `e0d200af5` are green** (§4): `cargo fmt --all -- --check`; clippy
+  for the nine collab crates plus the daemon and for `pdfcraft-ui-egui
+  --features collab`, `--all-targets -- -D warnings`; 209 collab/e2e tests
+  (proto 12, server 27, hub 5, client 13, client-pdf 28, session 5, ws 8 unit +
+  18 e2e, pdf 41, annot 18, daemon 31 + the conflict-resolve, crash-recovery
+  and publication-retry tests); `cargo check -p pdfcraft --features collab`;
+  `cargo xtask layers` (50 crates, no violations);
+  `git merge-tree --write-tree origin/main HEAD` exits 0.
+- **Gates at `0e839a4b1` were green** (§4; the historical `ca9e3c2c3` figure
+  set, superseded by the `b6cbf9bb3` rebase above): `cargo fmt --all --check`; clippy for
   the nine collab crates plus the daemon and for `pdfcraft-ui-egui --features
   collab`, `--all-targets -- -D warnings`; 142 collab/e2e tests (proto 12,
   server 22, hub 5, client 12, client-pdf 13, session 5, ws 6 unit, pdf 20,
