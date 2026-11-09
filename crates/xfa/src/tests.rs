@@ -4815,3 +4815,126 @@ fn a_template_inside_the_data_is_not_the_form() {
     let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
     assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
 }
+
+/// A multi-select choice list is bound to a data group of `value` elements, one per pick, and its
+/// value is theirs joined by newlines (XFA 3.3 p. 198). New picks replace the group's `value`
+/// elements, values off the list included, as Acrobat discards them (p. 199): the group was left
+/// as it was, so the old picks came back on reading, in the datasets and in the scripts' data.
+#[test]
+fn a_multi_select_lists_data_group_takes_its_new_picks() {
+    let shell =
+        crate::fixtures::static_shell("<form1><page1><grains><value>rye</value><value>barley</value><value>wheat</value></grains></page1></form1>");
+    let mut doc = Document::open(Arc::new(shell)).unwrap();
+    let path = som_to_path("form1[0].page1[0].grains[0]");
+    assert!(write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written);
+    let data = crate::script::data_of(&doc).unwrap();
+    assert_eq!(data.value_at(&path).as_deref(), Some("wheat\nmillet & oats"));
+    assert_eq!(data.count(&path, "value"), 2, "one value element per pick");
+    assert!(!write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written, "the same picks change nothing");
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written);
+    assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some(""), "nothing picked");
+    // Emptied, the group is marked as one (XFA 3.3 p. 150), so it is still written as picks.
+    let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xdp.contains("<grains xfa:dataNode=\"dataGroup\"></grains>"), "{xdp}");
+    assert!(
+        write_data_value(
+            &mut doc,
+            &path,
+            "rye
+millet"
+        )
+        .unwrap()
+        .written
+    );
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 2, "picks again, not text");
+    // A pick split or led by a comment is read whole: the same pick is no change, and clearing
+    // a pick that reads as empty through its first segment alone still clears it.
+    let commented =
+        crate::fixtures::static_shell("<form1><page1><grains><value><!-- a -->rye</value><value>whe<!-- b -->at</value></grains></page1></form1>");
+    let mut doc = Document::open(Arc::new(commented)).unwrap();
+    assert!(
+        !write_data_value(
+            &mut doc,
+            &path,
+            "rye
+wheat"
+        )
+        .unwrap()
+        .written,
+        "the same picks, read past the comments"
+    );
+    assert_eq!(
+        crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(),
+        Some(
+            "rye
+wheat"
+        ),
+        "and read back without them"
+    );
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written, "cleared");
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 0);
+    // Where `xfa` names another namespace and `pcxfa` is taken too, the marker's prefix is a free
+    // one, declared on the group, so no attribute in scope changes meaning.
+    let shadowed = crate::fixtures::static_shell(
+        "<form1><page1><grains xmlns:xfa=\"urn:other\" xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\"><value>rye</value></grains></page1></form1>",
+    );
+    let mut doc = Document::open(Arc::new(shadowed)).unwrap();
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written);
+    let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xdp.contains("xmlns:pcxfa1=\"http://www.xfa.org/schema/xfa-data/1.0/\" pcxfa1:dataNode=\"dataGroup\""), "{xdp}");
+    assert!(xdp.contains("xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\""), "the taken prefix keeps its namespace: {xdp}");
+    // With every candidate prefix taken, no marker can be written: the group keeps its pick
+    // and the skip is reported, rather than emptied into what would load as a data value.
+    let taken: String = (0..16).map(|i| if i == 0 { " xmlns:pcxfa=\"urn:t\"".to_string() } else { format!(" xmlns:pcxfa{i}=\"urn:t\"") }).collect();
+    let crowded =
+        crate::fixtures::static_shell(&format!("<form1><page1><grains xmlns:xfa=\"urn:other\"{taken}><value>rye</value></grains></page1></form1>"));
+    let mut doc = Document::open(Arc::new(crowded)).unwrap();
+    let r = write_data_value(&mut doc, &path, "").unwrap();
+    assert!(!r.written && r.warnings.iter().any(|w| w.contains("structured content")), "{:?}", r.warnings);
+    assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some("rye"));
+    // One `value` whose text holds a line break is one pick, not the two it would join to.
+    let one = crate::fixtures::static_shell(
+        "<form1><page1><grains><value>one
+two</value></grains></page1></form1>",
+    );
+    let mut doc = Document::open(Arc::new(one)).unwrap();
+    assert!(
+        write_data_value(
+            &mut doc, &path, "one
+two"
+        )
+        .unwrap()
+        .written,
+        "two picks replace the one"
+    );
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 2);
+    // The in-memory data, which scripts read before the packet is written, follows the same rule.
+    let mut tree = crate::script::data_of(
+        &Document::open(Arc::new(crate::fixtures::static_shell("<form1><page1><grains><value>rye</value></grains></page1></form1>"))).unwrap(),
+    )
+    .unwrap();
+    tree.apply(&DataOp::Value { path: path.clone(), text: "millet\nwheat".into() });
+    assert_eq!(tree.value_at(&path).as_deref(), Some("millet\nwheat"));
+    // Emptied in memory, the group still takes picks, not text.
+    tree.apply(&DataOp::Value { path: path.clone(), text: String::new() });
+    assert_eq!((tree.count(&path, "value"), tree.value_at(&path).as_deref()), (0, Some("")));
+    tree.apply(&DataOp::Value { path: path.clone(), text: "rye\nmillet".into() });
+    assert_eq!((tree.count(&path, "value"), tree.text_at(&path)), (2, Some("")), "picks again, not text");
+    assert_eq!(tree.value_at(&path).as_deref(), Some("rye\nmillet"));
+    let tree_of = |data: &str| crate::script::data_of(&Document::open(Arc::new(crate::fixtures::static_shell(data))).unwrap()).unwrap();
+    // A group read emptied, as the packet writer marks it, takes picks the same way.
+    let mut tree = tree_of("<form1><page1><grains xfa:dataNode=\"dataGroup\"/></page1></form1>");
+    tree.apply(&DataOp::Value { path: path.clone(), text: "rye\nmillet".into() });
+    assert_eq!(tree.count(&path, "value"), 2);
+    // A node holding anything but `value` leaves is not a list's picks: it is left as it was,
+    // as the packet writer leaves it (and reports the skip).
+    for structured in [
+        "<form1><page1><grains><value>rye</value><note>x</note></grains></page1></form1>",
+        "<form1><page1><grains><value><b>rye</b></value></grains></page1></form1>",
+    ] {
+        let mut tree = tree_of(structured);
+        let before = tree.clone();
+        tree.apply(&DataOp::Value { path: path.clone(), text: "millet".into() });
+        assert_eq!(tree, before, "{structured}");
+    }
+}

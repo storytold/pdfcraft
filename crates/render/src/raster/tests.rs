@@ -4073,6 +4073,23 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
     }
 }
 
+/// A `JBIG2Decode` image whose data starts with a JBIG2 file header (ISO 14492 D.4) draws, in
+/// either organization the header declares (hayro-jbig2 patch 17): sequential (flags bit 0 is 1,
+/// D.1) and random access (bit 0 is 0, D.2: the segment headers, ending with an end of file
+/// segment, then their data). A header with reserved flag bits set leaves the image out.
+#[test]
+fn a_jbig2_image_with_a_file_header_draws() {
+    const ID: [u8; 8] = [0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A];
+    let page = black_jbig2_page();
+    let header = |flags: u8| [&ID[..], &[flags], &1u32.to_be_bytes()].concat();
+    let (page_header, page_data) = page.split_at(11);
+    let end_of_file = [0, 0, 0, 1, 51, 0, 1, 0, 0, 0, 0];
+    assert!(jbig2_image_draws(&page), "without a header");
+    assert!(jbig2_image_draws(&[&header(0x01)[..], &page].concat()), "sequential");
+    assert!(jbig2_image_draws(&[&header(0x00)[..], page_header, &end_of_file, page_data].concat()), "random access");
+    assert!(!jbig2_image_draws(&[&header(0x11)[..], &page].concat()), "reserved flag bits");
+}
+
 /// The JBIG2 images of a page share one allowance, down to the step, and the next page starts with
 /// its own. The images differ by an extension segment: one image decoded again isn't decoded twice.
 #[test]
