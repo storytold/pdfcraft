@@ -347,7 +347,12 @@ pub(crate) fn info(d: &Document) -> Value {
             "horizontal": t.horizontal, "inward": t.inward, "direction": t.direction, "scale": t.scale, "opaque": t.opaque,
             "display": t.display,
         })).collect::<Vec<_>>(),
-        "attachments": i.attachments.iter().map(|a| json!({ "name": a.name, "description": a.description, "size": a.size })).collect::<Vec<_>>(),
+        "attachments": i.attachments.iter().map(|a| json!({ "name": a.name, "key": match &a.source { pdfcraft_render::AttachmentSource::Document { key } => Some(key), pdfcraft_render::AttachmentSource::Annotation { .. } => None }, "description": a.description, "size": a.size })).collect::<Vec<_>>(),
+        // A PDF portfolio (`/Collection`, ISO 32000-2 §7.11.6): its pages are a cover sheet and its
+        // documents are `attachments`; `initial` names the one presented first, null for the cover.
+        "portfolio": i.portfolio.as_ref().map(|p| json!({
+            "initial": p.initial.and_then(|n| i.attachments.get(n)).map(|a| &a.name), "view": p.view.name(),
+        })),
         // `substitute` names the face standing in for a program the document does not embed, and
         // `substitution` says why. Both are null for an embedded font: nothing stands in. A null
         // `substitute` with a non-null `substitution` means no face was available at all, so
