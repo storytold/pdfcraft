@@ -8825,6 +8825,9 @@ mod truetype_loca_format;
 // name.
 mod non_embedded_arial;
 
+// A Type 3 font without /Widths advances by its glyphs' d0/d1 widths (PDFBOX-2943).
+mod type3_proc_widths;
+
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
 fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
     let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());

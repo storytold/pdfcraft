@@ -782,8 +782,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = "hayro bootstrap with vendored patches. Text rendering modes follow ISO 32000-2 §9.3.6 for Type 3 fonts: 3 and 7 render nothing, the others render the glyph descriptions filled (never stroked), and 4 to 7 add nothing to the clipping path (hayro-interpret patches 42 and 64). Coverage is synthetic fixtures; no fidelity comparison across a Type 3 corpus yet"
+evidence = ["crates/render/src/raster/tests/type3_proc_widths.rs::a_type3_font_without_widths_advances_by_its_glyph_procedures", "crates/render/src/raster/tests/type3_proc_widths.rs::widths_the_font_gives_are_kept", "crates/render/src/raster/tests/type3_proc_widths.rs::a_type3_font_without_widths_is_reported"]
+notes = "hayro bootstrap with vendored patches. Text rendering modes follow ISO 32000-2 §9.3.6 for Type 3 fonts: 3 and 7 render nothing, the others render the glyph descriptions filled (never stroked), and 4 to 7 add nothing to the clipping path (hayro-interpret patches 42 and 64). A font without /Widths advances each glyph by its glyph procedure's d0/d1 width (§9.6.4) in rendering and text alike, and the page reports a render warning that the font's /Widths is missing (patch 90). Coverage is synthetic fixtures; no fidelity comparison across a Type 3 corpus yet"
 
 [[feature]]
 id = "view.render-cid-fonts"

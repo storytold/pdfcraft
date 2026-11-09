@@ -166,6 +166,10 @@ pub enum InterpreterWarning {
     /// read, or a Separation or DeviceN tint transform that cannot be evaluated) and was painted
     /// in a fallback colour. Reported at most once per content stream.
     ColorFallback,
+    /// PdfCraft patch (90): a Type 3 font without `/Widths` (or `/FirstChar`/`/LastChar`),
+    /// which ISO 32000-2 Table 110 requires, was selected; its glyphs advance by the widths
+    /// their glyph procedures set with `d0`/`d1`. Reported each time such a font is selected.
+    Type3WidthsMissing,
 }
 
 /// PdfCraft patch (73): ends a page's JBIG2 allowance with the page, so that what decodes on its
