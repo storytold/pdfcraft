@@ -127,6 +127,12 @@ impl PdfCraftApp {
                     "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
+            // Default font sizes of new text boxes and callouts (#5767).
+            "comment_font_sizes": self
+                .comment_prefs
+                .font_sizes()
+                .map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size }))
+                .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -144,6 +150,7 @@ impl PdfCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
+            "ocr": self.ocr_draft.to_pref(),
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
@@ -303,6 +310,9 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
+        // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
+        // flags); unknown or malformed values keep the defaults.
+        self.ocr_draft.apply_pref(&v["ocr"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
@@ -421,6 +431,16 @@ impl PdfCraftApp {
                 }
                 if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
                     self.comment_prefs.set_border_shape(tool, shape);
+                }
+            }
+        }
+        // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps
+        // the tool's own.
+        if let Some(sizes) = v["comment_font_sizes"].as_array() {
+            for e in sizes {
+                let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
+                if let Some(size) = e["font_size"].as_f64() {
+                    self.comment_prefs.set_font_size(tool, size);
                 }
             }
         }
