@@ -2021,7 +2021,7 @@ trailer << /Root 1 0 R >>
 }
 
 mod group_tests {
-    use crate::inspect::{Annotation, MAX_GROUP_DEPTH, group_primaries, link_replies};
+    use crate::inspect::{Annotation, MAX_GROUP_DEPTH, ReviewStates, group_primaries, link_replies};
 
     /// The annotation at `/Annots` position `index` of page 0, whose `/IRT` points at position
     /// `parent`, with `/RT /Group` when `grouped`.
@@ -2053,6 +2053,26 @@ mod group_tests {
     fn listed(mut all: Vec<Annotation>) -> Vec<Annotation> {
         link_replies(&mut all);
         all
+    }
+
+    /// A group is one comment, its primary's (ISO 32000-2 §12.5.6.2): a review status or a
+    /// checkmark set on a subordinate is the group's, as one set on the primary is.
+    #[test]
+    fn a_state_set_on_a_group_subordinate_is_the_groups() {
+        let state = |index: usize, parent: usize, state: &str| {
+            let mut a = annot(index, Some(parent), false);
+            a.subtype = "Text".into();
+            a.author = Some("Eve".into());
+            a.state = Some(state.into());
+            a
+        };
+        let all = listed(vec![annot(0, None, false), annot(1, Some(0), true), state(2, 1, "Accepted"), state(3, 1, "Marked"), annot(4, None, false)]);
+        let review = ReviewStates::new(&all);
+        let (primary, member, other) = (&all[0], &all[1], &all[4]);
+        assert_eq!(review.latest_status(primary), Some("Accepted"));
+        assert_eq!(review.marked(primary), ["Eve"]);
+        assert!(review.history(member).is_empty(), "the subordinate holds no state of its own");
+        assert!(review.history(other).is_empty());
     }
 
     /// ISO 32000-2 §12.5.6.2: a subordinate's primary is the annotation its `/IRT` points at,
