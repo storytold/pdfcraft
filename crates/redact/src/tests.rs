@@ -800,6 +800,16 @@ fn vertical_writing_text_under_a_mark_fails_closed() {
     mark(&mut hdoc, 0, &[[85.0, 55.5, 105.0, 61.0]], "");
     let r = apply(&mut hdoc, None).unwrap();
     assert_eq!(r.glyphs, 2, "the horizontal control is redacted: {r:?}");
+
+    // A Type0 font whose /Subtype is a reference still writes vertically (#6750).
+    let mut rdoc = make("Identity-V");
+    let page = pdfcraft_model::pages(&rdoc)[0].obj;
+    let res = rdoc.get(page).as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).cloned().unwrap();
+    let font_ref = res.get(b"Font").and_then(Object::as_dict).and_then(|f| f.get(b"F2")).and_then(Object::as_ref).unwrap();
+    let name_ref = rdoc.add(Object::Name(b"Type0".to_vec()));
+    rdoc.update_dict(font_ref, |d| d.set(b"Subtype".to_vec(), Object::Ref(name_ref))).unwrap();
+    mark(&mut rdoc, 0, &[[85.0, 55.5, 105.0, 61.0]], "");
+    assert_eq!(apply(&mut rdoc, None).unwrap_err(), RedactError::VerticalText(1), "a referenced /Subtype /Type0 is still vertical");
 }
 
 #[test]
@@ -821,6 +831,44 @@ fn images_are_removed_or_have_their_pixels_cleared() {
     assert_eq!(s.decoded().unwrap(), [0, 0, 255, 255], "pixels 1–2 (x 100–120) cleared");
     let Object::Stream(orig) = &*doc.get(ObjRef::new(7, 0)) else { panic!() };
     assert_eq!(orig.decoded().unwrap(), [255; 4], "the shared original is untouched");
+}
+
+/// `/Subtype 8 0 R` naming `/Image` is still an image, and the renderer draws it. Redaction read
+/// only a direct name, so it kept the `Do` and the samples under the box (#6750). The direct
+/// `/Subtype /Image` is the control.
+#[test]
+fn an_image_whose_subtype_is_a_reference_is_redacted() {
+    const MARKER: &[u8; 16] = b"F9-SECRET-PIXELS";
+    for subtype in ["/Image", "8 0 R"] {
+        let img = stream(&format!("/Type /XObject /Subtype {subtype} /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), MARKER);
+        let mut doc = one_page(b"q 10 0 0 10 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img, b"/Image".to_vec()]);
+        mark(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.images_removed, 1, "{subtype}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(!c.contains("/Im1 Do"), "{subtype}: {c}");
+        let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        assert!(!bytes.windows(MARKER.len()).any(|w| w == MARKER), "{subtype}: the image samples stay in the saved file");
+    }
+}
+
+/// An XObject the redactor cannot classify (no `/Subtype`, or one it does not know) may still draw
+/// something under a mark. Apply removes it there and verification counts it; one elsewhere stays.
+#[test]
+fn an_xobject_of_unknown_subtype_under_a_mark_goes() {
+    for subtype in ["", "/Subtype /PS", "/Subtype 42"] {
+        let x = stream(&format!("/Type /XObject {subtype} /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), [0]);
+        let src = b"q 10 0 0 10 10 10 cm /X1 Do Q q 10 0 0 10 200 200 cm /X1 Do Q";
+        let mut doc = one_page(src, "/XObject << /X1 7 0 R >>", vec![x]);
+        let rects = [[5.0, 5.0, 25.0, 25.0]];
+        assert_eq!(under(&mut doc, 0, &rects), 1, "{subtype:?}: verification counts it");
+        mark(&mut doc, 0, &rects, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_removed, 1, "{subtype:?}: {r:?}");
+        let c = content(&doc, 0);
+        assert_eq!(c.matches("/X1 Do").count(), 1, "{subtype:?}: only the placement outside the mark stays: {c}");
+        assert!(c.contains("200 200 cm"), "{subtype:?}: {c}");
+    }
 }
 
 #[test]
