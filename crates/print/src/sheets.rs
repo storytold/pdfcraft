@@ -164,8 +164,10 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
         Layout::Label { flip } => {
             sheets.extend(layout_labels(sizes, &pages, paper, settings.orientation, settings, flip));
         }
-        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
-            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
+        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate, custom } => {
+            // A predefined count has at most 16 × 16 cells; a custom grid up to 99 each way.
+            let fits = if custom { cols <= crate::MAX_GRID && rows <= crate::MAX_GRID } else { cols.checked_mul(rows).is_some_and(|n| n <= 256) };
+            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && fits);
             let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
             };
@@ -177,7 +179,10 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
             let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
-            let (gc, gr, sheet_landscape) = if cols == rows {
+            let (gc, gr, sheet_landscape) = if custom {
+                // A custom grid is laid out as given, on the sheet as chosen (Auto: portrait).
+                (cols, rows, false)
+            } else if cols == rows {
                 (cols, rows, page_landscape)
             } else if settings.orientation == Orientation::Landscape || (settings.orientation == Orientation::Auto && cols < rows) {
                 // 2 per sheet (1 × 2 on portrait) prints side by side on landscape paper.
