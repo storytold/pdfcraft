@@ -6,34 +6,72 @@
       <TextStyle Id="InstallerTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
       <Property Id="DefaultUIFont" Value="InstallerNormal" />
 
-      <Dialog Id="InstallWelcome" Width="370" Height="240" Title="[ProductName] Setup">
+      <Dialog Id="InstallWelcome" Width="370" Height="257" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40" Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" />
-        <Control Id="DescriptionUser" Type="Text" X="20" Y="55" Width="330" Height="40" Text="Setup will install [ProductName] only for your account and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" />
-        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17" Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17" Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
-        <Control Id="HotFolder" Type="CheckBox" X="20" Y="145" Width="330" Height="17" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
+        <Control Id="Description" Type="Text" X="20" Y="50" Width="330" Height="30" Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" />
+        <Control Id="DescriptionUser" Type="Text" X="20" Y="50" Width="330" Height="30" Text="Setup will install [ProductName] only for your account and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" />
+        <!-- The install folder (#1139): typed here, or picked in the browse dialog. It starts on the
+             folder install-policy.wxi chose for the scope (the recorded one on an update). Install
+             validates and sets it (SetTargetPath) before the dialog closes. -->
+        <Control Id="InstallToLabel" Type="Text" X="20" Y="84" Width="330" Height="12" Text="Install &amp;to:" />
+        <Control Id="InstallTo" Type="PathEdit" X="20" Y="98" Width="262" Height="18" Property="INSTALLFOLDER" />
+        <Control Id="Browse" Type="PushButton" X="288" Y="96" Width="62" Height="22" Text="B&amp;rowse…">
+          <Publish Event="SpawnDialog" Value="BrowseFolder" />
+        </Control>
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="126" Width="330" Height="17" Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="144" Width="330" Height="17" Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
+        <Control Id="HotFolder" Type="CheckBox" X="20" Y="166" Width="330" Height="17" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
             Property="INSTALLHOTFOLDER" CheckBoxValue="1" Text="Also install PdfCraft &amp;Hot Folder" />
-        <Control Id="HotFolderDescription" Type="Text" X="32" Y="165" Width="318" Height="30" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
+        <Control Id="HotFolderDescription" Type="Text" X="32" Y="186" Width="318" Height="30" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
             Text="Adds a background service that starts with Windows. Only tasks you configure and enable are processed." />
-        <Control Id="Install" Type="PushButton" X="195" Y="205" Width="75" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Install">
+        <Control Id="Install" Type="PushButton" X="195" Y="222" Width="75" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Install">
           <!-- CostFinalize precedes the welcome dialog, so apply the user's feature choice here.
                Only an installation for everyone can add the service; both buttons run the same events. -->
-          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" Order="1" />
-          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="2" />
-          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="3" />
-          <Publish Event="EndDialog" Value="Return" Order="4" />
+          <Publish Event="SetTargetPath" Value="INSTALLFOLDER" Order="1" />
+          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" Order="2" />
+          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="3" />
+          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="4" />
+          <Publish Event="EndDialog" Value="Return" Order="5" />
         </Control>
-        <Control Id="InstallUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="195" Y="205" Width="75" Height="23" Text="&amp;Install">
+        <Control Id="InstallUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="195" Y="222" Width="75" Height="23" Text="&amp;Install">
           <!-- CostFinalize precedes the welcome dialog, so apply the user's feature choice here.
                Only an installation for everyone can add the service; both buttons run the same events. -->
-          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" Order="1" />
-          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="2" />
-          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="3" />
-          <Publish Event="EndDialog" Value="Return" Order="4" />
+          <Publish Event="SetTargetPath" Value="INSTALLFOLDER" Order="1" />
+          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" Order="2" />
+          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="3" />
+          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="4" />
+          <Publish Event="EndDialog" Value="Return" Order="5" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="205" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="280" Y="222" Width="70" Height="23" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
+      <!-- Windows Installer's own folder browser, in native controls (#1139): the drive and parent
+           list, the folders at the current level, Up, New folder, and the full path to type.
+           OK validates and sets the folder; Cancel puts back what the welcome dialog had. -->
+      <Dialog Id="BrowseFolder" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Choose an install folder" />
+        <Control Id="LookInLabel" Type="Text" X="20" Y="45" Width="100" Height="12" Text="&amp;Look in:" />
+        <Control Id="DirectoryCombo" Type="DirectoryCombo" X="20" Y="58" Width="215" Height="80" Property="INSTALLFOLDER" Fixed="yes" Remote="yes">
+          <Subscribe Event="IgnoreChange" Attribute="IgnoreChange" />
+        </Control>
+        <Control Id="Up" Type="PushButton" X="245" Y="57" Width="40" Height="19" Text="&amp;Up">
+          <Publish Event="DirectoryListUp" Value="0" />
+        </Control>
+        <Control Id="NewFolder" Type="PushButton" X="290" Y="57" Width="60" Height="19" Text="&amp;New folder">
+          <Publish Event="DirectoryListNew" Value="0" />
+        </Control>
+        <Control Id="DirectoryList" Type="DirectoryList" X="20" Y="82" Width="330" Height="105" Property="INSTALLFOLDER" Sunken="yes" TabSkip="no" />
+        <Control Id="FolderLabel" Type="Text" X="20" Y="195" Width="100" Height="12" Text="&amp;Folder name:" />
+        <Control Id="PathEdit" Type="PathEdit" X="20" Y="209" Width="330" Height="18" Property="INSTALLFOLDER" />
+        <Control Id="OK" Type="PushButton" X="195" Y="237" Width="75" Height="23" Default="yes" Text="OK">
+          <Publish Event="SetTargetPath" Value="INSTALLFOLDER" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="237" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="Reset" Value="0" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
       </Dialog>
 
