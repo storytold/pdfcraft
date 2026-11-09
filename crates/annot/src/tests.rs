@@ -3079,8 +3079,8 @@ fn a_referenced_colour_is_listed_like_a_direct_one() {
 }
 
 /// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
-/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The builder
-/// doesn't follow it and draws no appearance, as for any colour it can't read.
+/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The display
+/// follows the reference (`draw::with_direct_values`) and draws it black.
 #[test]
 fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
     let doc = document_of(&[
@@ -3093,9 +3093,10 @@ fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
     ]);
     let display = with_missing_appearances(&doc).expect("the RGB square gets a fallback appearance");
     let squares = list(&display, 0);
-    assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
-    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
-    assert_eq!(summaries(&doc)[0].color, None, "nor in the comment list");
+    let content = ap_content(&display, &squares[0]);
+    assert!(content.contains("0 0 0 RG") && !content.contains("0 1 1 RG"), "CMYK black, no cyan stand-in: {content}");
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), Some([0.0, 0.0, 0.0]), "the properties show the colour drawn");
+    assert_eq!(summaries(&doc)[0].color, None, "the comment list shows no colour rather than cyan");
 }
 
 /// The `y` of every `1 0 0 1 x y Tm` in `content`: where each piece of text sits.
