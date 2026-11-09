@@ -9,6 +9,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
+use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
@@ -41,6 +42,7 @@ mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
+pub(crate) use area::SignTab;
 pub(crate) use area::signature_badges;
 use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
@@ -255,22 +257,6 @@ impl ImageObb {
     }
 }
 
-/// Whether pointer `p` is on an image being cropped, its crop box or its handles (#5835).
-pub(crate) fn crop_contains_point(
-    img: &pdfcraft_engine::PageImage,
-    crop: &crate::edit_text_ui::CropMode,
-    xf: &PageXform,
-    info: &DocInfo,
-    page: usize,
-    p: Pos2,
-) -> bool {
-    let obb = ImageObb::from_image(img, xf, info, page);
-    let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
-    crate::edit_text_ui::quad_contains(obb.corners(), p)
-        || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
-        || crate::edit_text_ui::crop_controls_contain(img, crop, xf, info, page, p)
-}
-
 /// The page display as it was before full screen, put back on leaving it
 /// ([`DocView::enter_presentation`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -434,6 +420,63 @@ pub struct Snapshot {
     pub from: String,
 }
 
+/// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
+/// or whether a signature's appearance draws it.
+pub(crate) fn signature_states_changed(before: &[pdfcraft_engine::SignatureInfo], after: &[pdfcraft_engine::SignatureInfo]) -> bool {
+    before.len() != after.len()
+        || before.iter().zip(after).any(|(b, a)| b.field != a.field || b.status != a.status || b.verdict_shown != a.verdict_shown)
+}
+
+/// The mark's side as a share of the widget's shorter side.
+const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points: a widget whose shorter side is under
+/// `MARK_SIDE_MIN / MARK_SIDE_SHARE` (32 points) keeps only its outline. A field over that at 100%
+/// can fall under it when the page is zoomed out to fit.
+const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+const MARK_ICON_SHARE: f32 = 0.64;
+
+/// The screen position of a widget's bottom-right corner on the page (`rect`, user space): where
+/// its validation mark goes, wherever the page's /Rotate and the view turn it.
+fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Pos2 {
+    let [_, bottom, right, _] = rect.map(|v| v as f32);
+    xf.user_rect(info, page, [right, bottom, right, bottom]).min
+}
+
+/// Where the validation mark sits in the part of a signature widget's screen rectangle that is on
+/// the page (`page`, on screen too), or `None` when that part is too small for a legible one. It
+/// goes in the corner nearest `anchor`, the screen position of the widget's bottom-right corner on
+/// the page, so it turns with the page and the view: off the middle, where a signer's artwork
+/// usually is, and clear of the state a named-layer appearance captions across its top.
+fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    // A widget past the crop box's edge shows its mark on the page, not beside it.
+    let widget = widget.intersect(page);
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    // A NaN anchor compares false either way and takes the bottom-right corner.
+    let left = anchor.x - widget.min.x < widget.max.x - anchor.x;
+    let top = anchor.y - widget.min.y < widget.max.y - anchor.y;
+    let x = if left { widget.min.x + inset } else { widget.max.x - inset - side };
+    let y = if top { widget.min.y + inset } else { widget.max.y - inset - side };
+    Some(Rect::from_min_size(pos2(x, y), vec2(side, side)))
+}
+
 /// The name shown for a document tab, the window title and the Combine picker.
 /// A snapshot reads like its source document, plus the snapshot suffix that tells
 /// the tabs apart. Without a title the file name (which already carries the suffix)
@@ -459,6 +502,9 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 }
 
 pub struct DocView {
+    /// Where the tab shows (split view's panes) and the key that tells two
+    /// views of one document apart (`crate::panes`).
+    pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
     pub zoom: f32,
     pub fit: Fit,
@@ -492,6 +538,10 @@ pub struct DocView {
     pub forward: Vec<usize>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
+    /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
+    /// starts at the edge the reader comes from (`false`: its left, after →; `true`: its right,
+    /// after ←) instead of keeping the column.
+    pub(crate) goto_side: Option<bool>,
     /// Pending position within that page from a destination ([`Self::go_to_dest`]): the point
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
     /// from the viewport's top-left corner.
@@ -499,6 +549,12 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Pending keyboard scrolling sideways, in points right (negative: left): → / ← on a page
+    /// wider than the window.
+    pub key_side: f32,
+    /// As last drawn: whether the view was at its left and at its right edge (both when the
+    /// pages fit across), so → / ← turn the page there and scroll sideways elsewhere.
+    side_edges: Option<(bool, bool)>,
     /// Single-page view, as last drawn: the page shown and whether the view was at its top and
     /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
     single_edges: Option<(usize, bool, bool)>,
@@ -512,6 +568,10 @@ pub struct DocView {
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
+    /// Pages whose content was cut at the renderer's limits (#623): drawn and searched in part.
+    cut_pages: std::collections::BTreeSet<usize>,
+    /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
+    cut_notice_dismissed: std::collections::BTreeSet<usize>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -541,6 +601,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
+    text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -567,8 +629,8 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page sizes (width, height) in points (view space), for mapping text positions to scroll offsets.
+    page_sizes: Vec<(f32, f32)>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
@@ -585,6 +647,10 @@ pub struct DocView {
     /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
     /// they are looked at again only after the document changes (an image added, say).
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
+    /// Scans Edit found while no engine could read them, with the document's edit generation
+    /// then: they wait for one (the web build downloads the models when first needed), and are
+    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`) or the document changes.
+    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// The document owns the full coarse-wheel distance, including its acceleration.
@@ -607,6 +673,10 @@ pub struct DocView {
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+    /// Edit text: a click on grouped artwork with text queued [`Edit::PrepareText`] for its page:
+    /// the page and the point clicked (user space), whose paragraph opens once the page is
+    /// prepared, so one click on grouped text starts editing it.
+    pub(crate) grouped_text_click: Option<(usize, [f64; 2])>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The paragraph editor whose edit was just queued. It opens again with its typing if the
     /// edit fails, as a refused form field does.
@@ -623,6 +693,10 @@ pub struct DocView {
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
     pub picked_image: Option<crate::image_pick::PickedImage>,
+    /// A click (page, user-space point, document generation) whose picture is still being looked for.
+    pub(crate) pending_pick: Option<(usize, [f64; 2], u64)>,
+    /// The pictures of the page last asked about.
+    pub(crate) pictures: crate::image_pick::PagePictures,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
     /// Commenting state: selected comment, gestures, composer.
@@ -641,6 +715,24 @@ pub struct DocView {
     /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// How many Apply redactions steps are in effect in this view. While it is above 0, Save
+    /// proposes the name with `_Redacted` ([`pdfcraft_engine::redacted_file_name`]), and while it is
+    /// above `redactions_downloaded`, Save asks where.
+    /// Undo of an Apply redactions step takes one off and Redo adds it back. Reload and a desktop
+    /// save set it to 0, and Revert sets it to `redactions_downloaded`; after a desktop save the document has the name it was saved
+    /// under. A web download keeps it, so later downloads carry the `_Redacted` name.
+    pub redactions_applied: usize,
+    /// How many Apply redactions steps saved into the document's file are undone in this view.
+    /// While it is above 0, Save asks where, so the restored content is not written over the
+    /// redacted file. Redo takes one off. Revert, Reload and a desktop save set it to 0.
+    pub redactions_undone_after_save: usize,
+    /// Set when Apply redactions runs while saved Apply redactions steps are undone: Redo can no
+    /// longer bring those steps back, so Save asks where until a desktop save or Revert clears it.
+    pub saved_redactions_cut_off: bool,
+    /// `redactions_applied` at the last web download, which Revert restores. While
+    /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
+    /// save leaves it at 0.
+    pub redactions_downloaded: usize,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -666,8 +758,13 @@ pub struct DocView {
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// What the page modules claim for the cursor this frame; `document_area` sets it once.
     pub(crate) cursor: crate::page_cursor::PageCursor,
-    /// Who the press the pages hold belongs to.
-    pub(crate) router: crate::page_router::PageRouter,
+    /// Who the press the pages hold belongs to. Only the page view reads it: it tells each page
+    /// module what the press is to its page (`PagePress`).
+    pub(in crate::canvas) router: crate::page_router::PageRouter,
+    /// What the last right-click on a page went to, and on which page (`None` off the pages, and for
+    /// Add text, which takes every right-click): the page's menu shows its entries when it has a menu
+    /// and is the one selected, or else the page's own.
+    pub(in crate::canvas) menu_for: Option<(usize, crate::page_router::Owner)>,
     /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
     /// its release neither clicks nor ends a drag.
     pub(crate) press_cancelled: bool,
@@ -777,6 +874,8 @@ pub(crate) enum PageMenuAction {
     MarqueeZoom,
     Copy,
     Paste(usize, [f64; 2]),
+    /// Paste the copied comments, centred at this point of the page.
+    PasteComments(usize, [f64; 2]),
     AddComment(usize, [f64; 2]),
     AddBookmark,
     TakeSnapshot,
@@ -798,6 +897,8 @@ pub(crate) struct PageMenuPerms {
     pub can_copy: bool,
     pub can_copy_items: bool,
     pub can_paste: bool,
+    /// Copied comments wait to be pasted, and comments may be added.
+    pub can_paste_comments: bool,
     pub has_annotations: bool,
 }
 
@@ -839,6 +940,9 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
         ui,
         A::Paste(page, at),
     );
+    if perms.can_paste_comments {
+        pick(ui.button(tl!("Paste comments")), ui, A::PasteComments(page, at));
+    }
 
     ui.separator();
 
@@ -889,13 +993,20 @@ impl DocView {
         if let Some(q) = &mut self.camera {
             q.grab = None;
         }
-        self.block_drag = None;
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
         self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
+        self.cancel_edit_text_gestures();
+    }
+
+    /// Abandon Edit text's pointer gestures (a paragraph moved or rewrapped, a picture moved,
+    /// resized, turned or cropped, added content moved, the objects' area selection or move), as
+    /// [`Self::cancel_pointer_gestures`] does: what they were previewing is not applied.
+    pub(crate) fn cancel_edit_text_gestures(&mut self) {
+        self.block_drag = None;
         self.content.cancel_pointer_gesture();
         self.objects.cancel_pointer_gesture();
         if let Some(image) = &mut self.image_selection {
@@ -907,6 +1018,7 @@ impl DocView {
     /// any layout or zoom the PDF itself asks for.
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
+            pane: Default::default(),
             id,
             zoom: defaults.zoom,
             fit: defaults.fit,
@@ -928,14 +1040,19 @@ impl DocView {
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
+            goto_side: None,
             goto_point: None,
             key_scroll: 0.0,
+            key_side: 0.0,
+            side_edges: None,
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
             presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
+            cut_pages: Default::default(),
+            cut_notice_dismissed: Default::default(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),
@@ -950,6 +1067,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            text_links: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -965,7 +1083,7 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
-            page_heights: info.pages.iter().map(|p| p.height).collect(),
+            page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
             screen_ppp: 1.0,
@@ -974,6 +1092,7 @@ impl DocView {
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
+            auto_ocr_awaiting_models: Default::default(),
             wheel: Default::default(),
             wheel_motion: Default::default(),
             wheel_frame: None,
@@ -986,6 +1105,7 @@ impl DocView {
             organize_range: Default::default(),
             pending_edit: None,
             edit_lines: HashMap::new(),
+            grouped_text_click: None,
             line_editor: None,
             applied_editor: None,
             pending_text_open: None,
@@ -995,6 +1115,8 @@ impl DocView {
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
+            pending_pick: None,
+            pictures: Default::default(),
             block_drag: None,
             pending_action: None,
             insert_at: None,
@@ -1026,6 +1148,10 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redactions_applied: 0,
+            redactions_undone_after_save: 0,
+            saved_redactions_cut_off: false,
+            redactions_downloaded: 0,
             crop_drag: None,
             camera: None,
             camera_done: None,
@@ -1040,6 +1166,7 @@ impl DocView {
             signature_drag: Default::default(),
             cursor: Default::default(),
             router: Default::default(),
+            menu_for: None,
             press_cancelled: false,
         }
     }
@@ -1050,7 +1177,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
-        self.page_heights = info.pages.iter().map(|p| p.height).collect();
+        self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
         self.selected.retain(|p| *p <= last);
@@ -1089,10 +1216,11 @@ impl DocView {
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
         fresh.thumbnail_zoom = self.thumbnail_zoom;
-        // Same document id, so the scroll offset egui keeps for it is still this document's.
+        // Same view key (`pane`), so the scroll offset egui keeps for it is still this view's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
         fresh.notice_dismissed = self.notice_dismissed;
+        fresh.cut_notice_dismissed = std::mem::take(&mut self.cut_notice_dismissed);
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
@@ -1106,11 +1234,51 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
         self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
         self.page_input_reselect = true;
+    }
+
+    /// Another view of this document changed it (split view: an edit, Undo,
+    /// a reload): start afresh as a reload does, keeping the reader's place, so nothing here
+    /// points into the old version.
+    pub(crate) fn follow_document(&mut self, info: &DocInfo) {
+        let continuous = self.continuous;
+        self.document_replaced(info);
+        self.continuous = continuous;
+    }
+
+    /// A second view of this document (split view), showing what this one shows.
+    pub(crate) fn twin(&self, info: &DocInfo) -> Self {
+        let mut v = Self::new(self.id, info, ViewDefaults::default());
+        v.zoom = self.zoom;
+        v.fit = self.fit;
+        v.layout = self.layout;
+        v.continuous = self.continuous;
+        v.show_page_gaps = self.show_page_gaps;
+        v.rotation = self.rotation;
+        v.cover = self.cover;
+        v.current = self.current;
+        v.page_input = self.page_input.clone();
+        v.highlight_fields = self.highlight_fields;
+        v.notice_dismissed = self.notice_dismissed;
+        v.scripts_off_noted = self.scripts_off_noted;
+        v.goto = Some((self.current, 0.0));
+        v
+    }
+
+    /// The key that tells this view apart from another view of the same document (split view):
+    /// unique for the app's life. Ids of what is drawn over the page are keyed by it.
+    pub fn view_key(&self) -> u64 {
+        self.pane.key
+    }
+
+    /// Where this tab shows: the main pane or split view's second pane.
+    pub fn place(&self) -> crate::panes::Place {
+        self.pane.place
     }
 
     /// Select pages in the organize grid (tests, automation). Empty clears the selection.
@@ -1143,6 +1311,10 @@ struct PageEnv<'a> {
     by_line: &'a String,
     calc_order: bool,
     can_copy: bool,
+    /// Copied comments wait to be pasted.
+    can_paste_comments: bool,
+    /// Copied comments hang on the pointer (`Gesture::Place`): the click is theirs.
+    placing: bool,
     can_crop: bool,
     can_fill: bool,
     can_modify: bool,
@@ -1162,6 +1334,7 @@ struct PageEnv<'a> {
     info: &'a DocInfo,
     initials: &'a Option<crate::fill_sign::SavedSig>,
     key_scroll: f32,
+    key_side: f32,
     middle_gesture: bool,
     modal: bool,
     navigation_enabled: bool,
@@ -1171,6 +1344,7 @@ struct PageEnv<'a> {
     precise_scroll: Vec2,
     prefs: &'a comments::CommentPrefs,
     preparing: bool,
+    prepare_tab_order: Option<&'a [(usize, usize)]>,
     rects: &'a Vec<Rect>,
     redact_mark: ([f64; 3], f64),
     scale: f32,
@@ -1182,6 +1356,8 @@ struct PageEnv<'a> {
     table_preview: &'a Option<crate::field_table_ui::Preview>,
     tag: u64,
     text_style: &'a pdfcraft_engine::AddedText,
+    /// Preferences: addresses written as plain page text open like links (#4207).
+    text_links: bool,
     tool: QuickTool,
     units: crate::units::Unit,
     unobstructed: bool,
@@ -1189,6 +1365,7 @@ struct PageEnv<'a> {
     y_shift: f32,
     fill_text_size: f64,
     fill_text_color: [f64; 3],
+    fill_text_border: crate::fill_sign::TextBorder,
     today: (i64, u32, u32),
     can_paste_image: bool,
 }
@@ -1198,6 +1375,8 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    comment_notice: Option<&'static str>,
+    copy_comments: bool,
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
@@ -1209,8 +1388,12 @@ struct PageOut {
     open_signature: bool,
     open_table: Option<(usize, [f64; 4])>,
     page_action: Option<PageMenuAction>,
+    paste_comments_at: Option<(usize, [f64; 2])>,
     primary_down: bool,
     refused: Option<String>,
+    /// The current page or spread where it is drawn, every page of it: one off screen (the second
+    /// page of a zoomed spread) has no screen transform, but still decides where the row ends.
+    row_on_screen: Option<Rect>,
     stamp_placed: bool,
 }
 
@@ -1240,11 +1423,10 @@ struct PageFrame<'a> {
 }
 
 impl PageFrame<'_> {
-    /// Where this frame's right-click is, on the page at `rect`, for the first page it is on: pages
-    /// that touch (the gaps hidden) can share a row of pixels, and a right-click there is one
-    /// page's, as a press is.
-    fn right_click_on(&mut self, rect: Rect) -> Option<Pos2> {
-        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && rect.contains(*p))?;
+    /// Where this frame's right-click is, for the first page it is `on`: pages that touch (the gaps
+    /// hidden) can share a row of pixels, and a right-click there is one page's, as a press is.
+    fn right_click_on(&mut self, on: impl FnOnce(Pos2) -> bool) -> Option<Pos2> {
+        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && on(*p))?;
         self.right_clicked = true;
         Some(p)
     }
@@ -1539,14 +1721,26 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
+    // Addresses written as plain text are found once per text layer, before the tools hit-test them.
+    if frame.env.text_links {
+        view.refresh_text_links(i);
+    }
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
-        if let Some(p) = frame.right_click_on(xf.rect) {
+        if let Some(p) = frame.right_click_on(|p| xf.rect.contains(p)) {
             comments::anchor(&pcx, p, view);
         }
-        PageInput { consumed: true, area_tool: false, hover: None, released_over: false }
+        PageInput {
+            press: crate::page_router::PagePress::Elsewhere,
+            text_drag: false,
+            consumed: true,
+            area_tool: false,
+            hover: None,
+            released_over: false,
+            sign_tabs: Vec::new(),
+        }
     } else {
         page_tool_input(ui, view, frame, &slot)
     };
@@ -1586,6 +1780,7 @@ fn draw_pages(
         coarse_scroll,
         calc_order,
         can_copy,
+        can_paste_comments,
         can_modify,
         content_h,
         content_w,
@@ -1597,6 +1792,7 @@ fn draw_pages(
         hand,
         info,
         key_scroll,
+        key_side,
         middle_gesture,
         modal,
         navigation_enabled,
@@ -1604,8 +1800,6 @@ fn draw_pages(
         prefs,
         preparing,
         selection_wheel,
-        ppp,
-        rects,
         single_paging,
         tool,
         unobstructed,
@@ -1626,7 +1820,7 @@ fn draw_pages(
     // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
     // until after the text widgets when a selection owns that drag.
     let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + coarse_scroll };
-    let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
+    let delta = auto_delta + edge_delta - vec2(key_side, key_scroll) + wheel_delta + glide;
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
@@ -1674,54 +1868,10 @@ fn draw_pages(
         view.links.context = None;
         // Set again below by the page right-clicked: a right-click off the pages (between them,
         // beside one) anchors no page's menu, which then acts on the current page. It deselects the
-        // comment too (below), as one on a page's empty part does. A selected Prepare field keeps
-        // its menu, off the pages as on them.
+        // comment, and Edit text's picture, too (below), as one on a page's empty part does. A
+        // selected Prepare field stays selected, and the menu is the page's there too.
         view.comments.context_at = None;
-        let mut over_image = false;
-        if tool == QuickTool::EditText {
-            let pointer_pos = ptr.pos;
-            if let Some(p) = pointer_pos {
-                for &page_idx in visible_pages {
-                    let r = snap_to_pixels(rects[page_idx].translate(origin.to_vec2()), ppp);
-                    if !r.intersects(visible) {
-                        continue;
-                    }
-                    let xf =
-                        PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
-                    let images = cached_edit_images(view, doc, page_idx).to_vec();
-                    // Crop controls own the click even when another image overlaps them.
-                    if view.image_selection.as_ref().is_some_and(|s| {
-                        s.page == page_idx
-                            && s.crop
-                                .as_ref()
-                                .zip(images.get(s.index))
-                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
-                    }) {
-                        over_image = true;
-                        break;
-                    }
-                    for (idx, img) in images.iter().enumerate().rev() {
-                        let obb = ImageObb::from_image(img, &xf, info, page_idx);
-                        let b = image_screen_rect(img, &xf, info, page_idx);
-                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
-                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
-                        if hit {
-                            over_image = true;
-                            if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
-                                view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
-                            }
-                            break;
-                        }
-                    }
-                    if over_image {
-                        break;
-                    }
-                }
-            }
-        }
-        if !over_image && tool == QuickTool::EditText {
-            view.image_selection = None;
-        }
+        view.menu_for = None;
     }
     let mut frame = PageFrame {
         env: *env,
@@ -1759,9 +1909,13 @@ fn draw_pages(
         right_clicked,
         ..
     } = frame;
-    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's.
+    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's,
+    // and with Edit text the picture (one on a page went to that page, `page_input`).
     if resp.secondary_clicked() && !right_clicked {
         view.comments.selected = None;
+        if tool == QuickTool::EditText {
+            view.image_selection = None;
+        }
     }
     let PageOut {
         mut canvas_action,
@@ -1779,7 +1933,9 @@ fn draw_pages(
         page_action: _,
         primary_down: _,
         refused,
+        row_on_screen: _,
         stamp_placed,
+        ..
     } = page_out;
     let mut page_action: Option<PageMenuAction> = None;
     let painter = ui.painter();
@@ -1831,25 +1987,34 @@ fn draw_pages(
     if view.continuous {
         view.current = current;
     }
+    // The menu of what the right-click went to (`menu_for`), or else the page's.
+    use crate::page_router::{Owner, PicturePart};
+    let menu_for = view.menu_for.map(|(_, owner)| owner);
+    // A right-click while a press is held leaves the selections alone, so the menu is its owner's only
+    // when that owner is the one selected.
+    let on_selected_field = match menu_for {
+        Some(Owner::PrepareField { field, widget }) => {
+            form.get(field).is_some_and(|f| view.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
+        }
+        Some(Owner::PrepareCorner { .. }) => true,
+        _ => false,
+    };
+    // The row as it is now: in continuous view the current page may have changed above.
+    let row_on_screen =
+        shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     resp.context_menu(|ui| {
-        let is_crop_over_image = tool == QuickTool::EditText
-            && view.image_selection.clone().is_some_and(|sel| {
-                let Some(ref crop) = sel.crop else { return false };
-                let pointer_pos = ptr.pos;
-                let Some(p) = pointer_pos else { return false };
-                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
-                let images = cached_edit_images(view, doc, sel.page).to_vec();
-                let Some(img) = images.get(sel.index) else { return false };
-                crop_contains_point(img, crop, &xf, info, sel.page, p)
-            });
-        if is_crop_over_image {
-            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+        // Crop mode has no menu: a right-click on the picture being cropped, its box or its grips is
+        // the crop's (#5835).
+        if matches!(menu_for, Some(Owner::Picture { part: PicturePart::Crop(_), .. })) {
             egui::Popup::close_all(ui.ctx());
             ui.close();
             return;
         }
-        // Preparing a form: the selected field's menu.
-        if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
+        // Preparing a form: the selected field's menu, on a field.
+        if preparing
+            && on_selected_field
+            && let Some((name, wi)) = view.prepare.selected.clone()
+        {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
             if !view.prepare.also.is_empty() {
                 use crate::prepare::Arrange as A;
@@ -1896,7 +2061,9 @@ fn draw_pages(
             }
             return;
         }
-        if let Some((page, index)) = view.links.context {
+        if matches!(menu_for, Some(Owner::Link { .. }))
+            && let Some((page, index)) = view.links.context
+        {
             if ui.button(tl!("Properties…")).clicked() {
                 view.links.open_existing = Some((page, index));
                 ui.close();
@@ -1917,45 +2084,39 @@ fn draw_pages(
             return;
         }
         let can_paste_image = env.can_paste_image;
-        let is_image_menu = tool == QuickTool::EditText
-            && (ui.ctx().data_mut(|d| d.get_temp::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
-                || view.image_selection.clone().is_some_and(|sel| {
-                    let pointer_pos = ptr.pos;
-                    let Some(p) = pointer_pos else { return false };
-                    let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
-                    let images = cached_edit_images(view, doc, sel.page).to_vec();
-                    let Some(img) = images.get(sel.index) else { return false };
-                    let obb = ImageObb::from_image(img, &xf, info, sel.page);
-                    let b = image_screen_rect(img, &xf, info, sel.page);
-                    obb.contains(b, p)
-                }));
-        if is_image_menu && let Some(sel) = view.image_selection.clone() {
+        if tool == QuickTool::EditText
+            && let Some((page, Owner::Picture { index, .. })) = view.menu_for
+            && let Some(sel) = view.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
+        {
             let images = cached_edit_images(view, doc, sel.page).to_vec();
-            // Paste lands where the menu opened only on the picture's page: where pages touch, the
-            // first page takes the right-click, and its point means nothing on the second.
+            // Paste lands where the menu opened, on the picture's page: the right-click that opened
+            // it went to that page (`page_input`), and another page's point means nothing there.
             let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
             let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
             crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
             return;
         }
-        if view.comments.selected.is_some() {
-            canvas_action = comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify);
+        // The comment the right-click went to, when it is the one selected, or connected lines being
+        // drawn (Complete, Undo last point): the comment menu.
+        let on_selected_comment =
+            matches!(view.menu_for, Some((page, Owner::Comment { index, .. })) if view.comments.selected == Some((page, index)));
+        let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
+        if on_selected_comment || drawing_points {
+            canvas_action = comments::context_menu(
+                ui,
+                view,
+                info,
+                &|page, index| doc.annotation_deletable(page, index),
+                prefs,
+                comments::MenuRights { allowed, can_paste: can_paste_comments, can_modify },
+            );
             return;
         }
         // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
         let mut copy_image = None;
         if let Some((page, at)) = view.comments.context_at {
-            // The page's content is parsed once per right-click, not on every frame the menu is open.
-            let key = egui::Id::unique("copy-image-under-menu");
-            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
-            let hit = match cached {
-                Some(c) => c.2,
-                None => {
-                    let hit = doc.page_image_at(page, at);
-                    ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
-                    hit
-                }
-            };
+            // On a page still being read, these items appear when the answer comes.
+            let hit = view.pictures.get(ui.ctx(), doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index);
             if let Some(image) = hit {
                 if ui.button(tl!("Copy Image")).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImage(page, image));
@@ -1983,16 +2144,20 @@ fn draw_pages(
             can_copy,
             can_copy_items,
             can_paste,
+            can_paste_comments: allowed && can_paste_comments,
             has_annotations: !info.annotations.is_empty(),
         };
         default_page_context_menu(ui, page, at, perms, &mut page_action);
     });
-    if !resp.context_menu_opened() {
-        ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
-    }
+    // Copy comments / Paste comments from the page's menu or a Comments panel card.
+    let copy_comments = std::mem::take(&mut view.comments.copy_request);
+    let paste_comments_at = view.comments.paste_request.take();
+    let comment_notice = view.comments.notice.take();
     *out = PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
+        copy_comments,
         copy_selected,
         field_menu,
         field_placed,
@@ -2004,8 +2169,10 @@ fn draw_pages(
         open_signature,
         open_table,
         page_action,
+        paste_comments_at,
         primary_down: ptr.primary_down,
         refused,
+        row_on_screen,
         stamp_placed,
     };
     (wanted, visible_now)
@@ -2052,25 +2219,23 @@ fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (
     if !view.continuous {
         // The row's bounding box on screen (one page, or a two-page spread).
         let row_rect = row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union);
-        // Within a point, so layout rounding can't stop a fitting page from turning.
-        let fits = row_rect.is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
+        let fits = row_rect.is_some_and(|r| fits_height(r, avail.height(), ui.ctx().pixels_per_point()));
         let can_turn = !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
         single_paging = can_turn && fits;
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
         // even while the page can't turn.
-        ui.input(|i| {
-            for e in &i.events {
-                if let egui::Event::MouseWheel { unit, delta, phase, modifiers, .. } = e {
-                    // Zooming (⌘ or Ctrl) and sideways scrolling (Shift) never turn pages.
-                    let dy = if modifiers.command || modifiers.ctrl || modifiers.shift { 0.0 } else { delta.y };
-                    if fits {
-                        view.single_page_wheel(*unit, dy, *phase, i.time, can_turn);
-                    } else {
-                        edge_turned |= view.single_page_wheel_edge(*unit, dy, *phase, i.time, can_turn);
-                    }
+        let now = ui.input(|i| i.time);
+        for e in &crate::motion::gesture_wheel_events(ui.ctx()) {
+            if let egui::Event::MouseWheel { unit, delta, phase, modifiers, .. } = e {
+                // Zooming (⌘ or Ctrl) and sideways scrolling (Shift) never turn pages.
+                let dy = if modifiers.command || modifiers.ctrl || modifiers.shift { 0.0 } else { delta.y };
+                if fits {
+                    view.single_page_wheel(*unit, dy, *phase, now, can_turn);
+                } else {
+                    edge_turned |= view.single_page_wheel_edge(*unit, dy, *phase, now, can_turn);
                 }
             }
-        });
+        }
         if single_paging {
             // Paging owns vertical wheel motion here. A diagonal gesture keeps its sideways
             // part, as `ScrollArea` itself handles each axis.
@@ -2119,10 +2284,10 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
         }
         return Wheel { precise_scroll: Vec2::ZERO, line_base: Vec2::ZERO, coarse_scroll: Vec2::ZERO, has_page: false, paging_owns_vertical };
     }
-    let consumed = ui.input(|i| {
-        i.events.iter().any(|event| {
-            matches!(event, egui::Event::MouseWheel { delta, modifiers, .. } if *delta != Vec2::ZERO && delta.is_finite() && !modifiers.command && !modifiers.ctrl)
-        })
+    // A touch gesture zooms to its end once it began with ⌘ or Ctrl, the keys let go or not.
+    let events = crate::motion::gesture_wheel_events(ui.ctx());
+    let consumed = events.iter().any(|event| {
+        matches!(event, egui::Event::MouseWheel { delta, modifiers, .. } if *delta != Vec2::ZERO && delta.is_finite() && !modifiers.command && !modifiers.ctrl)
     });
     if consumed {
         wheel_reset::consumed(ui.ctx());
@@ -2131,7 +2296,7 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
         // Match the line distance used by egui's other scroll areas.
         let live = ui.ctx().options(|o| o.input_options.line_scroll_speed);
         let line_points = if live.is_finite() && live > 0.0 { live } else { crate::scroll_speed::EGUI_LINE_POINTS };
-        ui.input(|i| crate::wheel_boost::accumulate(&i.events, line_points, single_paging))
+        crate::wheel_boost::accumulate(&events, line_points, single_paging)
     };
     let mut precise_scroll = input.precise;
     let mut line_base = input.line;
@@ -2179,10 +2344,24 @@ fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
         return Vec::new();
     }
     let n = PREFETCH_ROWS * if view.layout == PageLayout::Single { 1 } else { 2 };
+    // At high zoom the other page of a two-page row can be off to the side and not on screen, so
+    // the rows are counted from the edges of the rows shown, and that page is prefetched too.
     match (view.scroll_dir, visible_now.iter().min(), visible_now.iter().max()) {
-        (1, _, Some(&last)) => (last.saturating_add(1)..=last.saturating_add(n)).collect(),
-        (-1, Some(&first), _) => (first.saturating_sub(n)..first).rev().collect(),
+        (1, _, Some(&last)) => (last.saturating_add(1)..=row_bounds(view, last).1.saturating_add(n)).collect(),
+        (-1, Some(&first), _) => (row_bounds(view, first).0.saturating_sub(n)..first).rev().collect(),
         _ => Vec::new(),
+    }
+}
+
+/// The first and last page of the row that page `i` is in, paired as [`shown_row`] pairs them.
+fn row_bounds(view: &DocView, i: usize) -> (usize, usize) {
+    match view.layout {
+        PageLayout::Single => (i, i),
+        PageLayout::TwoUp if view.cover && i == 0 => (0, 0),
+        PageLayout::TwoUp => {
+            let first = view.spread_first(i);
+            (first, first.saturating_add(1))
+        }
     }
 }
 
@@ -2388,17 +2567,14 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
 }
 
 /// The snapshot notice bar's Close was clicked: close here, where no document borrow is held. The
-/// tab is looked up by id: indices may have shifted since the click, and the flag rides its own
-/// view, so a stale flag can never close the wrong tab. Whether a tab was closed (or asked about).
+/// tab is looked up by its view key (indices may have shifted since the click, and split view can
+/// show one document in two tabs), and the flag rides its own view, so a stale flag can never
+/// close the wrong tab. Whether a tab was closed (or asked about).
 fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
-    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
+    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.view_key()).and_then(|key| app.tab_with_key(key));
     let Some(i) = pending else { return false };
     app.views[i].close_requested = false;
-    if app.has_unsaved_work(i) {
-        app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
-    } else {
-        app.close_tab(i);
-    }
+    app.request_close_tab(i);
     true
 }
 
@@ -2427,8 +2603,9 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         },
         ..Default::default()
     });
-    // Each document keeps its own scroll position when switching tabs (#189).
-    scroll = scroll.id_salt(("page-view", view.id));
+    // Each tab keeps its own scroll position when switching tabs (#189), and so does each view of
+    // one document in split view.
+    scroll = scroll.id_salt(("page-view", view.view_key()));
     // Every scroll here asks for no animation. An animated area would still queue a zero-length
     // offset target for the next frame, which overwrites the jump a page turn just set.
     scroll = scroll.animated(false);
@@ -2468,6 +2645,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
         scroll = scroll.scroll_offset(anchored_scroll(point, rel, vec2(content_w, content_h), avail.size()));
     } else if let Some((page, frac)) = view.goto.take() {
+        let side = view.goto_side.take();
         let page = page.min(rects.len() - 1);
         let r = rects[page];
         // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - page_gap()
@@ -2483,7 +2661,27 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         // quick-action bar as the layout does.
         let (x, w) = (view.last_scroll.x, avail.width());
         let (left, right) = (r.left() - SIDE, r.right() + SIDE);
-        let target = if right - left <= w { if left >= x && right <= x + w { x } else { r.center().x - w / 2.0 } } else { x.clamp(left, right - w) };
+        // Turned by → / ← at an edge (`goto_side`): a page or spread wider than the window starts at
+        // the edge the reader comes from.
+        let row = shown_row(view, rects).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
+        let (row_left, row_right) = (row.left() - SIDE, row.right() + SIDE);
+        let target = match side {
+            Some(from_right) if row_right - row_left > w => {
+                if from_right {
+                    row_right - w
+                } else {
+                    row_left
+                }
+            }
+            _ if right - left <= w => {
+                if left >= x && right <= x + w {
+                    x
+                } else {
+                    r.center().x - w / 2.0
+                }
+            }
+            _ => x.clamp(left, right - w),
+        };
         if (target - x).abs() > 0.5 {
             scroll = scroll.horizontal_scroll_offset(target.clamp(0.0, (content_w - w).max(0.0)));
         }
@@ -2605,9 +2803,9 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
     }
 }
 
-/// Follows the link that was clicked. A link to another file comes back, to be opened once the
-/// document is no longer borrowed.
-fn follow_link(
+/// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
+/// back, to be opened once the document is no longer borrowed.
+pub(crate) fn follow_link(
     app: &mut PdfCraftApp,
     index: usize,
     target: Option<LinkTarget>,
@@ -2733,6 +2931,7 @@ struct GlideCx {
     now: f64,
     may_glide: bool,
     key_scroll: f32,
+    key_side: f32,
     auto_delta: Vec2,
     zoom_delta: f32,
     edge_delta: Vec2,
@@ -2746,11 +2945,11 @@ struct GlideCx {
 /// automatic flash uses `goto`, not these deltas, so its programmatic scroll is never mistaken for
 /// a reader action. Returns this frame's glide.
 fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> Vec2 {
-    let GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
+    let GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
     let over_page = ui.rect_contains_pointer(avail);
-    ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
+    view.fling.read(&crate::motion::gesture_wheel_events(ui.ctx()), now, may_glide && over_page);
     let interrupted = glide_interrupted(ui);
-    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+    if !may_glide || interrupted || key_scroll != 0.0 || key_side != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
     }
     let glide = view.fling.step(now);
@@ -2761,6 +2960,15 @@ fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> V
         view.end_find_following();
     }
     glide
+}
+
+/// The tool the page sees this frame, and whether copied comments hang on the pointer. Those
+/// take the next click whatever tool is on: the page sees the Select tool until the bundle is
+/// placed or let go, and no form field, added content or field being prepared takes the click
+/// either.
+fn page_tool(view: &DocView, chosen: QuickTool) -> (QuickTool, bool) {
+    let placing = matches!(view.comments.gesture, Some(comments::Gesture::Place { .. }));
+    (if placing { QuickTool::Select } else { chosen }, placing)
 }
 
 /// Text selection runs for the Select tool and for the markup tools (highlight…).
@@ -2818,8 +3026,31 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
+/// Where the `shown` pages sit in the scroll content, as how far the content starts into the
+/// layout and how tall it is. Scrolling continuously every page scrolls; otherwise only the
+/// current row does, the content being its bounding box plus margins. Pages that fit a view
+/// `view_height` tall sit in its middle, the spare height shared above and below (#5708): the
+/// content fills the view, so there is nothing to scroll, and starts on a whole physical pixel
+/// as the layout's pages do, or their edges would blur and the seams between them open.
+fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, pixels_per_point: f32) -> (f32, f32) {
+    let Some(r) = shown.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return (0.0, 0.0) };
+    if fits_height(r, view_height, pixels_per_point) {
+        return (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height);
+    }
+    if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) }
+}
+
+/// Whether the pages in `r` show whole in a view `view_height` tall, without their margins.
+/// Within half a physical pixel, which is all that snapping the pages to pixels can add: a
+/// fitting page is centred and has nothing to scroll, so any more would be cut off unseen.
+fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
+    let slack = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 0.5 / pixels_per_point } else { 0.0 };
+    r.height() <= view_height + slack
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
-/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
+/// scroll area with this frame's zoom, scrolling, tool input, overlays (form fields, comments,
+/// signature badges and sign tabs) and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let can_paste_key = egui::Id::unique("can-paste-image");
@@ -2832,7 +3063,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
-    if key_scroll != 0.0 {
+    let key_side = std::mem::take(&mut app.views[index].key_side);
+    if key_scroll != 0.0 || key_side != 0.0 {
         app.views[index].end_find_following();
     }
     // The Search panel closed: its search moves to the find bar.
@@ -2932,21 +3164,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
     let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
-    let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
+    let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
-    let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
-    } else {
-        // Only the current row scrolls into view; the content is its bounding box plus margins.
-        match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
-            Some(r) => (r.top() - MARGIN, r.height() + 2.0 * MARGIN),
-            None => (0.0, 0.0),
-        }
-    };
+    let (y_shift, content_h) = vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), ui.ctx().pixels_per_point());
 
     let mut scroll = page_scroll_area(
         ui,
@@ -2964,7 +3188,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let sharp_held = hold_sharp_renders(ui, view, scale);
     view.current_scale_tag = tag;
     let hand = app.quick_tool == QuickTool::Hand;
-    let tool = app.quick_tool;
+    let (tool, placing) = page_tool(view, app.quick_tool);
     // Text selection runs for the Select tool and for the markup tools (highlight…).
     let selects_text = tool_selects_text(tool, preparing);
     let prefs = &app.comment_prefs;
@@ -2972,6 +3196,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let units = app.units;
     let allowed = doc.allows_annotation();
     let can_copy = doc.allows_copying();
+    let can_paste_comments = app.comment_clipboard.is_some();
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
     let generation = doc.edit_generation();
@@ -2984,11 +3209,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
     let date_text = crate::date_text_for_pdf(&app.session);
     let by_line = app.session.stamp_by_line(&author);
-    let custom_stamp = match app.quick_tool {
+    let custom_stamp = match tool {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
     let mut open_props: Option<(usize, usize)> = None;
+    let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
@@ -3010,6 +3236,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
     let env = PageEnv {
         added: &added,
         allowed,
@@ -3020,6 +3247,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         by_line: &by_line,
         calc_order,
         can_copy,
+        can_paste_comments,
+        placing,
         can_crop,
         can_fill,
         can_modify,
@@ -3039,6 +3268,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         info,
         initials: &initials,
         key_scroll,
+        key_side,
         middle_gesture,
         modal,
         navigation_enabled,
@@ -3048,6 +3278,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         precise_scroll,
         prefs,
         preparing,
+        prepare_tab_order: prepare_tab_order.as_deref(),
         rects: &rects,
         redact_mark,
         scale,
@@ -3059,6 +3290,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         table_preview: &table_preview,
         tag,
         text_style: &text_style,
+        text_links: app.text_links,
         tool,
         units,
         unobstructed,
@@ -3066,16 +3298,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         y_shift,
         fill_text_size: app.fill_text_size,
         fill_text_color: app.fill_text_color,
+        fill_text_border: crate::fill_sign::TextBorder {
+            width: app.fill_text_border,
+            color: app.fill_text_border_color,
+            shape: app.fill_text_border_shape,
+        },
         today,
         can_paste_image,
     };
     let mut page_out = PageOut::default();
-    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), app.show_page_edge_shadows, |ui, viewport| {
+    // Keyed by the view, not the document: with one document in both panes of split view, shared
+    // ids gave the main pane's clicks on the page to the second pane's widgets.
+    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.view_key())), app.show_page_edge_shadows, |ui, viewport| {
         draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
     });
     let PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
+        copy_comments,
         mut copy_selected,
         field_menu,
         field_placed,
@@ -3087,8 +3328,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_signature,
         open_table,
         page_action,
+        paste_comments_at,
         primary_down,
         mut refused,
+        row_on_screen,
         stamp_placed,
     } = page_out;
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
@@ -3098,6 +3341,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
         (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
+    // Within a point, as above: at an edge of the scrolled content, or of the current page or
+    // spread shown whole that way (in continuous view the content is as wide as the widest page,
+    // and a narrower current page shows whole inside it).
+    let max_x = (out.content_size.x - out.inner_rect.width()).max(0.0);
+    let inner = out.inner_rect;
+    view.side_edges = Some((
+        out.state.clamped_offset().x <= 1.0 || row_on_screen.is_some_and(|r| r.left() >= inner.left() - 1.0),
+        out.state.clamped_offset().x >= max_x - 1.0 || row_on_screen.is_some_and(|r| r.right() <= inner.right() + 1.0),
+    ));
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
@@ -3161,6 +3413,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.comments_panel_closed = false;
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
+        Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
@@ -3185,6 +3438,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         form_notice,
         copy_selected,
+        copy_comments,
+        paste_comments_at,
+        comment_notice,
+        recolour,
         remote_open,
         form,
         generation,
@@ -3207,6 +3464,13 @@ struct FrameRequests {
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
+    /// Copy comments / Paste comments from the page's menu or a Comments panel card, and what
+    /// the comment tools have to say.
+    copy_comments: bool,
+    paste_comments_at: Option<(usize, [f64; 2])>,
+    comment_notice: Option<&'static str>,
+    /// A colour picked for every selected comment (Colour in the page's menu).
+    recolour: Option<pdfcraft_engine::Rgb>,
     remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
@@ -3229,6 +3493,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_table,
         form_notice,
         copy_selected,
+        copy_comments,
+        paste_comments_at,
+        comment_notice,
+        recolour,
         remote_open,
         form,
         generation,
@@ -3239,6 +3507,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if let Some((p, i)) = open_props {
         app.open_comment_props(p, i);
+    }
+    if let Some(c) = recolour {
+        app.colour_selected_comments(c);
     }
     if let Some((p, i)) = app.views[index].comments.default_request.take() {
         app.make_comment_default(p, i);
@@ -3335,6 +3606,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         Some(PageMenuAction::Paste(page, at)) => {
             app.paste_image_at(page, at);
         }
+        Some(PageMenuAction::PasteComments(page, at)) => {
+            app.paste_comments(index, None, Some((page, at)));
+        }
         Some(PageMenuAction::RotateCCW) => {
             app.views[index].rotate_view(false);
         }
@@ -3423,6 +3697,15 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if copy_selected {
         app.execute("edit.copy");
     }
+    if copy_comments {
+        app.execute("comment.copy");
+    }
+    if let Some(at) = paste_comments_at {
+        app.paste_comments(index, None, Some(at));
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
+    }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
@@ -3441,5 +3724,7 @@ enum FieldMenu {
     Duplicate(String),
 }
 
+#[cfg(test)]
+mod sign_tab_tests;
 #[cfg(test)]
 mod tests;

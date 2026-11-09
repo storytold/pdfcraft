@@ -129,11 +129,13 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The script's thread writes dates as this one asked (`with_english_printd`).
+        let english = crate::format::printd_english();
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, kept, skipped, limits));
+                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, limits)));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -215,7 +217,7 @@ fn run_here(
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
-        let ev = event_object(&mut ctx, event);
+        let (ev, value_store) = event_object(&mut ctx, event)?;
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
@@ -233,6 +235,7 @@ fn run_here(
         out.rc = rc.to_boolean();
         let v = ev.get(js_string!("value"), &mut ctx)?;
         out.value = text(&v, &mut ctx)?;
+        out.value_set = value_store.get(js_string!("set"), &mut ctx)?.to_boolean();
         let c = ev.get(js_string!("change"), &mut ctx)?;
         out.change = text(&c, &mut ctx)?;
         Ok(())

@@ -1,4 +1,6 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
@@ -39,6 +41,9 @@ impl Tool {
         }
     }
 }
+/// Where a thread reading snapping geometry sends it.
+type PathsReceiver = std::sync::mpsc::Receiver<Result<measure::snap::Geometry, String>>;
+
 pub struct MeasureView {
     pub points: Vec<Point>,
     pub page: Option<usize>,
@@ -68,6 +73,9 @@ pub struct MeasureView {
     /// Snapping geometry (or why it failed) per (page, edit generation): extraction is not
     /// repeated on every hover frame.
     paths: Option<(usize, u64, Result<measure::snap::Geometry, String>)>,
+    /// The snapping geometry being read on a thread, for (page, edit generation): a heavy
+    /// drawing takes seconds, which would freeze the window.
+    pending_paths: Option<(usize, u64, PathsReceiver)>,
     /// Saved measurements per edit generation, for the panel.
     listing: Option<(u64, Result<measure::Listing, String>)>,
 }
@@ -96,6 +104,7 @@ impl Default for MeasureView {
             label: String::new(),
             seeded_page: None,
             paths: None,
+            pending_paths: None,
             listing: None,
         }
     }
@@ -169,6 +178,7 @@ impl MeasureView {
 /// Snaps `point` to the page's drawn geometry (endpoints, midpoints, intersections, paths),
 /// recording in `state` why it couldn't when the content is too complex or unreadable.
 fn snap_to_content(
+    ctx: &egui::Context,
     state: &mut MeasureView,
     doc: &Document,
     page: usize,
@@ -176,8 +186,13 @@ fn snap_to_content(
     pixels_per_unit: f32,
     point: Point,
 ) -> Option<(Point, measure::snap::SnapKind)> {
-    if state.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != doc.edit_generation()) {
-        state.paths = Some((page, doc.edit_generation(), doc.measurement_paths(page)));
+    let reading = tl!("Reading the drawing for snapping…");
+    if !load_paths(ctx, state, doc, page) {
+        state.error = Some(reading.into());
+        return None;
+    }
+    if state.error.as_deref() == Some(reading) {
+        state.error = None;
     }
     if let Some((_, _, Err(e))) = &state.paths {
         state.error = Some(e.clone());
@@ -200,6 +215,83 @@ fn snap_to_content(
         }
     }
     None
+}
+
+/// A file smaller than this may have its snapping geometry read on the spot.
+#[cfg(not(target_arch = "wasm32"))]
+const SNAP_SMALL_FILE: usize = 8 * 1024 * 1024;
+
+/// Whether the snapping geometry of `page` as it is now is at hand, starting (on a thread) or
+/// collecting the read when it isn't.
+fn load_paths(ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page: usize) -> bool {
+    use std::sync::mpsc::TryRecvError;
+    let generation = doc.edit_generation();
+    let current = |p: usize, g: u64| p == page && g == generation;
+    if state.paths.as_ref().is_some_and(|(p, g, _)| current(*p, *g)) {
+        return true;
+    }
+    // One read at a time, each being a whole page: one of another page or edit is let finish, and
+    // its answer dropped.
+    if let Some((p, g, receiver)) = &state.pending_paths {
+        let answer = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => Err("the snapping read stopped unexpectedly".into()),
+        };
+        let wanted = current(*p, *g);
+        state.pending_paths = None;
+        if wanted {
+            state.paths = Some((page, generation, answer));
+            return true;
+        }
+    }
+    start_read(ctx, state, doc, page, generation)
+}
+
+/// What the window itself reads of `page`: a small file's page, if it is within what a frame can
+/// afford. A small file can still hold millions of segments.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_on_the_spot(doc: &Document, page: usize) -> Option<Result<measure::snap::Geometry, String>> {
+    if doc.bytes.len() >= SNAP_SMALL_FILE {
+        return None;
+    }
+    let read = doc.measurement_paths_within(page, measure::snap::Limits::WITHIN_A_FRAME);
+    (!read.as_ref().is_ok_and(|g| g.truncated)).then_some(read)
+}
+
+/// Read `page`'s geometry, on a thread unless it is little. Whether it is at hand already.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_read(ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page: usize, generation: u64) -> bool {
+    if let Some(read) = read_on_the_spot(doc, page) {
+        state.paths = Some((page, generation, read));
+        return true;
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let job = doc.measurement_paths_job(page);
+    let repaint = ctx.clone();
+    let work = move || {
+        let _ = sender.send(job());
+        repaint.request_repaint();
+    };
+    if let Err(e) = std::thread::Builder::new().name("pdfcraft-snap".into()).spawn(work) {
+        state.paths = Some((page, generation, Err(e.to_string())));
+        return true;
+    }
+    state.pending_paths = Some((page, generation, receiver));
+    false
+}
+
+/// With no threads here, what a frame can afford; past it the drawing says it exceeds the limit.
+#[cfg(target_arch = "wasm32")]
+fn start_read(_ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page: usize, generation: u64) -> bool {
+    state.paths = Some((page, generation, doc.measurement_paths_within(page, measure::snap::Limits::WITHIN_A_FRAME)));
+    true
+}
+
+/// Whether a click may place a point: with snapping on, not while the drawing is being read, as
+/// the point would land unsnapped.
+fn takes_clicks(state: &MeasureView) -> bool {
+    !state.snap_enabled || state.pending_paths.is_none()
 }
 
 /// The Measure tools' own clicks this frame: those of a press nobody holds.
@@ -256,7 +348,7 @@ pub(crate) fn page_input(
         let mut point = [f64::from(x), f64::from(y)];
         let mut snapped = None;
         if state.snap_enabled {
-            snapped = snap_to_content(state, doc, page, [vx, vy], xf.zoom().max(1e-6), point);
+            snapped = snap_to_content(ui.ctx(), state, doc, page, [vx, vy], xf.zoom().max(1e-6), point);
         }
         if let Some((snapped_point, kind)) = snapped {
             point = snapped_point;
@@ -268,7 +360,7 @@ pub(crate) fn page_input(
             point = measure::snap::constrain(*last, point);
         }
         hover = Some(point);
-        if clicks.single {
+        if clicks.single && takes_clicks(state) {
             if state.page != Some(page) {
                 state.cancel();
                 state.page = Some(page);
@@ -298,7 +390,8 @@ pub(crate) fn page_input(
         }
     }
     if state.page == Some(page) && !state.points.is_empty() {
-        if (clicks.double || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
+        let double = clicks.double && takes_clicks(state);
+        if (double || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
             finish(state, &mut view.pending_edit, doc, page, tool, author, units);
         }
         if !typing && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
@@ -576,7 +669,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     if let Some((page, annotation, reading, scale)) = select {
         app.views[index].current = page;
-        app.views[index].comments.selected = Some((page, annotation));
+        app.views[index].comments.select_only((page, annotation));
         app.views[index].measure.reading = Some(reading);
         app.views[index].measure.scale = Some(scale);
         app.quick_tool = QuickTool::Select;
@@ -627,7 +720,7 @@ fn export_csv(app: &mut PdfCraftApp) {
                 match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
                     Some(path) => write(app, path),
                     None => {
-                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
+                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter_any_case("CSV", &["csv"]);
                         app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                     }
                 }
@@ -649,6 +742,143 @@ mod tests {
         let page_unit = page_unit_of(state.page_unit, &state.unit, crate::units::Unit::Points);
         let scale = Scale::ratio([0.0, 0.0], [1.0, 0.0], state.drawing_points, page_unit, state.real_distance, &state.unit, 4).expect("scale");
         measure::reading(Kind::Distance, &[from, to], &scale).expect("reading").value
+    }
+
+    /// A one-page PDF of `lines` short lines, written out uncompressed.
+    fn lined_pdf(lines: usize) -> Vec<u8> {
+        padded_lined_pdf(lines, 0)
+    }
+
+    /// [`lined_pdf`], with `padding` more bytes in the file that aren't on the page.
+    fn padded_lined_pdf(lines: usize, padding: usize) -> Vec<u8> {
+        let content = "10 10 m 200 200 l S\n".repeat(lines);
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        pdf.extend_from_slice(format!("%{}\n", "x".repeat(padding)).as_bytes());
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        pdf
+    }
+
+    /// A big file's geometry is read on a thread, which the window doesn't wait for; a small
+    /// file's is there at once.
+    #[test]
+    fn only_a_small_file_is_read_for_snapping_on_the_window_thread() {
+        let ctx = egui::Context::default();
+        let mut session = pdfcraft_engine::Session::new();
+
+        let small = session.open_new("small.pdf", std::sync::Arc::new(lined_pdf(10))).unwrap();
+        let mut state = MeasureView::default();
+        assert!(load_paths(&ctx, &mut state, session.get(small).unwrap(), 0), "there at once");
+        assert!(state.pending_paths.is_none());
+
+        // However little is on its page.
+        let big = padded_lined_pdf(10, SNAP_SMALL_FILE);
+        assert!(big.len() >= SNAP_SMALL_FILE);
+        let big = session.open_new("big.pdf", std::sync::Arc::new(big)).unwrap();
+        let doc = session.get(big).unwrap();
+        let mut state = MeasureView::default();
+        assert!(!load_paths(&ctx, &mut state, doc, 0), "started, and not waited for");
+        assert!(state.pending_paths.is_some());
+        let start = std::time::Instant::now();
+        while !load_paths(&ctx, &mut state, doc, 0) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(60), "it arrives");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(state.pending_paths.is_none());
+        let geometry = state.paths.as_ref().and_then(|(_, _, g)| g.as_ref().ok()).expect("read");
+        assert!(geometry.segment_count() > 0);
+    }
+
+    /// A small file can hold more than a frame can read: it goes to the thread, and comes whole.
+    #[test]
+    fn a_small_file_past_a_frames_limits_is_read_on_a_thread() {
+        let lines = measure::snap::Limits::WITHIN_A_FRAME.segments + 1;
+        let pdf = lined_pdf(lines);
+        assert!(pdf.len() < SNAP_SMALL_FILE);
+        let ctx = egui::Context::default();
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open_new("small.pdf", std::sync::Arc::new(pdf)).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut state = MeasureView::default();
+        assert!(!load_paths(&ctx, &mut state, doc, 0), "not read on the window's thread");
+        let start = std::time::Instant::now();
+        while !load_paths(&ctx, &mut state, doc, 0) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(60), "it arrives");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let geometry = state.paths.as_ref().and_then(|(_, _, g)| g.as_ref().ok()).expect("read");
+        assert_eq!(geometry.segment_count(), lines);
+        assert!(!geometry.truncated);
+    }
+
+    /// A read of another page is let finish before the next starts, and only then is it dropped.
+    #[test]
+    fn only_one_snapping_read_runs_at_a_time() {
+        let ctx = egui::Context::default();
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open_new("big.pdf", std::sync::Arc::new(lined_pdf(SNAP_SMALL_FILE / 20 + 1))).unwrap();
+        let doc = session.get(id).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = MeasureView { pending_paths: Some((9, 9, receiver)), ..MeasureView::default() };
+        assert!(!load_paths(&ctx, &mut state, doc, 0));
+        assert_eq!(state.pending_paths.as_ref().map(|(p, _, _)| *p), Some(9), "waits for it");
+        sender.send(Ok(measure::snap::Geometry::default())).unwrap();
+        assert!(!load_paths(&ctx, &mut state, doc, 0));
+        assert_eq!(state.pending_paths.as_ref().map(|(p, _, _)| *p), Some(0), "then reads this page");
+        assert!(state.paths.is_none(), "the other page's answer is dropped");
+    }
+
+    /// A read that dies says so, instead of reading on for ever.
+    #[test]
+    fn a_snapping_read_that_stops_is_an_error() {
+        let ctx = egui::Context::default();
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open_new("small.pdf", std::sync::Arc::new(lined_pdf(10))).unwrap();
+        let doc = session.get(id).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        drop(sender);
+        let mut state = MeasureView { pending_paths: Some((0, doc.edit_generation(), receiver)), ..MeasureView::default() };
+        assert!(load_paths(&ctx, &mut state, doc, 0));
+        assert!(matches!(&state.paths, Some((_, _, Err(_)))));
+        assert!(state.pending_paths.is_none());
+    }
+
+    #[test]
+    fn the_reading_message_goes_when_the_drawing_is_read() {
+        let ctx = egui::Context::default();
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open_new("small.pdf", std::sync::Arc::new(lined_pdf(10))).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut state = MeasureView { error: Some(tl!("Reading the drawing for snapping…").into()), ..MeasureView::default() };
+        let _ = snap_to_content(&ctx, &mut state, doc, 0, [5.0, 5.0], 1.0, [5.0, 5.0]);
+        assert_eq!(state.error, None);
+    }
+
+    #[test]
+    fn clicks_wait_for_the_drawing_only_with_snapping_on() {
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        let mut state = MeasureView { pending_paths: Some((0, 0, receiver)), ..MeasureView::default() };
+        assert!(!takes_clicks(&state));
+        state.snap_enabled = false;
+        assert!(takes_clicks(&state));
+        state.snap_enabled = true;
+        state.pending_paths = None;
+        assert!(takes_clicks(&state));
     }
 
     #[test]

@@ -492,6 +492,8 @@ fn checkbox_label(words: &[Word], rect: [f64; 4], boxes: &[[f64; 4]], used: &mut
 /// enough: dates split into day and month groups of two cells. Cells are square or taller
 /// than wide; an empty table of wider cells is not a comb.
 fn combs(boxes: &[[f64; 4]]) -> Vec<([f64; 4], usize)> {
+    // A repeated box adds nothing to a row, but every repeat would be searched against every cell.
+    let mut seen = std::collections::HashSet::new();
     let cells: Vec<[f64; 4]> = boxes
         .iter()
         .copied()
@@ -499,6 +501,7 @@ fn combs(boxes: &[[f64; 4]]) -> Vec<([f64; 4], usize)> {
             let (w, h) = (r[2] - r[0], r[3] - r[1]);
             (5.0..=30.0).contains(&w) && (8.0..=40.0).contains(&h) && w <= h * 1.2
         })
+        .filter(|r| seen.insert(r.map(f64::to_bits)))
         .collect();
     // `b` comes right after `a` in a row: same size, its left edge on a's right edge.
     let follows = |a: &[f64; 4], b: &[f64; 4]| {
@@ -829,5 +832,14 @@ mod work_bound_tests {
         assert!(candidates.is_empty(), "an exhausted search cannot verify any proposal");
         assert!(INDEX_VISITS.get() <= 64 * MAX_DETECTION_BOXES);
         assert!(COMPARISONS.get() < 5 * MAX_DETECTION_BOXES * MAX_DETECTION_BOXES);
+    }
+
+    #[test]
+    fn repeated_boxes_do_not_change_or_multiply_a_comb() {
+        let row = [[10.0, 10.0, 20.0, 22.0], [20.0, 10.0, 30.0, 22.0], [30.0, 10.0, 40.0, 22.0]];
+        let mut many = row.to_vec();
+        many.extend(std::iter::repeat_n(row[1], 5000));
+        assert_eq!(combs(&row), vec![([10.0, 10.0, 40.0, 22.0], 3)]);
+        assert_eq!(combs(&many), combs(&row));
     }
 }

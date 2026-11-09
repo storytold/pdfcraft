@@ -83,7 +83,24 @@ fn signature(signed: bool, visible: bool, page: Option<usize>, rect: Option<[f64
         timestamp_time: None,
         status: pdfcraft_engine::SignatureStatus::Valid,
         modification: pdfcraft_engine::sign::Modification::None,
+        verdict_shown: false,
         details: Vec::new(),
+    }
+}
+
+#[test]
+fn signature_states_change_with_a_verdict_or_what_draws_it() {
+    let shown = signature(true, true, Some(0), Some([10.0, 10.0, 100.0, 50.0]));
+    let before = vec![shown.clone()];
+    assert!(!signature_states_changed(&before, &before), "identical lists report no change");
+    let mut invalid = shown.clone();
+    invalid.status = pdfcraft_engine::SignatureStatus::Invalid;
+    let mut drawn = shown.clone();
+    drawn.verdict_shown = true;
+    let mut other = shown.clone();
+    other.field = "Signature2".into();
+    for (after, why) in [(vec![invalid], "verdict"), (vec![drawn], "drawn"), (vec![other], "field"), (Vec::new(), "count")] {
+        assert!(signature_states_changed(&before, &after), "{why}");
     }
 }
 
@@ -123,6 +140,132 @@ fn signature_badges_skip_rectangles_that_cannot_reach_the_screen() {
     let signatures: Vec<_> = hostile.into_iter().map(|rect| signature(true, true, Some(0), Some(rect))).collect();
     let badges = signature_badges(&signatures, 0);
     assert_eq!(badges.len(), 1);
+}
+
+#[test]
+fn signature_badges_keep_every_verdict_the_appearance_shows() {
+    // Whether the redrawn layers are visible (not clipped or painted over) is not known, so a
+    // valid verdict keeps its badge as well.
+    use pdfcraft_engine::SignatureStatus::{Invalid, Unknown, Valid};
+    for status in [Valid, Unknown, Invalid] {
+        let mut shown = signature(true, true, Some(0), Some([10.0, 10.0, 100.0, 50.0]));
+        (shown.verdict_shown, shown.status) = (true, status);
+        assert_eq!(signature_badges(&[shown.clone()], 0).len(), 1, "{status:?}");
+        shown.verdict_shown = false;
+        assert_eq!(signature_badges(&[shown], 0).len(), 1, "{status:?}");
+    }
+}
+
+#[test]
+fn the_verdict_mark_takes_the_corner_nearest_its_anchor() {
+    let widget = Rect::from_min_max(pos2(40.0, 60.0), pos2(540.0, 760.0));
+    let centre = widget.center();
+    for anchor in [widget.left_top(), widget.right_top(), widget.right_bottom(), widget.left_bottom()] {
+        let mark = verdict_mark_rect(widget, Rect::EVERYTHING, anchor).expect("a widget this size carries a mark");
+        assert!(widget.contains_rect(mark), "{mark:?} in {widget:?}");
+        assert!(!mark.contains(centre), "the mark covers the artwork it annotates: {mark:?}");
+        let (right, below) = (mark.center().x > centre.x, mark.center().y > centre.y);
+        assert_eq!((right, below), (anchor.x > centre.x, anchor.y > centre.y), "{mark:?} for {anchor:?}");
+    }
+    // Without a usable anchor it sits bottom-right.
+    let mark = verdict_mark_rect(widget, Rect::EVERYTHING, pos2(f32::NAN, f32::NAN)).unwrap();
+    assert!(mark.min.x > centre.x && mark.min.y > centre.y, "{mark:?}");
+}
+
+#[test]
+fn the_verdict_mark_turns_with_the_page_and_the_view() {
+    // A named-layer caption runs across the widget's top on the page; the mark takes the
+    // opposite corner however the page's /Rotate and the view turn the two.
+    let rect = [100.0, 100.0, 300.0, 220.0];
+    for page_turn in [0_u16, 90, 180, 270] {
+        for view_turn in [0_u16, 90, 180, 270] {
+            let page =
+                pdfcraft_render::PageInfo { width: 612.0, height: 792.0, label: "1".into(), crop: [0.0, 0.0, 612.0, 792.0], rotation: page_turn };
+            let info = DocInfo { pages: vec![page], ..Default::default() };
+            let xf = PageXform { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 800.0)), rot: view_turn, pw: 612.0, ph: 792.0 };
+            let widget = xf.user_rect(&info, 0, rect.map(|v: f64| v as f32));
+            let mark = verdict_mark_rect(widget, xf.rect, mark_anchor(&xf, &info, 0, rect)).expect("a widget this size carries a mark");
+            let (right, below) = (mark.center().x > widget.center().x, mark.center().y > widget.center().y);
+            let expected = match (page_turn + view_turn) % 360 {
+                0 => (true, true),
+                90 => (false, true),
+                180 => (false, false),
+                _ => (true, false),
+            };
+            assert_eq!((right, below), expected, "page /Rotate {page_turn}, view {view_turn}");
+        }
+    }
+}
+
+#[test]
+fn the_verdict_mark_scales_with_the_widget_until_the_cap() {
+    let side_of = |shorter: f32| {
+        let widget = Rect::from_min_max(pos2(0.0, 0.0), pos2(shorter, shorter * 2.0));
+        verdict_mark_rect(widget, Rect::EVERYTHING, widget.right_bottom()).expect("a widget this size carries a mark").width()
+    };
+    // Literal values, not the constants, so a change to the share or the cap fails here.
+    assert!((side_of(96.0) - 24.0).abs() < 1e-3, "under the cap the mark is a quarter of the widget");
+    assert!((side_of(384.0) - 48.0).abs() <= 1e-3, "the mark stops at the 48pt the documentation promises");
+}
+
+#[test]
+fn the_legible_floor_is_the_exact_shortest_side_that_still_holds_a_mark() {
+    // The sweep below skips widgets without a mark, so the floor is pinned from both sides
+    // here.
+    let at_floor = MARK_SIDE_MIN / MARK_SIDE_SHARE;
+    let widget = |shorter: f32| Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + shorter, 70.0));
+    let mark =
+        verdict_mark_rect(widget(at_floor), Rect::EVERYTHING, widget(at_floor).right_bottom()).expect("a widget exactly at the floor holds a mark");
+    assert!((mark.width() - MARK_SIDE_MIN).abs() < 1e-3, "the mark at the floor is the floor, not less: {mark:?}");
+    assert_eq!(verdict_mark_rect(widget(at_floor - 0.5), Rect::EVERYTHING, pos2(0.0, 0.0)), None, "a notch under the floor is not legible");
+}
+
+#[test]
+fn the_verdict_mark_is_none_for_a_rectangle_the_screen_cannot_hold() {
+    // Each of these leaves the shorter side finite (`f32::min` returns the other operand for
+    // NaN), so only the `is_finite` check refuses them; one per coordinate.
+    let unplaceable = [
+        Rect { min: pos2(f32::NAN, 0.0), max: pos2(400.0, 200.0) },
+        Rect { min: pos2(0.0, 0.0), max: pos2(40.0, f32::NAN) },
+        Rect { min: pos2(0.0, f32::NEG_INFINITY), max: pos2(40.0, 100.0) },
+        Rect { min: pos2(0.0, 0.0), max: pos2(f32::INFINITY, 100.0) },
+    ];
+    for widget in unplaceable {
+        assert_eq!(verdict_mark_rect(widget, Rect::EVERYTHING, pos2(0.0, 0.0)), None, "{widget:?} has no place to sit at");
+    }
+}
+
+#[test]
+fn the_verdict_mark_stays_inside_its_widget_at_every_finite_size() {
+    // 50 and 56 are where a mark always taking the 48pt cap would no longer fit.
+    let sizes = [0.5, 3.0, 6.0, 12.0, 20.0, 32.0, 40.0, 50.0, 56.0, 90.0, 200.0, 500.0, 5_000.0];
+    for &w in &sizes {
+        for &h in &sizes {
+            let widget = Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + w, 10.0 + h));
+            for anchor in [widget.left_top(), widget.right_bottom()] {
+                let Some(mark) = verdict_mark_rect(widget, Rect::EVERYTHING, anchor) else { continue };
+                assert!(widget.contains_rect(mark), "{mark:?} is not inside {widget:?} for a {w}x{h} widget");
+            }
+            let Some(mark) = verdict_mark_rect(widget, Rect::EVERYTHING, widget.right_bottom()) else { continue };
+            // A quarter of the shorter side each way: at most 6.25% of a square widget.
+            let share = mark.width() * mark.height() / (widget.width() * widget.height());
+            assert!(share <= MARK_SIDE_SHARE * MARK_SIDE_SHARE * 1.0001, "the mark covers {:.2}% of a {w}x{h} widget", share * 100.0);
+        }
+    }
+}
+
+#[test]
+fn the_verdict_mark_stays_on_the_page_when_its_widget_crosses_the_edge() {
+    let page = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 300.0));
+    let widget = Rect::from_min_max(pos2(200.0, 150.0), pos2(600.0, 450.0));
+    let mark = verdict_mark_rect(widget, page, widget.right_bottom()).expect("the part on the page holds a mark");
+    assert!(page.contains_rect(mark), "{mark:?} is off {page:?}");
+    assert!(mark.max.x > 350.0 && mark.max.y > 250.0, "the corner of the part on the page nearest the anchor: {mark:?}");
+    // Wholly off the page, or a sliver on it too thin for a legible mark: none.
+    let off = widget.translate(vec2(400.0, 0.0));
+    assert_eq!(verdict_mark_rect(off, page, off.right_bottom()), None);
+    let sliver = Rect::from_min_max(pos2(390.0, 0.0), pos2(600.0, 300.0));
+    assert_eq!(verdict_mark_rect(sliver, page, sliver.right_bottom()), None);
 }
 
 #[test]
@@ -341,6 +484,7 @@ fn history_search_view() -> DocView {
             }],
             line_of: vec![0],
             space_before: vec![false],
+            truncated: false,
         }
         .into(),
     );
@@ -366,7 +510,8 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         // Chrome refreshes the idle page box; navigation must not overwrite a draft
         // that may still be focused. DocView does not own the editor's focus state.
         assert_eq!(v.page_input, "draft in progress");
-        assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
         assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
@@ -377,6 +522,18 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         v.go_to_match(2);
         assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
         assert_eq!(v.back, vec![0]);
+    }
+}
+
+#[test]
+fn search_centres_the_match_on_a_rotated_view() {
+    // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+    for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+        let mut v = history_search_view();
+        v.rotation = rotation;
+        v.find_step(true);
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
     }
 }
 
@@ -407,6 +564,7 @@ fn find_test_text(s: &str) -> PageText {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     }
 }
 
@@ -1035,6 +1193,7 @@ fn select_all_of_the_document_only_while_scrolling_through_several_pages() {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     };
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     for p in 0..3 {
@@ -1065,6 +1224,7 @@ fn text_layers_keep_the_selection_page() {
         glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
         line_of: vec![0],
         space_before: vec![false],
+        truncated: false,
     };
     for p in 0..100 {
         v.texts.insert(p, Arc::new(text.clone()));
@@ -1286,6 +1446,64 @@ fn thumbnails_release_on_scroll_panel_close_and_request_again_after_eviction() {
 }
 
 #[test]
+fn closing_the_last_thumbnail_consumer_releases_thumbnails_while_a_visible_page_renders() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    let first = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = first.clone();
+    assert_eq!(v.receive_result(&ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
+    let main = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+    v.begin_render_frame();
+    v.need_thumbnail(0, true);
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(!v.thumbs.is_empty(), "a thumbnail still shown waits for the page");
+    v.begin_render_frame();
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    v.stale_thumbs.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.is_empty(), "nothing shows it any more, whatever the page is doing");
+    assert!(v.stale_thumbs.is_empty(), "nor is it remembered as out of date");
+    // Shown again once the page is drawn: the thumbnail is asked for afresh.
+    v.last_queue = vec![main];
+    assert!(v.receive_result(&ctx, solid_result(main, 100, 130)) > 0);
+    v.begin_render_frame();
+    v.frame_visible.insert(0);
+    v.need_thumbnail(0, true);
+    let queue = v.prepare_render_queue(&info, 1.0);
+    assert!(queue.iter().any(|r| r.page == 0 && r.tag & THUMB_TAG != 0), "the thumbnail is asked for again: {queue:?}");
+}
+
+/// While anything still shows a thumbnail, the thumbnails all wait for the visible page, as before:
+/// only the last consumer closing lets them go early.
+#[test]
+fn a_thumbnail_still_shown_keeps_the_others_while_a_visible_page_renders() {
+    let ctx = egui::Context::default();
+    // Pages 0 and 3 are the same size.
+    let info = thumbnail_info(4);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    v.need_thumbnail(3, true);
+    let first = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = first.clone();
+    for r in &first {
+        assert!(v.receive_result(&ctx, solid_result(*r, 132, 171)) > 0, "thumbnail of page {} taken", r.page);
+    }
+    assert_eq!(v.thumbs.len(), 2);
+    let main = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+    v.begin_render_frame();
+    v.need_thumbnail(0, true);
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.contains_key(&0) && v.thumbs.contains_key(&3), "both wait for the page");
+}
+
+#[test]
 fn stale_results_are_rejected_before_conversion_after_dpi_invalidation_and_suspend() {
     let ctx = egui::Context::default();
     let info = thumbnail_info(1);
@@ -1391,6 +1609,21 @@ fn continuous_view_prefetches_the_rows_ahead_of_the_way_it_moved() {
     let mut single = view(20, PageLayout::Single, false);
     single.scroll_dir = 1;
     assert!(scroll_prefetch(&single, &[9]).is_empty(), "single-page view keeps its own prefetch");
+}
+
+#[test]
+fn continuous_two_page_prefetch_counts_rows_from_the_end_of_the_row_shown() {
+    let mut two = view(20, PageLayout::TwoUp, true);
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[8]), [9, 10, 11, 12, 13], "the right page off to the side, then two rows");
+    two.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&two, &[9]), [8, 7, 6, 5, 4], "the left page off to the side, then two rows");
+    two.cover = true;
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[0]), [1, 2, 3, 4], "the cover is a row of its own");
+    assert_eq!(scroll_prefetch(&two, &[3]), [4, 5, 6, 7, 8]);
+    two.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&two, &[4]), [3, 2, 1, 0]);
 }
 
 #[test]
@@ -1846,6 +2079,59 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     let app = h.state();
     let generation = app.session.get(app.views[0].id).unwrap().edit_generation();
     assert_eq!(app.views[0].edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
+}
+
+/// A cut page (#623) is named in a bar of its own: a static XFA form's notice, which comes
+/// first among the form notices, still shows beside it instead of replacing it (review on #2113).
+#[test]
+fn a_cut_page_is_named_beside_an_xfa_form_notice() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
+        app.open_bytes("form.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("XFA data are kept in step");
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label_contains("XFA data are kept in step");
+}
+
+/// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the
+/// cut-page notice lasts until another page is found cut (review on #2113).
+#[test]
+fn a_page_found_cut_after_a_dismissal_is_still_named() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    // The reader dismissed the document's notice before the render found the cut page.
+    h.state_mut().views[0].notice_dismissed = true;
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the cut-page notice can be dismissed");
+    // Re-reading the same page (an undo, a layer toggle) doesn't bring it back.
+    h.state_mut().views[0].invalidate_content();
+    h.state_mut().views[0].cut_pages.insert(0);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("holds more content").is_none(), "the dismissed page stays dismissed");
+    h.state_mut().views[0].cut_pages.insert(1);
+    h.run_steps(2);
+    h.get_by_label_contains("2 pages hold more content than PdfCraft can read, page 1 first");
 }
 
 #[test]
@@ -2379,4 +2665,61 @@ fn a_camera_corner_at_the_page_edge_is_hit_on_the_page_only() {
     let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
     assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(14.0, 24.0)).is_some(), "on the page");
     assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(6.0, 16.0)).is_none(), "just off it");
+}
+
+/// #5125: after Enhance scanned file, the page shown is re-rendered, not the raster of the
+/// scan before it was cleaned (same scale, so nothing else would replace it).
+#[test]
+fn enhancing_a_scan_re_renders_the_page_shown() {
+    let (w, h) = (64usize, 64usize);
+    let px: Vec<u8> = (0..w * h).map(|i| if i % w < 4 { 30 } else { 198 }).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {} >>\nstream\n",
+        px.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&px);
+    let content = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+    pdf.extend_from_slice(
+        format!(
+            "\nendstream\nendobj\n5 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        )
+        .as_bytes(),
+    );
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("scan.pdf", None, pdf).unwrap();
+    let (i, doc) = app.active_ids().unwrap();
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("before", egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    app.views[i].pages.insert(0, PageTex { tag: 1000, tex });
+    let job = app.session.scan_clean_job(doc, &[], pdfcraft_engine::scan_clean::ScanCleanSettings::default()).unwrap();
+    let cleaned = job.run(|_, _| true).unwrap();
+    assert_eq!(cleaned.report.pages, vec![0], "the page is a scan and gets cleaned");
+    let progress =
+        std::sync::Arc::new(std::sync::Mutex::new(crate::scan_clean_ui::ScanCleanProgress { result: Some(Ok(cleaned)), ..Default::default() }));
+    app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, progress });
+    app.poll_scan_clean();
+    assert!(app.scan_clean_run.is_none());
+    assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
+}
+
+/// #5708 review: a page that fits is centred with nothing to scroll, so only pixel snapping may
+/// pass for fitting. A page half a pixel or more too tall scrolls, or its ends would be cut off.
+#[test]
+fn only_pixel_snapping_passes_for_fitting_the_view() {
+    let page = |height: f32| [Rect::from_min_size(pos2(0.0, MARGIN), vec2(300.0, height))];
+    for ppp in [1.0, 2.0] {
+        let slack = 0.5 / ppp;
+        let (_, content) = vertical_placement(false, &page(600.0 + slack), &[0], 600.0, ppp);
+        assert_eq!(content, 600.0, "at {ppp}x, snapping's half pixel still fits");
+        for over in [slack + 0.1, 1.0] {
+            let (shift, content) = vertical_placement(false, &page(600.0 + over), &[0], 600.0, ppp);
+            assert_eq!((shift, content), (0.0, 600.0 + over + 2.0 * MARGIN), "at {ppp}x, {over} pt too tall scrolls");
+        }
+    }
+    // A scale that isn't one has no slack and never panics.
+    for ppp in [0.0, f32::NAN, f32::INFINITY] {
+        assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
+    }
 }

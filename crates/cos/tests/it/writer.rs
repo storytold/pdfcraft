@@ -358,11 +358,32 @@ fn objects_referenced_by_the_encrypt_dictionary_stay_outside_object_streams() {
     let cf = doc.get(enc_ref).as_dict().unwrap().get(b"CF").cloned().unwrap();
     let cf_ref = doc.add(cf);
     doc.update_dict(enc_ref, |d| d.set(b"CF".to_vec(), Object::Ref(cf_ref))).unwrap();
-    let packed = write_full(&doc, &SaveOptions::default()).unwrap();
-    let back = Document::open(Arc::new(packed.clone())).expect("reopens");
-    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
-    assert_eq!(title(&back), b"Caf\xe9 (draft)");
-    assert_eq!(hayro_pages(&packed), 4);
+    // Visit this alias from Root before the encryption walk reaches /CF's other alias.
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"CFProbe".to_vec(), Object::Ref(cf_ref))).unwrap();
+    let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let saved = Document::open(Arc::new(classic.clone())).unwrap();
+    let cf_num = saved.get(saved.root().unwrap()).as_dict().unwrap().reference(b"CFProbe").unwrap().num;
+    for damaged in [false, true] {
+        let mut bytes = classic.clone();
+        if damaged {
+            // Equal-length edits preserve the xref offsets and its generation-zero row.
+            for (from, to) in [(format!("\n{cf_num} 0 obj"), format!("\n{cf_num} 1 obj")), (format!("/CF {cf_num} 0 R"), format!("/CF {cf_num} 1 R"))]
+            {
+                let start = bytes.windows(from.len()).position(|w| w == from.as_bytes()).unwrap();
+                bytes[start..start + from.len()].copy_from_slice(to.as_bytes());
+            }
+        }
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let packed = write_full(&doc, &SaveOptions::default()).unwrap();
+        let back = Document::open(Arc::new(packed.clone())).expect("reopens");
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        assert_eq!(title(&back), b"Caf\xe9 (draft)");
+        assert_eq!(hayro_pages(&packed), 4);
+        let probe = back.get(back.root().unwrap()).as_dict().unwrap().reference(b"CFProbe").unwrap();
+        let encrypt = back.get(back.trailer().reference(b"Encrypt").unwrap());
+        assert_eq!(encrypt.as_dict().unwrap().reference(b"CF"), Some(probe));
+        assert!(matches!(back.xref_entry(probe.num), Some(pdfcraft_cos::XrefEntry::InFile { .. })), "crypt filters must stay outside object streams");
+    }
 }
 
 #[test]
@@ -522,4 +543,75 @@ fn incremental_saves_of_a_file_whose_offsets_count_from_its_first_byte_keep_coun
     assert!(back.xref_entry_is_exact(1));
     // No qpdf check here: qpdf counts every offset from the header in a file with bytes before
     // it, so it already reconstructs this input before anything is appended.
+}
+
+/// One page whose catalog carries a PDF 2.0 document part tree (`/DPartRoot`, ISO 32000-2
+/// 14.12) and whose structure tree root lists structure namespaces (`/Namespaces`, 14.7.4),
+/// both through indirect objects that nothing else references.
+fn pdf2_fixture() -> Vec<u8> {
+    Pdf::new()
+        .version("2.0")
+        .obj("<< /Type /Catalog /Pages 2 0 R /DPartRoot 6 0 R /StructTreeRoot 8 0 R >>")
+        .obj("<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
+        .stream("", "BT /F1 24 Tf 20 150 Td (Part) Tj ET")
+        .obj("<< /Type /DPartRoot /DPartRootNode 7 0 R /NodeNameList [/Chapter] >>")
+        .obj("<< /Type /DPart /Parent 6 0 R /Start 4 0 R /End 4 0 R /DPM << /Kind (cover) >> >>")
+        .obj("<< /Type /StructTreeRoot /K [] /Namespaces [9 0 R] >>")
+        .obj("<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) /Schema << /Type /Filespec /F (ssn.rnc) >> >>")
+        .build()
+}
+
+/// What `pdf2_fixture` declares, read back through the catalog.
+fn assert_dpart_and_namespaces(doc: &Document) {
+    let catalog = doc.get(doc.root().unwrap());
+    let catalog = catalog.as_dict().unwrap();
+    let root = doc.resolve(catalog.get(b"DPartRoot").expect("catalog keeps /DPartRoot"));
+    let root = root.as_dict().unwrap();
+    let node = doc.resolve(root.get(b"DPartRootNode").expect("/DPartRootNode kept"));
+    let node = node.as_dict().unwrap();
+    assert_eq!(node.name(b"Type"), Some(&b"DPart"[..]));
+    // Both ends of the part are still the one page, found through /Pages (references are
+    // renumbered by a full save, so they are compared inside this document).
+    let pages = doc.resolve(catalog.get(b"Pages").unwrap());
+    let kids = pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap();
+    let page = kids.first().and_then(|k| k.as_ref()).expect("the page is still the first kid");
+    assert_eq!(node.reference(b"Start"), Some(page), "the part still starts at its page");
+    assert_eq!(node.reference(b"End"), Some(page), "the part still ends at its page");
+    assert!(doc.resolve(node.get(b"DPM").unwrap()).as_dict().unwrap().get(b"Kind").is_some());
+    let tree = doc.resolve(catalog.get(b"StructTreeRoot").unwrap());
+    let namespaces = doc.resolve(tree.as_dict().unwrap().get(b"Namespaces").expect("/Namespaces kept"));
+    let namespace = doc.resolve(&namespaces.as_array().unwrap()[0]);
+    let namespace = namespace.as_dict().unwrap();
+    assert_eq!(namespace.get(b"NS").unwrap().as_string().unwrap().bytes, b"http://iso.org/pdf2/ssn");
+    assert!(namespace.get(b"Schema").is_some(), "/Schema is retained");
+}
+
+#[test]
+fn document_parts_and_structure_namespaces_survive_full_and_incremental_saves() {
+    let original = Arc::new(pdf2_fixture());
+    let doc = Document::open(original.clone()).unwrap();
+    assert_dpart_and_namespaces(&doc);
+
+    for object_streams in [true, false] {
+        let opts = SaveOptions { object_streams, ..SaveOptions::default() };
+        let full = write_full(&doc, &opts).unwrap();
+        let back = Document::open(Arc::new(full.clone())).unwrap();
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        assert_dpart_and_namespaces(&back);
+        // A second generation, rewritten from the rewritten file.
+        let second = Document::open(Arc::new(write_full(&back, &opts).unwrap())).unwrap();
+        assert!(second.repair_log().is_empty(), "{:?}", second.repair_log());
+        assert_dpart_and_namespaces(&second);
+    }
+
+    // An incremental save of an unrelated edit leaves the file's bytes, and so both, alone.
+    let mut edited = Document::open(original.clone()).unwrap();
+    edited.add(Object::Int(1));
+    let updated = write_incremental(&edited, &SaveOptions::default()).unwrap();
+    assert!(updated.starts_with(&original));
+    let reopened = Document::open(Arc::new(updated)).unwrap();
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+    assert_dpart_and_namespaces(&reopened);
 }
