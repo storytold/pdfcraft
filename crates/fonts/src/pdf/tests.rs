@@ -104,6 +104,18 @@ fn font(doc: &mut Document, entries: Vec<(&str, Object)>) -> Dict {
     d
 }
 
+/// `data` behind Flate and a PNG predictor whose `/DecodeParms` is a reference: read without
+/// it, every row of four bytes keeps its tag byte.
+fn behind_parms_by_reference(doc: &mut Document, data: &[u8]) -> Object {
+    let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(4))])));
+    let mut data = data.to_vec();
+    data.resize(data.len().next_multiple_of(4), 0);
+    let rows: Vec<u8> = data.chunks(4).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut stream = Stream::flate(Dict::new(), &rows);
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    Object::Ref(doc.add(Object::Stream(stream)))
+}
+
 #[test]
 fn embedded_editor_fonts_are_validated_without_installing_or_exporting() {
     use pdfcraft_cos::Stream;
@@ -124,34 +136,46 @@ fn embedded_editor_fonts_are_validated_without_installing_or_exporting() {
 }
 
 /// #2130: with no `/Widths`, an embedded program's advances win over a guess from the name
-/// ("Mono" would mean Courier, 600 units for every glyph).
+/// ("Mono" would mean Courier, 600 units for every glyph), the program's `/DecodeParms` given
+/// directly or by reference.
 #[test]
 fn a_font_without_widths_measures_with_its_embedded_program() {
     use pdfcraft_cos::Stream;
     use skrifa::MetadataProvider as _;
-    let mut doc = Document::new_empty();
     let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
     let face = skrifa::FontRef::new(bytes).unwrap();
     let (size, location) = (skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
     let upem = f64::from(face.metrics(size, location).units_per_em);
     let advance = |c: char| f64::from(face.glyph_metrics(size, location).advance_width(face.charmap().map(c).unwrap()).unwrap()) / upem;
-    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), bytes)));
-    let mut descriptor = Dict::new();
-    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
-    let f = font(
-        &mut doc,
-        vec![
-            ("Subtype", Object::name("TrueType")),
-            ("BaseFont", Object::name("HouseMono")),
-            ("Encoding", Object::name("WinAnsiEncoding")),
-            ("FontDescriptor", Object::Dict(descriptor)),
-        ],
-    );
-    let m = Metrics::from_dict(&doc, &f);
-    for c in ['i', 'l', 'W', ' '] {
-        assert!((m.width(u32::from(c)) - advance(c)).abs() < 1e-9, "{c}: {} vs {}", m.width(u32::from(c)), advance(c));
+    for by_reference in [false, true] {
+        let mut doc = Document::new_empty();
+        let program = if by_reference {
+            behind_parms_by_reference(&mut doc, bytes)
+        } else {
+            Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), bytes))))
+        };
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), program);
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("HouseMono")),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+            ],
+        );
+        let m = Metrics::from_dict(&doc, &f);
+        for c in ['i', 'l', 'W', ' '] {
+            assert!(
+                (m.width(u32::from(c)) - advance(c)).abs() < 1e-9,
+                "{c}, by reference {by_reference}: {} vs {}",
+                m.width(u32::from(c)),
+                advance(c)
+            );
+        }
+        assert!(m.width(u32::from('i')) < 0.4, "not Courier's 0.6, by reference {by_reference}");
     }
-    assert!(m.width(u32::from('i')) < 0.4, "not Courier's 0.6");
 }
 
 #[test]
@@ -310,6 +334,76 @@ fn subset_fonts_only_encode_the_glyphs_they_have() {
     assert_eq!(m.encode("abc"), None);
 }
 
+/// #6131: pdfTeX writes `/FirstChar` below 32 and `/Widths` of 0 for the codes it never uses, the space
+/// among them: the subset has no space glyph, and the words are apart by `TJ` gaps. Writing a typed space as
+/// code 32 would glue the words together at width 0, so the font can't encode one and the edit sets the
+/// space as a gap instead (as for a subset whose widths stop short of 32).
+#[test]
+fn a_subset_that_gives_the_space_no_width_cannot_encode_one() {
+    // pdfTeX writes Type 1 fonts; the same rule holds for a TrueType subset.
+    for subtype in ["TrueType", "Type1"] {
+        a_zero_width_space_in_a_subset_of(subtype);
+    }
+}
+
+fn a_zero_width_space_in_a_subset_of(subtype: &str) {
+    let metrics = |base: &str, space: i64| {
+        let mut doc = Document::new_empty();
+        // Codes 32..=98: the space, then a and b (97, 98) with a width, everything else 0.
+        let widths: Vec<Object> = (32..=98)
+            .map(|code| {
+                Object::Int(match code {
+                    32 => space,
+                    97 | 98 => 500,
+                    _ => 0,
+                })
+            })
+            .collect();
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name(subtype)),
+                ("BaseFont", Object::name(base)),
+                ("FirstChar", Object::Int(32)),
+                ("Widths", Object::Array(widths)),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+            ],
+        );
+        Metrics::from_dict(&doc, &f)
+    };
+    let subset = metrics("ABCDEF+Sample", 0);
+    assert!(subset.subset);
+    assert_eq!(subset.encode("ab").as_deref(), Some(&b"ab"[..]));
+    assert_eq!(subset.encode("a b"), None, "no space glyph: a gap sets it");
+    assert_eq!(subset.encode(" "), None);
+    assert_eq!(metrics("ABCDEF+Sample", 250).encode("a b").as_deref(), Some(&b"a b"[..]), "a subset that does draw the space");
+    assert_eq!(metrics("Sample", 0).encode("a b").as_deref(), Some(&b"a b"[..]), "a full font keeps its space whatever the width says");
+}
+
+/// Only a *space* at code 32 is given up for a width of 0: a subset that puts another glyph there (a symbol
+/// font, say) keeps encoding it.
+#[test]
+fn a_subset_keeps_a_zero_width_glyph_that_is_not_a_space_at_code_32() {
+    let mut doc = Document::new_empty();
+    let widths: Vec<Object> = (32..=98).map(|code| Object::Int(if code == 97 { 500 } else { 0 })).collect();
+    let mut enc = Dict::new();
+    enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(32), Object::name("Z")]));
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("TrueType")),
+            ("BaseFont", Object::name("ABCDEF+Sample")),
+            ("FirstChar", Object::Int(32)),
+            ("Widths", Object::Array(widths)),
+            ("Encoding", Object::Dict(enc)),
+        ],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert!(m.subset);
+    assert_eq!(m.text_of(32).as_deref(), Some("Z"));
+    assert_eq!(m.encode("Z").as_deref(), Some(&[32][..]), "code 32 is a glyph here, not a space");
+}
+
 #[test]
 fn cmap_streams_decode_within_a_size_cap() {
     // A valid CMap padded past the cap (a small Flate stream of whitespace) is not decoded whole.
@@ -339,6 +433,79 @@ fn cmap_streams_decode_within_a_size_cap() {
         let m = Metrics::from_dict(&doc, &f);
         assert_eq!(m.decode(&[0, 0x24]) == "A", !padded, "ToUnicode, padded: {padded}");
         assert_eq!(matches!(m.codes, Codes::Ranges(_)), !padded, "Encoding, padded: {padded}");
+    }
+}
+
+#[test]
+fn cmap_streams_read_their_parameters_given_by_reference() {
+    // Both maps behind a predictor whose `/DecodeParms` is a reference: read without it, every
+    // row keeps its tag byte inside the map's tokens.
+    let to_unicode = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0024> <0026> <0041> endbfrange";
+    let encoding = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange";
+    let mut doc = Document::new_empty();
+    let (tu, enc) = (behind_parms_by_reference(&mut doc, to_unicode), behind_parms_by_reference(&mut doc, encoding));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    let f = font(
+        &mut doc,
+        vec![("Subtype", Object::name("Type0")), ("Encoding", enc), ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])), ("ToUnicode", tu)],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.decode(&[0, 0x24]), "A", "ToUnicode");
+    assert!(matches!(m.codes, Codes::Ranges(_)), "Encoding");
+}
+
+/// A Type 0 subset over Inter with `/DW` alone, whose CIDs 1 to 7 draw "A B C D" (ToUnicode
+/// gives CIDs 1 and 2), its program and its `/CIDToGIDMap` each behind a predictor whose
+/// `/DecodeParms` is a reference, or behind Flate alone.
+fn inter_subset(program_by_reference: bool, map_by_reference: bool) -> Metrics {
+    use skrifa::MetadataProvider as _;
+    let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let face = skrifa::FontRef::new(bytes).unwrap();
+    let gid = |c: char| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
+    let gids: Vec<u8> = std::iter::once(0).chain("A B C D".chars().map(gid)).flat_map(u16::to_be_bytes).collect();
+    let stream = |doc: &mut Document, data: &[u8], by_reference: bool| {
+        if by_reference { behind_parms_by_reference(doc, data) } else { Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), data)))) }
+    };
+    let mut doc = Document::new_empty();
+    let program = stream(&mut doc, bytes, program_by_reference);
+    let map = stream(&mut doc, &gids, map_by_reference);
+    let to_unicode = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <0001> <0041> <0002> <0020> endbfchar";
+    let to_unicode = stream(&mut doc, to_unicode, false);
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), program);
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    desc.set(b"DW".to_vec(), Object::Int(600));
+    desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    desc.set(b"CIDToGIDMap".to_vec(), map);
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("BaseFont", Object::name("ABCDEF+Inter")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+            ("ToUnicode", to_unicode),
+        ],
+    );
+    Metrics::from_dict(&doc, &f)
+}
+
+/// A subset with `/DW` alone has a glyph for a CID when the program's glyph it maps to has an
+/// outline, so the space, Inter's empty glyph, is refused. Its program, or its `/CIDToGIDMap`,
+/// behind parameters given by reference says the same: read without them, no program says
+/// which glyphs are empty, or the map points the CIDs at other glyphs.
+#[test]
+fn a_subsets_program_and_cid_map_read_their_parameters_given_by_reference() {
+    let direct = inter_subset(false, false);
+    assert!(!direct.outlined_cids.is_empty());
+    assert_eq!(direct.encode("A").as_deref(), Some(&[0, 1][..]));
+    assert_eq!(direct.encode(" "), None, "the space's glyph is empty");
+    for (program, map) in [(true, false), (false, true)] {
+        let m = inter_subset(program, map);
+        assert_eq!(m.outlined_cids, direct.outlined_cids, "program by reference: {program}, map: {map}");
+        assert_eq!(m.encode(" "), None, "program by reference: {program}, map: {map}");
     }
 }
 
@@ -794,4 +961,45 @@ fn low_codes_resolve_to_the_covering_range() {
     let covered: Vec<u32> = (0..0x70).filter(|&c| u.covering(c).is_some()).collect();
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
+}
+
+#[test]
+fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without_replacing_the_program() {
+    use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+    let original = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let expected = skrifa::FontRef::new(original).unwrap().charmap().map('Ω').unwrap();
+    let mut subset = original.to_vec();
+    let count = u16::from_be_bytes(subset[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = subset[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    subset[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        subset[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    assert!(skrifa::FontRef::new(&subset).unwrap().cmap().is_err());
+    let mut doc = Document::new_empty();
+    let program = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &subset)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let mut gids = vec![0; 36];
+    gids[34..36].copy_from_slice(&(expected.to_u32() as u16).to_be_bytes());
+    let gids = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &gids)));
+    let mut descendant = Dict::new();
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    descendant.set(b"CIDToGIDMap".to_vec(), Object::Ref(gids));
+    let unicode = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), b"1 beginbfchar <0011> <03a9> endbfchar")));
+    let source = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(descendant)])),
+            ("ToUnicode", Object::Ref(unicode)),
+        ],
+    );
+    let editor = embedded_sfnt(&doc, &source).expect("the source outlines must be usable in the editor");
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+    let shaped = crate::source_shaping::shape(&editor, "Ω").expect("the rebuilt cmap must work in the actual shaping engine too");
+    assert_eq!(shaped.glyphs[0].id, expected);
+    let Object::Stream(saved) = doc.get(program).as_ref().clone() else { panic!("fixture") };
+    assert_eq!(saved.decoded().unwrap(), subset, "the source PDF font program stays byte-for-byte intact");
 }
