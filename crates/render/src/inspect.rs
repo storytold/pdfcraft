@@ -70,6 +70,9 @@ pub struct DocInfo {
     pub annotations: Vec<Annotation>,
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
+    /// The catalog's `/URI /Base` (ISO 32000-2 Table 211), the base for relative URI actions, when
+    /// it is a string of at most [`crate::MAX_URI_BASE_BYTES`].
+    pub uri_base: Option<String>,
     pub layers: Vec<Layer>,
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
