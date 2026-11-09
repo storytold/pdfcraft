@@ -4975,7 +4975,7 @@ fn redacted_clipping_title_keeps_an_empty_clip() {
             assert_eq!(apply(&mut doc, None).unwrap().glyphs, 5);
             let doc = reopen(&doc);
             let c = content(&doc, 0);
-            assert!(c.contains("ET\n0 0 0 0 re\nW\nn"), "mode {mode}, {show}: {c}");
+            assert!(c.contains("ET\n0 0 m\nW\nn"), "mode {mode}, {show}: {c}");
             assert!(!c.contains("TITLE"));
             assert!(c.contains("BODY"));
         }
@@ -5001,10 +5001,30 @@ fn clipping_text_keeps_surviving_runs_and_ignores_painted_runs() {
         mark(&mut doc, 0, &[[5.0, 95.0, 35.0, 110.0]], "");
         apply(&mut doc, None).unwrap();
         let c = content(&doc, 0);
-        assert_eq!(c.contains("ET\n0 0 0 0 re\nW\nn"), empty, "{runs}: {c}");
+        assert_eq!(c.contains("ET\n0 0 m\nW\nn"), empty, "{runs}: {c}");
         if runs.contains("MASK") {
             assert!(c.contains("MASK"), "{c}");
         }
+    }
+}
+
+/// All clipping outlines accumulate until ET, including those shown inside q/Q.
+/// Removing inner runs must retain an empty mask unless another clipping run survives.
+#[test]
+fn clipping_text_accumulates_across_q() {
+    for (runs, empty) in [
+        ("q (TITLE) Tj Q", true),
+        ("q q (TITLE) Tj Q Q", true),
+        ("(TITLE) Tj q 0 100 Td (MASK) Tj Q", false),
+        ("0 100 Td (MASK) Tj q 0 -100 Td (TITLE) Tj Q", false),
+        ("(TITLE) Tj Q", true), // A stray Q restores nothing.
+    ] {
+        let src = format!("BT /F1 10 Tf 7 Tr 10 100 Td {runs} ET");
+        let mut doc = one_page(src.as_bytes(), "", vec![]);
+        mark(&mut doc, 0, &[[5.0, 95.0, 40.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 5);
+        let c = content(&reopen(&doc), 0);
+        assert_eq!(c.contains("ET\n0 0 m\nW\nn"), empty, "{runs}: {c}");
     }
 }
 
@@ -5026,7 +5046,7 @@ fn clipping_title_state_crosses_streams_but_resets_at_bt() {
     mark(&mut doc, 0, &[[5.0, 95.0, 40.0, 110.0]], "");
     assert_eq!(apply(&mut doc, None).unwrap().glyphs, 5);
     let c = content(&reopen(&doc), 0);
-    assert_eq!(c.matches("ET\n0 0 0 0 re\nW\nn").count(), 1, "{c}");
+    assert_eq!(c.matches("ET\n0 0 m\nW\nn").count(), 1, "{c}");
     assert!(c.contains("MASK"), "the second text object keeps its clip: {c}");
 }
 
@@ -5038,7 +5058,7 @@ fn hidden_clipping_text_keeps_an_empty_clip() {
     sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
     let c = content(&reopen(&doc), 0);
     assert!(!c.contains("TITLE"), "{c}");
-    assert!(c.contains("ET\n0 0 0 0 re\nW\nn"), "{c}");
+    assert!(c.contains("ET\n0 0 m\nW\nn"), "{c}");
 }
 
 /// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for

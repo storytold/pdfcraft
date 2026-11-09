@@ -555,7 +555,9 @@ impl Walk {
                 // for the remainder of the original graphics-state scope.
                 if scope.mode == Mode::Apply && self.clip_removed && !self.clip_kept {
                     piece.ops.push(op);
-                    piece.ops.push(Op::new("re", vec![num(0.0); 4]));
+                    // A move-only subpath has no segments to scan-convert. A closed
+                    // zero-area rectangle can retain the pixel at the transformed origin.
+                    piece.ops.push(Op::new("m", vec![num(0.0); 2]));
                     piece.ops.push(Op::new("W", vec![]));
                     piece.ops.push(Op::new("n", vec![]));
                     piece.changed = true;

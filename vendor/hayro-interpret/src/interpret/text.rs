@@ -188,7 +188,9 @@ pub(crate) fn show_glyph<'a>(
 pub(crate) fn clip_glyph(context: &mut Context<'_>, glyph: &Glyph<'_>, transform: Affine) {
     match glyph {
         Glyph::Outline(o) => {
-            let outline = transform * o.outline();
+            // PdfCraft patch (104): freeze each outline in device space when shown, so
+            // later cm/Q operators cannot move glyphs already accumulated for ET.
+            let outline = context.get().ctm * transform * o.outline();
             let has_outline = outline.segments().next().is_some();
 
             if has_outline {

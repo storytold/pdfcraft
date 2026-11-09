@@ -1,5 +1,13 @@
 # Vendored crates
 
+Text clipping (#3123 / PR #4656, hayro-interpret patch 104): explicit `Q` preserves
+pending glyph outlines until `ET`, without resurrecting outlines already consumed
+there (ISO 32000-1 §9.3.6). Each outline is accumulated in device space, so
+changes to the CTM inside the text object do not move earlier outlines. Applied
+graphics-state clips still restore normally.
+Regressions: `crates/render/tests/text_clip_restore.rs` and the saved-page
+`redacting_clipping_titles_does_not_flood_the_page` automation test.
+
 ## Window-stack provenance after the egui 0.37 migration
 
 The checked-in, resolved Cargo graph pins `winit` to storytold/winit
