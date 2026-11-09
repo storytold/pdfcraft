@@ -25,7 +25,7 @@ pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
 /// form is read once, however many names are asked about. The flag says whether some of what
 /// `content` draws could not be read (a form that will not decode, or nesting past the limit), so
 /// a name missing from the set may still be drawn.
-fn names_drawn(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
+fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
     let mut drawn = HashSet::new();
     let mut seen = HashSet::new();
     let mut pending = vec![(Pieces::join(content).parse().ops, 0)];
@@ -52,7 +52,7 @@ fn names_drawn(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u
     (drawn, unknown)
 }
 
-/// Whether any of `drawn` (from [`names_drawn`]) draws `name`: `None` when none is known to and
+/// Whether any of `drawn` (from [`names_content_draws`]) draws `name`: `None` when none is known to and
 /// one could not be read in full.
 fn any_draws(drawn: &[(HashSet<Vec<u8>>, bool)], name: &[u8]) -> Option<bool> {
     if drawn.iter().any(|(names, _)| names.contains(name)) {
@@ -287,7 +287,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         }
         let mut pruned = false;
         // What each page draws through this dictionary, worked out once for all the names.
-        let drawn: Vec<_> = if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_drawn(doc, content, &xo)).collect() };
+        let drawn: Vec<_> = if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
         for n in names {
             match any_draws(&drawn, &n) {
                 Some(true) => {}
@@ -402,7 +402,7 @@ fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doo
     if doomed_names.is_empty() {
         return Ok(false);
     }
-    let drawn = [names_drawn(doc, content, xo)];
+    let drawn = [names_content_draws(doc, content, xo)];
     for name in doomed_names {
         match any_draws(&drawn, name) {
             Some(true) => {}
