@@ -3,6 +3,8 @@
 mod bounded_writer;
 mod corpus;
 mod encryption;
+mod generations;
 mod proptests;
+mod serialize_format;
 mod shared_streams;
 mod writer;

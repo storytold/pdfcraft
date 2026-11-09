@@ -60,6 +60,18 @@ pub(crate) fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Res
     }
 }
 
+/// A 3D model's poster: the picture in `file` brought into `doc` and fitted inside `rect`
+/// (user space), keeping its shape, and centred. It is drawn in user space and not counter-rotated
+/// (unlike a stamp), so on a page with `/Rotate` it turns with the page, as the model does.
+pub(crate) fn model_poster(doc: &mut pdfcraft_cos::Document, rect: [f64; 4], file: &MarkFile) -> Result<pdfcraft_annot::PosterPicture, EditError> {
+    let src = mark_source(doc, file)?;
+    let (sw, sh) = src.size;
+    if !(sw.is_finite() && sh.is_finite() && sw > 0.0 && sh > 0.0) {
+        return Err(EditError::Source(format!("{}: the poster has no area", file.name)));
+    }
+    Ok(pdfcraft_annot::PosterPicture { xobject: src.xobject, image: src.image, size: (sw, sh), at: fit_picture(rect, sw, sh) })
+}
+
 /// The dimensions of an image from its bytes (JPEG, PNG, TIFF), without decoding the full raster.
 pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let format = image::guess_format(bytes).ok()?;
