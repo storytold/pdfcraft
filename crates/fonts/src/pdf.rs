@@ -135,6 +135,15 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
             return Some(bytes);
         }
+        // A composite font's cmap is rebuilt only through Identity-H codes (`composite_glyph_maps`):
+        // with any other `/Encoding` nothing is, so its metrics aren't read, and a program with a
+        // cmap of its own is kept as it is, as when the rebuild finds nothing.
+        if font.name(b"Subtype") == Some(b"Type0") && font.name(b"Encoding") != Some(b"Identity-H") {
+            if own_cmap {
+                return Some(bytes);
+            }
+            continue;
+        }
         // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
         // cmap from ToUnicode and the actual CID-to-glyph map; source bytes stay unchanged.
         // Metrics read past the allowance, its widths' read of the program again included,

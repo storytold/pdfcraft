@@ -116,8 +116,9 @@ struct LegacyFace {
     space: f64,
 }
 
-/// What one edit may decode, and so keep, of the font programs of its THSarabunPSK subsets
-/// (each at most 16 MiB): a page may name many of them.
+/// What one edit may decode of its THSarabunPSK subsets' font data: their programs (each at most
+/// 16 MiB), which it keeps, and the CMaps and glyph maps their metrics and codes are read from. A
+/// page may name many of them.
 const MAX_THAI_PROGRAMS: usize = 64 << 20;
 
 struct PreparedCharacters {
@@ -926,7 +927,7 @@ fn legacy_thai_font(
     // A subset left unread would count as unusable, silently changing which subset draws the text.
     if budget.remaining() == 0 {
         return Err(EditError::Invalid(format!(
-            "the page's {} subsets need more than {} MiB of font programs for one edit; choose a replacement font for this text",
+            "the page's {} subsets need more than {} MiB of font data for one edit; choose a replacement font for this text",
             source.base_font.rsplit('+').next().unwrap_or(&source.base_font),
             MAX_THAI_PROGRAMS >> 20
         )));

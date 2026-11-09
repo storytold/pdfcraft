@@ -243,13 +243,13 @@ fn adapting_a_programs_cmap_is_paid_for() {
     assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
     assert_eq!(budget.remaining(), 0);
     assert!(embedded_sfnt_within(&doc, &source, &mut DecodeBudget::new(cost - 1, 0)).is_none());
-    // A composite font's metrics are read too, and paid for: the program and its ToUnicode, which
-    // give no glyph here (its codes aren't Identity-H).
+    // A composite font whose codes aren't Identity-H can't be adapted, so its metrics aren't
+    // read: the program is all it pays for.
     let mut budget = DecodeBudget::new(cost, 0);
     let mut composite = source.clone();
     composite.set(b"Subtype".to_vec(), Object::name("Type0"));
     assert!(embedded_sfnt_within(&doc, &composite, &mut budget).is_none());
-    assert_eq!(budget.remaining(), cost - subset.len() - cmap.len());
+    assert_eq!(budget.remaining(), cost - subset.len());
 }
 
 /// A Type 0 subset font whose `/Encoding`, program, `/CIDToGIDMap` and ToUnicode are streams, and
@@ -721,6 +721,21 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
         ],
     );
     assert_eq!(Metrics::from_dict(&doc, &f).decode(&codes), "");
+    // The names are read within the allowance the metrics are read within: the program is paid
+    // for by the glyph-name reading, by the Mac OS Roman one (which finds the glyphs named and
+    // reads nothing) and for the widths. A byte short of the first, the names go unread.
+    let mut doc = Document::new_empty();
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &subset)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Flags".to_vec(), Object::Int(4));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+    let mut budget = DecodeBudget::new(3 * subset.len(), 0);
+    assert_eq!(Metrics::from_dict_within(&doc, &f, &mut budget), symbolic);
+    assert_eq!(budget.remaining(), 0);
+    let short = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(subset.len() - 1, 0));
+    assert!(short.past_allowance);
+    assert_ne!(short.decode(&codes), TEXT, "the names unread");
 }
 
 /// The glyph list specification's `uni` and `u` forms spell their hex digits in uppercase
@@ -1982,6 +1997,22 @@ fn adapting_a_composite_subsets_cmap_is_paid_for() {
     assert_eq!(budget.remaining(), 0);
     assert!(cmap > map);
     assert!(embedded_sfnt_within(&doc, &source, &mut DecodeBudget::new(subset.len() + cmap - 1, 0)).is_none());
+}
+
+/// A composite font whose `/Encoding` isn't Identity-H can't have its cmap rebuilt
+/// (`composite_glyph_maps` reads only Identity-H codes), so the editor reads its program and no
+/// more: its ToUnicode and `/CIDToGIDMap` are left for what is left of the allowance.
+#[test]
+fn a_composite_font_that_cant_be_adapted_spends_only_its_program() {
+    let mut doc = Document::new_empty();
+    let (source, _, subset, _, [cmap, map]) = cmapless_composite(&mut doc);
+    for encoding in ["Identity-V", "UniJIS-UCS2-H"] {
+        let mut f = source.clone();
+        f.set(b"Encoding".to_vec(), Object::name(encoding));
+        let mut budget = DecodeBudget::new(subset.len() + cmap + map, 0);
+        assert!(embedded_sfnt_within(&doc, &f, &mut budget).is_none(), "{encoding}");
+        assert_eq!(budget.remaining(), cmap + map, "{encoding}");
+    }
 }
 
 /// The `/CIDToGIDMap` a composite subset's cmap is rebuilt from reads as the font's other streams
