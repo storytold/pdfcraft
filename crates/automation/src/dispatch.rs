@@ -873,9 +873,23 @@ impl Automation {
         // Lines are numbered in content order, and only the edited line and copies of it drawn on
         // its baseline go: the first line that differs from the page as it was is the edited one.
         // Counting every removed line instead would also count ones removed after it.
-        let first_changed = before.iter().zip(&after).position(|(b, a)| b.text != a.text);
-        let mut at = first_changed.into_iter().chain([line as usize - 1]).filter_map(|i| after.get(i));
-        if let Some(l) = at.find(|l| l.text.split_whitespace().collect::<String>() == wanted) {
+        // The edited line keeps its box: an overlay removed ahead of it shifts the numbers of the
+        // lines after it, not where it sits, so the box says which line is the one edited.
+        let edited = before.get(line as usize - 1);
+        let found = after
+            .iter()
+            .find(|l| {
+                edited.is_some_and(|e| e.rect[0] == l.rect[0] && e.rect[1] == l.rect[1]) && l.text.split_whitespace().collect::<String>() == wanted
+            })
+            .or_else(|| {
+                let first_changed = before.iter().zip(&after).position(|(b, a)| b.text != a.text);
+                first_changed
+                    .into_iter()
+                    .chain([line as usize - 1])
+                    .filter_map(|i| after.get(i))
+                    .find(|l| l.text.split_whitespace().collect::<String>() == wanted)
+            });
+        if let Some(l) = found {
             out["line"] = json!({ "font": l.base_font });
             if doc.allows_copying() {
                 out["line"]["text"] = json!(l.text);
