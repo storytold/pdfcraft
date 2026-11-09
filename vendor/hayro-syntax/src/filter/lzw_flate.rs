@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 pub(crate) mod flate {
     use super::*;
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor, untagged_png_rows};
 
     pub(crate) use fallback::FlateState;
 
@@ -17,9 +17,15 @@ pub(crate) mod flate {
     }
     use crate::object::Dict;
 
-    /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`).
+    /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`), and `rows`
+    /// the `/Height` of the image the data is the samples of, if it is (see [`untagged_png_rows`]).
     #[cfg(feature = "unsafe")]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        limit: usize,
+        rows: Option<usize>,
+    ) -> Option<Vec<u8>> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
@@ -51,19 +57,39 @@ pub(crate) mod flate {
         if decoded.len() >= limit {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        let params = PredictorParams::from_params(params);
-        apply_predictor(decoded, &params)
+        undo_predictor(decoded, &PredictorParams::from_params(params), rows)
     }
 
     #[cfg(not(feature = "unsafe"))]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        limit: usize,
+        rows: Option<usize>,
+    ) -> Option<Vec<u8>> {
         let decoded = fallback::decode(data, limit)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
         if decoded.len() >= limit {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        let params = PredictorParams::from_params(params);
-        apply_predictor(decoded, &params)
+        undo_predictor(decoded, &PredictorParams::from_params(params), rows)
+    }
+
+    /// PdfCraft patch: the predictor undone, unless the image's rows carry none
+    /// ([`untagged_png_rows`]): the data is then its samples as they are, which is reported.
+    fn undo_predictor(
+        decoded: Vec<u8>,
+        params: &PredictorParams,
+        rows: Option<usize>,
+    ) -> Option<Vec<u8>> {
+        if untagged_png_rows(params, decoded.len(), rows) {
+            warn!(
+                "flate image rows carry no PNG predictor tags, read as stored ({} rows)",
+                rows.unwrap_or(0)
+            );
+            return Some(decoded);
+        }
+        apply_predictor(decoded, params)
     }
 
     /// Ported from <https://github.com/mozilla/pdf.js/blob/master/src/core/flate_stream.js>
@@ -975,6 +1001,21 @@ impl PredictorParams {
     }
 }
 
+/// PdfCraft patch: whether `len` bytes of an image `rows` high (`None` for data that isn't an
+/// image's samples) are its rows without the filter-type byte each row starts with under a PNG
+/// predictor (ISO 32000-2 §7.4.4.4): exactly `rows` × the row's bytes, where the predicted data
+/// would be `rows` × (the row's bytes + 1). Some writers declare `/Predictor 15` without applying
+/// it; read with the predictor, every row's first byte was taken for a filter type, the image
+/// shifted a byte a row and came out short, drawn in fragments. PDFium, MuPDF and Poppler read
+/// such data as the samples it is. Any other length is decoded with the predictor, as before.
+fn untagged_png_rows(params: &PredictorParams, len: usize, rows: Option<usize>) -> bool {
+    let row_len = params.row_length_in_bytes();
+    params.predictor >= 10
+        && matches!(params.bits_per_component, 1 | 2 | 4 | 8 | 16)
+        && row_len > 0
+        && rows.filter(|&r| r > 0).and_then(|r| r.checked_mul(row_len)) == Some(len)
+}
+
 fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
     match params.predictor {
         1 => Some(data),
@@ -1289,7 +1330,7 @@ mod tests {
             0x78, 0x9c, 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0, 0x5, 0x8c, 0x1, 0xf5,
         ];
 
-        let decoded = flate::decode(&input, &Dict::default(), usize::MAX).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 
@@ -1297,7 +1338,7 @@ mod tests {
     fn decode_flate() {
         let input = [0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0];
 
-        let decoded = flate::decode(&input, &Dict::default(), usize::MAX).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
         assert_eq!(decoded, b"Hello");
     }
     
@@ -1437,7 +1478,134 @@ mod tests {
 /// PdfCraft patch tests: PNG predictors are undone byte by byte (`unfilter_png`).
 #[cfg(test)]
 mod pdfcraft_png_predictor_tests {
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor, flate, untagged_png_rows};
+    use crate::object::{Dict, FromBytes};
+
+    /// `data` as one stored (uncompressed) deflate block, at most 65,535 bytes.
+    fn stored(data: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(data.len()).unwrap();
+        let mut out = vec![1];
+        out.extend(len.to_le_bytes());
+        out.extend((!len).to_le_bytes());
+        out.extend(data);
+        out
+    }
+
+    /// `data` inflated and its PNG predictor undone, as the last filter of an image `rows` high.
+    fn inflate(parms: &[u8], data: &[u8], rows: Option<usize>) -> Option<Vec<u8>> {
+        let parms = Dict::from_bytes(parms).unwrap();
+        flate::decode(&stored(data), &parms, usize::MAX, rows)
+    }
+
+    const RGB3: &[u8] = b"<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 3 >>";
+
+    #[test]
+    fn an_image_whose_rows_carry_no_png_tags_is_read_as_its_samples() {
+        // Three RGB pixels a row, four rows: 36 bytes, where the predictor would need 40. Every
+        // row starts with a byte above 4, which the predictor took for a filter type, so the
+        // image came out three rows of shifted samples.
+        let samples: Vec<u8> = (0..36).map(|i| 200 - i as u8).collect();
+        assert_eq!(inflate(RGB3, &samples, Some(4)).unwrap(), samples);
+        let params = PredictorParams {
+            predictor: 15,
+            colors: 3,
+            bits_per_component: 8,
+            columns: 3,
+            early_change: false,
+        };
+        assert!(
+            untagged_png_rows(&params, 36, Some(4)),
+            "the repair is reported"
+        );
+        // Not an image's samples (no height known): the predictor is undone, as before.
+        assert_eq!(
+            inflate(RGB3, &samples, None).unwrap(),
+            apply_predictor(samples.clone(), &params).unwrap()
+        );
+        assert!(!untagged_png_rows(&params, 36, None));
+    }
+
+    #[test]
+    fn an_image_whose_rows_carry_png_tags_still_has_its_predictor_undone() {
+        // The same four rows, each filtered None, then Sub: 40 bytes.
+        let samples: Vec<u8> = (0..36).map(|i| 200 - i as u8).collect();
+        let mut tagged = Vec::new();
+        for row in samples.chunks(9) {
+            tagged.push(1);
+            let mut left = [0u8; 3];
+            for px in row.chunks(3) {
+                tagged.extend(px.iter().zip(left).map(|(s, l)| s.wrapping_sub(l)));
+                left.copy_from_slice(px);
+            }
+        }
+        assert_eq!(tagged.len(), 40);
+        assert_eq!(inflate(RGB3, &tagged, Some(4)).unwrap(), samples);
+    }
+
+    #[test]
+    fn data_of_neither_length_decodes_as_it_did() {
+        let params = PredictorParams {
+            predictor: 15,
+            colors: 3,
+            bits_per_component: 8,
+            columns: 3,
+            early_change: false,
+        };
+        // Short of the untagged length, past it, or between it and the tagged one.
+        for len in [0, 1, 9, 27, 35, 37, 39, 41, 72] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7) as u8 % 5).collect();
+            assert!(!untagged_png_rows(&params, len, Some(4)), "{len} bytes");
+            assert_eq!(
+                inflate(RGB3, &data, Some(4)),
+                apply_predictor(data.clone(), &params),
+                "{len} bytes"
+            );
+        }
+        // Rows of the untagged length for another height.
+        assert!(!untagged_png_rows(&params, 36, Some(3)));
+        assert!(!untagged_png_rows(&params, 36, Some(0)));
+        // No PNG predictor, or one with an invalid depth.
+        for (predictor, bits_per_component) in [(1, 8), (2, 8), (15, 3), (15, 0)] {
+            let params = PredictorParams {
+                predictor,
+                bits_per_component,
+                ..params
+            };
+            assert!(!untagged_png_rows(&params, 36, Some(4)));
+        }
+    }
+
+    #[test]
+    fn rows_of_no_bytes_or_of_more_than_memory_holds_do_not_panic() {
+        for (colors, bits_per_component, columns) in [
+            (0, 8, 3),
+            (3, 8, 0),
+            (255, 16, usize::MAX),
+            (1, 1, usize::MAX),
+            (3, 8, usize::MAX / 24 + 1),
+        ] {
+            let params = PredictorParams {
+                predictor: 15,
+                colors,
+                bits_per_component,
+                columns,
+                early_change: false,
+            };
+            for rows in [None, Some(0), Some(1), Some(4), Some(usize::MAX)] {
+                for len in [0, 1, 36, usize::MAX] {
+                    let _ = untagged_png_rows(&params, len, rows);
+                }
+            }
+        }
+        let zero = b"<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 0 >>";
+        let huge =
+            b"<< /Predictor 15 /Colors 255 /BitsPerComponent 16 /Columns 9223372036854775807 >>";
+        for parms in [&zero[..], &huge[..]] {
+            for rows in [None, Some(0), Some(4), Some(usize::MAX)] {
+                let _ = inflate(parms, &[7; 36], rows);
+            }
+        }
+    }
 
     /// PNG unfiltering written out from the PNG specification (§9.2–9.4), one byte at a time.
     fn reference(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {

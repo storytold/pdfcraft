@@ -10,7 +10,9 @@
 //! - every font embedded;
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
 //! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
-//!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView); no additional actions on the
+//!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView, and the PDF 1.2 SetState and
+//!   NOP that ISO 32000-1 no longer defines); Named actions only for NextPage, PrevPage,
+//!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
 //! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
 //! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
@@ -21,8 +23,15 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod gstate;
+mod header;
 pub mod icc;
+mod limits;
+mod spot;
+mod trailer;
+mod transparency;
 mod xmp;
+mod xmp_extension;
 mod xmp_types;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -153,14 +162,46 @@ pub const WORDINGS: &[&str] = &[
     "The title in the metadata and the document information differ",
     "The XMP property {property} in metadata stream {object} should have the value type {type}",
     "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
+    "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
+    "The XMP extension schema {schema} in metadata stream {object} describes {item} with an empty {entry} entry",
+    "The XMP extension schema container in metadata stream {object} holds no rdf:Bag",
+    "The XMP extension schema container in metadata stream {object} holds {found}, not one rdf:Bag",
+    "Metadata stream {object} writes the namespace {namespace} without a prefix, not with {prefix}",
+    "Metadata stream {object} writes the namespace {namespace} with the prefix {written}, not {prefix}",
     // The document as a whole.
+    "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line",
+    "The file header isn't followed by a comment of four bytes above 127",
+    "The trailer has no file identifier (ID)",
+    "The file identifier (ID) in the trailer isn't two non-empty strings",
     "The document is encrypted",
+    "An integer is outside the 32-bit range",
+    "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
+    "A CMap maps a character code to a CID above 65535",
+    "A string is longer than 32767 bytes",
+    "A name is longer than 127 bytes",
+    "Page {} has a boundary smaller than 3 or larger than 14400 units",
     "Device colour is used, but there is no PDF/A output intent",
+    "Page {} has transparency but no device-independent blending colour space or PDF/A output intent",
+    "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define",
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
     "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile",
+    "Separation colour spaces named {} differ in their alternate space or tint transform",
+    "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary",
     "The document has additional actions (/AA)",
     "The document has document-level JavaScript",
+    "A graphics state has a transfer function (TR)",
+    "A graphics state has a transfer function (TR2) other than Default",
+    "A graphics state has a halftone phase (HTP)",
+    "A halftone has type {}: only types 1 and 5 are allowed",
+    "A halftone's HalftoneType is missing or isn't an integer",
+    "A halftone has a HalftoneName",
+    "A halftone has a transfer function, which only a non-primary colorant's halftone may have",
+    "The halftone for the colorant {} has no transfer function",
+    "A graphics state has the rendering intent {}, which isn't a standard one",
+    "A graphics state has a rendering intent that isn't a name",
     "The form asks viewers to make appearances (NeedAppearances)",
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
@@ -192,8 +233,23 @@ pub struct Declared {
     pub output_intents: Vec<String>,
 }
 
-const FORBIDDEN_ACTIONS: &[&[u8]] =
-    &[b"JavaScript", b"Launch", b"Sound", b"Movie", b"ResetForm", b"ImportData", b"Hide", b"SetOCGState", b"Rendition", b"Trans", b"GoTo3DView"];
+const FORBIDDEN_ACTIONS: &[&[u8]] = &[
+    b"JavaScript",
+    b"Launch",
+    b"Sound",
+    b"Movie",
+    b"ResetForm",
+    b"ImportData",
+    b"Hide",
+    b"SetOCGState",
+    b"Rendition",
+    b"Trans",
+    b"GoTo3DView",
+    b"SetState",
+    b"NOP",
+];
+/// The named actions of ISO 32000-1 Table 212, the only ones a Named action may name.
+const NAMED_ACTIONS: &[&[u8]] = &[b"NextPage", b"PrevPage", b"FirstPage", b"LastPage"];
 const FORBIDDEN_ANNOTS: &[&[u8]] = &[b"Sound", b"Movie", b"Screen", b"3D", b"RichMedia"];
 
 fn catalog(doc: &Document) -> Dict {
@@ -248,6 +304,19 @@ fn dict_of(o: &Object) -> Option<&Dict> {
         Object::Stream(s) => Some(&s.dict),
         _ => None,
     }
+}
+
+/// Whether the document has a PDF/A output intent whose `/DestOutputProfile` is a stream: one with
+/// a null or missing profile describes no colour, so it doesn't stand in for a blending colour
+/// space (6.2.10).
+fn pdfa_intent_has_profile(doc: &Document) -> bool {
+    let cat = catalog(doc);
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    list.iter().any(|oi| {
+        let oi = doc.resolve(oi);
+        let Some(d) = oi.as_dict() else { return false };
+        d.name(b"S") == Some(b"GTS_PDFA1") && d.get(b"DestOutputProfile").is_some_and(|p| matches!(&*doc.resolve(p), Object::Stream(_)))
+    })
 }
 
 fn has_pdfa_intent(doc: &Document) -> bool {
@@ -369,6 +438,37 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
     out
 }
 
+/// The fonts the document draws with: those a resource dictionary names (`/Resources`, of a page or
+/// a page tree node, a form XObject or an annotation's appearance stream, a pattern or a Type 3
+/// font). PDF/A asks that every font "used for rendering" be embedded (ISO 19005-2, 6.2.11.4.1). A
+/// font that only the interactive form's default resources hold (`/AcroForm /DR`, ISO 32000-1
+/// 12.7.2) draws nothing, so it needn't be: an appearance stream that does draw with it names it in
+/// its own `/Resources`.
+fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
+    let mut out = std::collections::HashSet::new();
+    for (_, o) in objs {
+        let Some(resources) = dict_of(o).and_then(|d| d.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
+        let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
+        if let Some(fonts) = fonts.as_dict() {
+            out.extend(fonts.iter().filter_map(|(_, f)| f.as_ref()).map(|r| font_object(doc, r)));
+        }
+    }
+    out
+}
+
+/// How many references [`font_object`] follows, as the document's own `resolve` does.
+const MAX_REFERENCE_HOPS: usize = 32;
+
+/// The object a font entry's reference `r` ends at: an object can be nothing but a reference to
+/// another (ISO 32000-1 7.3.10), and the font dictionary is the last one in that chain.
+fn font_object(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..MAX_REFERENCE_HOPS {
+        let Object::Ref(next) = &*doc.get(r) else { break };
+        r = *next;
+    }
+    r
+}
+
 /// Whether a stream's own dictionary says it holds content: a form XObject, or a stream with a
 /// `/BBox` and no `/Subtype` (a tiling pattern, or an appearance stream that leaves out
 /// `/Subtype /Form`). Mesh shadings may carry a `/BBox` too, but their data isn't content.
@@ -486,7 +586,48 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         let message = fill(pattern, None, &values);
         push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
-    let cat = catalog(doc);
+    check_identification(doc, level, &mut issue);
+    let objs = objects(doc);
+    check_xmp_packets(&objs, &located_issue);
+    check_output_intent(doc, &objs, &mut issue);
+    check_catalog_actions(doc, &mut issue);
+    // Pages: annotations and page actions.
+    let pages = pdfcraft_model::pages(doc);
+    // Each annotation's page: the first page that lists it.
+    let mut annot_pages: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
+    for (i, p) in pages.iter().enumerate() {
+        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(a) = a.as_array()
+        {
+            #[cfg(test)]
+            ANNOT_ENTRIES_READ.with(|n| n.set(n.get() + a.len()));
+            for r in a.iter().filter_map(Object::as_ref) {
+                annot_pages.entry(r).or_insert(i);
+            }
+        }
+    }
+    let page_of = |r: ObjRef| annot_pages.get(&r).copied();
+    for (i, p) in pages.iter().enumerate() {
+        if p.dict.get(b"AA").is_some() {
+            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        }
+    }
+    check_transparency(doc, &pages, &mut issue);
+    let drawing = drawing_fonts(doc, &objs);
+    check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
+    check_limits(doc, &objs, &pages, &mut issue);
+    check_spots(doc, &objs, &mut issue);
+    check_graphics_states(doc, &mut issue);
+    // One message per kind of problem is enough for repeated ones (as preflight summaries do).
+    let mut out = out.into_inner();
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
+    out
+}
+
+/// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
+/// encryption.
+fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.1.3 / 6.6: identification and metadata.
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
@@ -503,16 +644,37 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             }
         }
     }
-    // 6.1.3: encryption.
+    // 6.1.2: the file header.
+    let header = header::check(doc);
+    if header.version {
+        issue("6.1.2", "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line", None, None, true);
+    }
+    if header.comment {
+        issue("6.1.2", "The file header isn't followed by a comment of four bytes above 127", None, None, true);
+    }
+    // 6.1.3: the file identifier and encryption.
+    match trailer::check(doc) {
+        Some(trailer::IdProblem::Missing) => issue("6.1.3", "The trailer has no file identifier (ID)", None, None, true),
+        Some(trailer::IdProblem::Malformed) => {
+            issue("6.1.3", "The file identifier (ID) in the trailer isn't two non-empty strings", None, None, true)
+        }
+        None => {}
+    }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
     }
-    // 6.2.2: output intent when device colour is used.
-    let objs = objects(doc);
-    // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
-    let mut mistyped = Vec::new();
-    xmp_types::for_each_packet(&objs, |object, packet| {
+}
+
+/// 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types and extension schema descriptions, in
+/// every metadata stream.
+fn check_xmp_packets(
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    located_issue: &impl Fn(&'static str, &'static str, Vec<(&'static str, String)>, ObjRef, bool),
+) {
+    let (mut mistyped, mut extension) = (Vec::new(), xmp_extension::Findings::default());
+    xmp_types::for_each_packet(objs, |object, packet| {
         mistyped.extend(xmp_types::mistyped(packet).into_iter().map(|((name, written), ty)| (object, name, written, ty)));
+        extension.add(object, packet);
     });
     for (object, name, written, ty) in mistyped {
         let mut values = vec![("{property}", name.clone()), ("{object}", object.to_string()), ("{type}", ty)];
@@ -535,7 +697,104 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             );
         }
     }
-    let used = uses_device_colour(doc, &objs);
+    report_xmp_extension(extension, located_issue);
+}
+
+/// 6.6.2.3.3: what the extension schema descriptions of the metadata streams lack.
+fn report_xmp_extension(
+    extension: xmp_extension::Findings,
+    located_issue: &impl Fn(&'static str, &'static str, Vec<(&'static str, String)>, ObjRef, bool),
+) {
+    for m in extension.missing {
+        let mut values = vec![("{schema}", m.schema), ("{object}", m.object.to_string()), ("{entry}", m.entry)];
+        match (m.item, m.empty) {
+            (None, false) => located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
+                values,
+                m.object,
+                false,
+            ),
+            (None, true) => located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
+                values,
+                m.object,
+                false,
+            ),
+            (Some(item), false) => {
+                values.push(("{item}", item));
+                located_issue(
+                    "6.6.2.3.3",
+                    "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
+                    values,
+                    m.object,
+                    false,
+                );
+            }
+            (Some(item), true) => {
+                values.push(("{item}", item));
+                located_issue(
+                    "6.6.2.3.3",
+                    "The XMP extension schema {schema} in metadata stream {object} describes {item} with an empty {entry} entry",
+                    values,
+                    m.object,
+                    false,
+                );
+            }
+        }
+    }
+    for c in extension.not_bag {
+        let object = c.object;
+        if c.found.is_empty() {
+            located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema container in metadata stream {object} holds no rdf:Bag",
+                vec![("{object}", object.to_string())],
+                object,
+                false,
+            );
+        } else {
+            let values = vec![("{object}", object.to_string()), ("{found}", c.found)];
+            located_issue(
+                "6.6.2.3.3",
+                "The XMP extension schema container in metadata stream {object} holds {found}, not one rdf:Bag",
+                values,
+                object,
+                false,
+            );
+        }
+    }
+    for p in extension.prefixes {
+        let mut values = vec![("{object}", p.object.to_string()), ("{namespace}", p.namespace.to_owned()), ("{prefix}", p.own.to_owned())];
+        if p.written.is_empty() {
+            located_issue(
+                "6.6.2.3.3",
+                "Metadata stream {object} writes the namespace {namespace} without a prefix, not with {prefix}",
+                values,
+                p.object,
+                false,
+            );
+        } else {
+            values.push(("{written}", p.written));
+            located_issue(
+                "6.6.2.3.3",
+                "Metadata stream {object} writes the namespace {namespace} with the prefix {written}, not {prefix}",
+                values,
+                p.object,
+                false,
+            );
+        }
+    }
+}
+
+/// 6.2.3 and 6.2.4.3: the output intent device colour needs.
+fn check_output_intent(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let used = uses_device_colour(doc, objs);
     match pdfa_intent_profile(doc) {
         None if used.any() => {
             issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
@@ -554,7 +813,11 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
         None => {}
     }
+}
+
+fn check_catalog_actions(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.1.3 / 6.6.1: catalog actions.
+    let cat = catalog(doc);
     if cat.get(b"AA").is_some() {
         issue("6.5.2", "The document has additional actions (/AA)", None, None, true);
     }
@@ -568,61 +831,137 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     {
         issue("6.4.1", "The form asks viewers to make appearances (NeedAppearances)", None, None, true);
     }
-    // Pages: annotations and page actions.
-    let pages = pdfcraft_model::pages(doc);
-    // Each annotation's page: the first page that lists it.
-    let mut annot_pages: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
+}
+
+fn check_transparency(
+    doc: &Document,
+    pages: &[pdfcraft_model::Page],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    // 6.2.10: blend modes are those ISO 32000-1 defines, and without a PDF/A output intent (one with
+    // a profile) a page with transparency names a blending colour space.
+    let intent = pdfa_intent_has_profile(doc);
+    // Pages share resources, forms and fonts: what one page found under them, the next takes as is.
+    let mut shared = transparency::Shared::default();
     for (i, p) in pages.iter().enumerate() {
-        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
-            && let Some(a) = a.as_array()
-        {
-            #[cfg(test)]
-            ANNOT_ENTRIES_READ.with(|n| n.set(n.get() + a.len()));
-            for r in a.iter().filter_map(Object::as_ref) {
-                annot_pages.entry(r).or_insert(i);
-            }
+        let painting = transparency::page_painting(doc, &p.dict, &mut shared);
+        for name in painting.unknown_blend_modes {
+            issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
+        }
+        if painting.transparency && !intent && !transparency::page_names_blending_space(doc, &p.dict) {
+            let n = Some((i + 1).to_string());
+            issue("6.2.10", "Page {} has transparency but no device-independent blending colour space or PDF/A output intent", n, Some(i), false);
         }
     }
-    let page_of = |r: ObjRef| annot_pages.get(&r).copied();
+}
+
+fn check_limits(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    pages: &[pdfcraft_model::Page],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    // 6.1.13: the implementation limits of ISO 32000-1 Annex C.
+    let over = limits::exceeded(doc, objs, &referenced_content(doc, objs));
+    if over.int {
+        issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
+    }
+    if over.real {
+        issue("6.1.13", "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸", None, None, false);
+    }
+    if over.string {
+        issue("6.1.13", "A string is longer than 32767 bytes", None, None, false);
+    }
+    if limits::cid_over_limit(doc, objs) {
+        issue("6.1.13", "A CMap maps a character code to a CID above 65535", None, None, false);
+    }
+    if over.name {
+        issue("6.1.13", "A name is longer than 127 bytes", None, None, false);
+    }
     for (i, p) in pages.iter().enumerate() {
-        if p.dict.get(b"AA").is_some() {
-            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        if limits::page_box_out_of_range(doc, &p.dict) {
+            issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
         }
     }
-    check_objects(doc, level, &objs, &page_of, &mut issue);
-    // One message per kind of problem is enough for repeated ones (as preflight summaries do).
-    let mut out = out.into_inner();
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
-    out
+}
+
+fn check_spots(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    // 6.2.4.4: Separation and DeviceN colour spaces.
+    let spots = spot::check(doc, objs);
+    for name in spots.differing {
+        issue("6.2.4.4", "Separation colour spaces named {} differ in their alternate space or tint transform", Some(name), None, false);
+    }
+    for name in spots.undefined {
+        issue("6.2.4.4", "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary", Some(name), None, false);
+    }
+}
+
+fn check_graphics_states(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    // 6.2.5: the extended graphics state.
+    let gs = gstate::check(doc);
+    if gs.transfer {
+        issue("6.2.5", "A graphics state has a transfer function (TR)", None, None, false);
+    }
+    if gs.transfer2 {
+        issue("6.2.5", "A graphics state has a transfer function (TR2) other than Default", None, None, false);
+    }
+    if gs.phase {
+        issue("6.2.5", "A graphics state has a halftone phase (HTP)", None, None, false);
+    }
+    for kind in gs.halftone_types {
+        issue("6.2.5", "A halftone has type {}: only types 1 and 5 are allowed", Some(kind.to_string()), None, false);
+    }
+    if gs.untyped {
+        issue("6.2.5", "A halftone's HalftoneType is missing or isn't an integer", None, None, false);
+    }
+    if gs.halftone_name {
+        issue("6.2.5", "A halftone has a HalftoneName", None, None, false);
+    }
+    if gs.halftone_transfer {
+        issue("6.2.5", "A halftone has a transfer function, which only a non-primary colorant's halftone may have", None, None, false);
+    }
+    for colorant in gs.missing_transfer {
+        issue("6.2.5", "The halftone for the colorant {} has no transfer function", Some(colorant), None, false);
+    }
+    for intent in gs.intents {
+        issue("6.2.5", "A graphics state has the rendering intent {}, which isn't a standard one", Some(intent), None, false);
+    }
+    if gs.intent_not_name {
+        issue("6.2.5", "A graphics state has a rendering intent that isn't a name", None, None, false);
+    }
 }
 
 fn check_objects(
     doc: &Document,
     level: Level,
     objects: &[(ObjRef, std::sync::Arc<Object>)],
+    drawing: &std::collections::HashSet<ObjRef>,
     page_of: &impl Fn(ObjRef) -> Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, *r, d, o, page_of, issue);
+        check_one_object(doc, level, d, o, drawing.contains(r), page_of(*r), issue);
     }
 }
 
 fn check_one_object(
     doc: &Document,
     level: Level,
-    reference: ObjRef,
     dict: &Dict,
     object: &Object,
-    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    draws: bool,
+    page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let ty = dict.name(b"Type");
     let subtype = dict.name(b"Subtype");
     check_actions(doc, dict, issue);
-    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page, issue) {
         // A forbidden annotation stops every later check for its object, as the scan did before
         // it was split into helpers: the rest of its own checks and the form field, font, stream
         // and embedded file below all came after that `continue`.
@@ -631,7 +970,8 @@ fn check_one_object(
     if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
-    if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
+    // A Type 0 font's descendant is checked through it.
+    if draws && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some()) {
         check_font(doc, dict, issue);
     }
     if let Object::Stream(stream) = object {
@@ -829,10 +1169,8 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
         if *read > MAX_ACTION_CHAIN {
             return Some("too deeply chained".into());
         }
-        if let Some(s) = d.name(b"S")
-            && FORBIDDEN_ACTIONS.contains(&s)
-        {
-            return Some(String::from_utf8_lossy(s).into_owned());
+        if let Some(s) = action_forbidden(doc, d) {
+            return Some(s);
         }
         match d.get(b"Next") {
             Some(Object::Dict(next)) => stack.push(next),
@@ -847,6 +1185,24 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
         }
     }
     None
+}
+
+/// The forbidden kind of the action `d` itself, if it is one: a forbidden type, or a Named
+/// action for anything but the four of [`NAMED_ACTIONS`]. The type and the name may each be given
+/// directly or by reference.
+fn action_forbidden(doc: &Document, d: &Dict) -> Option<String> {
+    let s = doc.resolve(d.get(b"S")?);
+    let s = s.as_name()?;
+    if FORBIDDEN_ACTIONS.contains(&s) {
+        return Some(String::from_utf8_lossy(s).into_owned());
+    }
+    let n = d.get(b"N").map(|n| doc.resolve(n));
+    match n.as_deref().and_then(Object::as_name) {
+        _ if s != b"Named" => None,
+        Some(n) if NAMED_ACTIONS.contains(&n) => None,
+        Some(n) => Some(format!("Named {}", String::from_utf8_lossy(n))),
+        None => Some("Named".into()),
+    }
 }
 
 /// Whether `o` is (or refers to) a forbidden action or one chaining to it, or to nothing.
@@ -874,6 +1230,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         doc.remove_encryption();
         fixed.push("Removed encryption".into());
     }
+    // A full save writes the header afresh, with the version it keeps and a binary comment.
+    fixed.extend(header::rewrite(doc));
+    fixed.extend(trailer::fix(doc));
     let root = doc.root().ok_or(pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
     // Catalog: actions, JavaScript, NeedAppearances, output intent, metadata.
     let mut cat = catalog(doc);

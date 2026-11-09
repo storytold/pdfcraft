@@ -10,7 +10,9 @@
 //! - link and GoTo destinations that target a copied page point at the copy. Links to pages that
 //!   were not copied are dropped, so they don't dangle;
 //! - form-field widgets keep their field hierarchy, and the top-level fields are registered in the
-//!   destination `/AcroForm`;
+//!   destination `/AcroForm`. When only some of a document's pages are copied, a field brings only
+//!   the kids that lead to a widget on those pages: the rest of the form stays behind with its
+//!   values;
 //! - structure-tree links (`/StructParent(s)`) and article beads (`/B`) are removed, because the
 //!   source structure tree is not copied;
 //! - named destinations are resolved against the source's name tree and become explicit ones;
@@ -18,6 +20,7 @@
 //!   `/OCProperties`, keeping their default on/off state.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -28,14 +31,14 @@ mod combine;
 mod copy;
 mod fields;
 
-pub(crate) use carry::set_attachments;
 use carry::{Mark, source_outline, write_outline_level};
+pub(crate) use carry::{set_attachments, set_attachments_exact};
 pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
     extract_pages, split, split_ranges,
 };
-use copy::SKIP_ON_PAGE;
 pub(crate) use copy::{Copier, copy_object};
+use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
 use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
 
@@ -100,8 +103,8 @@ fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
 /// Insert Pages from File: [`import_pages_with`], and the inserted file's bookmarks come along
 /// under one new bookmark titled `title` (the file's name) at its first inserted page, as Combine
 /// Files does for each file. That bookmark goes among the top-level bookmarks where the pages went:
-/// before the first one that points after them. Bookmarks to pages left out lose their destination;
-/// a file without bookmarks adds none.
+/// before the first one that points after them. Bookmarks to pages left out stay behind, unless a
+/// bookmark below them leads to an inserted page; a file without bookmarks adds none.
 pub fn insert_file_pages(
     dst: &mut Document,
     src: &Document,
@@ -171,6 +174,27 @@ struct Imported {
     renamed_fields: Vec<(String, String)>,
 }
 
+/// The annotations on `pages` and, above each widget among them, its fields up to the top one.
+/// A field copied with those pages keeps only these kids: its other kids sit on pages left behind,
+/// and carry their own values and appearances.
+fn fields_on(src: &Document, pages: impl IntoIterator<Item = ObjRef>) -> HashSet<ObjRef> {
+    let mut kept = HashSet::new();
+    for page in pages {
+        let page = src.get(page);
+        let Some(annots) = page.as_dict().and_then(|d| d.get(b"Annots")).map(|a| src.resolve(a)) else { continue };
+        for a in annots.as_array().into_iter().flatten() {
+            let mut at = a.as_ref().or_else(|| src.resolve(a).as_dict().and_then(|d| d.reference(b"Parent")));
+            // Up the field tree, as deep as a copy may go, and once: a node seen already has its
+            // fields above it in the set.
+            for _ in 0..MAX_COPY_DEPTH {
+                let Some(r) = at.filter(|r| kept.insert(*r)) else { break };
+                at = src.get(r).as_dict().and_then(|d| d.reference(b"Parent"));
+            }
+        }
+    }
+    kept
+}
+
 /// `import_pages`, also returning what was copied from where.
 fn import_pages_mapped(
     dst: &mut Document,
@@ -199,6 +223,9 @@ fn import_pages_mapped(
             (*page, new, inherited.clone())
         })
         .collect();
+    if src_pages.iter().collect::<HashSet<_>>().len() < source.len() {
+        copier.kept = Some(Rc::new(fields_on(src, copier.pages.keys().copied())));
+    }
     let mut annot_pages = HashMap::new();
     let mut new_pages = Vec::new();
     let mut done: HashMap<ObjRef, ObjRef> = HashMap::new();
@@ -208,7 +235,11 @@ fn import_pages_mapped(
         // popup, a widget's place). Destinations still map to the pages copied.
         let repeat = done.contains_key(&page);
         let new = if repeat { dst.add(Object::Null) } else { new };
-        let mut own = repeat.then(|| Copier::new(src, HashMap::new(), copier.pages.clone()));
+        let mut own = repeat.then(|| {
+            let mut c = Copier::new(src, HashMap::new(), copier.pages.clone());
+            c.kept = copier.kept.clone();
+            c
+        });
         let src_dict = src.get(page).as_dict().cloned().unwrap_or_default();
         let resources = resources_with_ancestors(src, &src_dict);
         let mut d = Dict::new();

@@ -20,10 +20,15 @@ impl PdfCraftApp {
         if self.hold_close_for_ocr_review(index) {
             return;
         }
-        // Text typed into a field counts as an unsaved change.
-        if self.has_unsaved_work(index)
+        // Text typed into a field counts as an unsaved change. Another tab of the document (split
+        // view) keeps the document's changes open, so closing this one asks only about its own.
+        if self.asks_before_closing(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
         {
+            if self.has_twin(index) {
+                // The question is about this tab of the document (`asking_tab`).
+                self.active = Some(index);
+            }
             self.close_request = Some(CloseRequest::Tab(id));
         } else {
             self.close_tab(index);
@@ -86,10 +91,21 @@ impl PdfCraftApp {
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
+                    // The focus goes with them, running no exit: a script changing the document
+                    // just reverted would only make it unsaved again.
+                    view.forms.focused = None;
                     view.forms.committed = None;
                     view.forms.unbaked.clear();
                     view.pending_edit = None;
+                    // The redactions applied since the last save are discarded too. Those in the
+                    // last web download stay, so later downloads keep the `_Redacted` name.
+                    view.redactions_applied = view.redactions_downloaded;
+                    view.redactions_undone_after_save = 0;
+                    view.saved_redactions_cut_off = false;
                 }
+                // A signature placed since the last save is gone with the rest: the next save
+                // doesn't ask to lock it (#2149).
+                self.placed_signatures.remove(&id);
                 self.notify_tr("Reverted to the last saved version");
             }
             Err(e) => self.notify_error(e),
@@ -107,7 +123,7 @@ impl PdfCraftApp {
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
         let index = match req {
-            CloseRequest::Tab(id) => match self.views.iter().position(|v| v.id == id) {
+            CloseRequest::Tab(id) => match self.asking_tab(id) {
                 Some(i) => i,
                 None => return, // already closed
             },
@@ -142,12 +158,18 @@ impl PdfCraftApp {
                 // document open.
                 let ctx = ctx.clone();
                 self.save_then(index, SaveTarget::InPlace, move |app| {
-                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                    if let Some(i) = app.asking_tab(id) {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
             }
         }
+    }
+
+    /// The tab a close question about document `id` is about: the active one when it shows `id`
+    /// (in split view two tabs can), else the document's first.
+    pub(crate) fn asking_tab(&self, id: pdfcraft_engine::DocId) -> Option<usize> {
+        self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).or_else(|| self.views.iter().position(|v| v.id == id))
     }
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
@@ -228,6 +250,12 @@ impl PdfCraftApp {
         if shortcut {
             self.request_quit(ctx);
         }
+        self.hold_close_for_unsaved(ctx);
+    }
+
+    /// The window's close: held back with the "save changes?" question while something is
+    /// unsaved. Also run after a frame whose logic panicked before `guard_quit` (#3914).
+    pub(crate) fn hold_close_for_unsaved(&mut self, ctx: &egui::Context) {
         self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;

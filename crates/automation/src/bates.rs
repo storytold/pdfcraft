@@ -287,7 +287,7 @@ fn same_output_name(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
                 })
                 .collect()
         }
-        return key(left) == key(right);
+        key(left) == key(right)
     }
     #[cfg(not(windows))]
     {
@@ -307,7 +307,7 @@ fn output_probe_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
                 wide.pop();
             }
         }
-        return Ok(std::ffi::OsString::from_wide(&wide));
+        Ok(std::ffi::OsString::from_wide(&wide))
     }
     #[cfg(not(windows))]
     {
@@ -415,7 +415,11 @@ mod tests {
         let acl = Command::new("icacls.exe").arg(dir.path()).arg("/deny").arg(format!("*{sid}:(AD)")).status().unwrap();
         assert!(acl.success());
 
-        assert!(matches!(tempfile::tempdir_in(dir.path()), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied));
+        // Where the deny entry does not bind the test's own account (it did not on CI's Windows image),
+        // there is no denied folder to probe.
+        if !matches!(tempfile::tempdir_in(dir.path()), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied) {
+            return;
+        }
         let direct_probe = dir.path().join("direct-probe");
         let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&direct_probe).unwrap();
         drop(file);

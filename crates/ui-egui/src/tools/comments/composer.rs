@@ -55,7 +55,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         anchor = anchor.clamp(viewport.min, viewport.max);
     }
     let pos = pos2(anchor.x + 12.0, anchor.y);
-    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
+    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.pane.key))).order(egui::Order::Foreground).constrain_to(viewport);
     area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
@@ -137,14 +137,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
             let font_size = prefs.font_size(CommentTool::Callout).unwrap_or(10.0);
             let rect = text_box_rect(c.at, &text, font_size, 0);
-            let side = if point[0] < rect[0] {
-                rect[0]
-            } else if point[0] > rect[2] {
-                rect[2]
-            } else {
-                (rect[0] + rect[2]) / 2.0
-            };
-            let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
+            let knee = pdfcraft_engine::callout_knee(rect, point);
             Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
