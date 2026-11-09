@@ -222,7 +222,8 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    pub(super) fn draw_value_text(&mut self, v: &Value, rect: Rect, font: &Font, para: &Para) -> Result<(), XfaError> {
+    /// Draw `v` in `rect`; `scope` is the SOM of what holds it, for the fields it embeds.
+    pub(super) fn draw_value_text(&mut self, v: &Value, rect: Rect, font: &Font, para: &Para, scope: &str) -> Result<(), XfaError> {
         let rich = match v {
             Value::Text(t) => text::plain(t),
             Value::Rich(r) => r.clone(),
@@ -235,7 +236,7 @@ impl Layouter<'_> {
         // The values of embedded fields are laid out with it, so each pass counts those too: a
         // short text embedding a long value is as much work as the value written out.
         let embed = |id: &str, max: usize| {
-            let v = self.embed(id, max);
+            let v = self.embed_in(id, max, scope);
             self.drawn_chars.set(self.drawn_chars.get().saturating_add(v.chars().count()));
             v
         };
@@ -282,7 +283,7 @@ impl Layouter<'_> {
         let ctx = ctx.child(&d.common);
         let inner = rect.inset(&d.common.margin);
         match &d.value {
-            Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para),
+            Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para, &ctx.som),
             Value::Image { content_type, data } => self.draw_image(data, content_type, inner),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {

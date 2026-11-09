@@ -532,6 +532,48 @@ fn restart_page_labels(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(3);
 }
 
+/// End shows the end of the document, the last page's bottom edge, when the page is taller than
+/// the window; Home goes back to the first page's top (#6434).
+#[test]
+fn end_shows_the_bottom_of_the_last_page() {
+    use egui::Key;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(4);
+    let vp = h.state().views[0].viewport_rect();
+    assert!(h.state().views[0].page_screen_rect(0).is_some_and(|r| r.height() > vp.height()), "a page is taller than the window");
+
+    h.key_press(Key::End);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 4, "the last page");
+    let last = v.page_screen_rect(4).expect("the last page is on screen");
+    assert!(last.bottom() <= vp.bottom() + 1.0 && last.bottom() > vp.bottom() - 40.0, "its bottom edge is at the window's: {last:?} in {vp:?}");
+
+    h.key_press(Key::Home);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 0, "the first page");
+    let first = v.page_screen_rect(0).expect("the first page is on screen");
+    assert!(first.top() >= vp.top() - 1.0 && first.top() < vp.top() + 40.0, "its top edge is at the window's: {first:?} in {vp:?}");
+
+    // The keys listed with them for Go to first / last page do the same.
+    let shift_cmd = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    for (last, first) in [(Key::ArrowDown, Key::ArrowUp), (Key::PageDown, Key::PageUp)] {
+        h.key_press_modifiers(shift_cmd, last);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let bottom = v.page_screen_rect(4).map(|r| r.bottom());
+        assert!(v.current == 4 && bottom.is_some_and(|b| (b - vp.bottom()).abs() < 40.0), "{last:?}: {bottom:?} in {vp:?}");
+        h.key_press_modifiers(shift_cmd, first);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let top = v.page_screen_rect(0).map(|r| r.top());
+        assert!(v.current == 0 && top.is_some_and(|t| (t - vp.top()).abs() < 40.0), "{first:?}: {top:?} in {vp:?}");
+    }
+}
+
 #[test]
 fn page_label_input_keeps_current_page_when_submitted_unchanged() {
     let mut h = harness();
@@ -1046,7 +1088,15 @@ fn the_window_title_marks_a_draft_that_is_not_applied_yet() {
     h.run_steps(2);
     assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
     let i = h.state().active.unwrap();
-    h.state_mut().views[i].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, color: [0.0; 3], focus: false });
+    h.state_mut().views[i].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
     h.run_steps(2);
     let s = h.state();
     assert!(!s.session.get(s.views[i].id).unwrap().dirty, "nothing applied to the document yet");
@@ -1482,6 +1532,138 @@ fn up_and_down_turn_pages_in_single_page_view() {
     assert_eq!(press(&mut h, Key::ArrowDown, 1), 1, "back at the bottom of page 1");
     assert_eq!(press(&mut h, Key::ArrowUp, 2), 0);
     assert_eq!(press(&mut h, Key::ArrowDown, 1), 0, "scrolled up from the bottom of page 1");
+}
+
+#[test]
+fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
+    // A plan zoomed in: → / ← turned the page (#185) and so never showed its other side; the
+    // view moved sideways only by the scroll bar, the wheel or the Hand.
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].set_zoom(12.0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(v.current).map(|r| r.left()))
+    };
+    let start = h.state().views[0].page_screen_rect(0).map(|r| r.left()).expect("on screen");
+    let (page, left) = press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert_eq!(page, 0, "→ scrolls the wide page rather than turning it");
+    assert!(left.is_some_and(|l| l < start - 10.0), "the page moved left: {left:?} from {start}");
+    // At its right edge the next → turns the page.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowRight).0 == 0 {
+        n += 1;
+        assert!(n < 500, "→ never reached the right edge");
+    }
+    assert!(n > 3, "→ scrolled across page 1 before turning ({n} presses)");
+    assert_eq!(h.state().views[0].current, 1);
+    // Page 2 starts at its left edge, as reading on across: → scrolls it rather than turning
+    // again at once.
+    let shown = |h: &Harness<'static, PdfCraftApp>, page: usize| {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(page).expect("on screen"), v.viewport_rect())
+    };
+    let (r, view) = shown(&h, 1);
+    assert!(r.left() >= view.left() && r.right() > view.right(), "page 2 from its left edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 1, "→ scrolls page 2 from its left edge");
+    // ← goes back to that edge and turns back: page 1 comes at its right edge, so the next ← scrolls it.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowLeft).0 == 1 {
+        n += 1;
+        assert!(n < 50, "← never turned back from page 2");
+    }
+    assert_eq!(h.state().views[0].current, 0);
+    let (r, view) = shown(&h, 0);
+    assert!(r.right() <= view.right() && r.left() < view.left(), "page 1 from its right edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowLeft).0, 0, "← scrolls page 1 from its right edge");
+    // ⌘→ turns at once.
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 1, "⌘→ turns the page at once");
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 2);
+    // A page that fits across: → turns pages as before.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(6);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 3);
+}
+
+/// Continuous view with pages of different widths: the content is as wide as the widest page, but
+/// on a narrow page that shows whole → turns the page; on the wide one it scrolls first.
+#[test]
+fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
+    use egui::Key;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("mixed.pdf", None, sized_fixture(&[(200, 1200), (3000, 1200), (200, 1200)])).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().active = Some(0);
+    assert!(h.state().views[0].continuous);
+    // Each page taller than the window, so one is the current page.
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(6);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.key_press(Key::ArrowRight);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(1).map(|r| r.left()))
+    };
+    assert_eq!(h.state().views[0].current, 0);
+    let (page, start) = press(&mut h);
+    assert_eq!(page, 1, "→ on the narrow page shown whole turns it");
+    let (page, left) = press(&mut h);
+    assert_eq!(page, 1, "→ on the wide page scrolls it");
+    assert!(left.zip(start).is_some_and(|(l, s)| l < s - 10.0), "the wide page moved left: {left:?} from {start:?}");
+}
+
+/// A zoomed two-page spread scrolled so its first page ends inside the window and the second is
+/// still wholly to the right of it: → scrolls on to the second page rather than turning the
+/// spread. (Read from the pages on screen alone, the spread seemed to end with its first page.)
+#[test]
+fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
+    use egui::Key;
+    // The page gap (points on screen).
+    const GAP: f32 = 14.0;
+    let build = |zoom: f32| {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
+            app.set_option("layout", "two-page").unwrap();
+            // Before the first layout: zoomed about the content's top left, scrolled to it.
+            app.views[0].set_zoom(zoom);
+            app
+        });
+        crate::support::settle(&mut h);
+        h.state_mut().active = Some(0);
+        h.run_steps(4);
+        h
+    };
+    let shown =
+        |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].viewport_rect(), h.state().views[0].page_screen_rect(0).expect("page 1 on screen"));
+    // Zoom until page 1's right edge sits half a gap inside the window's.
+    let mut zoom = 2.0;
+    let mut h = build(zoom);
+    for _ in 0..3 {
+        let (inner, first) = shown(&h);
+        zoom *= (inner.right() - GAP / 2.0 - first.left()) / first.width();
+        h = build(zoom);
+    }
+    let (inner, first) = shown(&h);
+    assert!(first.right() <= inner.right() && first.right() + GAP > inner.right(), "the spread's gap at the window's edge: {first:?} in {inner:?}");
+    assert!(h.state().views[0].page_screen_rect(1).is_none(), "its second page off screen");
+    assert!(h.state().views[0].layout == pdfcraft_ui_egui::canvas::PageLayout::TwoUp && !h.state().views[0].continuous);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert!(v.current < 2, "→ doesn't turn the spread: page {}", v.current + 1);
+    assert!(v.page_screen_rect(1).is_some(), "it scrolls the second page into view");
 }
 
 #[test]
