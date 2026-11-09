@@ -990,7 +990,7 @@ fn validated_form_with_note() -> Vec<u8> {
     ])
 }
 
-fn pdf_from_objects(objs: &[&str]) -> Vec<u8> {
+pub(crate) fn pdf_from_objects(objs: &[&str]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {

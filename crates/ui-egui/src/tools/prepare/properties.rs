@@ -254,6 +254,16 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                                 .response
                                 .labelled_by(l.id);
                         });
+                        // The dialog edits the whole field: say so before a style replaces each
+                        // widget's own mark (#6682).
+                        if d.check_mixed {
+                            let note = if d.kind == FormFieldKind::CheckBox {
+                                "This check box's widgets have different styles. Choosing one gives it to every widget."
+                            } else {
+                                "The buttons have different styles. Choosing one gives it to every button."
+                            };
+                            ui.label(egui::RichText::new(tl!(note)).small().color(t.text_muted));
+                        }
                     }
                     if d.kind == FormFieldKind::Radio {
                         flag_box(ui, &mut d.flags, ff::RADIOS_IN_UNISON, false, tl!("Buttons with the same name and value are selected in unison"));

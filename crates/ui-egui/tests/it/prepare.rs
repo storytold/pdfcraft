@@ -519,6 +519,8 @@ fn button_style_of_a_group_with_mixed_marks_says_mixed() {
     open(&mut h);
     assert!(h.state().field_props.as_ref().unwrap().check_mixed, "the buttons differ");
     h.get_by_value("Mixed");
+    const NOTE: &str = "The buttons have different styles. Choosing one gives it to every button.";
+    assert!(h.query_by_label(NOTE).is_some(), "the dialog says a style reaches every button");
     assert_eq!(h.state().field_props.as_ref().unwrap().props(), None, "opening changes nothing");
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -529,6 +531,7 @@ fn button_style_of_a_group_with_mixed_marks_says_mixed() {
     h.get_by_label("Circle").click();
     h.run_steps(2);
     h.get_by_value("Circle");
+    assert!(h.query_by_label(NOTE).is_none(), "chosen: no longer mixed");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Circle], "choosing the first button's style still changes the second");
