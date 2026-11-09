@@ -12,14 +12,16 @@
   `crates/engine/src/edit.rs`), each resolved by keeping both sides; §4 records
   them. The branch is 0 behind and
   `git merge-tree --write-tree origin/main HEAD` exits 0.
-- Local head before this STATUS commit: `5f3c6f3c2` (style: wrap the engine
+- Local head before this STATUS commit: `843a8f533` (feat: keep a split's part
+  and join Combine as ordered parts) on `a007c4256` (docs: record the rebase
+  onto `ba28458ad` and the gate run) on `5f3c6f3c2` (style: wrap the engine
   export list after the rebase merge) on `2020fce3f` (docs: record the
   Split/Combine dialogs inside a session) on `d975ebb72` (feat: send Split and
   Combine from a session as page operations) on `8f71c37db` (feat: split/combine
   pages as server-ordered operations) on `32e94bc78` (docs: the previous rebase
   record) on `ebce0fb6b` (refactor: the `apply_edit` dispatcher, which the
-  merged `ui-egui` needed to stay under the clippy complexity limit) — 77
-  commits on `ba28458ad` (78 with this STATUS commit). Commits named below and
+  merged `ui-egui` needed to stay under the clippy complexity limit) — 79
+  commits on `ba28458ad` (80 with this STATUS commit). Commits named below and
   in §4 by their pre-rebase hashes are mapped in the rebase section of §4.
 - PR #6622 on GitHub now has the pushed head `31bd4a7a2` (the owner's
   force-push, 2026-11-09 15:27Z) and reports `mergeable: CONFLICTING` /
@@ -30,7 +32,7 @@
   describes the older push; it is not re-edited in this pass (nothing is
   pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at `5f3c6f3c2`, the head this rebase produced.
+  §4 are green at `843a8f533`, the head this session produced.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -39,9 +41,11 @@
   (`a639f30c0`), presence selections (`b4e9179d8`), the conflict-resolution
   endpoint (`62d48d30a`), line endings/font size/info (`c400147b3`), page
   replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`),
-  page split/combine (`362f9c72b`), and the Split/Combine dialogs sending them
-  inside a session (this session, §4). The whole branch is rebased onto
-  `origin/main` `ba28458ad` with an empty `merge-tree` (§4, first table).
+  page split/combine (`362f9c72b`), the Split/Combine dialogs sending them
+  inside a session (this session, §4), and the split part kept as a document
+  plus one Combine confirmation as ordered parts (`843a8f533`, §4). The whole
+  branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
+  (§4, first table).
 - Known gaps before production are listed in §5, the plan in §6. The one this
   pass leaves explicitly open: a kill between the base write and the `CURRENT`
   rename is covered at the `Store` level only (§5 p.1, §6.1); the real-process
@@ -259,10 +263,11 @@ build enables the feature with `trunk build --release --features collab`.
     the cut and the pages that leave, instead of promising N files — because a
     silent "Split" that removes pages and writes nothing would be a surprise.
     A plan with one part has no cut and is refused with a message. The part is
-    not written to a file from the session: RFC §3.1.5 leaves that to the
-    client, and the operation is the only copy the room keeps. Do not make the
-    dialog take the first part out to match "the first file": that renumbers
-    every remaining page and moves everybody's comments.
+    not written to a file from the session, but it is not lost either: the
+    accepted operation carries it, and the app opens it as a document of its
+    own in the background (RFC §3.1.5 leaves the file to the client). Do not
+    make the dialog take the first part out to match "the first file": that
+    renumbers every remaining page and moves everybody's comments.
 24. **A dialog that changes the document asks the session first.** Split and
     Combine call `collab_shares`/`collab_document` and route through the same
     session methods as edits; the file workflow is the fallback, never a
@@ -480,12 +485,82 @@ Gates (host `agents`, rustc 1.99.1, `-j 12`):
 | UI without the feature | `cargo check -p pdfcraft-ui-egui --all-targets` | pass |
 | Web build | `cargo check -p pdfcraft-ui-egui --features collab --target wasm32-unknown-unknown` | pass |
 
-What this does **not** cover: the part a split takes out is not written to a file
-from the session (the accepted operation carries it; a "save the part" action is
-not built); a plan with more than one cut still removes one contiguous tail (the
-dialog names where, but the other parts are not separate files); a part over
-160 KiB is refused until the blob channel (RFC §4.1), for a combine as for a
-replica's insert; and nothing was run against a real cabinet or in a browser.
+What this did **not** cover before the next section: the part a split takes
+out was not written to a file from the session and was not kept (the accepted
+operation carried it; the next section opens it as a document); a plan with
+more than one cut still removed one contiguous tail; a part over 160 KiB was
+refused until the blob channel (RFC §4.1), for a combine as for a replica's
+insert; and nothing was run against a real cabinet or in a browser. The first
+two of those are addressed below; the multi-cut plan, the 160 KiB budget and a
+real-cabinet/browser run remain.
+
+### The split part and several parts per Combine — §6.6 leftovers (2026-11-09, local; not pushed)
+
+`843a8f533` on `a007c4256`. The two items §6.6 left open are closed: a split in a
+room no longer loses the part it takes out, and one Combine confirmation joins
+the whole list as several parts, all or nothing.
+
+- **The part is kept.** The accepted `page.split` already carries the bytes
+  (RFC §3.1.5); `collab-client-pdf::split_part(&Applied)` now hands them to the
+  app with the range (`SplitPart { from, to, bytes }`). In a room the app opens
+  the part as a document of its own in the background (`open_created_quiet`),
+  named as the single-user Split names its files (`<stem> (pages a-b).pdf`,
+  `(page a)`), so the pages can be read, printed or saved with Save a copy; the
+  shared document keeps the focus, so Undo still belongs to the room. Only a
+  split that is the user's Split opens a tab: one sent as an undo or a rollback
+  is an inverse and opens nothing (`SPLIT_LABEL`).
+- **One confirmation, several parts.** In a room `combine_staged` builds one
+  part per combine-list entry (its own range and password, in the list's order)
+  and `collab-client-pdf::combine_parts_ops` builds one `page.combine` per part,
+  each addressed where the parts before it end. The app sends them one at a
+  time (`CombineBatch`): a structural operation is accepted only at the head of
+  the version, so the next part goes out when the answer to the previous one is
+  in. The confirmation is one history group, so Undo takes it back in one step,
+  and undo sends a group's inverses in reverse order — the last part leaves
+  first, so the parts below it keep the positions they joined at — also one at
+  a time, each re-addressed to the head the previous answer left
+  (`OpSequence`).
+- **All or nothing.** A part refused `stale` (retryable) stops the queue: the
+  parts already joined are taken out again with the `page.split` of each, built
+  in reverse on the head the retry's snapshot leaves (`combine_mark_rollback`,
+  then `collab_combine_rollback`), the history group goes away, and the error
+  says the combine was taken back so the list can be sent again. A
+  non-retryable refusal (`limit`, `invalid`, `forbidden`) rolls back the same
+  way. A part over `MAX_RESTORE_PAGE_BYTES` (160 KiB) is still refused before
+  the first operation is sent and waits for the blob channel (RFC §4.1); the
+  budget was not raised.
+- **Nothing changes outside a room:** without a session the Combine tab builds
+  the merged document as before (`combine_grouped` on the whole list) and opens
+  it unsaved, and the Split dialog writes files as before.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-client-pdf` | `a_combine_of_several_parts_is_an_ordered_sequence` (one operation per part, each at the position the previous parts leave; a part over the budget or a position past the last page refuses the whole confirmation), `two_replicas_combine_several_parts_and_take_them_back` (both replicas converge after two parts, and the splits in reverse order restore the 4-page document), `the_accepted_split_part_opens_as_its_own_document` (`split_part` gives the range and the bytes, which open as a 2-page document) |
+| `ui-egui` (`collab::tests`) | `a_shared_split_sends_one_operation_and_undo_joins_the_part` (now also: the accepted part opens in a tab named `t (pages 2-4).pdf` with 3 pages, and the shared document keeps the focus), `a_shared_combine_joins_its_parts_one_at_a_time_and_undo_takes_them_back` (one `page.combine` sent, the second follows the first answer at index 6, both parts are one history group, and Undo sends the splits at 6 then 4), `a_stale_part_rolls_the_shared_combine_back` (a retried part waits for the snapshot, then the split at the joined index takes the part out; the history group is gone) |
+| `collab-ws` e2e | `two_clients_combine_parts_in_order_and_roll_back_a_stale_one` (two parts join in list order on both replicas, reverse-order undo restores 2 pages, a stale second part changes nothing and the joined first is taken out again) |
+
+Gates at `843a8f533` (host `agents`, rustc 1.99.1, `-j 12`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, projection | `cargo clippy -p pdfcraft-collab-client-pdf --all-targets -- -D warnings` | pass |
+| Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
+| Tests, adapter | `cargo test -p pdfcraft-collab-pdf` | pass — 47 |
+| Tests, projection | `cargo test -p pdfcraft-collab-client-pdf` | pass — **35** (32 of §4 plus the three above) |
+| Tests, session and e2e | `cargo test -p pdfcraft-collab-ws` | pass — 8 unit + **23** e2e (22 plus the new combine test) |
+| Tests, UI with the feature | `cargo test -p pdfcraft-ui-egui --features collab --lib` | pass — **964** passed, 1 ignored (927 of §4 plus the new collab tests) |
+| UI without the feature | `cargo check -p pdfcraft-ui-egui --all-targets` | pass |
+| Web build | `cargo check -p pdfcraft-ui-egui --features collab --target wasm32-unknown-unknown` | pass |
+
+What this does **not** cover: the part opens as an unsaved document, not in a
+file — saving it is the user's Save a copy; a plan with more than one cut still
+removes one contiguous tail (the other parts are not separate documents); the
+combine list is sent as one part per list entry, so a single entry whose PDF is
+over 160 KiB still waits for the blob channel; and nothing was run against a
+real cabinet or in a browser.
 
 ### Splitting and combining pages — §5 p.3 / limitation 3 (2026-11-09, local; not pushed)
 
@@ -2239,12 +2314,14 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   (3) and `collab-ws` e2e (2, two clients: converge, stale-retry, undo).
   **The dialogs are wired in §4 (this session, not pushed):** in a session,
   Split sends one `page.split` (the plan's cut, the tail leaves, the dialog says
-  so) and Combine sends one `page.combine` into the open document instead of a
-  new file; the local export runs only outside a session. Tests: the two-replica
-  projection test and the UI tests in §4 (32, 927 and 83/23 in the gate table).
-  What is left: saving the part a split takes out, more than one part per
-  confirmation, and a part over the budget waits for the blob channel
-  (RFC §4.1).
+  so) and the part opens as a document of its own; Combine sends one
+  `page.combine` per list entry into the open document instead of a new file,
+  sent one at a time as one confirmation, and a stale part takes the joined
+  parts out again (§4, "The split part and several parts per Combine"); the
+  local export runs only outside a session. Tests: the two-replica projection
+  tests and the UI and e2e tests in §4. What is left: a part over the budget
+  still waits for the blob channel (RFC §4.1); the part opens as an unsaved
+  document, not in a file.
 - **The publication queue (limitation 6 / §5 p.6) is done locally in §4**
   (2026-11-09, not pushed): a retryable cabinet failure is retried by the
   daemon's background queue with a doubling backoff (1 s → 60 s) and a derived
