@@ -1168,6 +1168,95 @@ fn gated_paper_detection_enables_print_after_worker_finishes() {
 }
 
 #[test]
+fn gated_paper_detection_blocks_print_on_printer_switch_reuse_until_resolved() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex, mpsc};
+
+    let mut h = harness();
+    let (release_a_tx, release_a_rx) = mpsc::channel();
+    let (started_a_tx, started_a_rx) = mpsc::channel();
+    let release_a_rx = Arc::new(Mutex::new(release_a_rx));
+    let started_a_tx = Arc::new(Mutex::new(started_a_tx));
+
+    let (release_b_tx, release_b_rx) = mpsc::channel();
+    let (started_b_tx, started_b_rx) = mpsc::channel();
+    let release_b_rx = Arc::new(Mutex::new(release_b_rx));
+    let started_b_tx = Arc::new(Mutex::new(started_b_tx));
+
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            spool::Printer { name: "Printer A".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Printer B".into(), default: false, two_sided: None, description: String::new() },
+        ]
+    }));
+
+    let rx_a = Arc::clone(&release_a_rx);
+    let tx_a = Arc::clone(&started_a_tx);
+    let rx_b = Arc::clone(&release_b_rx);
+    let tx_b = Arc::clone(&started_b_tx);
+    h.state_mut().printer_papers_source = Some(Arc::new(move |p| {
+        if p == "Printer A" {
+            let _ = tx_a.lock().unwrap().send(());
+            let _ = rx_a.lock().unwrap().recv();
+            vec![("A-Paper 4x6".into(), (288.0, 432.0))]
+        } else {
+            let _ = tx_b.lock().unwrap().send(());
+            let _ = rx_b.lock().unwrap().recv();
+            vec![("B-Paper 5x7".into(), (360.0, 504.0))]
+        }
+    }));
+    h.state_mut().default_paper_source = Some(Arc::new(|p| {
+        if p == "Printer A" {
+            Some(("A-Paper 4x6".into(), (288.0, 432.0)))
+        } else {
+            Some(("B-Paper 5x7".into(), (360.0, 504.0)))
+        }
+    }));
+
+    // 1. Open print dialog: Printer A is default and starts reading papers
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let _ = started_a_rx.recv_timeout(std::time::Duration::from_secs(5));
+    assert!(h.state().print_draft.papers_loading());
+    assert!(!h.state_mut().print_now());
+
+    // 2. Switch to Printer B
+    h.state_mut().print_draft.printer = Some("Printer B".into());
+    h.state_mut().print_draft.read_papers_for = Some("Printer B".into());
+    h.run_steps(1);
+    let _ = started_b_rx.recv_timeout(std::time::Duration::from_secs(5));
+    assert!(h.state().print_draft.papers_loading());
+    assert!(!h.state_mut().print_now());
+
+    // 3. Switch back to Printer A (A's read is still in flight, reusing worker)
+    h.state_mut().print_draft.printer = Some("Printer A".into());
+    h.state_mut().print_draft.read_papers_for = Some("Printer A".into());
+    h.run_steps(1);
+
+    // Guard must still hold for Printer A
+    assert!(h.state().print_draft.papers_loading(), "papers_loading must be restored for Printer A when reusing its worker");
+    assert!(!h.state_mut().print_now(), "print_now must be refused while Printer A's read is still pending after switch back");
+
+    // 4. Release Printer A's read
+    let _ = release_a_tx.send(());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.papers_loading() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.papers_loading());
+    assert_eq!(h.state().print_draft.paper_size(), (288.0, 432.0));
+    assert!(h.state_mut().print_now());
+
+    // Clean up Printer B worker
+    let _ = release_b_tx.send(());
+}
+
+#[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};
     let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;

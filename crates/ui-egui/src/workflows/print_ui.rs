@@ -312,10 +312,10 @@ impl PdfCraftApp {
                 }
             }
         }
+        self.print_draft.papers_loading = Some(printer.clone());
         if self.print_tasks.papers.iter().any(|(p, _)| *p == printer) {
             return;
         }
-        self.print_draft.papers_loading = Some(printer.clone());
         let papers_source = self.printer_papers_source.clone();
         let default_source = self.default_paper_source.clone();
         let (tx, rx) = std::sync::mpsc::channel();
