@@ -108,10 +108,12 @@ impl Fling {
         self.samples.clear();
     }
 
+    /// Whether a glide is moving the view.
     pub(crate) fn gliding(&self) -> bool {
         self.velocity != Vec2::ZERO
     }
 
+    /// Ends any glide where it is.
     pub(crate) fn stop(&mut self) {
         self.velocity = Vec2::ZERO;
         self.stalled = 0;
@@ -179,7 +181,8 @@ impl Fling {
     }
 
     /// How far the glide moves the view in the pass at `now` (zero when not gliding), as the
-    /// exact distance a speed decaying with [`TAU`] covers since the last pass.
+    /// exact distance a speed decaying with the glide's own constant ([`TAU`] for a touchpad
+    /// swipe, [`DRAG_TAU`] for a Hand tool drag) covers since the last pass.
     pub(crate) fn step(&mut self, now: f64) -> Vec2 {
         if !self.gliding() {
             return Vec2::ZERO;
@@ -264,12 +267,15 @@ mod tests {
         assert_eq!(fling.step(now + 1.0 / 60.0), Vec2::ZERO);
     }
 
+    /// One pass, at 60 a second.
     const DT: f64 = 1.0 / 60.0;
 
     /// Who is dragging the page in a [`hand_drag`].
     #[derive(Clone, Copy)]
     enum By {
+        /// One finger on a touch screen.
         Finger,
+        /// The mouse (or a touchpad's click and drag).
         Mouse,
         /// The mouse, with a finger touching the screen from the drag's third pass on.
         MouseThenFinger,
@@ -301,6 +307,8 @@ mod tests {
         lift
     }
 
+    /// A finger flicked and lifted glides at the speed it lifted at, even where touchpad swipes
+    /// don't glide.
     #[test]
     fn a_flicked_finger_glides_on_at_its_lift_speed() {
         // Where touchpad swipes don't glide too: a touch screen drag isn't the system's to glide.
@@ -314,6 +322,7 @@ mod tests {
         assert!((fling.velocity.y + 1800.0).abs() < 1.0, "{:?}", fling.velocity);
     }
 
+    /// A finger's glide slows by [`DRAG_TAU`], not the touchpad's [`TAU`], and stops.
     #[test]
     fn a_finger_glide_slows_with_the_drag_decay_and_stops() {
         let mut fling = Fling::new(true);
@@ -336,6 +345,7 @@ mod tests {
         assert!((-travelled - 1800.0 * DRAG_TAU).abs() < 10.0, "travelled {travelled}");
     }
 
+    /// A finger put back on the page during a glide holds the page still.
     #[test]
     fn a_finger_back_on_the_page_holds_a_glide() {
         let mut fling = Fling::new(true);
@@ -347,6 +357,7 @@ mod tests {
         assert_eq!(fling.step(lift + 3.0 * DT), Vec2::ZERO);
     }
 
+    /// A drag the mouse made stops where it is let go, however fast.
     #[test]
     fn a_mouse_drag_stops_where_it_is_let_go() {
         let mut fling = Fling::new(true);
@@ -354,6 +365,7 @@ mod tests {
         assert!(!fling.gliding());
     }
 
+    /// A finger touching the screen part way through a mouse drag doesn't make it a touch drag.
     #[test]
     fn a_finger_touching_during_a_mouse_drag_does_not_make_it_glide() {
         let mut fling = Fling::new(true);
@@ -361,6 +373,7 @@ mod tests {
         assert!(!fling.gliding(), "the mouse started the drag");
     }
 
+    /// A finger that stopped moving before it lifted doesn't glide.
     #[test]
     fn a_finger_resting_before_it_lifts_does_not_glide() {
         let mut fling = Fling::new(true);
@@ -369,6 +382,7 @@ mod tests {
         assert!(!fling.gliding());
     }
 
+    /// A drag a second finger joined (a pinch) doesn't glide when let go.
     #[test]
     fn a_pinch_does_not_glide() {
         let mut fling = Fling::new(true);
@@ -376,6 +390,7 @@ mod tests {
         assert!(!fling.gliding(), "a pinch lifted one finger at a time");
     }
 
+    /// A finger lifted while the page view's gate is closed doesn't glide.
     #[test]
     fn a_closed_gate_does_not_glide() {
         let mut fling = Fling::new(true);
@@ -383,6 +398,7 @@ mod tests {
         assert!(!fling.gliding(), "animations off, paging, a dialog, or a drag not let go");
     }
 
+    /// Whether a drag glides depends on that drag alone, not on the one before it.
     #[test]
     fn each_drag_is_judged_by_itself() {
         // A finger after a pinch glides again.

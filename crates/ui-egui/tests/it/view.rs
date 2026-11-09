@@ -1994,10 +1994,12 @@ fn hand_harness(effects: &str) -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Finger `id`'s touch event in `phase` at `pos`, on one touch screen.
 fn finger(id: u64, phase: TouchPhase, pos: egui::Pos2) -> egui::Event {
     egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: None }
 }
 
+/// The primary button going down (`pressed`) or up at `pos`, as egui-winit sends with a finger.
 fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
 }
@@ -2016,6 +2018,8 @@ fn hand_flick(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
     before - page_top(h)
 }
 
+/// A finger flicked with the Hand tool glides the page on after it lifts, for about the lift
+/// speed × 0.6 s (`DRAG_TAU`), and stops.
 #[test]
 fn a_flicked_finger_glides_on_with_the_hand_tool_and_slows_to_a_stop() {
     let mut h = hand_harness("on");
@@ -2031,6 +2035,7 @@ fn a_flicked_finger_glides_on_with_the_hand_tool_and_slows_to_a_stop() {
     assert!(total > 1200.0 && total < 1600.0, "about the lift speed × 0.6 s: glided {total}");
 }
 
+/// With Animation effects off, a flicked finger moves the page with it and no further.
 #[test]
 fn no_hand_tool_glide_with_animation_effects_off() {
     let mut h = hand_harness("off");
@@ -2040,6 +2045,7 @@ fn no_hand_tool_glide_with_animation_effects_off() {
     assert!(drift.abs() < 0.5, "no glide with animations off: drifted {drift}");
 }
 
+/// A finger put down on the page during a Hand tool glide holds it still.
 #[test]
 fn a_finger_back_down_holds_a_hand_tool_glide() {
     let mut h = hand_harness("on");
@@ -2052,6 +2058,7 @@ fn a_finger_back_down_holds_a_hand_tool_glide() {
     assert!(drift.abs() < 0.5, "a finger back down holds the page: drifted {drift}");
 }
 
+/// A finger dragging during a Hand tool glide takes the page from it.
 #[test]
 fn a_finger_dragging_during_a_hand_tool_glide_takes_the_page() {
     // The new drag stops the glide and moves the page with the finger, point for point; held
@@ -2075,6 +2082,7 @@ fn a_finger_dragging_during_a_hand_tool_glide_takes_the_page() {
     assert!(drift.abs() < 0.5, "no glide from the new drag: drifted {drift}");
 }
 
+/// A finger that stops on the page before it lifts leaves the page there, without a glide.
 #[test]
 fn a_finger_resting_before_it_lifts_does_not_glide_with_the_hand_tool() {
     let mut h = hand_harness("on");
@@ -2096,6 +2104,7 @@ fn a_finger_resting_before_it_lifts_does_not_glide_with_the_hand_tool() {
     assert!(drift.abs() < 0.5, "no glide after resting: drifted {drift}");
 }
 
+/// Two fingers dragging the page with the Hand tool (a pinch) don't glide it when they lift.
 #[test]
 fn a_two_finger_drag_does_not_glide_with_the_hand_tool() {
     // Two fingers flicked up together, the second lifted first, as a pinch ends.
