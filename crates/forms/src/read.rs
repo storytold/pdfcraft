@@ -93,7 +93,8 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         if seen.len() > 64 || !seen.insert(c) {
             break;
         }
-        let obj = doc.get(c);
+        // An object that is only a reference to another is followed, as `Document::resolve` does.
+        let obj = doc.resolve(&Object::Ref(c));
         let d = obj.as_dict()?;
         if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
             parts.push(t);
@@ -109,6 +110,38 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
 /// 32000-2 §7.3.9): the field is then a root, as if it named no parent.
 fn parent_of(doc: &Document, d: &Dict) -> Option<ObjRef> {
     d.reference(b"Parent").filter(|p| doc.get(*p).as_dict().is_some())
+}
+
+/// The fields of the form's tree whose `/Kids` list one of `kids` and whose own fully qualified
+/// name is `name`: a field listing kids that don't name it as their `/Parent`, and so share its
+/// name rather than extend it. Each node is visited once, at most 64 levels down.
+pub(crate) fn listing_fields_named(doc: &Document, name: &str, kids: &[ObjRef]) -> Vec<ObjRef> {
+    let mut out = Vec::new();
+    let Some(af) = acroform(doc) else { return out };
+    let top = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let mut stack: Vec<(ObjRef, usize)> = top.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((r, depth)) = stack.pop() {
+        if depth > 64 || !seen.insert(r) {
+            continue;
+        }
+        let obj = doc.get(r);
+        let Some(d) = obj.as_dict() else { continue };
+        let list: Vec<ObjRef> = d
+            .get(b"Kids")
+            .map(|k| doc.resolve(k))
+            .and_then(|k| k.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Object::as_ref)
+            .collect();
+        if list.iter().any(|k| kids.contains(k)) && qualified_name(doc, r).as_deref() == Some(name) {
+            out.push(r);
+        }
+        let next = depth.saturating_add(1);
+        stack.extend(list.into_iter().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).map(|k| (k, next)));
+    }
+    out
 }
 
 /// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
@@ -141,7 +174,11 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
             .and_then(|w| w.as_dict().and_then(|wd| wd.get(b"AA").map(|a| doc.resolve(a))))
             .and_then(|a| a.as_dict().cloned())
     });
-    let mut out = af::Actions::default();
+    let mut out = af::Actions {
+        // A date field the XFA layout generated: what its format doesn't read is kept as typed.
+        xfa_date: matches!(d.get(b"PCXfaDate").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))),
+        ..af::Actions::default()
+    };
     let Some(aa) = aa else { return out };
     let mut js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a, scripts));
     if let Some(f) = js(b"F") {
@@ -204,6 +241,69 @@ fn values_of(doc: &Document, o: Option<&Object>, budget: &mut DecodeBudget) -> V
         Object::Stream(s) => budget.decode(s).ok().map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
         other => text_of(other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
     }
+}
+
+/// A choice field's `/I` (ISO 32000-2 Table 234) as option positions, when it is usable: an array
+/// of integers "sorted in ascending order", each naming one of `count` options. `None` when it is
+/// absent or anything in it is not (a non-integer, a position out of range, out of order or
+/// repeated), so the field falls back to `/V`.
+pub(crate) fn listed_indices(doc: &Document, d: &Dict, count: usize) -> Option<Vec<usize>> {
+    let listed = doc.resolve(d.get(b"I")?);
+    let entries = listed.as_array()?;
+    // Strictly ascending positions below `count` number at most `count`.
+    if entries.len() > count {
+        return None;
+    }
+    let mut out: Vec<usize> = Vec::with_capacity(entries.len());
+    for e in entries {
+        let i = usize::try_from(doc.resolve(e).as_int()?).ok().filter(|&i| i < count)?;
+        if out.last().is_some_and(|&last| last >= i) {
+            return None;
+        }
+        out.push(i);
+    }
+    Some(out)
+}
+
+/// The options a choice field shows selected, as ascending positions in `options`, given its
+/// values (`/V`) and its usable `/I` ([`listed_indices`]).
+///
+/// `/I` decides when it names the same export values as `/V`: it "shall be used when two or more
+/// elements in the Opt array have different names but the same export value", and "if the items
+/// identified by this entry differ from those in the V entry …, the V entry shall be used" (ISO
+/// 32000-2 Table 234). Otherwise each value selects the first option with that export value, as
+/// the writer numbers `/I` when it is given only an export value, so a pick keeps showing the same
+/// option when `/I` is lost. A value no option exports selects nothing.
+pub fn selected_options(options: &[(String, String)], values: &[String], listed: Option<&[usize]>) -> Vec<usize> {
+    if let Some(listed) = listed {
+        // The same items, each as many times: `/V [(1) (1)]` names two items, which an `/I [1]`
+        // naming one doesn't, so `/V` decides then.
+        let mut named: Vec<&str> = values.iter().map(String::as_str).collect();
+        named.sort_unstable();
+        let exports: Option<Vec<&str>> = listed.iter().map(|&i| options.get(i).map(|(e, _)| e.as_str())).collect();
+        if let Some(mut exports) = exports {
+            exports.sort_unstable();
+            if exports == named {
+                return listed.to_vec();
+            }
+        }
+    }
+    let first = first_by_export(options);
+    let mut out: Vec<usize> = values.iter().filter_map(|v| first.get(v.as_str()).copied()).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Each export value in `options` with the position of the first option exporting it, so
+/// matching values against options takes one pass over each rather than one over the options per
+/// value (a file can hold many of both).
+pub(crate) fn first_by_export(options: &[(String, String)]) -> std::collections::HashMap<&str, usize> {
+    let mut first: std::collections::HashMap<&str, usize> = std::collections::HashMap::with_capacity(options.len());
+    for (i, (e, _)) in options.iter().enumerate() {
+        first.entry(e.as_str()).or_insert(i);
+    }
+    first
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
@@ -373,6 +473,19 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
     };
     for r in listed_roots {
+        // A `/Fields` entry that is a nameless kid of a field `/Fields` doesn't list is read
+        // through that field, which names it (ISO 32000-2 §12.7.4.2). A kid a field already read
+        // has claimed as its widget is not read again as a nameless field; one its parent's
+        // `/Kids` omits is still read on its own, as before.
+        let nameless_kid = doc.get(r).as_dict().is_some_and(|d| !d.contains(b"T") && d.contains(b"Parent"));
+        if nameless_kid {
+            if let Some(root) = unlisted_root(doc, r, &seen.fields) {
+                walk(doc, root, &base, &page_of, &mut seen, &mut out, 0);
+            }
+            if seen.widgets.contains(&r) {
+                continue;
+            }
+        }
         walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
     }
     let listed = out.len();
@@ -520,15 +633,34 @@ fn walk(
     let kids: Vec<ObjRef> =
         d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
     // Kids with /T are fields; kids without are this field's widgets.
-    let (field_kids, kids): (Vec<ObjRef>, Vec<ObjRef>) = kids.into_iter().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
+    let (field_kids, mut kids): (Vec<ObjRef>, Vec<ObjRef>) =
+        kids.into_iter().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
     let field_kids: Vec<ObjRef> = field_kids.into_iter().filter(|k| !not_a_child(doc, seen, r, *k)).collect();
     if !field_kids.is_empty() {
         seen.path.push(r);
         for k in field_kids {
-            walk(doc, k, &inh, page_of, seen, out, depth + 1);
+            // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+            // §12.7.4.2). A kid that doesn't name this field as its `/Parent` is named from its
+            // own chain, as other readers name it; it still inherits this field's attributes.
+            // The `/Parent` as written: `qualified_name` follows an object that only refers on,
+            // and names a missing one as no parent.
+            let parent = doc.get(k).as_dict().and_then(|kd| kd.reference(b"Parent"));
+            if parent == Some(r) {
+                walk(doc, k, &inh, page_of, seen, out, depth + 1);
+            } else {
+                let mut own = inh.clone();
+                own.name = parent.and_then(|p| qualified_name(doc, p)).unwrap_or_default();
+                walk(doc, k, &own, page_of, seen, out, depth + 1);
+            }
         }
         seen.path.pop();
-        return;
+        // "A field's children in the hierarchy may also include widget annotations" (ISO 32000-2
+        // §12.7.4): widget annotations listed beside named kids are still this field's widgets,
+        // read as a field of this name next to the named kids.
+        kids.retain(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.name(b"Subtype") == Some(b"Widget")));
+        if kids.is_empty() {
+            return;
+        }
     }
     // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
     // field listing them then reads.
@@ -545,8 +677,16 @@ fn walk(
     };
     // A child names its parent (ISO 32000-2 §12.7.4.1, Table 226): a page widget naming this field
     // is one of its widgets even when its `/Kids` leave it out, as MuPDF and PDFium read it.
-    let widget_refs: Vec<ObjRef> =
-        if d.contains(b"Rect") { vec![r] } else { kids.into_iter().chain(seen.by_parent.get(&r).into_iter().flatten().copied()).collect() };
+    // A field's widgets are its widget kids. The field dictionary is its own widget only when it
+    // has none (no kid whose `/Subtype` is `/Widget`): field and widget are merged "when a field has only a single associated widget
+    // annotation" (ISO 32000-2 §12.7.4), so a merged dictionary that also lists widget kids is a
+    // field whose buttons are those kids, not one more (often zero-area) button.
+    let has_widget_kids = kids.iter().any(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.name(b"Subtype") == Some(b"Widget")));
+    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") && !has_widget_kids {
+        vec![r]
+    } else {
+        kids.into_iter().chain(seen.by_parent.get(&r).into_iter().flatten().copied()).collect()
+    };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
@@ -599,16 +739,36 @@ fn walk(
             Object::Array(pair) if pair.len() >= 2 => Some((text_of(&doc.resolve(&pair[0]))?, text_of(&doc.resolve(&pair[1]))?)),
             other => text_of(other).map(|t| (t.clone(), t)),
         })
-        .collect();
+        .collect::<Vec<(String, String)>>();
+    let mut value = values_of(doc, inh.v.as_ref(), &mut seen.values);
+    // A list box without MultiSelect selects one option: "if clear, at most one item shall be
+    // selected" (ISO 32000-2 Table 233). Given an array /V or /DV anyway, it holds the first
+    // value only, and shows and resets to it; the file keeps its entries until the field is filled.
+    let mut default = values_of(doc, inh.dv.as_ref(), &mut seen.values);
+    let single = kind == FieldKind::List && ff & flags::MULTI_SELECT == 0;
+    let single_value_is_array = single && inh.v.as_ref().is_some_and(|v| doc.resolve(v).as_array().is_some());
+    if single {
+        value.truncate(1);
+        default.truncate(1);
+    }
+    let mut selected = match kind {
+        FieldKind::Combo | FieldKind::List => selected_options(&options, &value, listed_indices(doc, d, options.len()).as_deref()),
+        _ => Vec::new(),
+    };
+    if single {
+        selected.truncate(1);
+    }
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref(), &mut seen.values),
-        default: values_of(doc, inh.dv.as_ref(), &mut seen.values),
+        value,
+        default,
         flags: ff,
         max_len: inh.max_len,
         options,
+        selected,
+        single_value_is_array,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),
