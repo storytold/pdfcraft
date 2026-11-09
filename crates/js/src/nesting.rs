@@ -63,7 +63,7 @@ struct Reading {
 }
 
 impl Reading {
-    fn code() -> Self {
+    fn in_code() -> Self {
         Self { mode: Mode::Code, skip: 0, substitutions: Vec::new(), depth: 0, prefix: 0, conditionals: 0 }
     }
 
@@ -260,10 +260,10 @@ fn line_break(b: &[u8], i: usize) -> usize {
 /// conditionals; or the script has more ambiguous readings than the scan follows.
 pub(crate) fn too_deep(source: &str) -> bool {
     let b = source.as_bytes();
-    let mut readings = vec![Reading::code()];
+    let mut readings = vec![Reading::in_code()];
     if b.starts_with(b"#!") {
         // A hashbang comment, when the script is the start of what boa parses.
-        readings.push(Reading::code().with_mode(Mode::LineComment));
+        readings.push(Reading::in_code().with_mode(Mode::LineComment));
     }
     let mut next = Vec::with_capacity(MAX_READINGS + 1);
     for i in 0..b.len() {
@@ -281,7 +281,7 @@ pub(crate) fn too_deep(source: &str) -> bool {
         if next.is_empty() {
             // Every reading ends in a syntax error here, so boa stops by this byte. Carry on as
             // code anyway, with the largest counts, rather than stop checking.
-            let ended = ended.unwrap_or_else(Reading::code);
+            let ended = ended.unwrap_or_else(Reading::in_code);
             next.push(Reading { mode: Mode::Code, skip: 0, ..ended });
         }
         if next.iter().any(Reading::over_limit) {
