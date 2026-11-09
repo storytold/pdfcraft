@@ -951,7 +951,11 @@ impl Metrics {
                 || (self.outlined_cids.is_empty() && self.explicit_default);
         }
         match code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
-            Some(w) => *w > 0.0 || code == 32,
+            // A full font keeps its space whatever `/Widths` says; a subset that gives its space no width has no
+            // space glyph (pdfTeX writes 0 for the codes it never uses), and a typed space drawn as code 32 would
+            // glue the words together (#6131): the edit sets it as a positioning gap instead. Only when code 32
+            // is a space: another glyph a subset puts there keeps its code.
+            Some(w) => *w > 0.0 || (code == 32 && !(self.subset && self.text_of(code).is_some_and(|t| t.chars().all(char::is_whitespace)))),
             None => self.widths.is_empty() && !self.subset,
         }
     }
