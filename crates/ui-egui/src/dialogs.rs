@@ -550,6 +550,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 }
                 row(ui, "Application", i.creator.clone().unwrap_or_default());
                 row(ui, "PDF producer", i.producer.clone().unwrap_or_default());
+                row(ui, "Created", i.created.clone().unwrap_or_default());
+                row(ui, "Modified", i.modified.clone().unwrap_or_default());
             }
             PropsTab::InitialView => {
                 use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
@@ -624,7 +626,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                                 for (m, n) in names {
                                     ui.selectable_value(&mut v.magnification, m, n);
                                 }
-                                for p in [50.0, 75.0, 125.0, 150.0, 200.0] {
+                                // 100% is saved as Actual Size is (/XYZ zoom 1), so it reads back as Actual Size.
+                                for p in [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0] {
                                     ui.selectable_value(&mut v.magnification, M::Percent(p), format!("{p:.0}%"));
                                 }
                             })
