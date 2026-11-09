@@ -17,3 +17,4 @@ mod stroke_zero_end_tangent;
 mod substitute_widths;
 mod tiling_cell_placement;
 mod type3_text_clip;
+mod widgets_above_annotations;
