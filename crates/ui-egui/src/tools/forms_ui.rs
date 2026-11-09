@@ -958,7 +958,6 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
 /// A check box, radio button or read-only field (`locked`) with the focus, as [`overlay`] holds it.
 struct HeldField<'a> {
     field: &'a FormField,
-    widget: &'a FormWidget,
     /// The widget's index in its field.
     index: usize,
     /// Where the widget is on screen.
@@ -976,7 +975,7 @@ struct HeldField<'a> {
 /// instead of turning or scrolling the page. Returns whether the focus closes, the way Tab moves
 /// it (`Some(forward)`), and the edit a click, Space or an arrow makes (none for a read-only field).
 fn hold_focus(ctx: &egui::Context, view: &mut DocView, held: HeldField<'_>) -> (bool, Option<bool>, Option<Edit>) {
-    let HeldField { field: f, widget: w, index, rect, locked, toggle, clicked_outside } = held;
+    let HeldField { field: f, index, rect, locked, toggle, clicked_outside } = held;
     let id = egui::Id::unique(("form-field", view.view_key(), &f.name, index));
     let mut has_focus = false;
     // Not interactable, so clicks still reach the page under it.
@@ -1212,7 +1211,7 @@ pub(crate) fn overlay(
         }
         kind if locked || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
             // Nothing is drawn over the box, but a widget there holds the keyboard ([`hold_focus`]).
-            let held = HeldField { field: f, widget: w, index: focus.widget, rect, locked, toggle, clicked_outside: clicked_outside() };
+            let held = HeldField { field: f, index: focus.widget, rect, locked, toggle, clicked_outside: clicked_outside() };
             let (closes, tab, made) = hold_focus(ctx, view, held);
             close |= closes;
             next = next.or(tab);
