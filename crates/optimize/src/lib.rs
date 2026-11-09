@@ -35,6 +35,8 @@ mod external_refs;
 pub mod fragments;
 mod images;
 mod links;
+mod pool;
+mod samples;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
@@ -43,6 +45,8 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::effective_resolutions;
+pub use pool::give_way_to_other_programs;
+pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
@@ -109,6 +113,8 @@ impl Compatibility {
 /// Where an optimization is, reported to [`optimize_with_progress`]'s callback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
+    /// Reading what pages draw: `done` of `total` read, none yet while looking for fragments.
+    Reading { done: usize, total: usize },
     /// About to process image `done` (0-based) of `total`; `done == total` once all are done.
     Images { done: usize, total: usize },
     /// Merging the fragments of a page picture into one image (only when a page has some).
@@ -184,6 +190,8 @@ impl ImageSettings {
 pub struct Settings {
     /// Target PDF version (`Retain` by default).
     pub compatibility: Compatibility,
+    /// Threads for pictures: `None` picks from the machine. The result is the same with any number.
+    pub workers: Option<usize>,
     /// Put page pictures drawn as many stacked fragments back together first ([`fragments`]).
     pub merge_fragments: bool,
     pub color: ImageSettings,
@@ -224,6 +232,7 @@ impl Default for Settings {
     /// Acrobat's Reduce File Size choices.
     fn default() -> Self {
         Self {
+            workers: None,
             compatibility: Compatibility::Retain,
             merge_fragments: true,
             color: ImageSettings::REDUCE,
