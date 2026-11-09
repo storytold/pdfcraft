@@ -1264,22 +1264,36 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let strike = &a[i];
     assert_eq!((strike.name(b"Subtype"), strike.name(b"IT")), (Some(&b"StrikeOut"[..]), Some(&b"StrikeOutTextEdit"[..])));
     let caret = a.iter().find(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
-    assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"RT")), ("new words", Some(&b"Group"[..])));
-    assert!(caret.reference(b"IRT").is_some());
+    // The caret is the group's primary: a group's text is read from its primary and the
+    // subordinates' Contents are ignored (ISO 32000-2 §12.5.6.2), so the replacement is on it.
+    assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"IT")), ("new words", Some(&b"Replace"[..])));
+    assert!(caret.get(b"IRT").is_none() && caret.get(b"RT").is_none(), "a primary has no /IRT: {caret:?}");
+    assert_eq!(strike.name(b"RT"), Some(&b"Group"[..]));
+    assert!(text(strike, b"Contents").is_empty());
     // #2666: the pair needs its own `/NM` each. XFDF names a reply by the `/NM` of what it
     // replies to, so sharing one id writes `inreplyto` equal to the caret's own `name` and the
     // pair does not survive an export and import.
     assert_eq!(text(caret, b"NM").as_str(), "r-caret");
     assert_eq!(text(strike, b"NM").as_str(), "r");
     assert_ne!(text(caret, b"NM"), text(strike, b"NM"), "the caret must not carry the strikeout's name");
-    let irt = caret.reference(b"IRT").unwrap();
-    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r", "the caret replies to the strikeout");
+    let irt = strike.reference(b"IRT").unwrap();
+    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r-caret", "the strikeout is grouped under the caret");
     let r = rect(caret);
     assert!(r[0] < 200.0 && r[2] > 200.0 && r[1] < 706.0, "at the end of the line, below its baseline: {r:?}");
-    // Deleting the strikeout takes the caret with it (the group).
+    // Deleting either one takes the other with it (the proposal is one comment).
+    let marks = |doc: &Document| list(doc, 0).iter().filter(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))).count();
+    let mut by_strike = doc.clone();
+    delete_annotation(&mut by_strike, 0, i).unwrap();
+    assert_eq!(marks(&by_strike), 0, "deleting the strikeout deletes the caret");
     let mut doc = doc;
-    delete_annotation(&mut doc, 0, i).unwrap();
-    assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
+    let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    // A locked caret keeps the strikeout too: the pair can't be broken by deleting the other.
+    let mut locked = doc.clone();
+    set_locked(&mut locked, 0, c, true).unwrap();
+    assert!(deletable(&locked, 0, i).is_err() && delete_annotation(&mut locked, 0, i).is_err(), "a locked caret refuses its strikeout's deletion");
+    assert_eq!(marks(&locked), 2);
+    delete_annotation(&mut doc, 0, c).unwrap();
+    assert_eq!(marks(&doc), 0, "deleting the caret deletes the strikeout");
     assert!(
         add_text_replacement(
             &mut doc,
@@ -1296,6 +1310,55 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
         )
         .is_err()
     );
+}
+
+/// Review on #5689 (CodeRabbit): clicking a Replace Text strikeout selects its caret, the
+/// group's primary, so a restyle from Comment Properties lands on the caret. Colour and opacity
+/// are the proposal's, so the strikeout is restyled and redrawn in the same edit, whichever
+/// member is restyled; it takes no border width. A locked member refuses the whole change.
+#[test]
+fn restyling_a_replace_text_pair_restyles_both_members() {
+    let mut doc = fixture();
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let tr = TextReplacement {
+        page: 0,
+        quads: &quads,
+        replacement: "new words",
+        author: "Ada",
+        strike: &red,
+        caret: &red,
+        strike_meta: &meta("r"),
+        caret_meta: &meta("r-caret"),
+    };
+    let s = add_text_replacement(&mut doc, tr).unwrap();
+    let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    let color = |doc: &Document, i: usize| {
+        list(doc, 0)[i].get(b"C").and_then(|o| o.as_array().cloned()).unwrap().iter().filter_map(Object::as_f64).collect::<Vec<_>>()
+    };
+    let green = [0.0, 0.5, 0.0];
+
+    // Restyled through the caret (what a click on either part selects).
+    let mut by_caret = doc.clone();
+    set_style(&mut by_caret, 0, c, StyleChange::new(Some(green), Some(0.5), Some(3.0), None), &meta("")).unwrap();
+    let by_caret = reopen(&by_caret);
+    assert_eq!(color(&by_caret, c), green.to_vec());
+    assert_eq!(color(&by_caret, s), green.to_vec(), "the strikeout takes the proposal's colour");
+    let strike = &list(&by_caret, 0)[s];
+    assert_eq!(strike.get(b"CA").and_then(Object::as_f64), Some(0.5), "and its opacity");
+    assert!(strike.get(b"BS").is_none(), "a strikeout has no border to widen: {strike:?}");
+    assert!(ap_content(&by_caret, strike).contains("0 0.5 0 RG"), "its appearance is redrawn: {}", ap_content(&by_caret, strike));
+
+    // Restyled through the strikeout: the caret follows.
+    let mut by_strike = doc.clone();
+    set_style(&mut by_strike, 0, s, StyleChange::new(Some(green), None, None, None), &meta("")).unwrap();
+    assert_eq!(color(&by_strike, c), green.to_vec(), "the caret takes the proposal's colour");
+
+    // A locked strikeout refuses the change, and nothing moves.
+    let mut locked = doc.clone();
+    set_locked(&mut locked, 0, s, true).unwrap();
+    assert!(set_style(&mut locked, 0, c, StyleChange::new(Some(green), None, None, None), &meta("")).is_err());
+    assert_eq!(color(&locked, c), red.color.to_vec(), "the caret keeps its colour");
 }
 
 #[test]
