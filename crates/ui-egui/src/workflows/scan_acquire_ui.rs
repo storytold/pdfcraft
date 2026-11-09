@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 use egui::{Align, Layout};
-use pdfcraft_platform::scanner::{self, ScanColorMode, ScanError, ScanOptions, ScanResolution, ScannerDevice};
+use pdfcraft_platform::scanner::{self, ScanColorMode, ScanDuplex, ScanError, ScanOptions, ScanResolution, ScanSource, ScannerDevice};
 use crate::theme::{self, Tokens};
 use crate::{widgets, PdfCraftApp};
 
@@ -44,7 +44,7 @@ impl Default for ScanAcquireDraft {
 /// Status of a running background scan.
 pub enum ScanState {
     Running,
-    Finished(Result<Vec<u8>, ScanError>),
+    Finished(Result<Vec<Vec<u8>>, ScanError>),
 }
 
 /// Progress shared between background scanner thread and UI.
@@ -134,11 +134,28 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     group(ui, "Options", &mut |ui| {
         #[cfg(target_os = "windows")]
         {
-            ui.checkbox(&mut d.options.use_native_ui, tl!("Use system scan dialog (Preview & Scan)"));
+            ui.checkbox(&mut d.options.use_native_ui, tl!("Use system scan dialog (Windows basic)"));
             ui.add_space(6.0);
         }
 
         if !d.options.use_native_ui {
+            ui.label(egui::RichText::new(tl!("Paper Source & Sides:")).small().color(t.text_muted));
+            ui.horizontal(|ui| {
+                widgets::radio_value(ui, &mut d.options.source, ScanSource::Auto, tl!("Auto"));
+                widgets::radio_value(ui, &mut d.options.source, ScanSource::Flatbed, tl!("Flatbed"));
+                widgets::radio_value(ui, &mut d.options.source, ScanSource::Feeder, tl!("Feeder (ADF)"));
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                widgets::radio_value(ui, &mut d.options.duplex, ScanDuplex::Simplex, tl!("1-sided (Simplex)"));
+                widgets::radio_value(ui, &mut d.options.duplex, ScanDuplex::Duplex, tl!("2-sided (Duplex)"));
+            });
+            if d.options.source == ScanSource::Feeder || d.options.duplex == ScanDuplex::Duplex {
+                ui.add_space(4.0);
+                ui.checkbox(&mut d.options.all_pages, tl!("Scan all sheets in feeder (continuous)"));
+            }
+            ui.add_space(6.0);
+
             ui.label(egui::RichText::new(tl!("Resolution:")).small().color(t.text_muted));
             ui.horizontal(|ui| {
                 widgets::radio_value(ui, &mut d.options.resolution, ScanResolution::Dpi150, tl!("150 DPI"));
@@ -225,7 +242,7 @@ impl PdfCraftApp {
         let worker_options = options.clone();
 
         std::thread::spawn(move || {
-            let result = scanner::acquire_scan(&worker_options);
+            let result = scanner::acquire_scan_pages(&worker_options);
             if let Ok(mut lock) = worker_progress.lock() {
                 lock.state = ScanState::Finished(result);
             }
@@ -281,8 +298,12 @@ impl PdfCraftApp {
         let resolution = pdfcraft_engine::ImageResolution::Dpi(run.options.resolution.as_dpi() as f64);
 
         match state {
-            Ok(bytes) => {
-                let images = vec![("Scan.png".to_string(), bytes)];
+            Ok(pages) => {
+                let images: Vec<(String, Vec<u8>)> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, bytes)| (format!("Scan_{:03}.png", idx + 1), bytes))
+                    .collect();
                 match target {
                     ScanTarget::NewDocument => {
                         self.create_from_images_with_resolution(images, resolution);
@@ -291,7 +312,7 @@ impl PdfCraftApp {
                         }
                     }
                     ScanTarget::AppendActive => {
-                        // Append as a new page in the active document
+                        // Append as new pages in the active document
                         if let Some((_, doc_id)) = self.active_ids() {
                             let created = self.session.create_from_images_with_resolution(&images, resolution);
                             match created {
@@ -307,7 +328,7 @@ impl PdfCraftApp {
                                     if recognize_text {
                                         self.start_ocr();
                                     }
-                                    self.notify_tr("Scanned page appended to document");
+                                    self.notify_tr("Scanned pages appended to document");
                                 }
                                 Err(e) => self.notify(e.to_string()),
                             }

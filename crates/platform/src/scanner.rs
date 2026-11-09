@@ -53,6 +53,42 @@ impl ScanResolution {
     }
 }
 
+/// Paper source for scanning.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScanSource {
+    #[default]
+    Auto,
+    Flatbed,
+    Feeder,
+}
+
+impl ScanSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Flatbed => "Flatbed",
+            Self::Feeder => "Feeder (ADF)",
+        }
+    }
+}
+
+/// Sides to scan (Simplex vs Duplex).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScanDuplex {
+    #[default]
+    Simplex,
+    Duplex,
+}
+
+impl ScanDuplex {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Simplex => "1-sided",
+            Self::Duplex => "2-sided (Duplex)",
+        }
+    }
+}
+
 /// A discovered physical or network scanner device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScannerDevice {
@@ -66,6 +102,9 @@ pub struct ScanOptions {
     pub device_id: Option<String>,
     pub color_mode: ScanColorMode,
     pub resolution: ScanResolution,
+    pub source: ScanSource,
+    pub duplex: ScanDuplex,
+    pub all_pages: bool,
     pub use_native_ui: bool,
 }
 
@@ -75,7 +114,10 @@ impl Default for ScanOptions {
             device_id: None,
             color_mode: ScanColorMode::Color,
             resolution: ScanResolution::Dpi300,
-            use_native_ui: cfg!(target_os = "windows"),
+            source: ScanSource::Auto,
+            duplex: ScanDuplex::Simplex,
+            all_pages: true,
+            use_native_ui: false,
         }
     }
 }
@@ -153,14 +195,16 @@ try {
 }
 
 #[cfg(target_os = "windows")]
-pub fn acquire_scan(options: &ScanOptions) -> Result<Vec<u8>, ScanError> {
+pub fn acquire_scan_pages(options: &ScanOptions) -> Result<Vec<Vec<u8>>, ScanError> {
     let temp_dir = std::env::temp_dir();
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let out_file = temp_dir.join(format!("pdfcraft_scan_{}_{}.png", std::process::id(), nonce));
-    let out_path_str = out_file.to_string_lossy().to_string();
+    let out_dir = temp_dir.join(format!("pdfcraft_scan_batch_{}_{}", std::process::id(), nonce));
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| ScanError::AcquisitionFailed(format!("Failed to create temp batch directory: {e}")))?;
+    let out_dir_str = out_dir.to_string_lossy().to_string();
 
     let intent_num = match options.color_mode {
         ScanColorMode::Color => 1,
@@ -175,26 +219,45 @@ pub fn acquire_scan(options: &ScanOptions) -> Result<Vec<u8>, ScanError> {
 $ErrorActionPreference = 'Stop'
 try {{
     $dialog = New-Object -ComObject WIA.CommonDialog
-    $image = $dialog.ShowAcquireImage(1, {intent}, 131072, '{{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}}', $false, $true, $false)
+    $image = $dialog.ShowAcquireImage(1, {intent}, 131072, '{{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}}', $false, $true, $false)
     if ($image -eq $null) {{
         Write-Output "CANCELLED"
         exit 0
     }}
-    $image.SaveFile('{out_path}')
-    Write-Output "OK"
+    $tempBmp = [System.IO.Path]::GetTempFileName() + '.bmp'
+    $image.SaveFile($tempBmp)
+    Add-Type -AssemblyName System.Drawing
+    $bmp = [System.Drawing.Bitmap]::FromFile($tempBmp)
+    $outPng = Join-Path '{out_dir}' "page_0001.png"
+    $bmp.Save($outPng, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    Remove-Item $tempBmp -Force
+    Write-Output "OK:1"
 }} catch {{
     Write-Error $_.Exception.Message
     exit 1
 }}
 "#,
             intent = intent_num,
-            out_path = out_path_str.replace('\'', "''"),
+            out_dir = out_dir_str.replace('\'', "''"),
         )
     } else {
         let dev_filter = match &options.device_id {
             Some(id) if !id.is_empty() => format!("$targetId = '{}'", id.replace('\'', "''")),
             _ => "$targetId = $null".to_string(),
         };
+
+        let handling_select = match (options.source, options.duplex) {
+            (_, ScanDuplex::Duplex) => 5,
+            (ScanSource::Feeder, _) => 1,
+            (ScanSource::Flatbed, _) => 2,
+            (ScanSource::Auto, _) => 0,
+        };
+
+        let max_pages = if options.duplex == ScanDuplex::Duplex { 2 } else { 1 };
+        let all_pages_val = if options.all_pages { "$true" } else { "$false" };
+        let pages_val = if options.all_pages { 0 } else { max_pages };
+
         format!(
             r#"
 $ErrorActionPreference = 'Stop'
@@ -222,34 +285,81 @@ try {{
         Write-Error "No scanner device found"
         exit 2
     }}
+
+    $handlingSelect = {handling_select}
+    if ($handlingSelect -gt 0) {{
+        foreach ($p in $dev.Properties) {{
+            if ($p.PropertyID -eq 3088) {{
+                try {{ $p.Value = $handlingSelect }} catch {{}}
+            }}
+            if ($p.PropertyID -eq 3096) {{
+                try {{ $p.Value = {pages_val} }} catch {{}}
+            }}
+        }}
+    }}
+
     $item = $dev.Items.Item(1)
     foreach ($p in $item.Properties) {{
         if ($p.Name -eq 'Horizontal Resolution') {{ $p.Value = {dpi} }}
         if ($p.Name -eq 'Vertical Resolution') {{ $p.Value = {dpi} }}
         if ($p.Name -eq 'Current Intent') {{ $p.Value = {intent} }}
     }}
-    $image = $item.Transfer('{{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}}')
-    if ($image -eq $null) {{
-        Write-Output "CANCELLED"
-        exit 0
-    }}
-    $tempBmp = [System.IO.Path]::GetTempFileName() + '.bmp'
-    $image.SaveFile($tempBmp)
+
     Add-Type -AssemblyName System.Drawing
-    $bmp = [System.Drawing.Bitmap]::FromFile($tempBmp)
-    $bmp.Save('{out_path}', [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
-    Remove-Item $tempBmp -Force
-    Write-Output "OK"
+    $pageIdx = 0
+    $maxPages = {max_pages}
+    $allPages = {all_pages_val}
+
+    while ($true) {{
+        $image = $null
+        try {{
+            $image = $item.Transfer('{{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}}')
+        }} catch {{
+            if ($pageIdx -gt 0) {{
+                break
+            }}
+            Write-Error $_.Exception.Message
+            exit 1
+        }}
+
+        if ($image -eq $null) {{
+            if ($pageIdx -eq 0) {{
+                Write-Output "CANCELLED"
+                exit 0
+            }}
+            break
+        }}
+
+        $pageIdx++
+        $tempBmp = [System.IO.Path]::GetTempFileName() + '.bmp'
+        $image.SaveFile($tempBmp)
+        $outPng = Join-Path '{out_dir}' ("page_" + $pageIdx.ToString('0000') + ".png")
+        $bmp = [System.Drawing.Bitmap]::FromFile($tempBmp)
+        $bmp.Save($outPng, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+        Remove-Item $tempBmp -Force
+
+        if (-not $allPages -and ($pageIdx -ge $maxPages)) {{
+            break
+        }}
+        if ($handlingSelect -eq 2) {{
+            break
+        }}
+    }}
+    Write-Output "OK:$pageIdx"
 }} catch {{
     Write-Error $_.Exception.Message
     exit 1
 }}
 "#,
             dev_filter = dev_filter,
+            handling_select = handling_select,
+            pages_val = pages_val,
             dpi = dpi_num,
             intent = intent_num,
-            out_path = out_path_str.replace('\'', "''"),
+            max_pages = max_pages,
+            all_pages_val = all_pages_val,
+            out_dir = out_dir_str.replace('\'', "''"),
         )
     };
 
@@ -262,12 +372,12 @@ try {{
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if stdout.contains("CANCELLED") {
-        let _ = std::fs::remove_file(&out_file);
+        let _ = std::fs::remove_dir_all(&out_dir);
         return Err(ScanError::Cancelled);
     }
 
     if !output.status.success() {
-        let _ = std::fs::remove_file(&out_file);
+        let _ = std::fs::remove_dir_all(&out_dir);
         if output.status.code() == Some(2) {
             return Err(ScanError::NoScannerFound);
         }
@@ -277,15 +387,41 @@ try {{
         )));
     }
 
-    if !out_file.exists() {
-        return Err(ScanError::AcquisitionFailed("No scan file was produced".into()));
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&out_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("png") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+
+    if files.is_empty() {
+        let _ = std::fs::remove_dir_all(&out_dir);
+        return Err(ScanError::AcquisitionFailed("No scan pages were produced".into()));
     }
 
-    let bytes = std::fs::read(&out_file)
-        .map_err(|e| ScanError::AcquisitionFailed(format!("Failed to read scan output: {e}")))?;
-    let _ = std::fs::remove_file(&out_file);
+    let mut pages = Vec::new();
+    for f in &files {
+        match std::fs::read(f) {
+            Ok(bytes) => pages.push(bytes),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&out_dir);
+                return Err(ScanError::AcquisitionFailed(format!("Failed to read scan output {}: {e}", f.display())));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&out_dir);
 
-    Ok(bytes)
+    Ok(pages)
+}
+
+#[cfg(target_os = "windows")]
+pub fn acquire_scan(options: &ScanOptions) -> Result<Vec<u8>, ScanError> {
+    let pages = acquire_scan_pages(options)?;
+    pages.into_iter().next().ok_or_else(|| ScanError::AcquisitionFailed("No scan pages were produced".into()))
 }
 
 #[cfg(target_os = "linux")]
@@ -364,8 +500,19 @@ pub fn acquire_scan(options: &ScanOptions) -> Result<Vec<u8>, ScanError> {
     Ok(bytes)
 }
 
+#[cfg(target_os = "linux")]
+pub fn acquire_scan_pages(options: &ScanOptions) -> Result<Vec<Vec<u8>>, ScanError> {
+    let single = acquire_scan(options)?;
+    Ok(vec![single])
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn list_scanners() -> Result<Vec<ScannerDevice>, ScanError> {
+    Err(ScanError::UnsupportedPlatform)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub fn acquire_scan_pages(_options: &ScanOptions) -> Result<Vec<Vec<u8>>, ScanError> {
     Err(ScanError::UnsupportedPlatform)
 }
 
