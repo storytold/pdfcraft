@@ -72,6 +72,7 @@ fn same_style(a: &ClipStyle, b: &ClipStyle) -> bool {
     a.families == b.families
         && a.bold == b.bold
         && a.italic == b.italic
+        && a.small_caps == b.small_caps
         && same_size(a.size, b.size)
         && a.color.iter().zip(b.color).all(|(x, y)| (x - y).abs() <= COLOUR_NOISE)
 }
@@ -246,6 +247,14 @@ impl crate::Document {
                 (None, Some(block)) => &block.style,
                 (None, None) => &ClipStyle::default(),
             };
+            // A small capital keeps showing as one whichever style it takes.
+            let small;
+            let style = if layer.and_then(|l| l.style_of(i)).is_some_and(|d| d.small_caps) && !style.small_caps {
+                small = ClipStyle { small_caps: true, ..style.clone() };
+                &small
+            } else {
+                style
+            };
             let snap = as_drawn && last_style.as_ref().is_some_and(|last| same_style(last, style));
             let style = match &last_style {
                 Some(last) if snap => last,
@@ -281,6 +290,7 @@ impl crate::Document {
                     size: b.size * unit,
                     bold: b.bold || bold,
                     italic: b.italic || italic,
+                    small_caps: false,
                     color: b.color,
                 };
                 StyledBlock { rect: view_rect(info, b.rect), style, font: strip_subset_tag(&b.base_font).to_owned() }
@@ -325,6 +335,7 @@ fn drawn_style(s: &pdfcraft_render::GlyphStyle) -> ClipStyle {
         size: f64::from(s.size),
         bold: s.bold || named_bold,
         italic: s.italic || named_italic,
+        small_caps: s.small_caps,
         color: s.color.map(|c| f64::from(c) / 255.0),
     }
 }
@@ -739,6 +750,26 @@ mod tests {
         let layer = recovered_layer(&s, id).expect("recovered layer");
         let copy = doc.rich_copy_recovered(0, &layer, &[0, 1, 2]).unwrap();
         assert!(copy.html.contains("<strong>Soc"), "{}", copy.html);
+    }
+
+    /// Rule M in the copy: Copy keeps the private use characters; Copy with formatting copies
+    /// the letters, as lowercase letters in small capitals in the HTML (`font-variant:
+    /// small-caps`), and as the letters in its plain text.
+    #[test]
+    fn small_capitals_copy_as_letters_in_small_capitals() {
+        let mut s = Session::new();
+        let pdf = decimal_name_page_in("/Ismall /Nsmall /Tsmall /Rsmall /Osmall", false, "Rpxsc");
+        let id = s.open("smallcaps.pdf", None, Arc::new(pdf), None).unwrap();
+        let text = page_text(&s, id);
+        assert_eq!(text.plain_text(), "\u{F769}\u{F76E}\u{F774}\u{F772}\u{F76F}");
+        let doc = s.get(id).unwrap();
+        let layer = recovered_layer(&s, id).expect("recovered layer");
+        let all: Vec<usize> = (0..layer.text.glyphs.len()).collect();
+        let copy = doc.rich_copy_recovered(0, &layer, &all).unwrap();
+        assert!(copy.html.contains("font-variant:small-caps") && copy.html.contains("intro"), "{}", copy.html);
+        assert_eq!(copy.plain_text(), "intro");
+        let strict = doc.rich_copy(0, &text, &(0..text.glyphs.len()).collect::<Vec<_>>()).unwrap();
+        assert!(!strict.html.contains("small-caps") && strict.plain_text().contains('\u{F769}'), "{}", strict.html);
     }
 
     /// One font for [`mixed_line_page`]: its `/BaseFont`, descriptor `/Flags`, and the words it

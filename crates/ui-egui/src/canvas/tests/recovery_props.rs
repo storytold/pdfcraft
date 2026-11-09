@@ -450,8 +450,9 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: cases(), failure_persistence: None, ..ProptestConfig::default() })]
 
     /// Rule N (CIDs that are CFF standard string ids) reads a font numbered that way, and never
-    /// copies a wrong character: numbered one or two glyphs off, or monospaced so the widths
-    /// prove nothing, the font's text is either read right or not at all.
+    /// copies a wrong character: numbered one or two glyphs off (two ahead is the Macintosh
+    /// order, which its own rule may read), or monospaced so the widths prove nothing, the
+    /// font's text is either read right or not at all.
     #[test]
     fn standard_string_ids_read_right_or_not_at_all(
         text in standard_order_text(),

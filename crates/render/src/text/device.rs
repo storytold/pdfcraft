@@ -815,7 +815,8 @@ impl<'a> Device<'a> for TextDevice {
                     Paint::Pattern(_) => [0, 0, 0],
                 };
                 let size = if size.is_finite() { size } else { 0.0 };
-                let style = GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic };
+                let style =
+                    GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic, small_caps: r.small_caps };
                 let r = (r, style);
                 if glyph.text.chars().all(char::is_control) {
                     // No strict text: only Copy with formatting's layer has the glyph.

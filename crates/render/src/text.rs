@@ -145,6 +145,9 @@ pub struct GlyphStyle {
     pub color: [u8; 3],
     pub bold: bool,
     pub italic: bool,
+    /// A lowercase letter shown in small capitals: a private use small capital the recovery
+    /// rules read as its letter ([`Recovery::small_caps`]).
+    pub small_caps: bool,
 }
 
 impl RecoveredText {

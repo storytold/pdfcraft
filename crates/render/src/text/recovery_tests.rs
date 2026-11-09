@@ -923,13 +923,14 @@ fn cids_that_are_standard_string_ids_fill_the_recovered_layer() {
 }
 
 /// Rule N reads nothing where the evidence is missing or contradicts it: CIDs one ahead or
-/// behind the standard strings, or two ahead (the Macintosh order), whose widths put an `l`
-/// where the `m` is; a monospaced font, whose widths prove nothing; a font of an Adobe
-/// character collection (its CIDs are the collection's); and CIDs renumbered from 1.
+/// behind the standard strings, whose widths put an `l` where the `m` is (two ahead is the
+/// Macintosh order, read by the Macintosh-order rule); a monospaced font, whose widths prove
+/// nothing; a font of an Adobe character collection (its CIDs are the collection's); and CIDs
+/// renumbered from 1.
 #[test]
 fn cids_the_widths_dont_confirm_recover_nothing() {
     let text = "The Residence address and ZIP code are indicated.";
-    for shift in [-1, 1, 2] {
+    for shift in [-1, 1, 3] {
         let (_, recovered, _) = layers(&parse(cid_cff_page(text, shift, false, "Identity")));
         assert!(recovered.is_none(), "shift {shift}: {:?}", recovered.map(|r| r.text.plain_text()));
     }
@@ -1241,4 +1242,100 @@ fn type3_fonts_count_toward_the_recovery_font_budget() {
     assert_eq!(strict, plain);
     assert!(!strict.glyphs.is_empty());
     assert!(recovered.is_none(), "past the font budget nothing is recovered");
+}
+
+/// The Macintosh-order rule in a CID-keyed CFF font whose CIDs are glyph ids in the standard
+/// Macintosh order (a TrueType font converted to CFF, its glyph ids kept as CIDs; two ahead of
+/// the CFF standard strings for ASCII), without `/ToUnicode`: the widths confirm the order and
+/// the recovered layer is filled; the strict layer reads nothing. One or three ahead,
+/// monospaced, of an Adobe character collection, or a glyph id from 130 on (`“` is 180), and
+/// nothing more is read.
+#[test]
+fn cids_in_the_mac_order_fill_the_recovered_layer() {
+    let text = "Form 4 Articles of Amendment, Canada";
+    let (strict, recovered, plain) = layers(&parse(cid_cff_page(text, 2, false, "Identity")));
+    assert_eq!(strict, plain);
+    assert!(strict.glyphs.is_empty(), "{:?}", strict.plain_text());
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), text);
+    assert!(r.recovery.iter().flatten().all(|x| x.rule == RecoveryRule::MacGlyphOrder && x.mode == RecoveryMode::Fill));
+    for shift in [1, 3] {
+        let (_, recovered, _) = layers(&parse(cid_cff_page(text, shift, false, "Identity")));
+        assert!(recovered.is_none(), "shift {shift}: {:?}", recovered.map(|r| r.text.plain_text()));
+    }
+    let (_, recovered, _) = layers(&parse(cid_cff_page(text, 2, true, "Identity")));
+    assert!(recovered.is_none(), "monospaced: {:?}", recovered.map(|r| r.text.plain_text()));
+    let (_, recovered, _) = layers(&parse(cid_cff_page(text, 2, false, "Japan1")));
+    assert!(recovered.is_none(), "Adobe-Japan1: {:?}", recovered.map(|r| r.text.plain_text()));
+    // `‘` (standard string 65) is Macintosh glyph 67, `"` and `“` beside it: draw `“` (180)
+    // as an extra glyph; the letters still read, the curly quote doesn't.
+    let mut unique: Vec<char> = text.chars().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let mut cids: Vec<u16> = unique.iter().map(|&c| sid(c) + 2).collect();
+    cids.push(180);
+    let w: String = unique.iter().map(|&c| format!("{} [{}] ", sid(c) + 2, helvetica_width(c))).collect::<String>() + "180 [333]";
+    let shown: String = text.chars().map(|c| format!("{:04X}", sid(c) + 2)).collect::<String>() + "00B4";
+    let page = page_with_font(
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+        &format!("<{shown}>"),
+        false,
+        &[
+            (
+                &format!(
+                    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 8 0 R >>"
+                ),
+                Vec::new(),
+            ),
+            (
+                "<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 9 0 R >>",
+                Vec::new(),
+            ),
+            ("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids)),
+        ],
+    );
+    let (_, recovered, _) = layers(&parse(page));
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some(text));
+}
+
+/// Rule M: glyph names of the Adobe Glyph List's private use small capitals (`/Nsmall` is
+/// U+F76E) read as private use characters in the strict text, unchanged; the recovered layer
+/// reads each as the lowercase letter it is a small capital of, shown in small capitals, and
+/// says why it overrides. Oldstyle figures read as digits, not in small capitals.
+#[test]
+fn adobe_small_capitals_read_as_their_letters_in_small_capitals() {
+    let (strict, recovered, plain) =
+        layers(&parse(names_page("/Ismall /Nsmall /Tsmall /Rsmall /Osmall /zerooldstyle /oneoldstyle", "ABCDEF+Rpxsc", false)));
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text(), "\u{F769}\u{F76E}\u{F774}\u{F772}\u{F76F}\u{F730}\u{F731}");
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), "intro01");
+    for k in 0..r.text.glyphs.len() {
+        let x = r.recovery_of(k).expect("recovered");
+        assert_eq!(x.rule, RecoveryRule::AdobeSmallCaps);
+        assert!(matches!(x.mode, RecoveryMode::Override { .. }), "{x:?}");
+        let small = k < 5;
+        assert_eq!(x.small_caps, small, "glyph {k}");
+        assert_eq!(r.style_of(k).map(|s| s.small_caps), Some(small), "glyph {k}");
+    }
+}
+
+/// Rule M reads the same code points from `/ToUnicode`, and only those the glyph list names as
+/// a small capital or an oldstyle figure of the very character at their Latin-1 offset: U+F6CE
+/// (`Grave`, outside the range) and U+F760 (`Gravesmall`, whose `Grave` isn't a grave accent
+/// in the glyph list) read nothing, nor does any other private use character.
+#[test]
+fn only_the_glyph_lists_small_capitals_are_read() {
+    let tu = |pairs: &str| {
+        format!("/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <01> <FF> endcodespacerange 3 beginbfchar {pairs} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end").into_bytes()
+    };
+    let page = |pairs: &str| {
+        page_with_font("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 7 0 R >>", "<010203>", false, &[("", tu(pairs))])
+    };
+    let (strict, recovered, _) = layers(&parse(page("<01> <F761> <02> <F762> <03> <F763>")));
+    assert_eq!(strict.plain_text(), "\u{F761}\u{F762}\u{F763}");
+    assert_eq!(recovered.map(|r| r.text.plain_text()).as_deref(), Some("abc"));
+    let (strict, recovered, _) = layers(&parse(page("<01> <F6CE> <02> <F760> <03> <E000>")));
+    assert_eq!(strict.plain_text(), "\u{F6CE}\u{F760}\u{E000}");
+    assert!(recovered.is_none(), "{:?}", recovered.map(|r| r.text.plain_text()));
 }

@@ -22,6 +22,7 @@
 
 mod candidate;
 mod orders;
+mod small_caps;
 mod standard_order;
 mod widths;
 
@@ -36,6 +37,7 @@ use orders::{MAC_GLYPH_COUNT, mac_glyph_char, symbol_char};
 use skrifa::raw::TableProvider;
 use skrifa::raw::types::Version16Dot16;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
+use small_caps::AdobeSmallCaps;
 use standard_order::StandardStringOrder;
 use std::sync::{Arc, OnceLock};
 
@@ -54,11 +56,15 @@ pub enum RecoveryRule {
     /// are CFF standard string ids (Adobe Technical Note #5176 Appendix A), when the glyph widths
     /// confirm it: see `StandardStringOrder`.
     StandardStringOrder,
+    /// The Adobe Glyph List's private use small capitals and oldstyle figures (`Asmall` is
+    /// U+F761), read as the characters they are forms of: see `AdobeSmallCaps`.
+    AdobeSmallCaps,
 }
 
 impl RecoveryRule {
     /// Every rule, in the order they are tried.
-    pub const ORDER: [Self; 3] = [
+    pub const ORDER: [Self; 4] = [
+        Self::AdobeSmallCaps,
         Self::NumberedLatin1Names,
         Self::MacGlyphOrder,
         Self::StandardStringOrder,
@@ -70,6 +76,7 @@ impl RecoveryRule {
             Self::NumberedLatin1Names => "numbered-latin1-names",
             Self::MacGlyphOrder => "mac-glyph-order",
             Self::StandardStringOrder => "standard-string-order",
+            Self::AdobeSmallCaps => "adobe-small-caps",
         }
     }
 }
@@ -111,6 +118,9 @@ pub struct Recovery {
     pub rule: RecoveryRule,
     /// Whether it fills an empty glyph or overrides strict text.
     pub mode: RecoveryMode,
+    /// Whether the text is a lowercase letter shown in small capitals (a small capital read
+    /// by `AdobeSmallCaps`), for copies that keep the formatting (`font-variant: small-caps`).
+    pub small_caps: bool,
 }
 
 /// The kind of font a glyph comes from, as far as the rules care.
@@ -230,6 +240,7 @@ pub(crate) struct Guards {
     numbered: Option<<NumberedLatin1Names as Rule>::Guard>,
     mac: Option<<MacGlyphOrder as Rule>::Guard>,
     standard: Option<<StandardStringOrder as Rule>::Guard>,
+    small_caps: Option<<AdobeSmallCaps as Rule>::Guard>,
 }
 
 impl Guards {
@@ -238,12 +249,16 @@ impl Guards {
             numbered: NumberedLatin1Names::guard(font),
             mac: MacGlyphOrder::guard(font),
             standard: StandardStringOrder::guard(font),
+            small_caps: AdobeSmallCaps::guard(font),
         }
     }
 
     /// Whether no rule takes the font: nothing is ever recovered from it.
     fn none(&self) -> bool {
-        self.numbered.is_none() && self.mac.is_none() && self.standard.is_none()
+        self.numbered.is_none()
+            && self.mac.is_none()
+            && self.standard.is_none()
+            && self.small_caps.is_none()
     }
 }
 
@@ -364,6 +379,7 @@ impl std::fmt::Debug for Guards {
             .field("numbered", &self.numbered.is_some())
             .field("mac", &self.mac.is_some())
             .field("standard", &self.standard.is_some())
+            .field("small_caps", &self.small_caps.is_some())
             .finish()
     }
 }
@@ -394,6 +410,9 @@ impl RecoveryCache {
             }
             RecoveryRule::StandardStringOrder => {
                 apply::<StandardStringOrder>(guards.standard.as_ref(), &font, glyph)
+            }
+            RecoveryRule::AdobeSmallCaps => {
+                apply::<AdobeSmallCaps>(guards.small_caps.as_ref(), &font, glyph)
             }
         })
     }
@@ -432,7 +451,13 @@ pub fn recovery_policy(
         (Some(strict), RecoveryMode::Override { .. }) if *strict == text => return None,
         (Some(_), m @ RecoveryMode::Override { .. }) => m,
     };
-    Some(Recovery { text, rule, mode })
+    let small_caps = small_caps::shown_small(rule, strict);
+    Some(Recovery {
+        text,
+        rule,
+        mode,
+        small_caps,
+    })
 }
 
 /// Whether `text` is nothing but control characters (or empty): such a glyph has no text to
@@ -627,6 +652,8 @@ pub(crate) enum MacSource {
     Program { override_strict: bool, below: u32 },
     /// `/gNN` glyph names.
     Names,
+    /// The CIDs of a CID-keyed CFF program, glyph ids in the order ([`cid_cff_in_mac_order`]).
+    Cids,
 }
 
 /// Why [`MacGlyphOrder`] replaces the strict text of a simple TrueType font.
@@ -808,6 +835,42 @@ fn program_names_nothing(program: &FontRef<'_>) -> bool {
 /// 191, where the order has `guilsinglright`).
 const MAC_RELAXED_LIMIT: u32 = 130;
 
+/// Most CIDs [`cid_cff_in_mac_order`] looks at.
+const MAX_CIDS: usize = 65_536;
+
+/// [`MacGlyphOrder`] for a Type 0 font over an embedded CID-keyed CFF program (`CIDFontType0`)
+/// whose CIDs are glyph ids in the Macintosh order: a TrueType font converted to CFF that kept
+/// its glyph ids as CIDs. Nothing in the font names a glyph (no `/ToUnicode`, or one whose
+/// answers all agree with the order; not an Adobe character collection), so the CIDs of its
+/// charset must read as text, not be one gapless block, and the glyph widths (`/W`) must prove
+/// the order (`widths::widths_agree`): a program numbered by the CFF standard strings reads two
+/// letters off in this order and fails. Only CIDs below 130 are read (`MAC_RELAXED_LIMIT`), and
+/// only to fill.
+fn cid_cff_in_mac_order(font: &FontFacts<'_>) -> Option<MacSource> {
+    if font.has_to_unicode && !font.to_unicode_checkable {
+        return None;
+    }
+    let (Some(ids), Some(width)) = (font.ids, font.id_width) else {
+        return None;
+    };
+    let mut cids: Vec<u32> = ids()
+        .into_iter()
+        .filter(|&cid| cid >= 3)
+        .take(MAX_CIDS)
+        .collect();
+    cids.sort_unstable();
+    cids.dedup();
+    if font.has_to_unicode && !to_unicode_agrees(font, &cids) {
+        return None;
+    }
+    if renumbered_block(&cids) || !plausible(&cids) {
+        return None;
+    }
+    widths::widths_agree(&widths::read_widths(&cids, mac_glyph_char, width))
+        .proves()
+        .then_some(MacSource::Cids)
+}
+
 /// Most `cmap` mappings [`cmap_agrees`] reads.
 const MAX_CMAP_MAPPINGS: usize = 65_536;
 
@@ -898,6 +961,11 @@ impl Rule for MacGlyphOrder {
                 return Some(MacSource::Names);
             }
         }
+        // A CID-keyed CFF program whose CIDs are glyph ids in the Macintosh order (a TrueType
+        // font converted to CFF that kept its glyph ids as CIDs).
+        if font.kind == FontKind::CidCff {
+            return cid_cff_in_mac_order(font);
+        }
         // A program that keeps its original glyph ids.
         let simple = match font.kind {
             FontKind::TrueType => true,
@@ -965,6 +1033,10 @@ impl Rule for MacGlyphOrder {
             MacSource::Names => {
                 let c = mac_glyph_char(g_name_number(glyph.name?)?)?;
                 Some((BfString::Char(c), RecoveryMode::Fill))
+            }
+            MacSource::Cids => {
+                let cid = glyph.id.filter(|&cid| cid < MAC_RELAXED_LIMIT)?;
+                Some((BfString::Char(mac_glyph_char(cid)?), RecoveryMode::Fill))
             }
             MacSource::Program {
                 override_strict,
