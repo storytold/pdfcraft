@@ -333,7 +333,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
-        .with_min_inner_size([820.0, 520.0])
+        .with_min_inner_size(pdfcraft_ui_egui::MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
         // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
         .with_app_id(APP_ID);
@@ -439,6 +439,8 @@ fn app_creator<'a>(
         if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
             app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
         }
+        // The OCR Verify screen stores its per-language dictionary beside recovery data.
+        app.ocr_verify.dictionary_dir = pdfcraft_ui_egui::default_dictionary_dir();
         if let Some(state) = &cc.wgpu_render_state {
             let adapter = state.adapter.get_info();
             let max_texture_dimension_2d = state.device.limits().max_texture_dimension_2d;

@@ -9,6 +9,11 @@ impl DocView {
     /// zoom are kept). `None` before the first frame has laid pages out, when the bookmark just
     /// goes to the current page.
     pub(crate) fn bookmark_position(&self, info: &DocInfo) -> Option<(usize, [Option<f32>; 2])> {
+        // The page grid moves the viewport without refreshing where the pages are on screen, so
+        // there is no position to read: the bookmark goes to the current page.
+        if self.organize {
+            return None;
+        }
         if let Some(sel) = self.selection
             && let Some(text) = self.texts.get(&sel.page)
             && let Some(p) = info.pages.get(sel.page)
@@ -32,11 +37,17 @@ impl DocView {
         // of pages of different heights, whose shorter page can start below it), else the
         // nearest one below.
         let top = self.viewport_screen.top();
-        let showing = || self.screen_xforms.iter().filter(|(_, xf)| xf.rect.bottom() > top);
-        let (page, xf) = showing()
-            .filter(|(_, xf)| xf.rect.top() <= top)
-            .min_by_key(|(p, _)| *p)
-            .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))?;
+        // A page showing less than a pixel is rounding, not what the reader is looking at: a jump
+        // to the next page leaves the previous one's bottom edge within a pixel of the top. Such a
+        // sliver still counts when nothing else shows (the last page at the very end).
+        let pick = |slack: f32| {
+            let showing = || self.screen_xforms.iter().filter(move |(_, xf)| xf.rect.bottom() > top + slack);
+            showing()
+                .filter(|(_, xf)| xf.rect.top() <= top)
+                .min_by_key(|(p, _)| *p)
+                .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
+        };
+        let (page, xf) = pick(sliver(self.screen_ppp)).or_else(|| pick(0.0))?;
         let p = info.pages.get(*page)?;
         // Above the page (in the gap before it) is the page's own top. The window's vertical is
         // the view's y, or its x when the view is turned a quarter.
@@ -95,6 +106,16 @@ impl DocView {
         self.reset_coarse_state();
         self.goto = Some((page, 0.0));
         self.current = page;
+    }
+
+    /// The end of the document (End): the last page, scrolled to its bottom as far as the view
+    /// goes, as browsers and word processors do (#6434). [`go_to_page`](Self::go_to_page) shows a
+    /// page's top.
+    pub fn go_to_end(&mut self) {
+        self.go_to_page(usize::MAX);
+        // A fraction past a page's top scrolls as far as the content allows (`goto`, clamped when
+        // applied), so the whole page down to its bottom edge.
+        self.goto = Some((self.current, 1.0));
     }
 
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
@@ -269,7 +290,11 @@ impl DocView {
         let Some(forward) = self.wheel.feed(unit, dy, phase, now, can_turn) else { return false };
         let before = self.current;
         self.step_page(forward);
-        self.current != before
+        if self.current == before {
+            self.wheel.unturn();
+            return false;
+        }
+        true
     }
 
     /// One wheel event in a non-continuous view whose page is taller than the window, where the
@@ -289,6 +314,7 @@ impl DocView {
         let before = self.current;
         self.step_page(forward);
         if self.current == before {
+            self.wheel.unturn();
             return false;
         }
         if !forward {
@@ -392,11 +418,14 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
-    if key(Key::Home) {
+    // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434).
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    if key(Key::Home) || pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp)) {
         view.go_to_page(0);
     }
-    if key(Key::End) {
-        view.go_to_page(usize::MAX);
+    if key(Key::End) || pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown)) {
+        view.go_to_end();
     }
     // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
     // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).
@@ -409,14 +438,39 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         }
     }
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
-    // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
+    // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view. On a page wider
+    // than the window (a plan zoomed in) → / ← scroll sideways a line first, and turn the page
+    // once there is nothing left to scroll that way, as ↓ / ↑ do in single-page view; ⌘→ / ⌘←
+    // turn it at once.
     let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
-    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    let line = KEY_SCROLL_LINE * speed.factor();
+    // Only an up-to-date view counts: no jump pending.
+    let sideways = |view: &DocView, right: bool| {
+        !command && view.goto.is_none() && view.side_edges.is_some_and(|(left_edge, right_edge)| !if right { right_edge } else { left_edge })
+    };
+    // Turned at an edge, the next page starts at its left and the previous one at its right, as
+    // reading on across: on two wide pages → doesn't turn twice without showing the next one's left.
+    let at_edge = |view: &mut DocView, right: bool| {
+        if !command && view.goto.is_some() {
+            view.goto_side = Some(!right);
+        }
+    };
+    if key(Key::ArrowRight) && sideways(view, true) {
+        view.key_side += line;
+    } else if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
         view.step_page(true);
+        if key(Key::ArrowRight) {
+            at_edge(view, true);
+        }
     }
-    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    if key(Key::ArrowLeft) && sideways(view, false) {
+        view.key_side -= line;
+    } else if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
+        if key(Key::ArrowLeft) {
+            at_edge(view, false);
+        }
     }
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
     // single-page view, ↓ / ↑ turn the page once there is nothing left to scroll that way, as
@@ -424,7 +478,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // The Scroll speed preference sets how far ↓ / ↑ go as well as the wheel (#985); Page Down /
     // Page Up keep a screen.
     if !command {
-        let line = KEY_SCROLL_LINE * speed.factor();
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, line), (Key::ArrowUp, -line), (Key::PageDown, screen), (Key::PageUp, -screen)];
         for (k, by) in steps {
@@ -455,3 +508,23 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
 /// How far ↓ / ↑ scroll at Normal speed (Scroll speed halves or doubles it). Page Down / Page Up
 /// keep this much of the previous screen in view.
 const KEY_SCROLL_LINE: f32 = 40.0;
+/// How much of a page must show at the window's top edge to count as the page there, in points: one
+/// physical pixel, since page rectangles snap to whole pixels and less is rounding.
+fn sliver(pixels_per_point: f32) -> f32 {
+    if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 1.0 / pixels_per_point } else { 1.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sliver;
+
+    #[test]
+    fn a_sliver_is_one_physical_pixel() {
+        assert_eq!(sliver(1.0), 1.0);
+        assert_eq!(sliver(2.0), 0.5);
+        assert_eq!(sliver(0.5), 2.0);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(sliver(bad), 1.0, "{bad}");
+        }
+    }
+}

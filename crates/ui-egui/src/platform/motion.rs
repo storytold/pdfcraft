@@ -19,7 +19,7 @@
 //! How far anything scrolls or zooms doesn't change, only how long it takes.
 
 use egui::style::ScrollAnimation;
-use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, Vec2, vec2};
+use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, Vec2, vec2};
 
 /// Preferences ▸ Animation effects: whether anything in the window is animated, the wheel's
 /// scrolling and zooming included.
@@ -119,11 +119,10 @@ impl Motion {
         }
         let animate = effects.animates(self.reduced);
         self.sync_style(ctx, animate);
-        if animate {
-            // A gesture begun while easing is egui's to finish.
+        if crate::canvas::wheel_reset::reset_this_pass(ctx) {
+            // The document's hidden cancel resets egui before fresh input. Its app reader
+            // must forget the same older gesture modifiers before reading those events.
             self.wheel = WheelReader::default();
-            self.frame = None;
-            return;
         }
         let options = ctx.options(|o| o.input_options);
         // One frame may run several passes (`request_discard`). Only the first pass has this
@@ -141,11 +140,18 @@ impl Motion {
         let motion = match self.frame {
             Some((read_in, motion)) if read_in == frame => motion,
             _ => {
-                let motion = ctx.input(|i| self.wheel.read(&i.events, i.viewport_rect().height(), &options));
+                let motion = ctx.input(|i| self.wheel.read(&i.events, i.time, i.viewport_rect().height(), &options));
                 self.frame = Some((frame, motion));
+                let modifiers = self.wheel.modifiers.clone();
+                ctx.data_mut(|d| d.insert_temp(gesture_id(), (frame, modifiers)));
                 motion
             }
         };
+        if animate {
+            // egui eases the wheel itself. The reader still follows each touch gesture, as
+            // egui does, for the modifiers [`gesture_wheel_events`] hands the document.
+            return;
+        }
         let (scroll, zoom) = if first_pass { (motion.scroll, motion.zoom) } else { (Vec2::ZERO, 1.0) };
         ctx.input_mut(|i| i.smooth_scroll_delta = scroll);
         let pass = ctx.cumulative_pass_nr();
@@ -197,6 +203,34 @@ pub(crate) fn zoom_delta(ctx: &egui::Context) -> f32 {
     })
 }
 
+/// Return the stable egui id holding the modifiers of this frame's wheel events.
+fn gesture_id() -> egui::Id {
+    egui::Id::unique("pdfcraft-motion-wheel-gesture")
+}
+
+/// This pass's wheel events, each with the modifiers it acts with: a touch gesture keeps
+/// ⌘/Ctrl or Shift from its `Start` until its `End`, as egui and [`WheelReader`] read it. A view
+/// that reads the raw wheel then scrolls none of a gesture that egui or [`zoom_delta`] zooms,
+/// after the keys are let go too. The events keep their own modifiers when
+/// [`Motion::begin_pass`] did not read this frame's wheel.
+pub(crate) fn gesture_wheel_events(ctx: &egui::Context) -> Vec<Event> {
+    let read: Option<(u64, Vec<Modifiers>)> = ctx.data(|d| d.get_temp(gesture_id()));
+    let frame = ctx.cumulative_frame_nr();
+    let mut events: Vec<Event> = ctx.input(|i| i.events.iter().filter(|e| matches!(e, Event::MouseWheel { .. })).cloned().collect());
+    if let Some((at, held)) = read
+        && at == frame
+        // A later pass of the frame has no events left; only the pass that was read matches.
+        && events.len() == held.len()
+    {
+        for (event, held) in events.iter_mut().zip(held) {
+            if let Event::MouseWheel { modifiers, .. } = event {
+                *modifiers = held;
+            }
+        }
+    }
+    events
+}
+
 /// One pass's wheel input.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WheelMotion {
@@ -216,20 +250,44 @@ struct WheelReader {
     /// The modifiers of the touch gesture in progress (`TouchPhase::Start` to `End`). They hold
     /// for the whole gesture, as in egui: its momentum arrives after the keys are let go.
     touch: Option<Modifiers>,
+    /// The time of the last wheel event and what drove it. A touch whose `End` never arrives
+    /// (some mouse wheels on Wayland send `Start` alone) ends after egui's timeout.
+    last: Option<(f64, MouseWheelSource)>,
+    /// The modifiers each wheel event of the last [`Self::read`] acted with, in order.
+    modifiers: Vec<Modifiers>,
 }
 
+/// egui's `SCROLL_ACTION_TIMEOUT`: seconds without a wheel event that end a touch.
+const TOUCH_TIMEOUT: f64 = 0.150;
+
+/// egui's `RESTING_FINGER_TIMEOUT`: the same for a touch driven by fingers on a trackpad.
+const RESTING_FINGER_TIMEOUT: f64 = 1.0;
+
 impl WheelReader {
-    /// `page_height` is what one `MouseWheelUnit::Page` scrolls: the window's height in points.
-    fn read(&mut self, events: &[Event], page_height: f32, options: &egui::InputOptions) -> WheelMotion {
+    /// `time` is the pass's input time; `page_height` is what one `MouseWheelUnit::Page`
+    /// scrolls: the window's height in points.
+    fn read(&mut self, events: &[Event], time: f64, page_height: f32, options: &egui::InputOptions) -> WheelMotion {
         let mut delta = Vec2::ZERO;
         let mut zoom = 1.0_f32;
         let mut modifiers = self.touch.unwrap_or_default();
+        self.modifiers.clear();
         for event in events {
+            if let Event::MouseWheel { source, .. } = event {
+                if let Some((at, last_source)) = self.last {
+                    let timeout = if last_source == MouseWheelSource::Trackpad { RESTING_FINGER_TIMEOUT } else { TOUCH_TIMEOUT };
+                    // `>` is false for a NaN time, which then keeps the touch, as egui does.
+                    if time - at > timeout {
+                        self.touch = None;
+                    }
+                }
+                self.last = Some((time, *source));
+            }
             match event {
                 Event::MouseWheel { unit, delta: step, phase, modifiers: latest, .. } => match phase {
                     TouchPhase::Start => {
                         self.touch = Some(*latest);
                         modifiers = *latest;
+                        self.modifiers.push(modifiers);
                     }
                     TouchPhase::Move => {
                         modifiers = match &mut self.touch {
@@ -239,6 +297,7 @@ impl WheelReader {
                             }
                             None => *latest,
                         };
+                        self.modifiers.push(modifiers);
                         let mut step = match unit {
                             MouseWheelUnit::Point => *step,
                             MouseWheelUnit::Line => options.line_scroll_speed * *step,
@@ -259,6 +318,8 @@ impl WheelReader {
                     }
                     // egui drops what the gesture moved earlier in the pass it ends in.
                     TouchPhase::End | TouchPhase::Cancel => {
+                        // The end belongs to the gesture: it carries the gesture's modifiers.
+                        self.modifiers.push(self.touch.unwrap_or(*latest));
                         self.touch = None;
                         modifiers = Modifiers::NONE;
                         delta = Vec2::ZERO;

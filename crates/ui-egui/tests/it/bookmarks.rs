@@ -119,6 +119,40 @@ fn the_panel_keeps_its_width_while_the_pointer_moves() {
     assert_eq!(panel_width(&h), before, "the Bookmarks panel drifted wider");
 }
 
+/// #5529: the title is selected when the rename editor opens, so typing replaces it at once,
+/// with no Ctrl+A. New bookmarks and double-click rename both get this.
+#[test]
+fn typing_replaces_the_title_when_the_editor_opens() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+    h.run_steps(3);
+    field(&h, "Untitled").type_text("Intro"); // the whole default is replaced
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(outline(&h), [("Intro".into(), Some(0), 0)]);
+
+    menu(&mut h, "Intro", "Rename");
+    field(&h, "Intro").type_text("Introduction");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(outline(&h)[0].0, "Introduction");
+}
+
+/// The selection is one-shot: after the user collapses it to a caret, later frames must not
+/// reselect, so typing at that caret inserts.
+#[test]
+fn a_rename_editor_keeps_the_users_caret_across_frames() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+    h.run_steps(3);
+    h.key_press(Key::ArrowLeft); // collapses the opening selection to the caret at 0
+    h.run_steps(2);
+    field(&h, "Untitled").type_text("I"); // inserts at the caret, does not replace
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(outline(&h)[0].0, "IUntitled");
+}
+
 #[test]
 fn escape_cancels_a_rename() {
     let mut h = harness();
@@ -458,4 +492,113 @@ trailer << /Root 1 0 R >>
     h.get_by_label("Clear").click();
     h.run_steps(3);
     assert!(!shown(&h, "Closed child B") && !shown(&h, "Open child B"), "search leaves the open state alone");
+}
+
+/// The active document's outline, flattened like [`outline`].
+fn active_outline(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, Option<usize>, usize)> {
+    let i = h.state().active.unwrap();
+    let id = h.state().views[i].id;
+    fn flat(items: &[pdfcraft_render::OutlineItem], depth: usize, out: &mut Vec<(String, Option<usize>, usize)>) {
+        for i in items {
+            out.push((i.title.clone(), i.page, depth));
+            flat(&i.children, depth + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    flat(&h.state().session.get(id).unwrap().info.outline, 0, &mut out);
+    out
+}
+
+const ONE_PAGE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
+    let mut h = harness();
+    add(&mut h, "Intro");
+    h.state_mut().set_option("page", "3").unwrap();
+    h.run_steps(3);
+    add(&mut h, "Results");
+    menu(&mut h, "Results", "Indent");
+    let tree = [("Intro".to_string(), Some(0), 0), ("Results".to_string(), Some(2), 1)];
+    assert_eq!(outline(&h), tree);
+
+    // Copy and paste after itself: the whole subtree, as one undo step.
+    menu(&mut h, "Intro", "Copy");
+    menu(&mut h, "Intro", "Paste");
+    assert_eq!(outline(&h), [tree.clone(), tree.clone()].concat());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), tree, "a paste is one undo step");
+    // Pasted on a child, it goes in after that child, at the child's level.
+    menu(&mut h, "Results", "Paste");
+    let nested = [("Intro".to_string(), Some(0), 1), ("Results".to_string(), Some(2), 2)];
+    assert_eq!(outline(&h), [tree.clone(), nested].concat());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), tree);
+
+    // Cut takes the subtree away in one step and keeps it to paste.
+    menu(&mut h, "Intro", "Cut");
+    assert!(outline(&h).is_empty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), tree, "a cut is one undo step");
+
+    // Into a one-page document: Results' page 3 is not there, so it keeps its place without a
+    // destination rather than pointing at the wrong page, and the toast says so.
+    h.state_mut().open_bytes("one.pdf", None, ONE_PAGE.to_vec()).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Bookmark options").click();
+    h.run_steps(2);
+    h.get_by_label("Paste bookmarks").click();
+    h.run_steps(3);
+    assert_eq!(active_outline(&h), [("Intro".to_string(), Some(0), 0), ("Results".to_string(), None, 1)]);
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("1 pasted bookmark points past the last page"), "{toast}");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert!(active_outline(&h).is_empty());
+    assert_eq!(outline(&h), tree, "the source is untouched");
+}
+
+/// A one-page document whose single bookmark "Top" heads a chain `depth` bookmarks deep.
+fn deep_outline_pdf(depth: usize) -> Vec<u8> {
+    let mut pdf = String::from(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Outlines /First 10 0 R /Last 10 0 R /Count 1 >> endobj
+",
+    );
+    for k in 0..depth {
+        let id = 10 + k;
+        let parent = if k == 0 { 4 } else { id - 1 };
+        let title = if k == 0 { "Top".to_string() } else { format!("L{k}") };
+        let kids = if k + 1 < depth { format!("/First {0} 0 R /Last {0} 0 R /Count 1", id + 1) } else { String::new() };
+        pdf.push_str(&format!("{id} 0 obj << /Title ({title}) /Parent {parent} 0 R {kids} /Dest [3 0 R /Fit] >> endobj\n"));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    pdf.into_bytes()
+}
+
+/// Cutting a subtree nested deeper than a copy can hold would lose what the copy left out, so
+/// the cut copies and says why it deleted nothing.
+#[test]
+fn cutting_a_subtree_too_deep_to_copy_keeps_it() {
+    let mut h = harness();
+    h.state_mut().open_bytes("deep.pdf", None, deep_outline_pdf(40)).unwrap();
+    h.run_steps(3);
+    let before = active_outline(&h);
+    assert_eq!(before.first().map(|b| b.0.as_str()), Some("Top"));
+    menu(&mut h, "Top", "Cut");
+    assert_eq!(active_outline(&h), before, "nothing was cut");
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("so nothing was cut"), "{toast}");
+    assert!(h.state().bookmark_clipboard.is_some(), "the copy is still on the bookmark clipboard");
 }
