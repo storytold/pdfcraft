@@ -1498,7 +1498,8 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     use crate::commands::{
-        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN, ZOOM_OUT,
+        ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIRST_PAGE, FIT_WIDTH, LAST_PAGE, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW,
+        SELECT_ALL, ZOOM_IN, ZOOM_OUT,
     };
     // Registered commands first (always in sync with the real bindings), then the
     // keys the document view handles itself.
@@ -1528,7 +1529,10 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (key(FIT_WIDTH), tl!("Fit to width").to_string()),
         (pair(ZOOM_IN, ZOOM_OUT), scroll),
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
-        (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
+        (
+            format!("{} / {}, {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End"), pair(FIRST_PAGE, LAST_PAGE)),
+            tl!("First / last page").to_string(),
+        ),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
         (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
