@@ -125,11 +125,17 @@ impl Session {
         // pages and fields so the rest of the engine works on it. The original bytes stay: the
         // laid-out form is one appended revision.
         let opts = SaveOptions { mod_date: context.now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        // Write `work` as one more revision and reopen it: what the document then is.
+        // Write `work` as one more revision and reopen it: what the document then is. The notes
+        // about damage repaired while reading the file stay with it (Document Properties), once.
         let rebase = |work: &pdfcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String> {
             let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
             let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
-            let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            let mut new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            for line in work.repair_log() {
+                if !new_cos.repair_log().contains(line) {
+                    new_cos.note_repair(line.clone());
+                }
+            }
             Ok((new_bytes, new_info, new_cos))
         };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
@@ -254,9 +260,6 @@ impl Session {
                 };
                 match rebuilt {
                     Some((b, i, mut c)) => {
-                        for line in cos.repair_log() {
-                            c.note_repair(line.clone());
-                        }
                         c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
                         (b, i, Ok(Ok(c)))
                     }

@@ -32,6 +32,15 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// Their SHA-256s, as in ATTRIBUTION.toml. [`Ocr::from_bytes`] loads nothing else: rten's ONNX
+/// parser can spin forever on bytes that aren't a model (64 × 0xff does).
+pub const DETECTION_MODEL_SHA256: &str = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe";
+pub const RECOGNITION_MODEL_SHA256: &str = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
 
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -84,9 +93,25 @@ pub struct Ocr {
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        Self::with_models(load(&models.detection)?, load(&models.recognition)?)
+    }
+
+    /// Load the models from the contents of their files, where there is no file system (the web
+    /// build downloads them). Bytes that aren't the files ATTRIBUTION.toml names are an error.
+    pub fn from_bytes(detection: Vec<u8>, recognition: Vec<u8>) -> Result<Ocr, OcrError> {
+        let load = |name: &str, sha256: &str, data: Vec<u8>| {
+            if sha256_hex(&data) != sha256 {
+                return Err(OcrError::Load(name.into(), "not the expected model file (SHA-256 differs)".into()));
+            }
+            rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()))
+        };
+        Self::with_models(load(DETECTION_MODEL, DETECTION_MODEL_SHA256, detection)?, load(RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256, recognition)?)
+    }
+
+    fn with_models(detection: rten::Model, recognition: rten::Model) -> Result<Ocr, OcrError> {
         let params = ocrs::OcrEngineParams {
-            detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            detection_model: Some(detection),
+            recognition_model: Some(recognition),
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
@@ -139,12 +164,21 @@ impl Ocr {
 /// The ocrs engine as a [`Recognizer`] (the default engine).
 pub struct OcrsRecognizer {
     engine: Ocr,
+    /// Loaded from bytes ([`OcrsRecognizer::from_ocr`]), not from model files: it stays
+    /// available without them.
+    in_memory: bool,
 }
 
 impl OcrsRecognizer {
     /// Load the models from `models`.
     pub fn load(models: &Models) -> Result<OcrsRecognizer, OcrError> {
-        Ok(OcrsRecognizer { engine: Ocr::load(models)? })
+        Ok(OcrsRecognizer { engine: Ocr::load(models)?, in_memory: false })
+    }
+
+    /// A recogniser loaded some other way than from model files: the web build downloads the
+    /// models and loads them with [`Ocr::from_bytes`].
+    pub fn from_ocr(engine: Ocr) -> OcrsRecognizer {
+        OcrsRecognizer { engine, in_memory: true }
     }
 
     /// Load the models found by [`Models::find`].
@@ -159,7 +193,7 @@ impl Recognizer for OcrsRecognizer {
     }
 
     fn available(&self) -> bool {
-        Models::find().is_some()
+        self.in_memory || Models::find().is_some()
     }
 
     fn languages(&self) -> Vec<(String, String)> {

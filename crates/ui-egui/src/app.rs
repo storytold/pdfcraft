@@ -18,7 +18,7 @@ mod links;
 mod prefs;
 mod window;
 
-pub(crate) use clipboard::{copy_refused, print_refused};
+pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
 use frame::migrate_panel_state;
@@ -144,6 +144,10 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            deferred_opens: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            password_retry: None,
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(not(target_arch = "wasm32"))]
             launch_layout: None,
@@ -203,6 +207,10 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
             custom_actions: Vec::new(),
@@ -241,6 +249,8 @@ impl PdfCraftApp {
             progress_notice: None,
             page_clipboard: None,
             comment_clipboard: None,
+            object_clipboard: None,
+            object_clip_mark: Default::default(),
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
@@ -514,11 +524,11 @@ impl eframe::App for PdfCraftApp {
         let dropped = self.drop_on_signature_pad(dropped);
         #[cfg(not(target_arch = "wasm32"))]
         let dropped = self.drop_on_grid(dropped, ctx);
-        for f in dropped {
-            // Files dropped on the Combine files tab join its list instead of opening.
-            if self.combine_showing() {
-                self.drop_into_combine(f, ctx);
-            } else {
+        // Files dropped on the Combine files tab join its list, all at once, instead of opening.
+        if self.combine_showing() && !dropped.is_empty() {
+            self.drop_into_combine(dropped, ctx);
+        } else {
+            for f in dropped {
                 self.open_dropped(f, ctx);
             }
         }
@@ -531,7 +541,7 @@ impl eframe::App for PdfCraftApp {
         // Don't replace a pending prompt or import. A startup file may need its own password
         // prompt, so its bytes stay queued until the current interaction finishes.
         #[cfg(not(target_arch = "wasm32"))]
-        let opening = !self.pending_opens.is_empty();
+        let opening = !self.pending_opens.is_empty() || !self.deferred_opens.is_empty();
         #[cfg(target_arch = "wasm32")]
         let opening = false;
         if !opening
@@ -590,7 +600,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            // An OCR review not yet accepted or rejected is work the page would lose, too.
+            let dirty = self.work_at_risk();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
@@ -640,6 +651,11 @@ impl eframe::App for PdfCraftApp {
         // The OCR Verify screen's worker may have finished while no frame was drawn.
         if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
+        }
+        // A run or re-read asked for while the web build downloaded the models starts when they land.
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_verify.awaiting_models.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
         // So may a page or region re-read's worker.
         if self.ocr_verify.reread.is_some() {
@@ -701,10 +717,20 @@ impl eframe::App for PdfCraftApp {
         if self.draws_window_frame() {
             window_controls::resize_edges(&ctx);
         }
+        chrome::tab_strip(self, ui);
+        chrome::mode_bar(self, ui);
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
+        // recognized text brings it back with its review as it was.
+        if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
+            self.ocr_verify.open = false;
+        }
+        self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
         if self.ocr_verify.open {
-            // The OCR Verify screen owns the window (its four panes); dialogs and notices
+            // The OCR Verify screen takes the document area (its four panes) under the window's
+            // tabs, menus and toolbar, which stay (#6485); the palette, dialogs and notices
             // still show above it.
             workflows::ocr_verify::show(self, ui);
+            palette::show(self, &ctx);
             dialogs::show(self, &ctx);
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
@@ -715,8 +741,6 @@ impl eframe::App for PdfCraftApp {
             }
             return;
         }
-        chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;

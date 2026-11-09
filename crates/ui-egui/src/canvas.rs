@@ -636,6 +636,10 @@ pub struct DocView {
     /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
     /// they are looked at again only after the document changes (an image added, say).
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
+    /// Scans Edit found while no engine could read them, with the document's edit generation
+    /// then: they wait for one (the web build downloads the models when first needed), and are
+    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`) or the document changes.
+    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// The document owns the full coarse-wheel distance, including its acceleration.
@@ -658,6 +662,10 @@ pub struct DocView {
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+    /// Edit text: a click on grouped artwork with text queued [`Edit::PrepareText`] for its page:
+    /// the page and the point clicked (user space), whose paragraph opens once the page is
+    /// prepared, so one click on grouped text starts editing it.
+    pub(crate) grouped_text_click: Option<(usize, [f64; 2])>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The paragraph editor whose edit was just queued. It opens again with its typing if the
     /// edit fails, as a refused form field does.
@@ -1047,6 +1055,7 @@ impl DocView {
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
+            auto_ocr_awaiting_models: Default::default(),
             wheel: Default::default(),
             wheel_motion: Default::default(),
             wheel_frame: None,
@@ -1059,6 +1068,7 @@ impl DocView {
             organize_range: Default::default(),
             pending_edit: None,
             edit_lines: HashMap::new(),
+            grouped_text_click: None,
             line_editor: None,
             applied_editor: None,
             pending_text_open: None,
@@ -2127,8 +2137,7 @@ fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (
     if !view.continuous {
         // The row's bounding box on screen (one page, or a two-page spread).
         let row_rect = row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union);
-        // Within a point, so layout rounding can't stop a fitting page from turning.
-        let fits = row_rect.is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
+        let fits = row_rect.is_some_and(|r| fits_height(r, avail.height(), ui.ctx().pixels_per_point()));
         let can_turn = !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
         single_paging = can_turn && fits;
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
@@ -2469,6 +2478,9 @@ fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
     let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
     let Some(i) = pending else { return false };
     app.views[i].close_requested = false;
+    if app.hold_close_for_ocr_review(i) {
+        return true;
+    }
     if app.has_unsaved_work(i) {
         app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
     } else {
@@ -2924,6 +2936,28 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
+/// Where the `shown` pages sit in the scroll content, as how far the content starts into the
+/// layout and how tall it is. Scrolling continuously every page scrolls; otherwise only the
+/// current row does, the content being its bounding box plus margins. Pages that fit a view
+/// `view_height` tall sit in its middle, the spare height shared above and below (#5708): the
+/// content fills the view, so there is nothing to scroll, and starts on a whole physical pixel
+/// as the layout's pages do, or their edges would blur and the seams between them open.
+fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, pixels_per_point: f32) -> (f32, f32) {
+    let Some(r) = shown.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return (0.0, 0.0) };
+    if fits_height(r, view_height, pixels_per_point) {
+        return (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height);
+    }
+    if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) }
+}
+
+/// Whether the pages in `r` show whole in a view `view_height` tall, without their margins.
+/// Within half a physical pixel, which is all that snapping the pages to pixels can add: a
+/// fitting page is centred and has nothing to scroll, so any more would be cut off unseen.
+fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
+    let slack = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 0.5 / pixels_per_point } else { 0.0 };
+    r.height() <= view_height + slack
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -3045,15 +3079,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
-    let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
-    } else {
-        // Only the current row scrolls into view; the content is its bounding box plus margins.
-        match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
-            Some(r) => (r.top() - MARGIN, r.height() + 2.0 * MARGIN),
-            None => (0.0, 0.0),
-        }
-    };
+    let (y_shift, content_h) = vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), ui.ctx().pixels_per_point());
 
     let mut scroll = page_scroll_area(
         ui,

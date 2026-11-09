@@ -189,7 +189,7 @@ pub(crate) fn pay(work: &mut u64, steps: u64) -> Result<(), FilterError> {
 /// [`FilterError::Unsupported`] (callers keep such data encoded), as does a chain longer than
 /// [`MAX_CHAIN`]. `max_output` bounds every intermediate buffer.
 pub fn decode(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<Vec<u8>, FilterError> {
-    run(chain, data, max_output, None, true).map(|(v, _, _)| v).map_err(|(e, _)| e)
+    run(chain, data, max_output, None, true, false).map(|(v, _, _)| v).map_err(|(e, _)| e)
 }
 
 /// Like [`decode`] for a caller charging an allowance: `max_output` bounds the bytes all stages
@@ -197,27 +197,28 @@ pub fn decode(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Res
 /// bytes, on success and on failure. A stage's output counts even when a later stage or its
 /// predictor shrinks it.
 pub fn decode_counted(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, usize), (FilterError, usize)> {
-    run(chain, data, max_output, Some(max_output), true).map(|(v, _, spent)| (v, spent))
+    run(chain, data, max_output, Some(max_output), true, false).map(|(v, _, spent)| (v, spent))
 }
 
 /// Like [`decode`], but on corrupt data returns what was decoded before the error and
 /// reports `partial = true` (the behaviour viewers expect). The remaining filters of the
 /// chain still run on the partial data. Limit and unsupported errors are still errors.
 pub fn decode_tolerant(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, bool), FilterError> {
-    run(chain, data, max_output, None, false).map(|(v, partial, _)| (v, partial)).map_err(|(e, _)| e)
+    run(chain, data, max_output, None, false, false).map(|(v, partial, _)| (v, partial)).map_err(|(e, _)| e)
 }
 
 /// [`decode_tolerant`] bounded and counted as [`decode_counted`] is.
 pub fn decode_tolerant_counted(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)> {
-    run(chain, data, max_output, Some(max_output), false)
+    run(chain, data, max_output, Some(max_output), false, false)
 }
 
 /// [`decode_tolerant`], spending from `work`, what decoding may still cost across a run of images:
-/// a step for each byte of `data`, paid before anything is decoded, and one for each byte a stage
-/// decodes, so a chain that fails, or a stage that goes past `max_output`, has paid for what it did.
-/// No stage decodes past what is left: a chain that `work` can't pay for spends all of it and stops
-/// there, so with nothing left nothing is read. A chain that can't be decoded at all costs nothing,
-/// whatever is left, so what an image's filters are is known from the error.
+/// a step for each byte of `data`, paid before anything is decoded, [`FLATE_READ_WORK`] for each
+/// byte a Flate stage reads, paid before it runs (again if it reads them twice), and one for each
+/// byte a stage decodes, so a chain that fails, or a stage that goes past `max_output`, has paid for
+/// what it did. No stage decodes past what is left: a chain that `work` can't pay for spends all of
+/// it and stops there, so with nothing left nothing is read. A chain that can't be decoded at all
+/// costs nothing, whatever is left, so what an image's filters are is known from the error.
 ///
 /// Unlike [`decode_tolerant`], no filters at all gives `data` itself, within `max_output`.
 pub fn decode_tolerant_within(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &mut u64) -> Result<Vec<u8>, FilterError> {
@@ -237,14 +238,15 @@ fn spending(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &m
         return if data.len() > max_output { Err(FilterError::LimitExceeded(max_output)) } else { Ok(data.to_vec()) };
     }
     let left = usize::try_from(*work).unwrap_or(usize::MAX);
-    match run(chain, data, max_output, Some(left), strict) {
+    match run(chain, data, max_output, Some(left), strict, true) {
         Ok((out, _, decoded)) => pay(work, decoded as u64).map(|()| out),
         // The stage stopped at the lower of the two, which took as much to find out.
         Err((FilterError::LimitExceeded(_), decoded)) if left.saturating_sub(decoded) > max_output => {
             pay(work, (decoded as u64).saturating_add(max_output as u64))?;
             Err(FilterError::LimitExceeded(max_output))
         }
-        Err((FilterError::LimitExceeded(_), _)) => {
+        // Past what is left, a stage stops, or a Flate stage doesn't start.
+        Err((FilterError::LimitExceeded(_) | FilterError::Spent, _)) => {
             *work = 0;
             Err(FilterError::Spent)
         }
@@ -255,6 +257,20 @@ fn spending(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &m
 /// Longest filter chain decoded. Real streams use one to three filters; every stage may produce
 /// up to the output limit, so the chain length multiplies the work.
 pub const MAX_CHAIN: usize = 8;
+
+/// The steps each byte Flate reads costs where decoding is paid for ([`decode_tolerant_within`],
+/// [`decode_within`]), besides the step it was paid as input and a step for each byte it makes.
+/// Inflating does work for every block it reads, whether or not the block makes anything: an empty
+/// fixed-Huffman block is ten bits (RFC 1951 §3.2.6). With flate2's zlib-rs backend (zlib-rs
+/// 0.6.8, release build) the slowest blocks measured, empty dynamic ones, took 21 ns a byte read
+/// to make nothing, empty fixed ones 9 and fixed ones of a literal each 6, so at this price the
+/// worst per byte read comes to about 7 ns a step, inside what a step of JBIG2 decoding takes.
+/// (miniz_oxide 0.9.1, flate2's backend here before, took about 1.7 µs for every fixed-Huffman
+/// block, empty or not: 1,383 ns a byte read on empty ones.) A stage's start isn't priced, about
+/// 0.25 µs: every way to repeat one takes bytes of the file, so what starts cost is bounded by the
+/// file's length. Data a real encoder makes took 0.2 to 2.3 ns a byte made, its reading included, so
+/// an image pays twice its stored length more than it would unpriced.
+pub const FLATE_READ_WORK: u64 = 2;
 
 /// Whether a chain is one [`run`] takes, and if not, the error.
 fn decodable(chain: &[(Filter, Params)]) -> Result<(), FilterError> {
@@ -269,22 +285,39 @@ fn decodable(chain: &[(Filter, Params)]) -> Result<(), FilterError> {
 
 /// The decoded data, whether it is partial and the bytes all stages decoded, or the error and
 /// the bytes decoded before it. `max` bounds each stage, and `total` all of them together.
+/// `priced`, the count is steps: each Flate stage also pays [`FLATE_READ_WORK`] for each byte it
+/// reads, before it runs, so a stage `total` can't pay for doesn't run
+/// ([`FilterError::Spent`]).
 fn run(
     chain: &[(Filter, Params)],
     data: &[u8],
     max: usize,
     total: Option<usize>,
     strict: bool,
+    priced: bool,
 ) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)> {
     decodable(chain).map_err(|e| (e, 0))?;
     let mut cur: Cow<[u8]> = Cow::Borrowed(data);
     let mut partial = false;
     let mut spent = 0usize;
+    let price = usize::try_from(FLATE_READ_WORK).unwrap_or(usize::MAX);
     for (filter, params) in chain {
+        let read = if priced && matches!(filter, Filter::Flate) { price.saturating_mul(cur.len()) } else { 0 };
+        let room = total.map_or(usize::MAX, |total| total.saturating_sub(spent));
+        if read > room {
+            return Err((FilterError::Spent, spent));
+        }
+        spent = spent.saturating_add(read);
         #[cfg(test)]
         STAGE_BYTES.with(|c| c.set(c.get() + cur.len()));
         let limit = total.map_or(max, |total| max.min(total.saturating_sub(spent)));
-        let (step, work) = decode_one(filter, params, &cur, limit);
+        // A second reading of the same bytes (Flate's raw retry) is paid for as the first was, and
+        // makes no more than is left once it has been.
+        let again = room.checked_sub(read.saturating_mul(2)).map(|left| max.min(left));
+        let (step, work, again) = decode_one(filter, params, &cur, limit, again);
+        if again {
+            spent = spent.saturating_add(read);
+        }
         spent = spent.saturating_add(work);
         cur = Cow::Owned(match step {
             Ok(v) => v,
@@ -299,15 +332,21 @@ fn run(
     Ok((cur.into_owned(), partial, spent))
 }
 
-/// One stage's result and the bytes its decoder produced (before any predictor).
-fn decode_one(filter: &Filter, params: &Params, data: &[u8], max: usize) -> (Step, usize) {
+/// One stage's result, the bytes its decoder produced (before any predictor), and whether it
+/// read its input twice, which it does only within `again` ([`flate::decode`]).
+fn decode_one(filter: &Filter, params: &Params, data: &[u8], max: usize, again: Option<usize>) -> (Step, usize, bool) {
+    let once = |(step, n): (Step, usize)| (step, n, false);
     match filter {
-        Filter::Flate => with_predictor(flate::decode(data, max), params, "FlateDecode"),
-        Filter::Lzw => with_predictor(lzw::decode(data, params.early_change != 0, max), params, "LZWDecode"),
-        Filter::AsciiHex => counted(asciihex::decode(data, max)),
-        Filter::Ascii85 => counted(ascii85::decode(data, max)),
-        Filter::RunLength => counted(runlength::decode(data, max)),
-        other => (Err(Failure { error: FilterError::Unsupported(other.name().to_owned()), partial: Vec::new(), discarded: 0 }), 0),
+        Filter::Flate => {
+            let (step, twice) = flate::decode(data, max, again);
+            let (step, n) = with_predictor(step, params, "FlateDecode");
+            (step, n, twice)
+        }
+        Filter::Lzw => once(with_predictor(lzw::decode(data, params.early_change != 0, max), params, "LZWDecode")),
+        Filter::AsciiHex => once(counted(asciihex::decode(data, max))),
+        Filter::Ascii85 => once(counted(ascii85::decode(data, max))),
+        Filter::RunLength => once(counted(runlength::decode(data, max))),
+        other => (Err(Failure { error: FilterError::Unsupported(other.name().to_owned()), partial: Vec::new(), discarded: 0 }), 0, false),
     }
 }
 
@@ -553,7 +592,7 @@ mod tests {
         let data = encode_flate(&hex);
         let chain = [(Filter::Flate, Params::default()), (Filter::AsciiHex, Params::default())];
         let whole = decode(&chain, &data, 1 << 20).unwrap();
-        let cost = (data.len() + hex.len() + whole.len()) as u64;
+        let cost = (data.len() + hex.len() + whole.len()) as u64 + FLATE_READ_WORK * data.len() as u64;
         let mut work = u64::MAX;
         assert_eq!(decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap(), whole);
         assert_eq!(u64::MAX - work, cost);
@@ -585,8 +624,11 @@ mod tests {
             assert_eq!(work, 0);
             super::STAGE_BYTES.with(|c| c.get())
         };
-        assert_eq!(read((bomb.len() + inner.len()) as u64 + 10), bomb.len() + inner.len(), "the second stage stops");
-        assert_eq!(read(bomb.len() as u64 + 10), bomb.len(), "the first stops, and the second never runs");
+        let paid = |n: usize| (1 + FLATE_READ_WORK) * n as u64;
+        assert_eq!(read(paid(bomb.len()) + paid(inner.len()) + 10), bomb.len() + inner.len(), "the second stage stops");
+        assert_eq!(read(paid(bomb.len()) + FLATE_READ_WORK * inner.len() as u64 - 1), bomb.len(), "the second can't pay to read");
+        assert_eq!(read(paid(bomb.len()) + 10), bomb.len(), "the first stops, and the second never runs");
+        assert_eq!(read(paid(bomb.len()) - 1), 0, "the first can't pay to read");
         assert_eq!(read(bomb.len() as u64 - 1), 0, "it can't pay to be read");
     }
 
@@ -598,18 +640,19 @@ mod tests {
         let chain = [(Filter::Flate, Params::default())];
         let mut work = u64::MAX;
         assert!(matches!(decode_tolerant_within(&chain, &data, 1000, &mut work), Err(FilterError::LimitExceeded(1000))));
-        assert_eq!(u64::MAX - work, data.len() as u64 + 1000);
+        let read = |n: usize| FLATE_READ_WORK * n as u64;
+        assert_eq!(u64::MAX - work, data.len() as u64 + read(data.len()) + 1000);
         // The later stage of two, which pays for the first as well.
         let bomb = encode_flate(&data);
         let two = [(Filter::Flate, Params::default()), (Filter::Flate, Params::default())];
         let mut work = u64::MAX;
         assert!(matches!(decode_tolerant_within(&two, &bomb, data.len(), &mut work), Err(FilterError::LimitExceeded(_))));
-        assert_eq!(u64::MAX - work, (bomb.len() + 2 * data.len()) as u64);
+        assert_eq!(u64::MAX - work, (bomb.len() + 2 * data.len()) as u64 + read(bomb.len()) + read(data.len()));
         // Both limits at once: a run that can't go on is what a caller needs to hear.
-        let mut work = data.len() as u64 + 1000;
+        let mut work = data.len() as u64 + read(data.len()) + 1000;
         assert!(refused(&decode_tolerant_within(&chain, &data, 1000, &mut work).unwrap_err()));
         assert_eq!(work, 0);
-        let mut work = data.len() as u64 + 1001;
+        let mut work = data.len() as u64 + read(data.len()) + 1001;
         assert!(matches!(decode_tolerant_within(&chain, &data, 1000, &mut work), Err(FilterError::LimitExceeded(1000))));
         assert_eq!(work, 1, "the image's limit, with a step to spare");
     }
@@ -625,21 +668,22 @@ mod tests {
         assert!(!partial.is_empty());
         let mut work = u64::MAX;
         assert_eq!(decode_tolerant_within(&chain, &cut, 1 << 20, &mut work).unwrap(), partial);
-        assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64);
+        let read = |n: usize| FLATE_READ_WORK * n as u64;
+        assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64 + read(cut.len()));
         // Read strictly it is an error, for the same work.
         let mut work = u64::MAX;
         assert!(matches!(decode_within(&chain, &cut, 1 << 20, &mut work), Err(FilterError::Corrupt { .. })));
-        assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64);
+        assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64 + read(cut.len()));
         let whole = encode_flate(&data);
         let mut work = u64::MAX;
         assert_eq!(decode_within(&chain, &whole, 1 << 20, &mut work).unwrap(), data);
-        assert_eq!(u64::MAX - work, (whole.len() + data.len()) as u64);
+        assert_eq!(u64::MAX - work, (whole.len() + data.len()) as u64 + read(whole.len()));
         // A predictor that comes to nothing, after all of this was inflated for it.
         let p = Params { predictor: 99, ..Params::default() };
         let data = encode_flate(&vec![0; 1 << 16]);
         let mut work = u64::MAX;
         assert!(decode_tolerant_within(&[(Filter::Flate, p)], &data, 1 << 20, &mut work).unwrap().is_empty());
-        assert_eq!(u64::MAX - work, data.len() as u64 + (1 << 16));
+        assert_eq!(u64::MAX - work, data.len() as u64 + read(data.len()) + (1 << 16));
     }
 
     /// A stream that reads as zlib only until it fails, and as raw deflate until that fails too,
@@ -661,11 +705,65 @@ mod tests {
         assert_eq!(spent, 0x0601);
         let mut work = u64::MAX;
         assert!(decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap().is_empty());
-        assert_eq!(u64::MAX - work, (data.len() + 0x0601) as u64);
+        // Read twice: as zlib, then as raw deflate.
+        assert_eq!(u64::MAX - work, (data.len() + 0x0601) as u64 + 2 * FLATE_READ_WORK * data.len() as u64);
         // Through a predictor, which would otherwise lose the count.
         let p = Params { predictor: 12, columns: 4, ..Params::default() };
         let (_, _, spent) = decode_tolerant_counted(&[(Filter::Flate, p)], &data, 1 << 20).unwrap();
         assert_eq!(spent, 0x0601);
+    }
+
+    /// Inflating does work for every block it reads, whether or not the block makes anything: empty
+    /// fixed-Huffman blocks, ten bits each, make nothing however many there are. Each byte of them
+    /// is paid for at Flate's price before any is read.
+    #[test]
+    fn a_flate_stage_pays_for_what_it_reads() {
+        // Four empty blocks in five bytes, as raw deflate, then an empty final block.
+        let mut hollow = [0x02, 0x08, 0x20, 0x80, 0x00].repeat(1 << 12);
+        hollow.extend([0x03, 0x00]);
+        let chain = [(Filter::Flate, Params::default())];
+        assert_eq!(decode(&chain, &hollow, 1 << 20).unwrap(), b"");
+        let cost = (1 + FLATE_READ_WORK) * hollow.len() as u64;
+        let mut work = u64::MAX;
+        assert_eq!(decode_tolerant_within(&chain, &hollow, 1 << 20, &mut work).unwrap(), b"");
+        assert_eq!(u64::MAX - work, cost);
+        let mut work = cost;
+        assert!(decode_tolerant_within(&chain, &hollow, 1 << 20, &mut work).is_ok(), "exactly enough");
+        assert_eq!(work, 0);
+        super::STAGE_BYTES.with(|c| c.set(0));
+        let mut work = cost - 1;
+        assert!(refused(&decode_tolerant_within(&chain, &hollow, 1 << 20, &mut work).unwrap_err()));
+        assert_eq!((work, super::STAGE_BYTES.with(|c| c.get())), (0, 0), "nothing was inflated");
+        // Counted for a byte allowance, as a page's content is, reading costs nothing.
+        assert_eq!(decode_counted(&chain, &hollow, 1 << 20).unwrap(), (Vec::new(), 0));
+    }
+
+    /// A zlib header that only looked valid is read again as raw deflate, and the second reading
+    /// is paid for as the first was. One that can't be paid for is refused, not read as damaged.
+    #[test]
+    fn a_second_reading_is_paid_for() {
+        // As zlib: a block of a reserved type at once. As raw deflate: a stored block of this many
+        // zero bytes, then an empty final block.
+        let mut data = vec![0x78, 0x01, 0x06, 0xFE, 0xF9];
+        data.extend(vec![0u8; 0x0601]);
+        data.extend([0x03, 0x00]);
+        let chain = [(Filter::Flate, Params::default())];
+        assert_eq!(decode(&chain, &data, 1 << 20).unwrap(), vec![0u8; 0x0601]);
+        let read = FLATE_READ_WORK * data.len() as u64;
+        let mut work = (data.len() + 0x0601) as u64 + 2 * read;
+        assert_eq!(decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap(), vec![0u8; 0x0601]);
+        assert_eq!(work, 0, "exactly enough");
+        // Enough to read it once and not twice: it isn't read again.
+        super::flate::INFLATED.with(|c| c.set(0));
+        let mut work = data.len() as u64 + 2 * read - 1;
+        assert!(refused(&decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap_err()));
+        assert_eq!((work, super::flate::INFLATED.with(|c| c.get())), (0, 0));
+        // Enough to read it twice, and a byte short of what it makes: the second reading makes no
+        // more than is left once it has been paid for.
+        super::flate::INFLATED.with(|c| c.set(0));
+        let mut work = (data.len() + 0x0601) as u64 + 2 * read - 1;
+        assert!(refused(&decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap_err()));
+        assert!(super::flate::INFLATED.with(|c| c.get()) < 0x0601, "it stopped short");
     }
 
     /// With nothing left nothing is read. What can't be decoded at all never costs anything, and

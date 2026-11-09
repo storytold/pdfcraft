@@ -25,6 +25,15 @@ pub(crate) fn refuse_foreign_text(doc: &Document, d: &Dict) -> Result<(), AnnotE
     Ok(())
 }
 
+/// Thai typed into a text box (`free_text`) that this build can't draw (it has no Thai face): refused
+/// with what to do, rather than drawn as `?`.
+pub(crate) fn refuse_undrawable_thai(free_text: bool, text: &str) -> Result<(), AnnotError> {
+    match free_text.then(|| pdfcraft_fonts::shaped_text::thai_refusal(text)).flatten() {
+        Some(why) => Err(AnnotError::Undrawable(why)),
+        None => Ok(()),
+    }
+}
+
 /// Format a number for content streams and DA strings.
 pub(crate) fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
@@ -89,7 +98,7 @@ pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotE
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
     // answers either. Pop-ups follow their comment.
     for (_, e) in list.iter().enumerate().filter(|(i, e)| *i != index && goes_with(e, &doomed)) {
@@ -110,15 +119,28 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e.clone()).collect();
     Ok(set_annots(doc, p, kept)?)
 }
 
 /// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline
-/// comment (which has none to collect) the pop-up it names, which still goes.
-fn seed(target: &Object) -> Option<ObjRef> {
-    target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
+/// comment (which has none to collect) the pop-up it names, which still goes. The strikeout of a
+/// Replace Text proposal also takes the caret it is grouped under, so the two go together
+/// whichever is deleted.
+fn seed(doc: &Document, target: &Object) -> Vec<ObjRef> {
+    let own = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
+    own.into_iter().chain(replaced_by(doc, target)).collect()
+}
+
+/// The caret a Replace Text strikeout is grouped under (`/IT /StrikeOutTextEdit`, `/RT /Group`,
+/// `/IRT` to a caret): the proposal's primary, which holds the replacement.
+fn replaced_by(doc: &Document, strike: &Object) -> Option<ObjRef> {
+    let obj = doc.resolve(strike);
+    let d = obj.as_dict()?;
+    let edit = d.name(b"Subtype") == Some(b"StrikeOut") && d.name(b"IT") == Some(b"StrikeOutTextEdit") && d.name(b"RT") == Some(b"Group");
+    let caret = d.reference(b"IRT").filter(|_| edit)?;
+    (annot_dict(doc, caret).name(b"Subtype") == Some(b"Caret")).then_some(caret)
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
@@ -169,6 +191,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     let (_, r) = annot_ref(doc, page, index)?;
     let d = annot_dict(doc, r);
     let free_text = d.name(b"Subtype") == Some(b"FreeText");
+    refuse_undrawable_thai(free_text, text)?;
     let snug = free_text && is_snug(&d);
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
@@ -228,8 +251,8 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let height = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size);
+    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -463,7 +486,7 @@ fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let (_, size) = appearance::parse_da(d);
     let lines = appearance::wrap(&text, size, wrap.max(1.0));
     let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    [widest, lines.len().max(1) as f64 * size * 1.2]
+    [widest, appearance::text_lines_height(&lines, size)]
 }
 
 /// The width and height of FreeText `d`'s text box `tb` as displayed: swapped on a page turned by
@@ -707,14 +730,66 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 
 /// Change a comment's colour, opacity (of the whole comment), line width and/or line endings, and
 /// redraw it.
+///
+/// A Replace Text proposal is one look: colour and opacity are the group's (`/C` is read from
+/// the primary, ISO 32000-2 §12.5.6.2), so restyling either the caret or its strikeout restyles
+/// and redraws the other too, in the same edit. The strikeout takes no line width (a text markup
+/// annotation has no border) and neither part has line endings. All or nothing: if one member
+/// can't be restyled, none is.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
     let (_, r) = annot_ref(doc, page, index)?;
+    let others = replace_text_partners(doc, page, r)?;
+    // Check every partner before changing anything.
+    for &o in &others {
+        unlocked(doc, o)?;
+    }
+    let before: Vec<(ObjRef, Dict)> = others.iter().map(|&o| (o, annot_dict(doc, o))).collect();
+    let mut done: Vec<(ObjRef, Dict)> = vec![(r, annot_dict(doc, r))];
+    style_one(doc, r, change.clone(), meta)?;
+    for (o, d) in before {
+        let caret = d.name(b"Subtype") == Some(b"Caret");
+        let part = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None };
+        let unchanged = part.color.is_none() && part.opacity.is_none() && part.width.is_none();
+        if unchanged {
+            continue;
+        }
+        if let Err(e) = style_one(doc, o, part, meta) {
+            // Put the members already restyled back, the target included.
+            for (o, d) in done.into_iter().rev() {
+                doc.set(o, Object::Dict(d));
+            }
+            return Err(e);
+        }
+        done.push((o, d));
+    }
+    Ok(())
+}
+
+/// The other members of the Replace Text proposal `r` belongs to, on `page`: for its caret, the
+/// strikeouts grouped under it; for a strikeout, its caret and any other strikeout under it.
+/// Empty for anything else.
+fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<ObjRef>, AnnotError> {
+    let own = Object::Ref(r);
+    let caret = match replaced_by(doc, &own) {
+        Some(c) => c,
+        None if annot_dict(doc, r).name(b"Subtype") == Some(b"Caret") => r,
+        None => return Ok(Vec::new()),
+    };
+    let list = annots(doc, page_ref(doc, page)?);
+    let strikes = list.iter().filter(|e| replaced_by(doc, e) == Some(caret)).filter_map(Object::as_ref);
+    // `/Annots` may list one annotation twice: restyle each once.
+    let mut seen: HashSet<ObjRef> = HashSet::from([r]);
+    Ok(std::iter::once(caret).chain(strikes).filter(|&o| seen.insert(o)).collect())
+}
+
+/// [`set_style`] on one annotation.
+fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+    let StyleChange { color, opacity, width, endings } = change;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build(&d).is_none() {
+    if appearance::build(doc, &d).is_none() {
         return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
@@ -875,7 +950,7 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
-    if appearance::build(&d).is_none() {
+    if appearance::build(doc, &d).is_none() {
         return Err(AnnotError::Unsupported(subtype));
     }
     if fill.is_some_and(|c| !finite(&c)) {
@@ -916,7 +991,7 @@ pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Opt
         return Err(AnnotError::Invalid("invalid opacity".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new opacity.
-    if appearance::build(&d).is_none() {
+    if appearance::build(doc, &d).is_none() {
         return Err(AnnotError::Unsupported(subtype));
     }
     refuse_foreign_text(doc, &d)?;
@@ -988,8 +1063,13 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 }
 
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
-/// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
-/// move, list and delete as one. Returns the strikeout's index.
+/// struck text holding `replacement`, the two grouped so they move, list and delete as one.
+/// Returns the strikeout's index.
+///
+/// The caret is the group's primary (`/IT /Replace`) and the strikeout its subordinate (`/IRT` to
+/// the caret, `/RT /Group`, `/IT /StrikeOutTextEdit`): a group's text is read from its primary,
+/// and the subordinates' `Contents` are ignored (ISO 32000-2 §12.5.6.2), so the replacement has
+/// to be on the primary.
 ///
 /// The two annotations need their own `/NM`: XFDF names a reply by the `/NM` of what it replies
 /// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
@@ -1010,7 +1090,6 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
         meta,
     )?;
     let (_, sr) = annot_ref(doc, page, s)?;
-    doc.update_dict(sr, |d| d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit")))?;
     // The caret sits on the baseline at the end of the last line, its point at the text.
     let xs = [last[0], last[2], last[4], last[6]];
     let ys = [last[1], last[3], last[5], last[7]];
@@ -1025,9 +1104,13 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
     )?;
     let (_, cr) = annot_ref(doc, page, c)?;
     doc.update_dict(cr, |d| {
-        d.set(b"IRT".to_vec(), Object::Ref(sr));
-        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.set(b"IT".to_vec(), Object::name("Replace"));
         d.set(b"Subj".to_vec(), PdfString::text("Replace Text"));
+    })?;
+    doc.update_dict(sr, |d| {
+        d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit"));
+        d.set(b"IRT".to_vec(), Object::Ref(cr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
     })?;
     Ok(s)
 }

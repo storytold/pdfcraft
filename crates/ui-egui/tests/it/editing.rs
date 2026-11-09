@@ -2727,6 +2727,153 @@ fn canceling_launch_display_override_does_not_affect_later_documents() {
     std::fs::remove_file(path).unwrap();
 }
 
+/// `pdfcraft locked.pdf other.pdf`: the files open before the first frame, and opening the
+/// second one inline used to clear the first one's password prompt, so `locked.pdf` was never
+/// opened or asked for. The later file now waits behind the prompt.
+#[test]
+fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
+    for unlock in [true, false] {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let locked = temp_path(&format!("startup-locked-{unlock}-{nonce}.pdf"));
+        let other = temp_path(&format!("startup-other-{unlock}-{nonce}.pdf"));
+        std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+        std::fs::write(&other, fixture(2)).unwrap();
+        let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
+        let (first, second) = (locked_path.clone(), other_path.clone());
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_path(&first);
+            app.open_path(&second);
+            app
+        });
+        h.run_steps(4);
+        let prompt = h.state().password_prompt.as_ref().map(|p| p.path.clone());
+        assert_eq!(prompt, Some(Some(locked_path.clone())), "the protected file is asked for");
+        assert!(h.state().views.is_empty(), "the later file waits behind the prompt");
+        if unlock {
+            h.state_mut().submit_password(Some("reader".into()));
+            support::wait_until(&mut h, "both files", |app| app.views.len() == 2);
+            // The other file opened while the password was being typed; the unlocked one comes
+            // after it and is the one in view.
+            assert_eq!(open_paths(h.state()), vec![other_path, locked_path]);
+            assert_eq!(h.state().active_ids().map(|(i, _)| i), Some(1));
+        } else {
+            h.state_mut().submit_password(None);
+            support::wait_until(&mut h, "the other file", |app| app.views.len() == 1);
+            assert_eq!(open_paths(h.state()), vec![other_path]);
+        }
+        std::fs::remove_file(locked).unwrap();
+        std::fs::remove_file(other).unwrap();
+    }
+}
+
+/// `pdfcraft locked.pdf locked.pdf other.pdf`: the repeated file joins its open password
+/// prompt. It used to be queued again behind the prompt, so the unlocked file asked for its
+/// password a second time.
+#[test]
+fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let locked = temp_path(&format!("startup-twice-locked-{nonce}.pdf"));
+    let other = temp_path(&format!("startup-twice-other-{nonce}.pdf"));
+    std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+    std::fs::write(&other, fixture(2)).unwrap();
+    let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
+    let (first, second) = (locked_path.clone(), other_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        app.open_path(&first);
+        app.open_path(&second);
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "both files, or a second prompt", |app| app.views.len() == 2 || app.password_prompt.is_some());
+    assert!(h.state().password_prompt.is_none(), "the password is asked for once");
+    let mut paths = open_paths(h.state());
+    paths.sort();
+    let mut expected = vec![locked_path, other_path];
+    expected.sort();
+    assert_eq!(paths, expected);
+    std::fs::remove_file(locked).unwrap();
+    std::fs::remove_file(other).unwrap();
+}
+
+/// `pdfcraft locked-a.pdf locked-b.pdf`: B's reply is ready while A's password is asked for.
+/// Once A's password is given, A's retry comes first: A opens (or asks again) before B's prompt
+/// can take the dialog. B's prompt used to replace A's retry, so A waited for B's answer.
+#[test]
+fn a_password_retry_finishes_before_the_next_protected_files_prompt() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let a = temp_path(&format!("startup-retry-a-{nonce}.pdf"));
+    let b = temp_path(&format!("startup-retry-b-{nonce}.pdf"));
+    std::fs::write(&a, protected("reader", "owner", -4)).unwrap();
+    std::fs::write(&b, protected("reader", "owner", -4)).unwrap();
+    let (a_path, b_path) = (a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string());
+    let (first, second) = (a_path.clone(), b_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        app.open_path(&second);
+        app
+    });
+    h.run_steps(4);
+    // B is prepared in the background meanwhile; its reply waits behind A's prompt.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    h.run_steps(2);
+    assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(a_path.clone()));
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "the next prompt", |app| app.password_prompt.is_some());
+    assert_eq!(open_paths(h.state()), vec![a_path], "A's retry finished first");
+    assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(b_path));
+    std::fs::remove_file(a).unwrap();
+    std::fs::remove_file(b).unwrap();
+}
+
+/// `pdfcraft locked.pdf` followed by more files than the open worker queues at once: the files
+/// past its bound wait in order and open as it drains, instead of failing to open.
+#[test]
+fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
+    const OTHERS: usize = 24;
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let locked = temp_path(&format!("startup-long-locked-{nonce}.pdf"));
+    std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+    let others: Vec<std::path::PathBuf> = (0..OTHERS).map(|i| temp_path(&format!("startup-long-{i:02}-{nonce}.pdf"))).collect();
+    for path in &others {
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    let locked_path = locked.to_str().unwrap().to_string();
+    let other_paths: Vec<String> = others.iter().map(|p| p.to_str().unwrap().to_string()).collect();
+    let (first, rest) = (locked_path.clone(), other_paths.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        for path in &rest {
+            app.open_path(path);
+        }
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "every file", |app| app.views.len() == OTHERS + 1);
+    let mut paths = open_paths(h.state());
+    paths.sort();
+    let mut expected = other_paths;
+    expected.push(locked_path);
+    expected.sort();
+    assert_eq!(paths, expected);
+    std::fs::remove_file(locked).unwrap();
+    for path in others {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 #[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -5824,7 +5971,9 @@ fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
     assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
     // Flick the right edge outward, past the box and its handle: back onto one line.
     let b = block(&h);
-    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    // 1 px outside the box: the grab zone's outer limit sits near 2 px, where a pixel of page
+    // scale (the canvas width depends on the rail) decides whether the press lands on the handle.
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(1.0, 0.0);
     flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
     let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
     assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
@@ -10454,6 +10603,141 @@ fn escape_in_an_open_paragraph_selects_its_box_for_delete() {
         h.run_steps(2);
         assert_eq!(blocks(&h)[0].text, "Page 1");
     }
+}
+
+/// #3005: a table drawn inside one Form XObject is a single piece of artwork in Edit text &
+/// images. Its right-click menu offers Ungroup, which draws the form in place so the table's
+/// text can be edited; one Undo puts the form back.
+#[test]
+fn ungroup_in_the_artwork_menu_makes_a_forms_text_editable() {
+    let table = b"BT /F1 14 Tf 1 0 0 1 40 200 Tm (Revenue 153,300.00) Tj 1 0 0 1 40 170 Tm (Costs 382,110.00) Tj ET";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /XObject << /Fm1 5 0 R >> >> >>".to_vec(),
+        pdf_stream("<<", b"q /Fm1 Do Q"),
+        pdf_stream(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 400 300] /Group << /S /Transparency >> /Resources << /Font << /F1 6 0 R >> >>",
+            table,
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+    ];
+    let pdf = pdf_of_objects(&objs);
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("table.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let blocks = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().text_blocks(0).len();
+    assert_eq!(blocks(&h), 0, "the table's text is inside the form");
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    // An empty spot of the form: the artwork, not a paragraph.
+    let at = r.left_top() + egui::vec2(r.width() * 0.8, r.height() * 0.85);
+    right_click_at(&mut h, at);
+    h.run_steps(1);
+    let selection = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selection, Some((0, 0)), "the right-click selects the form");
+    assert!(h.query_by_label("Ungroup").is_some(), "the artwork menu offers Ungroup");
+    // The page's own menu opens over the artwork menu (#2637, fixed by #2155), so the item is
+    // applied the way it queues its edit rather than clicked through the overlap.
+    h.state_mut().views[0].pending_edit =
+        Some(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Ungroup });
+    h.run_steps(4);
+    assert!(blocks(&h) >= 1, "the table's rows are page text now");
+    let images = h.state().session.get(id).unwrap().page_images(0);
+    assert!(images.is_empty(), "no artwork left: {images:?}");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(blocks(&h), 0, "undo puts the form back");
+}
+
+/// A stream object `dict` (its opening `<<` and entries, without `/Length` or `>>`) holding `data`.
+fn pdf_stream(dict: &str, data: &[u8]) -> Vec<u8> {
+    [format!("{dict} /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat()
+}
+
+/// A PDF of `objs`, numbered from 1, with the first as its catalog.
+fn pdf_of_objects(objs: &[Vec<u8>]) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(o);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// Grouped text is not prepared while the pages are only looked at: entering Edit text and
+/// scrolling change nothing. One click on the group's text prepares that page, as one undoable
+/// step, and opens the paragraph clicked for typing. A click on a grouped logo selects it, as a
+/// click on any picture does, and changes nothing; a drag from the text group prepares nothing.
+#[test]
+fn one_click_on_grouped_text_opens_it_for_editing() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /XObject << /Body 5 0 R /Logo 7 0 R >> >> >>".to_vec(),
+        pdf_stream("<<", b"q /Body Do Q q 1 0 0 1 300 20 cm /Logo Do Q"),
+        pdf_stream(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 280 300] /Resources << /Font << /F1 6 0 R >> >>",
+            b"BT /F1 24 Tf 1 0 0 1 40 200 Tm (Grouped words) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+        pdf_stream("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /Resources << >>", b"0 0 1 rg 0 0 60 60 re f"),
+    ];
+    let pdf = pdf_of_objects(&objs);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("grouped.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let doc = |h: &Harness<'static, PdfCraftApp>| {
+        let d = h.state().session.get(id).unwrap();
+        (d.text_blocks(0).len(), d.page_images(0).len(), d.can_undo().map(str::to_string))
+    };
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(6);
+    assert_eq!(doc(&h), (0, 2, None), "nothing is prepared while the page is only shown");
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    // User space (x, y) on the page, which is 400 by 300 points and upright.
+    let at = |x: f32, y: f32| r.left_top() + egui::vec2(r.width() * x / 400.0, r.height() * (300.0 - y) / 300.0);
+
+    click_at(&mut h, at(330.0, 50.0));
+    let logo = h.state().session.get(id).unwrap().page_images(0).iter().position(|i| i.name == "Logo");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index)), logo.map(|i| (0, i)), "the logo is selected");
+    assert_eq!(doc(&h), (0, 2, None), "a click on artwork without text changes nothing");
+    assert!(h.state().views[0].line_editor.is_none());
+
+    drag(&mut h, at(60.0, 208.0), at(120.0, 150.0));
+    assert_eq!(doc(&h).0, 0, "a drag on the text group prepares nothing");
+
+    click_at(&mut h, at(60.0, 208.0));
+    h.run_steps(2);
+    assert_eq!(doc(&h), (1, 1, Some("Prepare grouped text".into())), "the page's grouped text is prepared, in one step");
+    let editing = h.state().views[0].line_editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(editing.as_deref(), Some("Grouped words"), "the paragraph clicked opens for typing");
+
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    let (blocks, images, _) = doc(&h);
+    assert_eq!((blocks, images), (0, 2), "undo puts the group back");
 }
 
 #[test]

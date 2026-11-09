@@ -21,6 +21,10 @@ const MAX_IMAGE: usize = 32 << 20;
 const MAX_ITEMS: usize = 1000;
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
+/// Most content areas kept on one page area. A master page has a handful (the most in the
+/// 500-form corpus is nine); laying a splittable subform out across tens of thousands of them,
+/// which `next_area` walks before starting a new page, costs time quadratic in the paragraphs.
+const MAX_CONTENT_AREAS: usize = 128;
 
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
@@ -609,7 +613,19 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
                     attr_measure(c, "h").unwrap_or(height).clamp(1.0, height),
                 )
             })
+            .take(MAX_CONTENT_AREAS + 1)
             .collect();
+        if content.len() > MAX_CONTENT_AREAS {
+            content.truncate(MAX_CONTENT_AREAS);
+            // Said once however many warnings came before: other warnings fill the shared cap of
+            // 100 without limit of their own, and this one must not go silent behind them. It is
+            // kept first, so whether it was said is one comparison, not a scan of every warning
+            // for every page area (nothing else is put first).
+            let said = format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out");
+            if warnings.first() != Some(&said) {
+                warnings.insert(0, said);
+            }
+        }
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
