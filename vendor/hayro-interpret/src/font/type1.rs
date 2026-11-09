@@ -1,4 +1,5 @@
 use crate::font::blob::{CffFontBlob, Type1FontBlob};
+use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::standard_font::{StandardFont, StandardKind, select_standard_font};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
@@ -23,6 +24,8 @@ pub(crate) struct Type1Font(
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     OnceLock<bool>,
+    /// PdfCraft patch (104): what the recovery rules need, and their decisions.
+    FontRecovery,
 );
 
 impl Type1Font {
@@ -58,18 +61,31 @@ impl Type1Font {
                 )?),
                 to_unicode.clone(),
                 OnceLock::new(),
+                FontRecovery::new(dict, None),
             ))
         };
 
         let inner = if is_cff(dict) {
             if let Some(cff) = CffKind::new(dict) {
-                Self(cache_key, Kind::Cff(cff), to_unicode, OnceLock::new())
+                Self(
+                    cache_key,
+                    Kind::Cff(cff),
+                    to_unicode,
+                    OnceLock::new(),
+                    FontRecovery::new(dict, None),
+                )
             } else {
                 return fallback();
             }
         } else if is_type1(dict) {
             if let Some(f) = Type1Kind::new(dict) {
-                Self(cache_key, Kind::Type1(f), to_unicode, OnceLock::new())
+                Self(
+                    cache_key,
+                    Kind::Type1(f),
+                    to_unicode,
+                    OnceLock::new(),
+                    FontRecovery::new(dict, None),
+                )
             } else {
                 return fallback();
             }
@@ -79,6 +95,7 @@ impl Type1Font {
                 Kind::Standard(standard),
                 to_unicode,
                 OnceLock::new(),
+                FontRecovery::new(dict, None),
             )
         } else {
             return fallback();
@@ -91,7 +108,13 @@ impl Type1Font {
         let dict = Dict::default();
         let standard = StandardKind::new_with_standard(&dict, font, true, resolver)?;
 
-        Some(Self(0, Kind::Standard(standard), None, OnceLock::new()))
+        Some(Self(
+            0,
+            Kind::Standard(standard),
+            None,
+            OnceLock::new(),
+            FontRecovery::default(),
+        ))
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
@@ -157,6 +180,44 @@ impl Type1Font {
                 .then(|| numbered_glyph_name_at_its_code(name, code))
                 .flatten()
         })
+    }
+
+    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    pub(crate) fn recovery_info(&self) -> &FontRecovery {
+        &self.4
+    }
+
+    /// PdfCraft patch (104): the recovery rules' reading of a code (see `font::recovery`),
+    /// given its strict text when that is more than control characters.
+    pub(crate) fn recovery(
+        &self,
+        code: u32,
+        gid: GlyphId,
+        strict: Option<&BfString>,
+    ) -> Option<Recovery> {
+        let names = |c: u8| self.code_to_ps_name(c);
+        let facts = || FontFacts {
+            kind: if matches!(self.1, Kind::Cff(_)) {
+                FontKind::Cff
+            } else {
+                FontKind::Type1
+            },
+            base_font: self.4.base_font.as_deref(),
+            flags: self.4.flags.as_ref(),
+            has_to_unicode: self.2.is_some(),
+            has_encoding: self.4.has_encoding,
+            names: Some(&names),
+            program: None,
+            code_glyph: None,
+        };
+        let glyph = || GlyphFacts {
+            gid,
+            name: u8::try_from(code)
+                .ok()
+                .and_then(|c| self.code_to_ps_name(c)),
+            strict,
+        };
+        self.4.cache.recover(facts, glyph)
     }
 
     fn code_to_ps_name(&self, code: u8) -> Option<&str> {

@@ -190,6 +190,7 @@ impl DocView {
         self.stale_tiles.clear();
         self.forms.unbaked.clear();
         self.texts.clear();
+        self.recovered.clear();
         self.text_failed.clear();
         self.errors.clear();
         self.cut_pages.clear();
@@ -234,6 +235,7 @@ impl DocView {
         }
         self.slow_pages.remove(&page);
         self.texts.remove(&page);
+        self.recovered.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
         self.cut_pages.remove(&page);
@@ -539,7 +541,7 @@ impl DocView {
         self.stale_thumbs.retain(|p| admitted.contains(p));
         self.retain_text_layers();
         // Visible main pages and thumbnails take precedence over background search work.
-        queue.extend(requests.into_iter().filter(|r| r.kind == RequestKind::Text));
+        queue.extend(requests.into_iter().filter(|r| r.kind != RequestKind::Pixels));
         queue
     }
 
@@ -568,6 +570,7 @@ impl DocView {
         rest.sort_by_key(|p| p.abs_diff(self.current));
         keep.extend(rest.into_iter().take(MAX_CACHED_TEXT_PAGES));
         self.texts.retain(|p, _| keep.contains(p));
+        self.recovered.retain(|p, _| keep.contains(p));
     }
 
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context, info: &DocInfo, pool: &RenderPool) {
@@ -668,12 +671,26 @@ impl DocView {
         if r.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated) {
             self.cut_pages.insert(r.request.page);
         }
-        if r.request.kind == RequestKind::Text {
+        if r.request.kind != RequestKind::Pixels {
+            let page = r.request.page;
+            let recovering = r.request.kind == RequestKind::RecoveredText;
             match r.text {
                 Some(t) => {
-                    self.texts.insert(r.request.page, t);
-                    self.refresh_find_page(r.request.page);
+                    self.texts.insert(page, t);
+                    if recovering {
+                        // A run selected on the strict layer keeps its glyphs on the new one.
+                        if let Some(layer) = &r.recovered
+                            && self.recovered.get(&page).is_none_or(Option::is_none)
+                        {
+                            self.move_selection_onto(page, layer);
+                        }
+                        self.recovered.insert(page, r.recovered);
+                    }
+                    self.refresh_find_page(page);
                 }
+                // A recovered-text request that failed (a crash, the watchdog) fails the page's
+                // text as a text request would: asking again for the strict text alone would cost
+                // the same interpretation, and a stuck page another watchdog.
                 None => {
                     log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
                     self.text_failed.insert(r.request.page);
@@ -881,6 +898,7 @@ fn copy_result(r: &pdfcraft_render::RenderedPage) -> pdfcraft_render::RenderedPa
         rgba: r.rgba.clone(),
         error: r.error.clone(),
         text: r.text.clone(),
+        recovered: r.recovered.clone(),
         warnings: r.warnings.clone(),
         millis: r.millis,
     }

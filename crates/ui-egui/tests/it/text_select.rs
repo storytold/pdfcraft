@@ -749,3 +749,37 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
     h.run_steps(30);
     assert_eq!(h.state().views[0].current, 0, "no page turn after leaving");
 }
+
+/// Copy with formatting obeys the copy permission as Copy does: with copying withheld neither
+/// copies, and the page's context menu shows Copy with formatting unavailable.
+#[test]
+fn copy_with_formatting_honours_permissions_too() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(two_lines())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "pw",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let (mut h, at) = harness_with(bytes, |app| app.submit_password(Some("pw".into())));
+    let sets = html_clipboard(h.state_mut(), true);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    assert!(!h.state_mut().execute("edit.copy-with-formatting"));
+    h.step();
+    assert!(!any_copy_text(&h));
+    assert!(sets.lock().unwrap().is_empty());
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(2);
+    assert!(h.get_by_label("Copy with formatting").accesskit_node().is_disabled(), "unavailable where copying is withheld");
+}

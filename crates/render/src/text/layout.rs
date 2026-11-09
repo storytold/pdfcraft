@@ -17,10 +17,22 @@ pub(super) struct Flow {
 }
 
 /// Lay out the page's glyphs `ids`, giving each the box at the same position in `rects`.
-pub(super) fn arrange_flow(glyphs: &[Drawn], ids: Vec<usize>, rects: Vec<[f32; 4]>, quarter: Option<u8>) -> Flow {
+/// `protected[i]` marks glyph `i` of `glyphs` as one no unprotected glyph may displace as its
+/// double (see [`arrange`]); empty, no glyph is.
+pub(super) fn arrange_flow(glyphs: &[Drawn], ids: Vec<usize>, rects: Vec<[f32; 4]>, quarter: Option<u8>, protected: &[bool]) -> Flow {
     let top = ids.iter().filter_map(|&i| glyphs.get(i)).map(|g| g.2.rect[1]).fold(f32::INFINITY, f32::min);
-    let framed: Vec<TextGlyph> = ids.iter().zip(rects).filter_map(|(&i, rect)| glyphs.get(i).map(|g| TextGlyph { rect, ..g.2.clone() })).collect();
-    let (order, line_of, space_before) = arrange(&framed);
+    let mut framed = Vec::with_capacity(ids.len());
+    let mut kept_ids = Vec::with_capacity(ids.len());
+    for (&i, rect) in ids.iter().zip(rects) {
+        if let Some(g) = glyphs.get(i) {
+            framed.push(TextGlyph { rect, ..g.2.clone() });
+            kept_ids.push(i);
+        }
+    }
+    let ids = kept_ids;
+    let shielded: Vec<bool> =
+        if protected.is_empty() { Vec::new() } else { ids.iter().map(|&i| protected.get(i).copied().unwrap_or(false)).collect() };
+    let (order, line_of, space_before) = arrange(&framed, &shielded);
     let ids = order.into_iter().filter_map(|k| ids.get(k).copied()).collect();
     Flow { top, quarter, ids, line_of, space_before }
 }
@@ -190,15 +202,16 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    several lines does so only after a one-line block narrower than [`SAME_LINE_GAP`] heights (a
 ///    label): beside a wider one, or the last line of a column, it is the next column.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
-    let (order, line_of, space_before) = arrange(&glyphs);
+    let (order, line_of, space_before) = arrange(&glyphs, &[]);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
     // Each glyph is emitted exactly once.
     let glyphs = order.iter().filter_map(|i| slots.get_mut(*i).and_then(Option::take)).collect();
     PageText { glyphs, line_of, space_before, truncated: false }
 }
 
-/// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
-fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
+/// Which glyphs survive the "fake bold" dedupe (see [`arrange`]); a `shielded` glyph is never
+/// dropped as the double of an unshielded one.
+fn fake_bold_kept(glyphs: &[TextGlyph], shielded: &impl Fn(usize) -> bool) -> Vec<bool> {
     // Drop "fake bold" duplicates: the same character redrawn at (almost) the same place. A redraw
     // also overlaps most of its own width: a narrow letter in condensed text (80 Tz and below) sits
     // closer than a fifth of its height to its double, as the second "l" of "Alle" (#1467), and
@@ -213,12 +226,31 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         for j in (i.saturating_sub(4)..i).rev() {
             let p = &glyphs[j];
             if keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2 {
+                // A shielded glyph is never dropped: an unshielded double before it goes instead.
+                if shielded(i) {
+                    if !shielded(j) {
+                        keep[j] = false;
+                    }
+                    continue;
+                }
                 keep[i] = false;
                 break;
             }
         }
     }
+    keep
+}
+
+/// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
+///
+/// `protected[i]` (empty: all `false`) marks a glyph that no unprotected glyph may displace as
+/// its double: where a protected glyph or run doubles an unprotected one, the unprotected one is
+/// dropped instead of the later one (the recovered layer keeps every strict glyph so).
+fn arrange(glyphs: &[TextGlyph], protected: &[bool]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
+    let shielded = |i: usize| protected.get(i).copied().unwrap_or(false);
+    let keep = fake_bold_kept(glyphs, &shielded);
     let kept: Vec<usize> = (0..glyphs.len()).filter(|i| keep[*i]).collect();
+    let run_shielded: Vec<bool> = kept.iter().map(|&i| shielded(i)).collect();
     let glyphs: Vec<&TextGlyph> = kept.iter().map(|i| &glyphs[*i]).collect();
     let n = glyphs.len();
     if n == 0 {
@@ -286,25 +318,33 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let (cx, cy_) = ((glyphs[run.start].rect[0] / tol).floor() as i32, (glyphs[run.start].rect[1] / tol).floor() as i32);
                 let fp = fingerprint(&glyphs, run);
                 let mut checks = REDRAW_CANDIDATES;
-                let twin = (-1..=1i32).any(|dx| {
-                    (-1..=1i32).any(|dy| {
+                let twin = (-1..=1i32).find_map(|dx| {
+                    (-1..=1i32).find_map(|dy| {
                         let mut link = latest.get(&(fp, cx.saturating_add(dx), cy_.saturating_add(dy))).copied();
                         while let Some(k) = link {
                             let Some(prev) = segs.get(k) else { break };
                             if checks == 0 {
-                                return false;
+                                return None;
                             }
                             checks -= 1;
                             if redraws(&glyphs, prev.first, run) {
-                                return true;
+                                return Some(k);
                             }
                             link = older.get(k).copied().filter(|&o| o != NONE);
                         }
-                        false
+                        None
                     })
                 });
-                if twin {
-                    continue;
+                // A run holding a protected glyph is never dropped: if the run it doubles holds
+                // none, that one goes instead; if both hold some, both stay.
+                let shields = |r: Run| (r.start..r.end).any(|g| run_shielded.get(g).copied().unwrap_or(false));
+                match twin {
+                    Some(k) if shields(run) && segs.get(k).is_some_and(|p| !shields(p.first)) => {
+                        segs.swap(k, i);
+                        continue;
+                    }
+                    Some(_) if !shields(run) => continue,
+                    _ => {}
                 }
                 older[kept_runs] = latest.insert((fp, cx, cy_), kept_runs).unwrap_or(NONE);
             }

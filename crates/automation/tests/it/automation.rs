@@ -10876,6 +10876,71 @@ fn text_extract_as_html_keeps_the_formatting() {
     assert!(html.contains("color:#0000FF\">Blue"), "{html}");
 }
 
+/// Copy with formatting, headless, recovers what the strict text can't name: a font whose
+/// glyph names number Latin-1 characters in decimal (`/Differences [1 /C83 /C111 …]`, no
+/// `/ToUnicode`) reads in `html` only. `text`, the default format and Find stay strict.
+#[test]
+fn text_extract_as_html_recovers_glyphs_named_by_decimal_number() {
+    let dir = workdir("rich-copy-recovered");
+    let body = "BT /F1 20 Tf 20 250 Td (Hi) Tj ET BT /F3 20 Tf 60 250 Td <010203040506070809> Tj ET BT /F1 20 Tf 20 200 Td (end) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F3 6 0 R >> >> >>",
+        &stream,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar 9 /Widths [600 600 600 600 600 600 600 600 600] /Encoding << /Type /Encoding /Differences [1 /C83 /C111 /C99 /C246 /c105 /MT97 /C0108 /C32 /C174] >> >>",
+    ]);
+    std::fs::write(dir.join("advtt.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "advtt.pdf" }))["doc"].as_u64().unwrap();
+    let plain = ok(&mut a, "text_extract", json!({ "doc": doc }));
+    assert_eq!(plain["pages"][0]["text"], "Hi\nend");
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }))["pages"][0];
+    assert_eq!(page["text"], "Hi\nend", "the plain text stays strict");
+    let html = page["html"].as_str().unwrap();
+    assert!(html.contains("Soc\u{f6}ial \u{ae}") && html.contains("Hi") && html.contains("end"), "{html}");
+    // Only what the rect takes: the recovered word alone.
+    let column = ok(&mut a, "text_extract", json!({ "doc": doc, "rect": [55, 0, 400, 70], "format": "html" }));
+    let html = column["pages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Soc\u{f6}ial") && !html.contains("Hi") && !html.contains("end"), "{html}");
+    for query in ["Soc", "ial"] {
+        let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": query }));
+        assert!(found["matches"].as_array().unwrap().is_empty(), "{query}: {found}");
+    }
+}
+
+/// The same for glyph ids in the standard Macintosh glyph order (a Type 0 font over a TrueType
+/// subset that kept its original glyph ids, with no `/ToUnicode`, `cmap` or glyph names): the
+/// page has no strict text, and `html` reads it.
+#[test]
+fn text_extract_as_html_recovers_glyph_ids_in_the_mac_order() {
+    use pdfcraft_testkit::truetype::{Cmap, mac_gid, subset};
+    let dir = workdir("rich-copy-mac-order");
+    let text = "Besluitenlijst van de vergadering";
+    let gids: Vec<u16> = text.chars().map(mac_gid).collect();
+    let shown: String = gids.iter().map(|g| format!("{g:04X}")).collect();
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+        .stream("", format!("BT /F1 20 Tf 20 250 Td <{shown}> Tj ET"))
+        .obj("<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [6 0 R] >>")
+        .obj("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /CIDToGIDMap /Identity /DW 600 /FontDescriptor 7 0 R >>")
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>")
+        .stream("", subset(300, &gids, Cmap::None, None))
+        .build();
+    std::fs::write(dir.join("mac.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "mac.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }))["pages"][0];
+    assert_eq!(page["text"], "", "no strict text");
+    assert!(page["html"].as_str().unwrap().contains(text), "{}", page["html"]);
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "vergadering" }));
+    assert!(found["matches"].as_array().unwrap().is_empty(), "{found}");
+}
+
 #[test]
 fn mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};

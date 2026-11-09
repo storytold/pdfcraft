@@ -93,6 +93,8 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 
 [dev-dependencies]
 craft-update = { workspace = true }
+# Synthetic TrueType programs for the Copy with formatting recovery tests.
+pdfcraft-testkit = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 # A content stream that inflates past the renderer's limits, for the cut-content notice test.
 flate2 = { workspace = true }

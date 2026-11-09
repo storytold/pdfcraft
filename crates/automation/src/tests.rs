@@ -707,3 +707,48 @@ fn text_extract_html_has_one_budget_across_pages() {
     assert_eq!(capped["pages"][1]["html"], "", "no HTML after the budget ran out: {capped}");
     assert_eq!(capped["pages"][1]["styles_incomplete"], true);
 }
+
+/// Review finding: `text_extract` with `format: "html"` reads each page once, its strict text
+/// and recovered layer in the same pass, and its `text` is that pass's strict text (here a
+/// stand-in, empty, so a second strict pass would show).
+#[test]
+fn html_extraction_reads_each_page_in_one_pass() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let mut asked = Vec::new();
+    let out = a
+        .text_extract_with(&Args(&json!({ "doc": id.0, "format": "html" })), usize::MAX, &mut |bytes, password, pages| {
+            asked.extend_from_slice(pages);
+            pages::extract_recovering(bytes, password, pages)
+                .into_iter()
+                .map(|(p, r)| (p, r.map(|(_, layer)| (Arc::new(PageText::default()), layer))))
+                .collect()
+        })
+        .unwrap();
+    assert_eq!(asked, [0, 1, 2], "one pass per page");
+    let texts: Vec<&Value> = out["pages"].as_array().unwrap().iter().map(|p| &p["text"]).collect();
+    assert_eq!(texts, [""; 3], "the text came from that pass, not from a second one");
+    assert!(a.texts.get(id, 1).is_some_and(|t| t.glyphs.is_empty()), "and is cached as a text request would cache it");
+    // Without HTML, no recovered-text pass runs at all.
+    let plain = a.text_extract_with(&Args(&json!({ "doc": id.0 })), usize::MAX, &mut |_, _, _| panic!("no recovery without html")).unwrap();
+    assert_eq!(plain["pages"].as_array().unwrap().len(), 3);
+}
+
+/// Review finding: a page whose recovered-text pass failed fails `text_extract` with HTML, as a
+/// failed text pass does, instead of paying for the same interpretation again (a crash, a
+/// stuck page) to read its strict text alone.
+#[test]
+fn html_extraction_fails_a_page_whose_recovered_pass_failed() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 3);
+    let err = a
+        .text_extract_with(&Args(&json!({ "doc": id.0, "format": "html" })), usize::MAX, &mut |bytes, password, pages| {
+            pages::extract_recovering(bytes, password, pages)
+                .into_iter()
+                .map(|(p, r)| (p, if p == 1 { Err("text extraction crashed on page 2".to_owned()) } else { r }))
+                .collect()
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("page 2"), "{err}");
+    assert!(a.texts.get(id, 1).is_none(), "the page's text wasn't read again");
+}

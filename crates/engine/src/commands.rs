@@ -220,6 +220,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Alt-drag for moving windows (several Linux window managers).
     // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
     c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    // Acrobat's Copy With Formatting (right-click on selected text): the selection with its
+    // fonts, sizes and colours, as HTML beside its plain text, and the text the font makes clear
+    // although the strict text can't name it. No shortcut, as in Acrobat.
+    c("edit.copy-with-formatting", "Copy with formatting", EDIT, None, Copying, "copy"),
     // Comments travel between documents as XFDF (M14): ⌘C with comments selected copies them,
     // ⌘V pastes the copies onto the current page; the strip's Copy/Paste in the menus too.
     c("comment.copy", "Copy comments", EDIT, None, Document, "copy"),

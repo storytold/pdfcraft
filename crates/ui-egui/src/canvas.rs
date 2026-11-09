@@ -11,7 +11,9 @@ use std::sync::Arc;
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
 use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
-use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
+use pdfcraft_render::{
+    DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RecoveredText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels,
+};
 
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
@@ -603,6 +605,12 @@ pub struct DocView {
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
     text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
+    /// Pages whose recovered-text request came back (`RequestKind::RecoveredText`, asked only for
+    /// pages on screen), with Copy with formatting's layer where a recovery rule read some glyph:
+    /// text selection works on it there (so text only it has can be selected), while Find,
+    /// search and plain Copy keep to `texts`. `None`: nothing was recovered. (A failed request
+    /// fails the page's text: `text_failed`.)
+    pub(crate) recovered: HashMap<usize, Option<Arc<RecoveredText>>>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -873,6 +881,7 @@ pub(crate) enum PageMenuAction {
     HandTool,
     MarqueeZoom,
     Copy,
+    CopyWithFormatting,
     Paste(usize, [f64; 2]),
     /// Paste the copied comments, centred at this point of the page.
     PasteComments(usize, [f64; 2]),
@@ -896,6 +905,9 @@ pub(crate) struct PageMenuPerms {
     pub can_print: bool,
     pub can_copy: bool,
     pub can_copy_items: bool,
+    /// Text is selected (strict, or only a recovered layer reads it): the menu offers Copy with
+    /// formatting, which the copy permission enables.
+    pub has_text_selection: bool,
     pub can_paste: bool,
     /// Copied comments wait to be pasted, and comments may be added.
     pub can_paste_comments: bool,
@@ -932,6 +944,10 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
         ui,
         A::Copy,
     );
+    // Acrobat's Copy With Formatting, right after Copy on selected text.
+    if perms.has_text_selection {
+        pick(ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Copy with formatting"))), ui, A::CopyWithFormatting);
+    }
     pick(
         ui.add_enabled(
             perms.can_paste,
@@ -1068,6 +1084,7 @@ impl DocView {
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_links: HashMap::new(),
+            recovered: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -2135,6 +2152,9 @@ fn draw_pages(
         }
         let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
         let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
+        // Offered on selected text under a tool that selects it (Acrobat: right-click the text
+        // selected with the Select tool), not over the Hand tool's page menu.
+        let has_text_selection = !hand && view.selection_copies(true);
         let can_paste = can_paste_image && can_modify;
         let perms = PageMenuPerms {
             can_modify,
@@ -2143,6 +2163,7 @@ fn draw_pages(
             can_print: doc.allows_printing(),
             can_copy,
             can_copy_items,
+            has_text_selection,
             can_paste,
             can_paste_comments: allowed && can_paste_comments,
             has_annotations: !info.annotations.is_empty(),
@@ -2517,21 +2538,20 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
     // Text layers: visible pages for selection, every page while a search is active. (Select All
     // of the document needs no more: shown pages highlight as their text comes, and Copy reads
     // the rest, as text far away is let go to bound memory.)
+    // A page on screen is read with its recovered layer, which selection works on; the strict
+    // text alone is read for search (a page whose text failed either way isn't asked again).
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
-    let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
+    let need_recovered = |p: &usize| !view.recovered.contains_key(p) && !view.text_failed.contains(p);
+    let on_screen = |p: &usize| {
+        if need_recovered(p) { Some((*p, RequestKind::RecoveredText)) } else { need_text(p).then_some((*p, RequestKind::Text)) }
+    };
+    let mut text_pages: Vec<(usize, RequestKind)> = if hand { Vec::new() } else { visible_now.iter().filter_map(on_screen).collect() };
     if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
         let n = info.pages.len();
-        let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
-        text_pages.extend(rest);
+        let queued: HashSet<usize> = text_pages.iter().map(|(p, _)| *p).collect();
+        text_pages.extend((0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !queued.contains(p)).map(|p| (p, RequestKind::Text)));
     }
-    queue.extend(text_pages.into_iter().map(|page| RenderRequest {
-        page,
-        kind: RequestKind::Text,
-        tile: None,
-        scale: 1.0,
-        tag: TEXT_TAG,
-        preview: false,
-    }));
+    queue.extend(text_pages.into_iter().map(|(page, kind)| RenderRequest { page, kind, tile: None, scale: 1.0, tag: TEXT_TAG, preview: false }));
     view.frame_queue = queue;
     view.frame_visible = visible_now.iter().copied().collect();
 }
@@ -3591,6 +3611,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         None => {}
     }
     match page_action {
+        Some(PageMenuAction::CopyWithFormatting) => {
+            app.execute("edit.copy-with-formatting");
+        }
         Some(PageMenuAction::Copy) => {
             if let Some(sel) = app.views[index].image_selection.clone() {
                 app.copy_page_image(sel.page, sel.index);

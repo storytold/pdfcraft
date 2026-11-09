@@ -2,6 +2,7 @@ use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based};
 use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
+use pdfcraft_render::RecoveredText;
 
 /// Default and maximum resolution for `page_render`.
 pub(crate) const DEFAULT_DPI: f64 = 96.0;
@@ -15,6 +16,13 @@ pub(crate) const FIND_FIRST_BATCH: usize = 8;
 const FIND_MAX_BATCH: usize = 128;
 
 type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
+
+/// A page's strict text and, read in the same pass, its recovered layer when a recovery rule
+/// read some glyph (`RequestKind::RecoveredText`).
+pub(crate) type PageLayers = Vec<(usize, std::result::Result<Layers, String>)>;
+
+/// A page's strict text and its recovered layer, if any.
+type Layers = (Arc<PageText>, Option<Arc<RecoveredText>>);
 
 pub(crate) const FIND_MAX_WARNINGS: usize = 100;
 
@@ -210,6 +218,54 @@ impl Automation {
 
     /// [`Self::text_extract`] with at most `html_budget` bytes of HTML across all pages.
     pub(crate) fn text_extract_within(&mut self, a: &Args, html_budget: usize) -> Result<Value> {
+        self.text_extract_with(a, html_budget, &mut extract_recovering)
+    }
+
+    /// The strict text and recovered layer of `pages` (0-based) for HTML extraction, one pass per
+    /// page through `extract`; the strict text is cached as a text request would cache it. A page
+    /// whose recovered-text pass fails fails the call, as a failed text pass does: reading the
+    /// strict text again would cost the same interpretation (a crash, a stuck page) once more.
+    fn page_layers(
+        &mut self,
+        id: DocId,
+        pages: &[usize],
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageLayers,
+    ) -> Result<Vec<Layers>> {
+        let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
+        let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
+        if let Some(p) = pages.iter().find(|p| **p >= n) {
+            return Err(failed(format!("page {}: page is out of range", p.saturating_add(1))));
+        }
+        self.texts.prepare(id, &bytes);
+        let mut wanted = pages.to_vec();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut read = HashMap::new();
+        for (p, layers) in extract(&bytes, password, &wanted) {
+            if let Ok((text, _)) = &layers {
+                self.texts.insert(id, p, &bytes, text.clone());
+            }
+            read.insert(p, layers);
+        }
+        let mut out = Vec::with_capacity(pages.len());
+        for &p in pages {
+            out.push(match read.get(&p) {
+                Some(Ok(layers)) => layers.clone(),
+                Some(Err(e)) => return Err(failed(format!("page {}: {e}", p + 1))),
+                None => return Err(failed(format!("page {}: text extraction returned no result", p + 1))),
+            });
+        }
+        Ok(out)
+    }
+
+    /// [`Self::text_extract_within`] reading HTML pages' layers through `extract`.
+    pub(crate) fn text_extract_with(
+        &mut self,
+        a: &Args,
+        html_budget: usize,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageLayers,
+    ) -> Result<Value> {
         let html = match a.opt_str("format")?.unwrap_or("text") {
             "text" => false,
             "html" => true,
@@ -223,7 +279,10 @@ impl Automation {
         };
         // Column select (#740): only the text inside the rectangle, row by row.
         let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
-        let texts = self.page_texts(id, &pages)?;
+        // Copy with formatting also copies what the strict text can't name: with HTML, each
+        // page's strict text and recovered layer come from one pass; without, no recovery runs.
+        let layers =
+            if html { self.page_layers(id, &pages, extract)? } else { self.page_texts(id, &pages)?.into_iter().map(|t| (t, None)).collect() };
         let text = |t: &PageText| match rect {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),
@@ -233,7 +292,7 @@ impl Automation {
         // `spent`: the budget ran out, so later pages get no HTML. `cut`: some page's HTML is
         // missing part of its text, by the budget or by the copy's own caps.
         let (mut html_left, mut spent, mut cut) = (html_budget, false, false);
-        for (&p, t) in pages.iter().zip(texts) {
+        for (&p, (t, layer)) in pages.iter().zip(layers) {
             let mut page = json!({ "page": p + 1, "text": text(&t) });
             // Content cut at the renderer's limits (#623): the text is incomplete, and said so.
             if t.truncated {
@@ -244,11 +303,19 @@ impl Automation {
                 // the whole call; a page past it gets none and the call says so.
                 let mut copy = pdfcraft_engine::RichCopy::default();
                 if !spent {
-                    let glyphs: Vec<usize> = match rect {
-                        Some(r) => t.glyphs_in(r),
-                        None => (0..t.glyphs.len()).collect(),
+                    let selection = |t: &PageText| -> Vec<usize> {
+                        match rect {
+                            Some(r) => t.glyphs_in(r),
+                            None => (0..t.glyphs.len()).collect(),
+                        }
                     };
-                    copy = doc.rich_copy(p, &t, &glyphs).map_err(failed)?;
+                    // With nothing recovered in it, the copy is Copy's: the strict layer.
+                    let recovered = layer.map(|layer| (selection(&layer.text), layer)).filter(|(glyphs, layer)| layer.any_recovered(glyphs));
+                    copy = match recovered {
+                        Some((glyphs, layer)) => doc.rich_copy_recovered(p, &layer, &glyphs),
+                        None => doc.rich_copy(p, &t, &selection(&t)),
+                    }
+                    .map_err(failed)?;
                     match html_left.checked_sub(copy.html.len()) {
                         Some(left) => html_left = left,
                         None => {
@@ -421,11 +488,29 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
 pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
+    read_parallel(bytes, password, pages, RequestKind::Text, |out| out.text.unwrap_or_default())
+}
+
+/// Extract the strict text and recovered layer of `pages` (0-based) in one pass per page, with
+/// one renderer per worker thread.
+pub(crate) fn extract_recovering(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageLayers {
+    read_parallel(bytes, password, pages, RequestKind::RecoveredText, |out| (out.text.unwrap_or_default(), out.recovered))
+}
+
+/// Read `pages` (0-based) with a `kind` request each, one renderer per worker thread, and `take`
+/// what a successful request gives.
+fn read_parallel<T: Send>(
+    bytes: &Arc<Vec<u8>>,
+    password: Option<Arc<str>>,
+    pages: &[usize],
+    kind: RequestKind,
+    take: impl Fn(pdfcraft_render::RenderedPage) -> T + Sync,
+) -> Vec<(usize, std::result::Result<T, String>)> {
     let extract = |r: &mut PageRenderer, p: usize| {
-        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
-        match out.error {
+        let mut out = r.render(RenderRequest { page: p, kind, tile: None, scale: 1.0, tag: 0, preview: false });
+        match out.error.take() {
             Some(e) => Err(e),
-            None => Ok(out.text.unwrap_or_default()),
+            None => Ok(take(out)),
         }
     };
     let config = RenderConfig { password, ..Default::default() };
@@ -436,7 +521,7 @@ pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>,
         return pages.iter().map(|p| (*p, extract(&mut r, *p))).collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut out: PageTexts = std::thread::scope(|s| {
+    let mut out: Vec<(usize, std::result::Result<T, String>)> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 s.spawn(|| {

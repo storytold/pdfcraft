@@ -108,6 +108,36 @@ impl OutlineFont {
         }
     }
 
+    /// PdfCraft patch (104): the recovery rules' reading of a code drawn as glyph `gid` (see
+    /// `font::recovery`), given its strict text when that is more than control characters.
+    pub(crate) fn recovery(
+        &self,
+        char_code: u32,
+        gid: GlyphId,
+        strict: Option<&BfString>,
+    ) -> Option<crate::font::Recovery> {
+        match self {
+            Self::Type1(t) => t.recovery(char_code, gid, strict),
+            Self::TrueType(t) => t.recovery(char_code, gid, strict),
+            Self::Type0(t) => t.recovery(gid, strict),
+        }
+    }
+
+    /// PdfCraft patch (104): the font's style for text the recovery rules read, worked out on
+    /// first use and shared by every glyph of the font.
+    pub(crate) fn recovery_style(&self) -> crate::font::RecoveredFontStyle {
+        let info = match self {
+            Self::Type1(t) => t.recovery_info(),
+            Self::TrueType(t) => t.recovery_info(),
+            Self::Type0(t) => t.recovery_info(),
+        };
+        // Only an embedded program is evidence: a substitute's weight and style are its own.
+        info.style(|| match self {
+            Self::Type0(t) if t.is_substitute() => None,
+            _ => self.font_data(),
+        })
+    }
+
     /// Get the advance width for a glyph by character code.
     pub(crate) fn glyph_advance_width(&self, char_code: u32) -> Option<f32> {
         match self {

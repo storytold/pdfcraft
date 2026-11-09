@@ -1,5 +1,6 @@
 use crate::font::blob::{CffFontBlob, OpenTypeFontBlob, Type1FontBlob};
 use crate::font::generated::glyph_names;
+use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::standard_font::select_standard_font;
 use crate::font::{
     FallbackFontQuery, FontFlags, FontQuery, read_to_unicode, stretch_glyph, strip_subset_prefix,
@@ -60,6 +61,8 @@ pub(crate) struct Type0Font {
     /// gives glyph indexes in the author's font, which numbers its first 258 glyphs in the
     /// standard Macintosh order of the TrueType `post` table (#5889, #6449).
     mac_glyph_order: bool,
+    /// PdfCraft patch (104): what the recovery rules need, and their decisions.
+    recovery: FontRecovery,
 }
 
 impl Type0Font {
@@ -185,6 +188,8 @@ impl Type0Font {
             .get::<u32>(FLAGS)
             .and_then(FontFlags::from_bits);
 
+        let recovery = FontRecovery::new(dict, Some(&descendant_font));
+
         Some(Self {
             cache_key,
             horizontal,
@@ -204,6 +209,7 @@ impl Type0Font {
             adobe_collection,
             identity_to_unicode,
             mac_glyph_order,
+            recovery,
         })
     }
 
@@ -515,6 +521,50 @@ impl Type0Font {
         } else {
             Vec2::new(-self.horizontal_width(cid) as f64 / 2.0, -self.dw2.0 as f64)
         }
+    }
+
+    /// PdfCraft patch (104): whether the font draws with a substitute for a missing program.
+    pub(crate) fn is_substitute(&self) -> bool {
+        self.fallback
+    }
+
+    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    pub(crate) fn recovery_info(&self) -> &FontRecovery {
+        &self.recovery
+    }
+
+    /// PdfCraft patch (104): the recovery rules' reading of glyph `gid` (see `font::recovery`),
+    /// given its strict text when that is more than control characters. Only an embedded
+    /// program is evidence: a substitute's glyph ids are its own.
+    pub(crate) fn recovery(
+        &self,
+        gid: GlyphId,
+        strict: Option<&BfString>,
+    ) -> Option<Recovery> {
+        let program = match &self.font_type {
+            FontType::OpenType(t) if !self.fallback => Some(t.font_ref()),
+            _ => None,
+        };
+        let facts = || FontFacts {
+            kind: if program.is_some() {
+                FontKind::CidTrueType
+            } else {
+                FontKind::CidOther
+            },
+            base_font: self.recovery.base_font.as_deref(),
+            flags: self.recovery.flags.as_ref(),
+            has_to_unicode: self.to_unicode.is_some() || self.identity_to_unicode,
+            has_encoding: self.recovery.has_encoding,
+            names: None,
+            program,
+            code_glyph: None,
+        };
+        let glyph = || GlyphFacts {
+            gid,
+            name: None,
+            strict,
+        };
+        self.recovery.cache.recover(facts, glyph)
     }
 
     /// The text a character code stands for, or `None` when the font gives none (or, for an

@@ -468,7 +468,7 @@ fn worker_reuses_parser_and_releases_source_after_rendering() {
         assert_eq!(page.request.tag, tag as u64);
         match kind {
             RequestKind::Pixels => assert_eq!((page.width, page.height), (100, 50)),
-            RequestKind::Text => assert!(page.text.is_some()),
+            RequestKind::Text | RequestKind::RecoveredText => assert!(page.text.is_some()),
         }
         assert_eq!(pool.shared.parses.load(std::sync::atomic::Ordering::Relaxed), 1, "requests reuse one parser");
     }
@@ -11394,4 +11394,14 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     // hayro-postscript's `parse_object_or_skip_does_not_read_a_failed_read_again`.)
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
+}
+
+/// Review finding: a recovered-text request that crashed or overran the watchdog is remembered
+/// as a text request of the page, so the page's text request fails at once instead of costing
+/// a second crash or watchdog; a pixel request of the page is another matter.
+#[test]
+fn a_failed_recovered_text_request_is_remembered_as_the_pages_text() {
+    let key = |kind| RequestFailureKey::from(RenderRequest { page: 3, kind, ..Default::default() });
+    assert!(key(RequestKind::RecoveredText) == key(RequestKind::Text));
+    assert!(key(RequestKind::RecoveredText) != key(RequestKind::Pixels));
 }

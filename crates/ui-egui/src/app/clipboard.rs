@@ -344,9 +344,63 @@ impl PdfCraftApp {
         true
     }
 
+    /// Copy with formatting (Acrobat's Copy With Formatting): the selection as HTML beside its
+    /// own plain text, both with the glyphs only the page's recovered layer reads, styled to
+    /// blend in ([`pdfcraft_engine::Document::rich_copy_formatted`]); Copy never takes those.
+    /// Where the HTML can't be written (the web build, the system clipboard off, a refused or
+    /// capped copy, a column selection) it copies its own plain text, uncapped. Select All of the
+    /// document copies the plain text, as Copy does.
+    pub(crate) fn copy_selected_text_with_formatting(&mut self, i: usize, ctx: &egui::Context) -> bool {
+        let Some(v) = self.views.get(i) else { return false };
+        if v.all_text {
+            return self.copy_selected_text(i, ctx);
+        }
+        self.document_copy = None;
+        let id = v.id;
+        let text = v.selected_text().filter(|text| !text.is_empty());
+        let copies = v.selection_copies(true);
+        // The selection's recovered glyphs, if it holds any, looked up once: without them Copy
+        // with formatting is Copy, byte for byte (the strict glyphs, the strict layer, main's
+        // rich copy).
+        let recovered = v.selected_recovered();
+        if !copies || !self.may_copy(id) {
+            return false;
+        }
+        if self.takes_html() {
+            let doc = self.session.get(id);
+            let copy = match (&recovered, doc) {
+                (Some((page, layer, glyphs, true)), Some(doc)) => doc.rich_copy_recovered(*page, layer, glyphs).ok(),
+                // A column copies plain text only.
+                (Some((.., false)), _) => None,
+                (None, Some(doc)) => {
+                    self.views.get(i).and_then(DocView::selected_glyphs).and_then(|(page, layer, glyphs)| doc.rich_copy(page, &layer, &glyphs).ok())
+                }
+                (_, None) => None,
+            };
+            if let Some(copy) = copy.filter(|copy| !copy.truncated && !copy.html.is_empty()) {
+                // The HTML's plain alternative is the copy's own text, in the copy's order and
+                // under its caps; Copy's is the strict text.
+                let alternative = if copy.recovered { Some(copy.plain_text()) } else { text.clone() };
+                if alternative.as_ref().is_some_and(|plain| self.put_rich_text(&copy.html, plain)) {
+                    return true;
+                }
+            }
+        }
+        // Its own plain text: the strict text when nothing recovered is selected, else the
+        // selection's text on the recovered layer, recovered glyphs included, uncapped as the
+        // strict text is (also without a copy: a column).
+        let layer_text =
+            recovered.map(|(_, layer, glyphs, run)| if run { layer.text.text_of_glyphs(&glyphs) } else { layer.text.column_text(&glyphs) });
+        let fallback = layer_text.filter(|text| !text.is_empty()).or(text);
+        fallback.filter(|text| !text.is_empty()).is_some_and(|text| {
+            ctx.copy_text(text);
+            true
+        })
+    }
+
     /// Whether Copy with formatting has a clipboard to write: the system clipboard is on, and
     /// this isn't the web build (or a test stands in for the clipboard).
-    fn takes_html(&self) -> bool {
+    pub(crate) fn takes_html(&self) -> bool {
         self.system_clipboard && (self.html_clipboard_override.is_some() || cfg!(not(target_arch = "wasm32")))
     }
 

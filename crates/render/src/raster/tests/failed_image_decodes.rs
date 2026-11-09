@@ -221,7 +221,7 @@ fn a_picture_left_out_for_the_pages_allowance_draws_on_the_next_page() {
                 let warnings = Arc::new(Mutex::new(Vec::new()));
                 let settings = warning_settings(&config.settings(), warnings.clone());
                 let req = RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() };
-                let (_, _, rgba, _) = render_page(&pdf, &cache, &settings, &config, req).expect("renders");
+                let (_, _, rgba, _, _) = render_page(&pdf, &cache, &settings, &config, req).expect("renders");
                 (rgba[..].to_vec(), take_warnings(&warnings))
             })
             .collect::<Vec<Drawn>>()

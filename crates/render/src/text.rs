@@ -9,6 +9,7 @@
 //! case-insensitive search and reading-order selection.
 
 use hayro::hayro_interpret::font::Glyph;
+pub use hayro::hayro_interpret::font::{Recovery, RecoveryMode, RecoveryRule, recovery_policy};
 use hayro::hayro_interpret::hayro_syntax::Pdf;
 use hayro::hayro_interpret::{
     BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode,
@@ -106,6 +107,100 @@ pub struct PageText {
     pub truncated: bool,
 }
 
+/// A page's text as Copy with formatting reads it ([`crate::RequestKind::RecoveredText`]):
+/// the strict text layer's glyphs together with what the recovery rules read
+/// ([`Recovery`]), laid out together. A glyph without strict text that a rule reads (a fill)
+/// is only here; a strict glyph a rule overrides carries the recovered text here and its strict
+/// text in the strict layer. Find, plain copy and text extraction never see this layer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecoveredText {
+    /// Every glyph, strict and recovered (shared, as the strict layer is, so a view can select
+    /// on it without copying).
+    pub text: std::sync::Arc<PageText>,
+    /// For each glyph of `text`: how a rule read it, or `None` for strict text.
+    pub recovery: Vec<Option<Recovery>>,
+    /// For each glyph of `text`: its index in the strict layer read in the same pass, or `None`
+    /// for a glyph only this layer has ([`Self::strict_index_of`]).
+    strict_index: Vec<Option<usize>>,
+    /// The inverse of `strict_index`: for each glyph of the strict layer, its index in `text`
+    /// ([`Self::layer_index_of`]).
+    layer_index: Vec<Option<usize>>,
+    /// For each recovered glyph of `text`: its style from the font and graphics state, for
+    /// Copy with formatting where no reading block holds the glyph (the editor reads blocks
+    /// from text it can name, and a page of recovered text has none). `None` for strict glyphs.
+    pub style: Vec<Option<GlyphStyle>>,
+}
+
+/// A recovered glyph's style, as drawn: the font's `/BaseFont` (as written, subset tag included), the size in
+/// view-space points (the em box's height, one em), the fill colour through the colour space,
+/// and bold and italic from the font: the descriptor's `/Flags` (ForceBold, Italic), and an
+/// embedded program's own weight (600 and above), italic style and `head.macStyle` bits.
+/// (Copy with formatting adds what the font's name says: style words, a `.B`/`.I`/`.BI`
+/// suffix.)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GlyphStyle {
+    /// Shared by every glyph of the font.
+    pub font: Option<std::sync::Arc<str>>,
+    pub size: f32,
+    pub color: [u8; 3],
+    pub bold: bool,
+    pub italic: bool,
+}
+
+impl RecoveredText {
+    /// A layer of `text` with each glyph's reading, strict index and style (one entry per glyph
+    /// of `text`); `layer_index` is worked out from `strict_index`, for a strict layer of
+    /// `strict_len` glyphs.
+    pub fn new(
+        text: std::sync::Arc<PageText>,
+        recovery: Vec<Option<Recovery>>,
+        strict_index: Vec<Option<usize>>,
+        style: Vec<Option<GlyphStyle>>,
+        strict_len: usize,
+    ) -> Self {
+        let mut layer_index = vec![None; strict_len];
+        for (c, k) in strict_index.iter().enumerate() {
+            if let Some(slot) = k.and_then(|k| layer_index.get_mut(k)) {
+                *slot = Some(c);
+            }
+        }
+        Self { text, recovery, strict_index, layer_index, style }
+    }
+
+    /// Glyph `i`'s index in the strict layer, or `None` for a glyph only this layer has.
+    pub fn strict_index_of(&self, i: usize) -> Option<usize> {
+        self.strict_index.get(i).copied().flatten()
+    }
+
+    /// Where glyph `strict` of the strict layer stands in `text`, if the strict layer has it.
+    pub fn layer_index_of(&self, strict: usize) -> Option<usize> {
+        self.layer_index.get(strict).copied().flatten()
+    }
+
+    /// How glyph `i` was recovered, if it was.
+    pub fn recovery_of(&self, i: usize) -> Option<&Recovery> {
+        self.recovery.get(i).and_then(Option::as_ref)
+    }
+
+    /// The style of glyph `i`, if it was recovered.
+    pub fn style_of(&self, i: usize) -> Option<&GlyphStyle> {
+        self.style.get(i).and_then(Option::as_ref)
+    }
+
+    /// Whether any of `glyphs` was recovered.
+    pub fn any_recovered(&self, glyphs: &[usize]) -> bool {
+        glyphs.iter().any(|&i| self.recovery_of(i).is_some())
+    }
+
+    /// The strict layer's glyphs among `glyphs` (indices into `text`), in strict order.
+    pub fn strict_glyphs(&self, glyphs: &[usize]) -> Vec<usize> {
+        let mut strict: Vec<usize> = glyphs.iter().filter_map(|&i| self.strict_index.get(i).copied().flatten()).collect();
+        strict.sort_unstable();
+        strict.dedup();
+        strict
+    }
+}
+
 impl PageText {
     pub fn is_empty(&self) -> bool {
         self.glyphs.is_empty()
@@ -126,6 +221,27 @@ impl PageText {
             }
             s.push_str(&g.text);
             prev_line = Some(self.line_of[i]);
+        }
+        s
+    }
+
+    /// The text of `glyphs` (indices in reading order, ascending), as [`Self::text_of`] reads a
+    /// range: a line break between lines, and on one line a space wherever a word gap lies
+    /// between two of them, also across glyphs left out. For a range it is `text_of`'s text.
+    pub fn text_of_glyphs(&self, glyphs: &[usize]) -> String {
+        let mut s = String::new();
+        let mut prev: Option<(usize, u32)> = None;
+        for &i in glyphs {
+            let (Some(g), Some(&line)) = (self.glyphs.get(i), self.line_of.get(i)) else { continue };
+            if let Some((p, prev_line)) = prev {
+                if prev_line != line {
+                    s.push('\n');
+                } else if self.space_before.get(p.saturating_add(1)..=i).is_some_and(|gaps| gaps.contains(&true)) {
+                    s.push(' ');
+                }
+            }
+            s.push_str(&g.text);
+            prev = Some((i, line));
         }
         s
     }
@@ -401,8 +517,11 @@ mod order;
 
 use device::{CELL_GAP, WORD_GAP};
 #[cfg(test)]
-use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice, ligature_letters};
-pub(crate) use device::{extract_page, extract_page_filtered};
+use device::{
+    DOUBLES_WORK, MAX_REDRAW_TEXT, MAX_REDRAW_WORK, PAGE_WORK, PANIC_IN_RECOVERY, REDRAW_TEXT_BYTES, REDRAW_WALK_STEPS, Replaced, TextDevice,
+    ligature_letters,
+};
+pub(crate) use device::{extract_page, extract_page_filtered, extract_page_recovering};
 pub use layout::layout;
 #[cfg(test)]
 use layout::{from_upright, to_upright};
@@ -410,5 +529,7 @@ use layout::{is_rtl, union};
 #[cfg(test)]
 use order::{Run, Scratch, Seg, collide, restarts_run};
 
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod tests;

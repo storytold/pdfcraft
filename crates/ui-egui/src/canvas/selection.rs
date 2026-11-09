@@ -1,10 +1,18 @@
-use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, comments, pos2};
+use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, RecoveredText, Rect, comments, pos2};
 
 /// A text selection on one page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Selection {
     pub(super) page: usize,
     pub(super) span: Span,
+    /// A run on a recovered layer that holds only the strict glyphs `from..=to` (strict-layer
+    /// indices) and the recovered glyphs between them: the layer may order strict glyphs
+    /// otherwise than the strict layer, so the run between the first and the last of them can
+    /// pass over others ([`DocView::select_text`]). `None`: everything in the run.
+    pub(super) strict: Option<(usize, usize)>,
+    /// The whole page is selected: Select All of the page, four quick clicks, or a drag by pages
+    /// made it. When the page's recovered layer arrives, the selection takes the whole layer.
+    pub(super) whole_page: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,7 +26,26 @@ pub(super) enum Span {
 
 impl Selection {
     pub(super) fn run(page: usize, anchor: usize, head: usize) -> Self {
-        Self { page, span: Span::Run { anchor, head } }
+        Self { page, span: Span::Run { anchor, head }, strict: None, whole_page: false }
+    }
+
+    pub(super) fn column(page: usize, rect: [f32; 4]) -> Self {
+        Self { page, span: Span::Column { rect }, strict: None, whole_page: false }
+    }
+
+    /// The run quick clicks select, `first` to `last`: four or more clicks select the page, as
+    /// Select All of it does ([`Self::whole_page`]).
+    pub(super) fn clicked(page: usize, clicks: u32, first: usize, last: usize) -> Self {
+        Self { whole_page: clicks >= 4, ..Self::run(page, first, last) }
+    }
+
+    /// The run from `anchor` to `head` (indices into the selection layer), as the pointer makes
+    /// or extends it: everything in the run, not a strict range ([`Self::strict`]), and no
+    /// longer Select All's.
+    pub(super) fn set_run(&mut self, anchor: usize, head: usize) {
+        self.span = Span::Run { anchor, head };
+        self.strict = None;
+        self.whole_page = false;
     }
 
     fn range(anchor: usize, head: usize) -> Range<usize> {
@@ -42,6 +69,36 @@ impl Selection {
     }
 }
 
+/// Where glyph `strict` of the strict layer sits in its recovered `layer`: past the layer's end
+/// for a glyph the strict layer lacks.
+fn layer_index(layer: &RecoveredText, strict: usize) -> usize {
+    layer.layer_index_of(strict).unwrap_or(layer.text.glyphs.len())
+}
+
+/// The selection on `layer` holding exactly the strict glyphs `from..=to` (and the recovered
+/// glyphs between them): the run from the first to the last of their places in the layer,
+/// limited to them. `None` when none of them is in the layer.
+fn exact_selection(page: usize, layer: &RecoveredText, from: usize, to: usize) -> Option<Selection> {
+    let (lo, hi) = (from.min(to), from.max(to));
+    let places = (lo..=hi).take(layer.text.glyphs.len()).filter_map(|k| layer.layer_index_of(k));
+    let (first, last) = places.fold(None, |b: Option<(usize, usize)>, c| Some(b.map_or((c, c), |(lo, hi)| (lo.min(c), hi.max(c)))))?;
+    // The run keeps the selection's direction: a backward one stays anchored at its end.
+    let (anchor, head) = if from <= to { (first, last) } else { (last, first) };
+    Some(Selection { strict: Some((lo, hi)), ..Selection::run(page, anchor, head) })
+}
+
+/// The glyphs of `layer` a run from `anchor` to `head` holds, in copy order: all of them, or with
+/// `strict` only the strict glyphs in that strict range and the recovered glyphs between.
+fn run_glyphs(layer: &RecoveredText, anchor: usize, head: usize, strict: Option<(usize, usize)>) -> Vec<usize> {
+    Selection::range(anchor, head)
+        .take(layer.text.glyphs.len())
+        .filter(|&i| match (layer.strict_index_of(i), strict) {
+            (Some(k), Some((from, to))) => (from..=to).contains(&k),
+            _ => true,
+        })
+        .collect()
+}
+
 /// The glyphs `clicks` quick clicks select around glyph `a`: two the word, three the line, more
 /// the page.
 pub(super) fn click_unit(text: &PageText, clicks: u32, a: usize) -> Option<(usize, usize)> {
@@ -56,10 +113,20 @@ impl DocView {
     /// The text selection as markup quadrilaterals in user space: (page, quads).
     pub(crate) fn selection_quads(&self, info: &DocInfo) -> Option<(usize, Vec<[f64; 8]>)> {
         let s = self.selection?;
-        let text = self.texts.get(&s.page)?;
+        let text = self.selection_layer(s.page)?;
         let page = info.pages.get(s.page)?;
-        let quads: Vec<[f64; 8]> = s.rects(text).into_iter().map(|r| page.view_rect_to_quad(r)).collect();
+        let quads: Vec<[f64; 8]> = self.selection_rects(&s, &text).into_iter().map(|r| page.view_rect_to_quad(r)).collect();
         (!quads.is_empty()).then_some((s.page, quads))
+    }
+
+    /// The view-space rectangles `s` covers on `text`, its page's selection layer (highlighting,
+    /// markup quads): one per selected piece of a line, or one per glyph for a run limited to
+    /// some strict glyphs ([`Selection::strict`]).
+    pub(super) fn selection_rects(&self, s: &Selection, text: &PageText) -> Vec<[f32; 4]> {
+        match (s.span, s.strict, self.recovered_layer(s.page)) {
+            (Span::Run { anchor, head }, Some(_), Some(layer)) => text.glyph_rects(&run_glyphs(layer, anchor, head, s.strict)),
+            _ => s.rects(text),
+        }
     }
 
     pub(crate) fn clear_selection(&mut self) {
@@ -67,14 +134,30 @@ impl DocView {
         self.actions_dismissed = None;
     }
 
-    /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
+    /// Select text on `page` from glyph `from` to glyph `to` of the page's strict text layer, the
+    /// index space of [`Self::has_page_text`], Find and `text_extract` (tests and automation).
+    /// On a page with a recovered layer the selection holds exactly those strict glyphs and the
+    /// recovered glyphs between them in the layer's order (see [`Selection::strict`]).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
+        self.all_text = false;
+        let exact = self.recovered_layer(page).map(|layer| exact_selection(page, layer, from, to));
+        self.selection = match exact {
+            Some(exact) => exact,
+            None => Some(Selection::run(page, from, to)),
+        };
+    }
+
+    /// Select text on `page` from glyph `from` to glyph `to` of the page's selection layer: its
+    /// recovered layer where it has one, else its strict layer (tests and automation, to reach
+    /// glyphs only the recovered layer reads; [`Self::layer_glyph_screen_pos`] aims at them).
+    pub fn select_layer_text(&mut self, page: usize, from: usize, to: usize) {
         self.all_text = false;
         self.selection = Some(Selection::run(page, from, to));
     }
 
-    /// Screen position of the centre of glyph `glyph` on `page`, if that page is on screen and its
-    /// text layer is loaded (used by UI tests and automation to aim pointer input).
+    /// Screen position of the centre of glyph `glyph` of `page`'s strict text layer (the index
+    /// space of [`Self::select_text`]), if that page is on screen and its text layer is loaded
+    /// (used by UI tests and automation to aim pointer input).
     pub fn glyph_screen_pos(&self, page: usize, glyph: usize) -> Option<Pos2> {
         self.glyph_screen_rect(page, glyph).map(|r| r.center())
     }
@@ -86,6 +169,49 @@ impl DocView {
         Some(xf.view_rect(g.rect))
     }
 
+    /// [`Self::glyph_screen_pos`] for glyph `glyph` of `page`'s selection layer (the index space
+    /// of [`Self::select_layer_text`]), which also reaches glyphs only a recovered layer reads.
+    pub fn layer_glyph_screen_pos(&self, page: usize, glyph: usize) -> Option<Pos2> {
+        let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
+        let rect = self.selection_layer(page)?.glyphs.get(glyph)?.rect;
+        Some(xf.view_rect(rect).center())
+    }
+
+    /// The text layer selection works on for `page`: Copy with formatting's layer where a
+    /// recovery rule read some glyph (so text only it has can be selected), else the strict one.
+    /// Text markup and redaction made from a text selection (Highlight, Underline, Redact…)
+    /// cover what it selects there, recovered glyphs included. Find, search, plain Copy, the
+    /// caret's placement and the area tools' test for text under the pointer read the strict
+    /// layer (`texts`).
+    pub(crate) fn selection_layer(&self, page: usize) -> Option<Arc<PageText>> {
+        match self.recovered_layer(page) {
+            Some(layer) => Some(layer.text.clone()),
+            None => self.texts.get(&page).cloned(),
+        }
+    }
+
+    /// `page`'s recovered layer, when its strict text is loaded and a recovery rule read some
+    /// glyph of it.
+    pub(crate) fn recovered_layer(&self, page: usize) -> Option<&Arc<RecoveredText>> {
+        self.texts.get(&page)?;
+        self.recovered.get(&page)?.as_ref()
+    }
+
+    /// A run selected on `page`'s strict layer, moved onto the recovered `layer` that just
+    /// arrived for the page: it keeps exactly its strict glyphs (and the recovered ones between
+    /// them), and a run over the whole strict page (Select All) takes the whole layer, recovered
+    /// glyphs at its ends included.
+    pub(super) fn move_selection_onto(&mut self, page: usize, layer: &RecoveredText) {
+        let Some(Selection { page: p, span: Span::Run { anchor, head }, whole_page: whole, .. }) = self.selection else { return };
+        if p != page {
+            return;
+        }
+        self.selection = match layer.text.glyphs.len().checked_sub(1) {
+            Some(last) if whole => Some(Selection { whole_page: true, ..Selection::run(page, 0, last) }),
+            _ => exact_selection(page, layer, anchor, head).or(Some(Selection::run(page, layer_index(layer, anchor), layer_index(layer, head)))),
+        };
+    }
+
     /// Selected text, if any (⌘C).
     /// The selected text: of the pages read so far, after Select All of the document (Copy reads
     /// the others, [`DocView::pages_without_text`]).
@@ -95,21 +221,85 @@ impl DocView {
         }
         let s = self.selection?;
         let t = self.texts.get(&s.page)?;
-        Some(s.text(t)).filter(|x| !x.is_empty())
+        let text = match (self.recovered_layer(s.page), s.span) {
+            // A run on the recovered layer copies the strict text of exactly the strict glyphs in
+            // it: laid out together with the recovered glyphs, the layer may order them otherwise
+            // than the strict layer does, so they need not be one strict range.
+            (Some(layer), Span::Run { anchor, head }) => t.text_of_glyphs(&layer.strict_glyphs(&run_glyphs(layer, anchor, head, s.strict))),
+            // A column takes the strict glyphs inside its rectangle, whichever layer it was drawn on.
+            _ => s.text(t),
+        };
+        Some(text).filter(|x| !x.is_empty())
     }
 
-    /// The selection's page, its text layer and the selected glyphs in copy order, for Copy with
-    /// formatting. `None` after Select All of the document and for a column selection, which
-    /// copy plain text (a column's rows and tab-separated cells are not paragraphs).
+    /// Whether Copy has something to copy from the text selection, without building the text:
+    /// strict text, or, for Copy with formatting (`with_formatting`: a clipboard that takes
+    /// HTML), glyphs only the recovered layer reads. Plain Copy is strict only.
+    pub fn selection_copies(&self, with_formatting: bool) -> bool {
+        self.selection_has_strict_text() || (with_formatting && self.selection_has_recovered())
+    }
+
+    /// Whether the selection holds strict text (what plain Copy copies).
+    fn selection_has_strict_text(&self) -> bool {
+        if self.all_text {
+            return self.texts.values().any(|t| t.glyphs.iter().any(|g| !g.text.is_empty()));
+        }
+        let Some(s) = self.selection else { return false };
+        let Some(t) = self.texts.get(&s.page) else { return false };
+        let nonempty = |i: usize| t.glyphs.get(i).is_some_and(|g| !g.text.is_empty());
+        match (self.recovered_layer(s.page), s.span) {
+            (Some(layer), Span::Run { anchor, head }) => {
+                run_glyphs(layer, anchor, head, s.strict).into_iter().any(|i| layer.strict_index_of(i).is_some_and(nonempty))
+            }
+            (None, Span::Run { anchor, head }) => Selection::range(anchor, head).take(t.glyphs.len()).any(nonempty),
+            (_, Span::Column { rect }) => t.glyphs_in(rect).into_iter().any(nonempty),
+        }
+    }
+
+    /// Whether the selection holds a glyph only the recovered layer reads.
+    pub(crate) fn selection_has_recovered(&self) -> bool {
+        self.selected_layer_glyphs().is_some_and(|(_, layer, glyphs)| layer.any_recovered(&glyphs))
+    }
+
+    /// The selection as glyphs of its page's recovered layer: a run's in copy order, a column's
+    /// inside its rectangle. `None` where the page has no recovered layer and after Select All
+    /// of the document.
+    pub(super) fn selected_layer_glyphs(&self) -> Option<(Selection, Arc<RecoveredText>, Vec<usize>)> {
+        if self.all_text {
+            return None;
+        }
+        let s = self.selection?;
+        let layer = self.recovered_layer(s.page)?;
+        let glyphs = match s.span {
+            Span::Run { anchor, head } => run_glyphs(layer, anchor, head, s.strict),
+            Span::Column { rect } => layer.text.glyphs_in(rect),
+        };
+        Some((s, layer.clone(), glyphs))
+    }
+
+    /// The selection as glyphs of its page's recovered layer (a run's in copy order), when it
+    /// holds a glyph only that layer reads, for Copy with formatting, and whether it is a run
+    /// (a column copies plain text only). `None` where the page has no recovered layer, after
+    /// Select All of the document, and when nothing recovered is selected.
+    pub(crate) fn selected_recovered(&self) -> Option<(usize, Arc<RecoveredText>, Vec<usize>, bool)> {
+        let (s, layer, glyphs) = self.selected_layer_glyphs()?;
+        layer.any_recovered(&glyphs).then_some((s.page, layer, glyphs, matches!(s.span, Span::Run { .. })))
+    }
+
+    /// The selection's page, its strict text layer and the selected strict glyphs in copy order,
+    /// for Copy's HTML (on a page with a recovered layer, the strict glyphs the selection holds
+    /// there). `None` after Select All of the document and for a column selection, which copy
+    /// plain text (a column's rows and tab-separated cells are not paragraphs).
     pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
         if self.all_text {
             return None;
         }
         let s = self.selection?;
         let t = self.texts.get(&s.page)?;
-        let glyphs = match s.span {
-            Span::Run { anchor, head } => Selection::range(anchor, head).take(t.glyphs.len()).collect(),
-            Span::Column { .. } => return None,
+        let glyphs = match (s.span, self.recovered_layer(s.page)) {
+            (Span::Run { anchor, head }, Some(layer)) => layer.strict_glyphs(&run_glyphs(layer, anchor, head, s.strict)),
+            (Span::Run { anchor, head }, None) => Selection::range(anchor, head).take(t.glyphs.len()).collect(),
+            (Span::Column { .. }, _) => return None,
         };
         Some((s.page, t.clone(), glyphs))
     }
@@ -137,12 +327,27 @@ impl DocView {
         }
         self.all_text = false;
         let page = self.current;
-        let Some(t) = self.texts.get(&page) else { return false };
+        let Some(t) = self.selection_layer(page) else { return false };
         if t.glyphs.is_empty() {
             return false;
         }
-        self.selection = Some(Selection::run(page, 0, t.glyphs.len() - 1));
+        self.selection = Some(Selection { whole_page: true, ..Selection::run(page, 0, t.glyphs.len() - 1) });
         true
+    }
+
+    /// Moves the end of the run selected on `page` to glyph `head` of its selection layer (a
+    /// drag, Shift+click): `false` without a run there.
+    pub(super) fn extend_selection(&mut self, page: usize, head: usize) -> bool {
+        match self.selection.as_mut() {
+            Some(s) if s.page == page => match s.span {
+                Span::Run { anchor, .. } => {
+                    s.set_run(anchor, head);
+                    true
+                }
+                Span::Column { .. } => false,
+            },
+            _ => false,
+        }
     }
 
     /// Pages whose text [`DocView::whole_text`] still needs: not read yet, nor failed.
@@ -200,10 +405,10 @@ pub(super) fn selection_actions(
     if view.actions_dismissed == Some(selection) {
         return false;
     }
-    let Some(text) = view.texts.get(&selection.page) else { return false };
+    let Some(text) = view.selection_layer(selection.page) else { return false };
     let Some(xf) = view.page_xform(selection.page) else { return false };
-    let Some(last) = selection.rects(text).last().copied() else { return false };
-    let selected = selection.text(text);
+    let Some(last) = view.selection_rects(&selection, &text).last().copied() else { return false };
+    let selected = selection.text(&text);
     if selected.is_empty() {
         return false;
     }
@@ -211,6 +416,9 @@ pub(super) fn selection_actions(
     if !viewport.intersects(rect) {
         return false;
     }
+    // Copy here is Copy (edit.copy): strict text only, so a selection of recovered glyphs alone
+    // has nothing for it.
+    let copies = can_copy && view.selection_copies(false);
     let id = egui::Id::unique(("text-selection-actions", view.view_key()));
     // The bar stays inside the pages' area, by the width it had last frame (its labels make it
     // wider in some languages), so it never covers a side panel; a first guess before it has one.
@@ -232,7 +440,7 @@ pub(super) fn selection_actions(
                         chosen = Some(action);
                     }
                 }
-                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                if ui.add_enabled(copies, egui::Button::new(tl!("Copy"))).clicked() {
                     chosen = Some(SelectionAction::Copy);
                 }
             });

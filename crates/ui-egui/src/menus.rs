@@ -138,6 +138,7 @@ const EDIT: &[&str] = &[
     SEP,
     CUT,
     "edit.copy",
+    "edit.copy-with-formatting",
     PASTE,
     DELETE,
     SEP,

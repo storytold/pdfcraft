@@ -1,5 +1,6 @@
 use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
 use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
+use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
     Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode, read_to_unicode,
@@ -30,6 +31,8 @@ pub(crate) struct TrueTypeFont {
     cache_key: u128,
     kind: Kind,
     to_unicode: Option<CMap>,
+    /// PdfCraft patch (104): what the recovery rules need, and their decisions.
+    recovery: FontRecovery,
 }
 
 #[derive(Debug)]
@@ -52,6 +55,7 @@ impl TrueTypeFont {
                 cache_key,
                 kind: Kind::Embedded(embedded),
                 to_unicode,
+                recovery: FontRecovery::new(dict, None),
             });
         }
 
@@ -76,6 +80,7 @@ impl TrueTypeFont {
                     font_resolver,
                 )?),
                 to_unicode: to_unicode.clone(),
+                recovery: FontRecovery::new(dict, None),
             })
         };
 
@@ -84,6 +89,7 @@ impl TrueTypeFont {
                 cache_key,
                 kind: Kind::Standard(standard),
                 to_unicode,
+                recovery: FontRecovery::new(dict, None),
             })
         } else {
             fallback()
@@ -181,6 +187,45 @@ impl TrueTypeFont {
             Kind::Embedded(e) => e.glyph_width(code),
             Kind::Standard(s) => s.glyph_width(code).unwrap_or(0.0),
         }
+    }
+
+    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    pub(crate) fn recovery_info(&self) -> &FontRecovery {
+        &self.recovery
+    }
+
+    /// PdfCraft patch (104): the recovery rules' reading of a code (see `font::recovery`),
+    /// given its strict text when that is more than control characters.
+    pub(crate) fn recovery(
+        &self,
+        code: u32,
+        gid: GlyphId,
+        strict: Option<&BfString>,
+    ) -> Option<Recovery> {
+        let names = |c: u8| match &self.kind {
+            Kind::Embedded(e) => e.code_to_name(c),
+            Kind::Standard(s) => s.code_to_ps_name(c),
+        };
+        let code_glyph = |c: u8| (self.map_code(c), self.char_code_to_unicode(u32::from(c)));
+        let facts = || FontFacts {
+            kind: FontKind::TrueType,
+            base_font: self.recovery.base_font.as_deref(),
+            flags: self.recovery.flags.as_ref(),
+            has_to_unicode: self.to_unicode.is_some(),
+            has_encoding: self.recovery.has_encoding,
+            names: Some(&names),
+            program: match &self.kind {
+                Kind::Embedded(e) => Some(e.base_font.font_ref()),
+                Kind::Standard(_) => None,
+            },
+            code_glyph: Some(&code_glyph),
+        };
+        let glyph = || GlyphFacts {
+            gid,
+            name: u8::try_from(code).ok().and_then(names),
+            strict,
+        };
+        self.recovery.cache.recover(facts, glyph)
     }
 
     pub(crate) fn char_code_to_unicode(&self, code: u32) -> Option<BfString> {

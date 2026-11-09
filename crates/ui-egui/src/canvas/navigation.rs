@@ -15,14 +15,15 @@ impl DocView {
             return None;
         }
         if let Some(sel) = self.selection
-            && let Some(text) = self.texts.get(&sel.page)
+            && let Some(text) = self.selection_layer(sel.page)
             && let Some(p) = info.pages.get(sel.page)
         {
             // The selection's bounds in view space, which View ▸ Rotate View leaves unturned: the
             // corner at the screen's top-left is a different one for each quarter turn.
-            let [x0, y0, x1, y1] = sel.rects(text).iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, r| {
-                [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])]
-            });
+            let [x0, y0, x1, y1] =
+                self.selection_rects(&sel, &text).iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, r| {
+                    [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])]
+                });
             let (x, y) = match self.rotation {
                 90 => (x0, y1),
                 180 => (x1, y1),

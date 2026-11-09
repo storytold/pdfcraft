@@ -317,6 +317,7 @@ mod tests {
             rgba: Pixels::from(vec![0u32; bytes / 4]),
             error: None,
             text: None,
+            recovered: None,
             warnings: Vec::new(),
             millis: 0,
         }

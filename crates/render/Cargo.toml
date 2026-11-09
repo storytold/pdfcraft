@@ -43,3 +43,5 @@ pdfcraft-content = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
+# The recovery rules' test-only call counter (vendored hayro-interpret, patch 104).
+hayro-interpret = { version = "0.7.0", features = ["test-counters"] }

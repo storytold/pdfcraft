@@ -1,7 +1,8 @@
 use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
 use super::{
-    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings,
-    InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
+    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, GlyphStyle, HashMap, Image, InterpreterCache, InterpreterSettings,
+    InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt,
+    interpret_page,
 };
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
@@ -48,7 +49,28 @@ pub(super) struct TextDevice {
     actual_filtered: bool,
     actual_cropped: bool,
     partial_replacement: bool,
+    /// Copy with formatting: also take the recovery rules' readings
+    /// (`Glyph::unicode_and_recovery`). Off for every other reader, and then nothing below is
+    /// ever filled.
+    pub(super) recover: bool,
+    /// Glyphs without strict text that a rule reads (fills), each with the number of strict
+    /// glyphs in `glyphs` before it, in content order.
+    pub(super) filled: Vec<(usize, Drawn, Read)>,
+    /// Strict glyphs a rule overrides: their index in `glyphs`, the recovered text and how it
+    /// was read.
+    pub(super) overrides: Vec<(usize, String, Read)>,
+    /// The recovery rules panicked or ran past their budgets: the page gets no recovered layer,
+    /// and its strict text as if nothing had been recovered.
+    pub(super) recovery_failed: bool,
+    /// Fonts whose recovery rules were asked on this page ([`MAX_RECOVERY_FONTS`]).
+    recovery_fonts: std::collections::HashSet<u128>,
+    /// What is left of the page's dedupe work ([`MAX_REDRAW_WORK`]).
+    pub(super) work_left: usize,
 }
+
+/// How a recovery rule read a glyph, and the glyph's style from the font and graphics state
+/// (Copy with formatting styles it from these where no reading block holds it).
+pub(super) type Read = (Recovery, GlyphStyle);
 
 /// An `/ActualText` replacement: the glyph standing for it in `TextDevice::glyphs` (none for an
 /// empty replacement), its text, and the text and box of each replaced glyph that has Unicode of
@@ -65,19 +87,52 @@ const CELL: f32 = 8.0;
 /// Most grid cells searched around one place: a glyph so tall its tolerance spans more is skipped.
 const MAX_CELLS: i64 = 4096;
 
-/// Most work (grid cells visited plus glyphs compared) the redraw dedupe in `TextDevice::finish`
-/// may do on one page. A hostile page stacking ~10^5 glyphs and ~10^5 replacements at one spot
+/// Most work (grid cells visited plus glyphs compared) the page's two dedupes may do together:
+/// the redraw dedupe in `TextDevice::finish`, then, with what it leaves, the recovered layer's
+/// `drop_doubles`. A hostile page stacking ~10^5 glyphs and ~10^5 replacements at one spot
 /// would otherwise make ~10^10 comparisons; past the budget the remaining replacements keep
-/// their unmarked redraws (the text reads twice, as it would without `/ActualText`).
-const MAX_REDRAW_WORK: usize = 1 << 22;
+/// their unmarked redraws (the text reads twice, as it would without `/ActualText`), and
+/// recovered glyphs are kept as they are.
+pub(super) const MAX_REDRAW_WORK: usize = 1 << 22;
 
 /// Most replacement text bytes the redraw dedupe in `TextDevice::finish` copies on one page.
 pub(super) const MAX_REDRAW_TEXT: usize = 1 << 22;
+
+/// Most fonts whose recovery rules one page asks: each font's guard reads its program once
+/// (up to `MAX_PROGRAM_GLYPHS` glyph entries), so a page of many fonts stops recovering here.
+const MAX_RECOVERY_FONTS: usize = 1 << 10;
+
+/// Most glyphs the recovered layer of one page holds beyond the strict ones (fills and
+/// overrides); past it the page has no recovered layer.
+const MAX_RECOVERED_GLYPHS: usize = 1 << 20;
 
 #[cfg(test)]
 thread_local! {
     /// Replacement text bytes given to redraws on this thread.
     pub(super) static REDRAW_TEXT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Makes the recovery rules panic on this thread, to show the strict text survives them.
+    pub(super) static PANIC_IN_RECOVERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A smaller dedupe work budget for the pages read on this thread.
+    pub(super) static PAGE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Work (cells visited, glyphs compared) of `drop_doubles` on this thread.
+    pub(super) static DOUBLES_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Steps of the walk that drops recovered glyphs inside merged redraws, on this thread.
+    pub(super) static REDRAW_WALK_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The page's dedupe work budget: [`MAX_REDRAW_WORK`], or a test's smaller one.
+fn page_work() -> usize {
+    #[cfg(test)]
+    if let Some(w) = PAGE_WORK.with(std::cell::Cell::get) {
+        return w;
+    }
+    MAX_REDRAW_WORK
+}
+
+/// The grid cells a coordinate `v` give or take `tol` falls in, first and last. `cell`
+/// saturates at the ends of `i64`, and nothing here steps past them.
+pub(super) fn cell_span(v: f32, tol: f32) -> (i64, i64) {
+    (cell(v - tol), cell(v + tol))
 }
 
 fn cell(v: f32) -> i64 {
@@ -229,6 +284,12 @@ impl TextDevice {
             actual_filtered: false,
             actual_cropped: false,
             partial_replacement: false,
+            recover: false,
+            filled: Vec::new(),
+            overrides: Vec::new(),
+            recovery_failed: false,
+            recovery_fonts: std::collections::HashSet::new(),
+            work_left: page_work(),
         }
     }
 
@@ -331,21 +392,28 @@ impl TextDevice {
         }
         // Redraws found: the glyph range and the replacement standing for it.
         let mut redraws: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
-        let mut budget = MAX_REDRAW_WORK;
+        let mut budget = self.work_left;
         'replacements: for (k, r) in self.replaced.iter().enumerate() {
             let Some((_, rect)) = r.originals.first() else { continue };
             let tol = redraw_tolerance(rect);
-            let (x0, x1, y0, y1) = (cell(rect[0] - tol), cell(rect[0] + tol), cell(rect[1] - tol), cell(rect[1] + tol));
+            let ((x0, x1), (y0, y1)) = (cell_span(rect[0], tol), cell_span(rect[1], tol));
             if x1.saturating_sub(x0).saturating_add(1).saturating_mul(y1.saturating_sub(y0).saturating_add(1)) > MAX_CELLS {
                 continue;
             }
             // Checking one candidate walks its run twice (free, then same).
             let candidate_cost = r.originals.len().saturating_mul(2).saturating_add(1);
             for key in (x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))) {
-                let Some(rest) = budget.checked_sub(1) else { break 'replacements };
+                let Some(rest) = budget.checked_sub(1) else {
+                    budget = 0;
+                    break 'replacements;
+                };
                 budget = rest;
                 for &i in grid.get(&key).map_or(&[][..], Vec::as_slice) {
-                    let Some(rest) = budget.checked_sub(candidate_cost) else { break 'replacements };
+                    // Out of budget the page's is spent: what is left can't pay for a candidate.
+                    let Some(rest) = budget.checked_sub(candidate_cost) else {
+                        budget = 0;
+                        break 'replacements;
+                    };
                     budget = rest;
                     let Some(range) = i.checked_add(r.originals.len()).map(|end| i..end) else { continue };
                     let Some(run) = self.glyphs.get(range.clone()) else { continue };
@@ -363,25 +431,58 @@ impl TextDevice {
                 }
             }
         }
+        self.work_left = budget;
         if redraws.is_empty() {
             return;
         }
         redraws.sort_by_key(|(range, _)| range.start);
         let glyphs = std::mem::take(&mut self.glyphs);
+        // Where each old glyph went, for the recovered readings that point into `glyphs`:
+        // `at[i]`, the new place of what stood at old index `i` (`at[len]`, the end), and
+        // `kept[i]`, the new index of an old glyph kept as it was. Only with readings to move.
+        let track = !self.filled.is_empty() || !self.overrides.is_empty();
+        let mut at = if track { vec![0; glyphs.len().saturating_add(1)] } else { Vec::new() };
+        let mut kept: Vec<Option<usize>> = if track { vec![None; glyphs.len()] } else { Vec::new() };
+        // Redraw runs that took their replacement (old indices): a recovered glyph drawn inside
+        // one goes with it, or the recovered layer would read it twice.
+        let mut merged: Vec<MergedRun> = Vec::new();
         let mut redraws = redraws.into_iter().peekable();
         let mut text_left = MAX_REDRAW_TEXT;
         let mut i = 0;
         while let Some(g) = glyphs.get(i) {
             let Some((range, k)) = redraws.next_if(|(range, _)| range.start == i) else {
+                if let Some(a) = at.get_mut(i) {
+                    *a = self.glyphs.len();
+                }
+                if let Some(k) = kept.get_mut(i) {
+                    *k = Some(self.glyphs.len());
+                }
                 self.glyphs.push(g.clone());
                 i += 1;
                 continue;
+            };
+            let start = self.glyphs.len();
+            if let Some(a) = at.get_mut(range.clone()) {
+                a.fill(start);
+            }
+            // A run kept as it was: its glyphs, and anything recovered between them, keep their
+            // places.
+            let keep_run = |at: &mut [usize], kept: &mut [Option<usize>]| {
+                for (n, old) in range.clone().enumerate() {
+                    if let Some(a) = at.get_mut(old) {
+                        *a = start.saturating_add(n);
+                    }
+                    if let Some(k) = kept.get_mut(old) {
+                        *k = Some(start.saturating_add(n));
+                    }
+                }
             };
             let run = glyphs.get(range.clone()).unwrap_or_default();
             let replacement = self.replaced.get(k).map_or("", |r| r.text.as_str());
             // Each redraw takes its own copy of the replacement, and one long replacement can
             // have many redraws: past the budget a redraw keeps its glyphs, as past the work budget.
             let Some(left) = text_left.checked_sub(replacement.len()) else {
+                keep_run(&mut at, &mut kept);
                 self.glyphs.extend_from_slice(run);
                 i = range.end.max(i + 1);
                 continue;
@@ -390,14 +491,104 @@ impl TextDevice {
             let text = replacement.to_owned();
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
-            if !text.chars().all(char::is_control) {
+            if text.chars().all(char::is_control) {
+                merged.push(MergedRun(range.clone()));
+            } else {
                 match merge(run, text) {
-                    Some(glyph) => self.glyphs.push(glyph),
-                    None => self.glyphs.extend_from_slice(run),
+                    Some(glyph) => {
+                        merged.push(MergedRun(range.clone()));
+                        self.glyphs.push(glyph);
+                    }
+                    None => {
+                        keep_run(&mut at, &mut kept);
+                        self.glyphs.extend_from_slice(run);
+                    }
                 }
             }
             i = range.end.max(i + 1);
         }
+        if track {
+            if let Some(a) = at.last_mut() {
+                *a = self.glyphs.len();
+            }
+            // Between two glyphs of a merged run: drawn inside the redraw. (A recovered glyph
+            // before its first or after its last strict glyph can't be told from its neighbours'
+            // and stays.)
+            // Both are in content order (the runs disjoint), so one walk does it.
+            let mut runs = merged.iter().peekable();
+            self.filled.retain(|(pos, _, _)| {
+                while runs.next_if(|r| r.end() <= *pos).is_some() {}
+                !runs.peek().is_some_and(|r| r.start() < *pos && *pos < r.end())
+            });
+            for (pos, _, _) in &mut self.filled {
+                *pos = at.get(*pos).copied().unwrap_or(self.glyphs.len());
+            }
+            // An overridden glyph merged into a replacement takes the replacement's text.
+            let overrides = std::mem::take(&mut self.overrides);
+            self.overrides = overrides.into_iter().filter_map(|(i, text, r)| Some((kept.get(i).copied().flatten()?, text, r))).collect();
+        }
+    }
+}
+
+impl TextDevice {
+    /// The strict text of `glyph`, what the recovery rules read for it, and its font's style
+    /// (worked out once per font, the name shared by its glyphs) when they read something. A
+    /// panic in the rules or a page past their budgets ([`MAX_RECOVERY_FONTS`],
+    /// [`MAX_RECOVERED_GLYPHS`]) stops recovering for the page and marks it failed.
+    fn recover_glyph(
+        &mut self,
+        glyph: &Glyph<'_>,
+    ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
+        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= MAX_RECOVERED_GLYPHS
+            || matches!(glyph, Glyph::Outline(g) if self.recovery_fonts.insert(g.font_cache_key()) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS);
+        if !over_budget {
+            let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                {
+                    if PANIC_IN_RECOVERY.with(std::cell::Cell::get) {
+                        panic!("recovery panics in this test");
+                    }
+                }
+                let (strict, recovery) = glyph.unicode_and_recovery();
+                let style = recovery.as_ref().and_then(|_| glyph.recovery_style()).unwrap_or_default();
+                (strict, recovery, style)
+            }));
+            if let Ok(read) = read {
+                return read;
+            }
+        }
+        self.recover = false;
+        self.recovery_failed = true;
+        self.filled.clear();
+        self.overrides.clear();
+        (glyph.as_unicode(), None, Default::default())
+    }
+}
+
+/// A redraw run (old glyph indices) that took its replacement. Its ends are read through
+/// [`Self::start`] and [`Self::end`], which tests count, so the work spent walking the runs is
+/// measured whatever the walk.
+struct MergedRun(std::ops::Range<usize>);
+
+impl MergedRun {
+    fn start(&self) -> usize {
+        #[cfg(test)]
+        REDRAW_WALK_STEPS.with(|c| c.set(c.get() + 1));
+        self.0.start
+    }
+
+    fn end(&self) -> usize {
+        #[cfg(test)]
+        REDRAW_WALK_STEPS.with(|c| c.set(c.get() + 1));
+        self.0.end
+    }
+}
+
+/// A glyph's text as a string.
+fn bf_text(text: hayro::hayro_interpret::hayro_cmap::BfString) -> String {
+    match text {
+        hayro::hayro_interpret::hayro_cmap::BfString::Char(c) => c.to_string(),
+        hayro::hayro_interpret::hayro_cmap::BfString::String(s) => s,
     }
 }
 
@@ -458,17 +649,24 @@ impl<'a> Device<'a> for TextDevice {
         self.clips.push(visible);
     }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
-    fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
+    fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &Paint<'a>, mode: &GlyphDrawMode) {
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
             self.actual_filtered |= self.actual.is_some();
             return;
         }
-        // Inside an `/ActualText` replacement only the glyph's box matters.
+        // Inside an `/ActualText` replacement only the glyph's box matters, and the replacement
+        // is the glyph's text for every reader: nothing is recovered there.
         let replaced = self.actual.is_some();
-        let text = match glyph.as_unicode() {
-            Some(hayro::hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
-            Some(hayro::hayro_interpret::hayro_cmap::BfString::String(s)) => s,
-            None if replaced => String::new(),
+        // The strict text is `as_unicode` either way; recovering adds the rules' reading, and
+        // can't cost the strict text: a panic in the rules, or a page past their budgets, ends
+        // recovering for the page (no recovered layer) and the glyph reads strictly.
+        let (strict, recovery, font_style) = match self.recover && !replaced {
+            true => self.recover_glyph(glyph),
+            false => (glyph.as_unicode(), None, Default::default()),
+        };
+        let text = match strict {
+            Some(text) => bf_text(text),
+            None if replaced || recovery.is_some() => String::new(),
             None => {
                 if text_debug() {
                     eprintln!(
@@ -480,7 +678,7 @@ impl<'a> Device<'a> for TextDevice {
                 return;
             }
         };
-        if !replaced && text.chars().all(char::is_control) {
+        if !replaced && recovery.is_none() && text.chars().all(char::is_control) {
             return;
         }
         let text = ligature_letters(text);
@@ -544,9 +742,34 @@ impl<'a> Device<'a> for TextDevice {
             quad: corners.map(|p| [p.x as f32, p.y as f32]),
             direction: direction.map(|d| d as f32),
         };
-        match &mut self.actual {
-            Some((_, _, drawn)) => drawn.push((dir, direction, glyph)),
-            None => self.glyphs.push((dir, direction, glyph)),
+        match (&mut self.actual, recovery) {
+            (Some((_, _, drawn)), _) => drawn.push((dir, direction, glyph)),
+            (None, None) => self.glyphs.push((dir, direction, glyph)),
+            (None, Some(r)) => {
+                let recovered = bf_text(r.text.clone());
+                // The em box's height (descender to ascender, 1000 glyph units) is one em: the
+                // font size in view space, whichever way the text runs (in vertical writing the
+                // box's other side is the advance).
+                let size = (t * kurbo::Point::new(0.0, em.y1)).distance(t * kurbo::Point::new(0.0, em.y0)) as f32;
+                let color = match paint {
+                    Paint::Color(c) => {
+                        let [r, g, b, _] = c.to_rgba().to_rgba8();
+                        [r, g, b]
+                    }
+                    Paint::Pattern(_) => [0, 0, 0],
+                };
+                let size = if size.is_finite() { size } else { 0.0 };
+                let style = GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic };
+                let r = (r, style);
+                if glyph.text.chars().all(char::is_control) {
+                    // No strict text: only Copy with formatting's layer has the glyph.
+                    let glyph = TextGlyph { text: recovered, ..glyph };
+                    self.filled.push((self.glyphs.len(), (dir, direction, glyph), r));
+                } else {
+                    self.overrides.push((self.glyphs.len(), recovered, r));
+                    self.glyphs.push((dir, direction, glyph));
+                }
+            }
         }
     }
     fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
@@ -595,12 +818,31 @@ impl<'a> Device<'a> for TextDevice {
     }
 }
 
-/// Extract the text of one page. Panics inside the interpreter are the caller's to catch.
+/// Extract the strict text of one page; no recovery rule runs. Panics inside the interpreter
+/// are the caller's to catch.
 pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Option<PageText> {
     extract_page_filtered(pdf, page, settings, TextFilter::default()).ok()
 }
 
 pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &InterpreterSettings, filter: TextFilter) -> Result<PageText, String> {
+    extract_page_with(pdf, page, settings, filter, false).map(|(text, _)| text)
+}
+
+/// The text of one page in one interpretation: the strict text layer, exactly as
+/// [`extract_page`] reads it, and, when a recovery rule read any glyph, Copy with formatting's
+/// layer ([`RecoveredText`]). Panics inside the interpreter are the caller's to catch.
+pub(crate) fn extract_page_recovering(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Option<(PageText, Option<RecoveredText>)> {
+    extract_page_with(pdf, page, settings, TextFilter::default(), true).ok()
+}
+
+/// One page's text, and with `recover` the recovered layer when some glyph has a reading.
+fn extract_page_with(
+    pdf: &Pdf,
+    page: usize,
+    settings: &InterpreterSettings,
+    filter: TextFilter,
+    recover: bool,
+) -> Result<(PageText, Option<RecoveredText>), String> {
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;
     let (w, h) = p.render_dimensions();
@@ -629,13 +871,145 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let mut dev = TextDevice::new();
     dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
+    dev.recover = recover;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.
     dev.finish();
     if dev.partial_replacement {
         return Err("a replacement text span mixes included and excluded content; disable the exclusions to count this page".into());
     }
-    let glyphs = dev.glyphs;
+    let truncated = cut.load(std::sync::atomic::Ordering::Relaxed);
+    if dev.recovery_failed || (dev.filled.is_empty() && dev.overrides.is_empty()) {
+        let mut strict = lay_out(dev.glyphs, w, h, &[]).0;
+        strict.truncated = truncated;
+        return Ok((strict, None));
+    }
+    // Copy with formatting's layer: the strict glyphs (overridden ones with their recovered
+    // text) and the filled ones at their places in content order, laid out together.
+    let mut combined: Vec<Drawn> = Vec::with_capacity(dev.glyphs.len().saturating_add(dev.filled.len()));
+    // For each combined glyph: its strict glyph (index into `dev.glyphs`) and its reading.
+    let mut source: Vec<Source> = Vec::with_capacity(combined.capacity());
+    let mut overrides = dev.overrides.into_iter().peekable();
+    let mut filled = dev.filled.into_iter().peekable();
+    for (j, g) in dev.glyphs.iter().enumerate() {
+        while let Some((_, d, r)) = filled.next_if(|(pos, _, _)| *pos <= j) {
+            combined.push(d);
+            source.push((None, Some(r)));
+        }
+        let mut g = g.clone();
+        // Overrides come in glyph order; any left behind (none should be) are dropped.
+        while overrides.next_if(|(i, _, _)| *i < j).is_some() {}
+        match overrides.next_if(|(i, _, _)| *i == j) {
+            Some((_, text, r)) => {
+                g.2.text = text;
+                source.push((Some(j), Some(r)));
+            }
+            None => source.push((Some(j), None)),
+        }
+        combined.push(g);
+    }
+    for (_, d, r) in filled {
+        combined.push(d);
+        source.push((None, Some(r)));
+    }
+    let drawn_strict = dev.glyphs.len();
+    let mut work_left = dev.work_left;
+    let (mut strict, strict_order) = lay_out(dev.glyphs, w, h, &[]);
+    strict.truncated = truncated;
+    // The recovered layer's own layout can't cost the strict text: if it fails, the page just
+    // has no recovered layer.
+    let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Strict glyph (content order, every one drawn) → its index in the strict layer, or
+        // `None` for one the strict layout dropped (a double).
+        let mut strict_at = vec![None; drawn_strict];
+        for (k, &j) in strict_order.iter().enumerate() {
+            if let Some(slot) = strict_at.get_mut(j) {
+                *slot = Some(k);
+            }
+        }
+        // The strict glyphs here are exactly those the strict layout kept (its doubles are
+        // dropped as it dropped them), and none of them is dropped again: a recovered glyph that
+        // doubles one goes instead ([`drop_doubles`], and `arrange` with `protected`).
+        let (combined, source) = drop_doubles(combined, source, &strict_at, &mut work_left);
+        let protected: Vec<bool> = source.iter().map(|(j, _)| j.is_some()).collect();
+        let (mut text, order) = lay_out(combined, w, h, &protected);
+        text.truncated = truncated;
+        let mut strict_index = Vec::with_capacity(order.len());
+        let mut recovery = Vec::with_capacity(order.len());
+        let mut style = Vec::with_capacity(order.len());
+        for &c in &order {
+            let (j, read) = source.get(c).cloned().unwrap_or((None, None));
+            strict_index.push(j.and_then(|j| strict_at.get(j).copied().flatten()));
+            let (r, s) = read.map_or((None, None), |(r, s)| (Some(r), Some(s)));
+            recovery.push(r);
+            style.push(s);
+        }
+        RecoveredText::new(std::sync::Arc::new(text), recovery, strict_index, style, strict_order.len())
+    }));
+    Ok((strict, recovered.ok()))
+}
+
+/// Where a glyph of the recovered layer comes from: its strict glyph (index into the strict
+/// glyphs in content order), and how a rule read it.
+type Source = (Option<usize>, Option<Read>);
+
+/// The recovered layer's glyphs (`combined`, content order, each with its `source`) without the
+/// strict glyphs the strict layout dropped (`strict_at[j]` is `None`), and without recovered
+/// glyphs that double an earlier glyph: the same text at the same place (fake bold, a shadow, a
+/// strict text layer drawn over them), found through a grid of `CELL`-sized cells.
+fn drop_doubles(combined: Vec<Drawn>, source: Vec<Source>, strict_at: &[Option<usize>], budget: &mut usize) -> (Vec<Drawn>, Vec<Source>) {
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut out: Vec<Drawn> = Vec::with_capacity(combined.len());
+    let mut kept_source = Vec::with_capacity(source.len());
+    // `budget`: what the redraw dedupe left of the page's work; past it, recovered glyphs are
+    // kept as they are (the text may read twice, as without the dedupe).
+    for (g, src) in combined.into_iter().zip(source) {
+        let keep = match src.0 {
+            Some(j) => strict_at.get(j).copied().flatten().is_some(),
+            None => {
+                let r = g.2.rect;
+                let h = (r[3] - r[1]).max(0.1);
+                let w = r[2] - r[0];
+                let (tx, ty) = (if w > 0.0 { (h * 0.2).min(w * 0.5) } else { h * 0.2 }, h * 0.2);
+                // Every cell a double within the tolerance can sit in, as many as the tolerance
+                // spans; a glyph so big its tolerance spans more than `MAX_CELLS` is kept.
+                let ((x0, x1), (y0, y1)) = (cell_span(r[0], tx), cell_span(r[1], ty));
+                let cells = x1.saturating_sub(x0).saturating_add(1).saturating_mul(y1.saturating_sub(y0).saturating_add(1));
+                let mut double = false;
+                if cells <= MAX_CELLS {
+                    'cells: for key in (x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))) {
+                        let Some(rest) = budget.checked_sub(1) else { break };
+                        *budget = rest;
+                        #[cfg(test)]
+                        DOUBLES_WORK.with(|c| c.set(c.get() + 1));
+                        for p in grid.get(&key).map_or(&[][..], Vec::as_slice).iter().filter_map(|&k| out.get(k)) {
+                            let Some(rest) = budget.checked_sub(1) else { break 'cells };
+                            *budget = rest;
+                            #[cfg(test)]
+                            DOUBLES_WORK.with(|c| c.set(c.get() + 1));
+                            if p.2.text == g.2.text && (p.2.rect[0] - r[0]).abs() < tx && (p.2.rect[1] - r[1]).abs() < ty {
+                                double = true;
+                                break 'cells;
+                            }
+                        }
+                    }
+                }
+                !double
+            }
+        };
+        if keep {
+            grid.entry((cell(g.2.rect[0]), cell(g.2.rect[1]))).or_default().push(out.len());
+            out.push(g);
+            kept_source.push(src);
+        }
+    }
+    (out, kept_source)
+}
+
+/// Lay out glyphs (content order) into lines and reading order: the page's text, and for each
+/// of its glyphs the index in `glyphs` it came from.
+/// `protected[i]` marks a glyph no unprotected glyph may displace as its double (empty: none).
+fn lay_out(glyphs: Vec<Drawn>, w: f32, h: f32, protected: &[bool]) -> (PageText, Vec<usize>) {
     // Text on a curved path: glyphs that each continue the previous one's line while the
     // direction turns. Each such run is one line.
     let turned = |u: [f64; 2]| u[0].abs().min(u[1].abs()) > DIRECTION_TOLERANCE;
@@ -681,14 +1055,14 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             .filter(|(_, ids)| !ids.is_empty())
             .map(|(quarter, ids)| {
                 let rects = ids.iter().map(|&i| to_upright(glyphs[i].2.rect, quarter as u8, w, h)).collect();
-                arrange_flow(&glyphs, ids, rects, Some(quarter as u8))
+                arrange_flow(&glyphs, ids, rects, Some(quarter as u8), protected)
             })
             .collect();
         flows.sort_by(|a, b| a.top.total_cmp(&b.top));
         flows
     };
     let mut flows = upright(quarters);
-    let (main, mut inline, place) = turned_lines_in_place(&glyphs, &mut flows);
+    let (main, mut inline, place) = turned_lines_in_place(&glyphs, &mut flows, protected);
     let mut extra: Vec<Flow> = curves
         .into_iter()
         .map(|ids| (None, ids))
@@ -699,7 +1073,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
                 Some(u) => ids.iter().map(|&i| along_baseline(&glyphs[i].2.quad, u).map(|c| c as f32)).collect(),
                 None => unrolled(ids.iter().map(|&i| &glyphs[i])),
             };
-            arrange_flow(&glyphs, ids, rects, None)
+            arrange_flow(&glyphs, ids, rects, None, protected)
         })
         .collect();
     // Turned text takes the place in the reading order where laying it out among the nearest
@@ -722,6 +1096,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let mut extra = extra.into_iter().peekable();
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(|g| Some(g.2)).collect();
     let mut text = PageText::default();
+    let mut order = Vec::with_capacity(slots.len());
     let mut emit = |text: &mut PageText, ids: &[usize], line_of: &[u32], space_before: &[bool], quarter: Option<u8>| {
         let offset = text.line_of.last().map_or(0, |line| line.saturating_add(1));
         for ((&i, &line), &space) in ids.iter().zip(line_of).zip(space_before) {
@@ -729,6 +1104,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             if let Some(quarter) = quarter {
                 g.rect = from_upright(to_upright(g.rect, quarter, w, h), quarter, w, h);
             }
+            order.push(i);
             text.glyphs.push(g);
             text.line_of.push(line.saturating_add(offset));
             text.space_before.push(space);
@@ -762,8 +1138,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     for f in extra {
         emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
     }
-    text.truncated = cut.load(std::sync::atomic::Ordering::Relaxed);
-    Ok(text)
+    (text, order)
 }
 
 /// A line turned a quarter from the page's main text, read in place among it.
@@ -782,8 +1157,15 @@ struct InPlace {
 /// glyph, rather than after all the main text. Lines outside the area (a stamp in the margin) and every other flow
 /// keep their place, as does a page whose main text is vertical.
 ///
+/// `protected` is [`arrange_flow`]'s: the recovered layer's strict glyphs, none of which the
+/// placing layout may drop as a double.
+///
 /// Returns the main flow's index, the lines in place order, and each glyph's place in that layout.
-fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>, std::iter::Peekable<std::vec::IntoIter<InPlace>>, Vec<usize>) {
+fn turned_lines_in_place(
+    glyphs: &[Drawn],
+    flows: &mut [Flow],
+    protected: &[bool],
+) -> (Option<usize>, std::iter::Peekable<std::vec::IntoIter<InPlace>>, Vec<usize>) {
     let nothing = || (None, Vec::new().into_iter().peekable(), Vec::new());
     let Some((main, size)) = flows.iter().enumerate().find(|(_, f)| f.quarter == Some(0)).map(|(i, f)| (i, f.ids.len())) else { return nothing() };
     if flows.iter().enumerate().any(|(i, f)| i != main && f.ids.len() >= size) {
@@ -829,7 +1211,7 @@ fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>
         flows.get(main).map_or(&[][..], |f| &f.ids[..]).iter().copied().chain(lines.iter().flat_map(|l| l.ids.iter().copied())).collect();
     let rects = ids.iter().map(|&i| rect(i)).collect();
     let mut place = vec![usize::MAX; glyphs.len()];
-    for (r, i) in arrange_flow(glyphs, ids, rects, Some(0)).ids.into_iter().enumerate() {
+    for (r, i) in arrange_flow(glyphs, ids, rects, Some(0), protected).ids.into_iter().enumerate() {
         if let Some(p) = place.get_mut(i) {
             *p = r;
         }

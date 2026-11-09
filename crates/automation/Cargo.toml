@@ -29,6 +29,8 @@ mcp = ["dep:base64"]
 
 [dev-dependencies]
 pdfcraft-fonts = { workspace = true }
+# Synthetic TrueType programs for the Copy with formatting recovery tests.
+pdfcraft-testkit = { workspace = true }
 png = "0.18"
 flate2.workspace = true
 pdfcraft-model = { workspace = true }

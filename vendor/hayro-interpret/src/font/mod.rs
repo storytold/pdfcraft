@@ -33,6 +33,7 @@ mod cid;
 mod generated;
 mod glyph_simulator;
 pub(crate) mod outline;
+mod recovery;
 mod standard_font;
 mod true_type;
 mod type1;
@@ -67,6 +68,9 @@ pub(crate) fn strip_subset_prefix(name: &str) -> &str {
 use crate::util::hash128;
 use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
+#[cfg(feature = "test-counters")]
+pub use recovery::recovery_rule_calls;
+pub use recovery::{RecoveredFontStyle, Recovery, RecoveryMode, RecoveryRule, recovery_policy};
 pub use standard_font::StandardFont;
 
 /// A glyph that can be drawn.
@@ -111,6 +115,38 @@ impl Glyph<'_> {
         match self {
             Glyph::Outline(g) => g.as_unicode(),
             Glyph::Type3(g) => g.as_unicode(),
+        }
+    }
+
+    /// PdfCraft patch (104): the strict text ([`Self::as_unicode`], unchanged) and, in the same
+    /// call, the text the recovery rules read for the glyph, if any (see `font::recovery`): a
+    /// reading of a glyph without strict text ([`RecoveryMode::Fill`]), or one that replaces
+    /// strict text a rule judges untrustworthy ([`RecoveryMode::Override`]). Search, plain copy
+    /// and text extraction use the strict text only; the recovery is for copies that recover
+    /// what they can, such as Copy with formatting. Type 3 glyphs have no rule yet.
+    pub fn unicode_and_recovery(&self) -> (Option<BfString>, Option<Recovery>) {
+        let strict = self.as_unicode();
+        let recovery = match self {
+            Glyph::Outline(g) => {
+                let shown = strict.as_ref().filter(|s| !recovery::is_control_only(s));
+                g.font.recovery(g.char_code, g.id, shown)
+            }
+            Glyph::Type3(_) => None,
+        };
+        (strict, recovery)
+    }
+
+    /// PdfCraft patch (104): the font's style, for styling text read by the recovery rules
+    /// (whose fonts often give no other way to know their family): `/BaseFont` as written,
+    /// subset tag included, and bold and italic from the font descriptor (`/Flags` ForceBold
+    /// and Italic, `/FontWeight` of 600 or more, a slanted `/ItalicAngle`) or an embedded
+    /// program's own weight (600 and above), italic style and `head.macStyle` bits. Worked out
+    /// once per font and shared (the name is one `Arc` for all its glyphs). `None` for Type 3
+    /// glyphs.
+    pub fn recovery_style(&self) -> Option<RecoveredFontStyle> {
+        match self {
+            Glyph::Outline(g) => Some(g.font.recovery_style()),
+            Glyph::Type3(_) => None,
         }
     }
 }
@@ -759,7 +795,7 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
 /// every split into letters and digits, read in decimal and in hexadecimal (`GA9` is `G` with
 /// hex `A9`); nothing for any other name. Everything from the first `.` is dropped first, as
 /// `glyph_name_to_text` drops it.
-fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
+pub(crate) fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
     let base = name.split('.').next().unwrap_or_default();
     (1..=3).flat_map(move |prefix| {
         // `from_str_radix` would also take a leading `+`: the number is digits only, and at
@@ -781,6 +817,18 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
     })
 }
 
+/// PdfCraft patch: whether a glyph name only numbers its glyph (see `glyph_name_numbers`): no
+/// reading through the glyph list or its `uni`/`u` forms, and one to three letters followed by
+/// one to six digits. Shared by `numbered_names_name_their_codes` and the recovery rules
+/// (patch 104).
+pub(crate) fn is_numbered_glyph_name(name: &str) -> bool {
+    // The shape test first: it allocates nothing, and most names fail it.
+    glyph_name_numbers(name).next().is_some()
+        && glyph_names::get(name).is_none()
+        && unicode_from_name(name).is_none()
+        && glyph_name_to_text(name).is_none()
+}
+
 /// PdfCraft patch: whether every glyph name in a simple font's encoding that only numbers its
 /// glyph (see `glyph_name_numbers`) names the very code it sits at, in decimal or hexadecimal.
 /// Names the glyph list or its `uni`/`u` forms read are not numbered names. A font whose names
@@ -790,20 +838,16 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
 /// coincidence, not evidence. A subset that counts its glyphs in order of first use from code 1
 /// (`/Differences [1 /C1 /C2 … /C80]`) names its own codes too, but the counter says nothing
 /// about the characters (`/C65` is the 65th glyph used, not `A`): a numbered name at a C0
-/// control code (below 32), which no text shows, gives such a counter away and fails the font.
+/// control code (below 32), which no text shows, gives such a counter away and fails the font,
+/// as it does for the recovery rules (patch 104).
 pub(crate) fn numbered_names_name_their_codes<'a>(
     names: impl IntoIterator<Item = (u8, &'a str)>,
 ) -> bool {
     names
         .into_iter()
-        .filter(|(_, name)| {
-            glyph_names::get(name).is_none()
-                && unicode_from_name(name).is_none()
-                && glyph_name_to_text(name).is_none()
-        })
+        .filter(|(_, name)| is_numbered_glyph_name(name))
         .all(|(code, name)| {
-            let mut numbers = glyph_name_numbers(name).peekable();
-            numbers.peek().is_none() || (code >= 0x20 && numbers.any(|n| n == u32::from(code)))
+            code >= 0x20 && glyph_name_numbers(name).any(|n| n == u32::from(code))
         })
 }
 
