@@ -26,6 +26,7 @@ mod header;
 pub mod icc;
 mod limits;
 mod spot;
+mod trailer;
 mod xmp;
 mod xmp_extension;
 mod xmp_types;
@@ -169,6 +170,8 @@ pub const WORDINGS: &[&str] = &[
     // The document as a whole.
     "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line",
     "The file header isn't followed by a comment of four bytes above 127",
+    "The trailer has no file identifier (ID)",
+    "The file identifier (ID) in the trailer isn't two non-empty strings",
     "The document is encrypted",
     "An integer is outside the 32-bit range",
     "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
@@ -575,7 +578,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     if header.comment {
         issue("6.1.2", "The file header isn't followed by a comment of four bytes above 127", None, None, true);
     }
-    // 6.1.3: encryption.
+    // 6.1.3: the file identifier and encryption.
+    match trailer::check(doc) {
+        Some(trailer::IdProblem::Missing) => issue("6.1.3", "The trailer has no file identifier (ID)", None, None, true),
+        Some(trailer::IdProblem::Malformed) => {
+            issue("6.1.3", "The file identifier (ID) in the trailer isn't two non-empty strings", None, None, true)
+        }
+        None => {}
+    }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
     }
@@ -1096,6 +1106,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     }
     // A full save writes the header afresh, with the version it keeps and a binary comment.
     fixed.extend(header::rewrite(doc));
+    fixed.extend(trailer::fix(doc));
     let root = doc.root().ok_or(pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
     // Catalog: actions, JavaScript, NeedAppearances, output intent, metadata.
     let mut cat = catalog(doc);
