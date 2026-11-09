@@ -13,6 +13,7 @@ mod search;
 mod separation_all;
 mod stray_q_in_a_form;
 mod stroke_degenerate_cubic;
+mod stroke_zero_end_tangent;
 mod substitute_widths;
 mod tiling_cell_backdrop;
 mod tiling_cell_placement;

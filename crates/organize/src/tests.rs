@@ -2628,6 +2628,262 @@ fn extract_keeps_images_an_undecodable_page_might_draw() {
     assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "an image the unreadable page may draw must stay");
 }
 
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A page or form damaged partway may draw images past the damage, which other readers may still
+/// read: pruning keeps them, as it does for content that doesn't decode.
+#[test]
+fn extract_keeps_images_content_damaged_partway_might_draw() {
+    use pdfcraft_cos::ObjRef;
+    let mut page = doc_images_with(&raw("/ImA Do"), "");
+    page.set(ObjRef::new(6, 0), damaged_flate(b"/ImA Do\n", b"/ImB Do"));
+
+    let mut form = doc_images_with(&raw("/Fm Do"), "");
+    let mut fm = damaged_flate(b"/ImA Do\n", b"/ImB Do");
+    fm.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    fm.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+    let fm = form.add(fm);
+    let xobjects: Dict =
+        [(b"ImA".to_vec(), Object::Ref(ObjRef::new(8, 0))), (b"ImB".to_vec(), Object::Ref(ObjRef::new(9, 0))), (b"Fm".to_vec(), Object::Ref(fm))]
+            .into_iter()
+            .collect();
+    form.update_dict(ObjRef::new(7, 0), |d| d.set(b"XObject".to_vec(), Object::Dict(xobjects))).unwrap();
+
+    for (src, what) in [(page, "page"), (form, "form")] {
+        let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+        let names = xobject_names(&part, 0);
+        assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "{what}: an image drawn past the damage must stay: {names:?}");
+    }
+}
+
+/// Two pages: the first draws `/Fm` through resources of its own, `/Fm` draws `/Nested` through
+/// resources of its own too, and `/Nested` draws `/ImA` through resources it shares with the second
+/// page, which draws `/ImB` through them. The three streams are the first page's content, `/Fm`
+/// and `/Nested`.
+fn doc_shared_form_resources(page: pdfcraft_cos::Stream, fm: pdfcraft_cos::Stream, nested: pdfcraft_cos::Stream) -> Document {
+    use pdfcraft_cos::ObjRef;
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Fm 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources 8 0 R >>".into(),
+        raw(""),
+        raw("/ImB Do"),
+        raw(""),
+        "<< /XObject << /ImA 9 0 R /ImB 10 0 R >> >>".into(),
+        image(1, 1, 1),
+        image(1, 1, 2000),
+        raw(""),
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    doc.set(ObjRef::new(5, 0), page);
+    let nested_res: Dict =
+        [(b"XObject".to_vec(), Object::Dict([(b"Nested".to_vec(), Object::Ref(ObjRef::new(11, 0)))].into_iter().collect()))].into_iter().collect();
+    for (num, mut form, resources) in [(7, fm, Object::Dict(nested_res)), (11, nested, Object::Ref(ObjRef::new(8, 0)))] {
+        form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        form.dict.set(b"Resources".to_vec(), resources);
+        doc.set(ObjRef::new(num, 0), form);
+    }
+    doc
+}
+
+/// Every form the resources of a page or form damaged partway name may be drawn, before the
+/// damage or past it, so each is read: one whose resources another page shares keeps what it draws
+/// from them. So is each one content that doesn't decode may draw.
+#[test]
+fn extract_keeps_images_forms_drawn_around_damage_draw_through_shared_resources() {
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let undecodable = |content: &[u8]| {
+        let mut s = whole(content);
+        s.dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+        s
+    };
+    let cases = [
+        ("page, before the damage", damaged_flate(b"/Fm Do\n", b"0 g"), whole(b"/Nested Do")),
+        ("page, past the damage", damaged_flate(b"0 g\n", b"/Fm Do"), whole(b"/Nested Do")),
+        ("page that doesn't decode", undecodable(b"/Fm Do"), whole(b"/Nested Do")),
+        ("form, before the damage", whole(b"/Fm Do"), damaged_flate(b"/Nested Do\n", b"0 g")),
+        ("form, past the damage", whole(b"/Fm Do"), damaged_flate(b"0 g\n", b"/Nested Do")),
+        ("form that doesn't decode", whole(b"/Fm Do"), undecodable(b"/Nested Do")),
+    ];
+    for (what, page, fm) in cases {
+        let part = full_roundtrip(&extract_pages(&doc_shared_form_resources(page, fm, whole(b"/ImA Do")), &[0, 1]).unwrap());
+        let names = xobject_names(&part, 1);
+        assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{what}: {names:?}");
+        assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "{what}: {names:?}");
+    }
+    // What nothing draws still goes.
+    let src = doc_shared_form_resources(whole(b"0 g"), whole(b"/Nested Do"), whole(b"/ImA Do"));
+    let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    assert_eq!(xobject_names(&part, 1), [b"ImB".to_vec()]);
+}
+
+/// Forms are read 8 deep (`prune.rs`'s `MAX_FORM_DEPTH`). A damaged form that deep still has
+/// every form it names read as drawn: here `/Nested`, which draws through resources another page
+/// shares. Read 9 deep, it leaves the file unpruned, so what it draws from them stays.
+#[test]
+fn a_damaged_form_at_the_depth_limit_has_its_forms_read() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let mut src = doc_shared_form_resources(whole(b"/C Do"), damaged_flate(b"0 g\n", b"/Nested Do"), whole(b"/ImA Do"));
+    // Seven forms between the page and `/Fm`, each drawing the next as `/C`: `/Fm` is 8 deep.
+    let mut next = ObjRef::new(7, 0);
+    for _ in 1..8 {
+        let mut form = whole(b"/C Do");
+        form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        form.dict.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()));
+        next = src.add(Object::Stream(form));
+    }
+    let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+    src.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()))
+    })
+    .unwrap();
+    let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    let names = xobject_names(&part, 1);
+    assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{names:?}");
+}
+
+/// Past the depth limit a form isn't read, nor what the forms it draws draw: one of those may draw
+/// through resources another page shares, and keep images there that page doesn't draw, so nothing
+/// is pruned. Here `/Fm` is 9 deep, whole or damaged partway, and `/Nested`, which it draws, draws
+/// `/ImA` through the resources the second page draws `/ImB` through.
+#[test]
+fn nothing_is_pruned_past_the_depth_limit() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    for (what, fm) in [("whole", whole(b"/Nested Do")), ("damaged", damaged_flate(b"0 g\n", b"/Nested Do"))] {
+        let mut src = doc_shared_form_resources(whole(b"/C Do"), fm, whole(b"/ImA Do"));
+        // Eight forms between the page and `/Fm`, each drawing the next as `/C`: `/Fm` is 9 deep.
+        let mut next = ObjRef::new(7, 0);
+        for _ in 0..8 {
+            let mut form = whole(b"/C Do");
+            form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+            form.dict.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()));
+            next = src.add(Object::Stream(form));
+        }
+        let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        src.update_dict(ObjRef::new(3, 0), |p| {
+            p.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()))
+        })
+        .unwrap();
+        let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+        let names = xobject_names(&part, 1);
+        assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{what}: {names:?}");
+    }
+}
+
+/// Down to the depth limit pruning goes on: under a page whole or damaged partway, a form 8 deep,
+/// whole or damaged, is read, and the image nothing draws, `/ImA`, still goes from the resources
+/// the second page draws `/ImB` through.
+#[test]
+fn pruning_goes_on_down_to_the_depth_limit() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let cases = [
+        ("whole", whole(b"/C Do"), whole(b"0 g")),
+        ("damaged form", whole(b"/C Do"), damaged_flate(b"0 g\n", b"0 g")),
+        ("damaged page", damaged_flate(b"/C Do\n", b"0 g"), whole(b"0 g")),
+    ];
+    for (what, page, fm) in cases {
+        let mut src = doc_shared_form_resources(page, fm, whole(b""));
+        // `/Fm` names an image, not `/Nested`: nothing is read 9 deep.
+        let image: Dict = [(b"Img".to_vec(), Object::Ref(ObjRef::new(9, 0)))].into_iter().collect();
+        let resources = Object::Dict([(b"XObject".to_vec(), Object::Dict(image))].into_iter().collect());
+        src.update_dict(ObjRef::new(7, 0), |f| f.set(b"Resources".to_vec(), resources)).unwrap();
+        // Seven forms between the page and `/Fm`, each drawing the next as `/C`: `/Fm` is 8 deep.
+        let mut next = ObjRef::new(7, 0);
+        for _ in 1..8 {
+            let mut form = whole(b"/C Do");
+            form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+            form.dict.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()));
+            next = src.add(Object::Stream(form));
+        }
+        let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        src.update_dict(ObjRef::new(3, 0), |p| {
+            p.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()))
+        })
+        .unwrap();
+        let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+        assert_eq!(xobject_names(&part, 1), [b"ImB".to_vec()], "{what}");
+    }
+}
+
+/// A chain of forms nested far past the depth limit, whole or each damaged partway, is read only
+/// down to it: the walk's depth stays bounded however long the chain is, and the run ends without
+/// an error, having pruned nothing.
+#[test]
+fn a_long_chain_of_forms_is_read_only_to_the_depth_limit() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let xobjects = |names: Dict| Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect());
+    for damaged in [false, true] {
+        let mut doc = doc_shared_form_resources(whole(b"/C Do"), whole(b""), whole(b""));
+        let mut names = Dict::new();
+        for _ in 0..100_000 {
+            let mut form = if damaged { damaged_flate(b"", b"/C Do") } else { whole(b"/C Do") };
+            form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            form.dict.set(b"Resources".to_vec(), xobjects(names));
+            let next = doc.add(Object::Stream(form));
+            names = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        }
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Resources".to_vec(), xobjects(names))).unwrap();
+        assert!(matches!(crate::prune::prune_unused_xobjects(&mut doc), Ok(0)), "damaged: {damaged}");
+    }
+}
+
+/// A form whose `/DecodeParms` is given by reference is read through it: the image it draws is
+/// kept, not lost to content read with the predictor's tag bytes left in it.
+#[test]
+fn extract_keeps_images_a_form_with_parameters_by_reference_draws() {
+    use pdfcraft_cos::ObjRef;
+    let content = b"q 10 0 0 10 0 0 cm /ImB Do Q";
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let mut src = doc_images_with(&raw("/Fm Do"), "");
+    let parms = src.add(Object::Dict([(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect::<Dict>()));
+    let mut fm = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
+    fm.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    fm.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    fm.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+    let fm = src.add(fm);
+    let xobjects: Dict =
+        [(b"ImA".to_vec(), Object::Ref(ObjRef::new(8, 0))), (b"ImB".to_vec(), Object::Ref(ObjRef::new(9, 0))), (b"Fm".to_vec(), Object::Ref(fm))]
+            .into_iter()
+            .collect();
+    src.update_dict(ObjRef::new(7, 0), |d| d.set(b"XObject".to_vec(), Object::Dict(xobjects))).unwrap();
+    let part = full_roundtrip(&extract_pages(&src, &[1]).unwrap());
+    let names = xobject_names(&part, 0);
+    assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "{names:?}");
+    assert!(!names.iter().any(|n| n.as_slice() == b"ImA"), "what the part doesn't draw still goes: {names:?}");
+}
+
 #[test]
 fn extract_keeps_images_type3_glyphs_may_draw() {
     // A Type 3 font without its own /Resources draws through the page's: its glyphs could `Do`.
@@ -3984,4 +4240,75 @@ fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
     let mut target = doc_a();
     crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
     assert_eq!(crate::bookmarks(&target).len(), 33);
+}
+
+/// Does any object in `doc` hold the string value `/V (value)`?
+fn holds_value(doc: &Document, value: &str) -> bool {
+    doc.scan_objects()
+        .into_iter()
+        .any(|(_, o)| o.as_dict().and_then(|d| d.get(b"V")).and_then(|v| v.as_string()).is_some_and(|v| v.to_text() == value))
+}
+
+/// A field with a widget on each of two pages: extracting one page brings that widget and the field
+/// above it, not the other kid with its value.
+#[test]
+fn extracting_a_page_leaves_the_rest_of_its_form_behind() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [8 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [9 0 R] >>".into(),   // 4
+        raw("0 0 m"),                                                               // 5
+        raw("0 0 m"),                                                               // 6
+        "<< /T (applicant) /Kids [8 0 R 9 0 R] >>".into(),                          // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /Parent 7 0 R /P 3 0 R /Rect [0 0 50 20] >>".into(), // 8
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (90000) /Parent 7 0 R /P 4 0 R /Rect [0 0 50 20] >>".into(), // 9
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let part = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert!(holds_value(&part, "Ada"));
+    assert!(!holds_value(&part, "90000"), "the widget on the page left behind came along with its value");
+    let form = part.resolve(catalog(&part).get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let fields = part.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let applicant = part.resolve(&fields[0]).as_dict().cloned().unwrap();
+    assert_eq!(part.resolve(applicant.get(b"Kids").unwrap()).as_array().map(Vec::len), Some(1));
+    // With every page, the whole form comes along, as before.
+    let both = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    assert!(holds_value(&both, "Ada") && holds_value(&both, "90000"));
+}
+
+/// A form action lists fields by reference: extracting the page with the button doesn't bring
+/// the fields it submits, resets or hides from a page left behind, with their values. A reset of
+/// only those would list none, which reads as every field: it goes.
+#[test]
+fn a_form_action_brings_no_field_from_a_page_left_behind() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R 8 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [7 0 R 9 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [8 0 R] >>".into(),         // 4
+        raw("0 0 m"),                                                                     // 5
+        raw("0 0 m"),                                                                     // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (send) /P 3 0 R /Rect [0 0 50 20] \
+         /A << /S /SubmitForm /F (https://example.invalid/) /Fields [8 0 R (other)] \
+         /Next << /S /ResetForm /Fields [8 0 R] /Next << /S /Hide /T 8 0 R >> >> >> >>"
+            .into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (90000) /P 4 0 R /Rect [0 0 50 20] >>".into(), // 8
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (clear) /P 3 0 R /Rect [0 30 50 50] \
+         /A << /S /ResetForm /Fields [8 0 R] >> /AA << /U << /S /ResetForm /Flags 1 /Fields [8 0 R] >> >> >>"
+            .into(), // 9
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let part = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert!(!holds_value(&part, "90000"), "a field the action lists came along from the page left behind");
+    let submit = part.resolve(annots(&part, 0)[0].get(b"A").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(part.resolve(submit.get(b"Fields").unwrap()).as_array().map(Vec::len), Some(1), "the field named by text stays");
+    assert!(submit.get(b"Next").is_none_or(|n| part.resolve(n).as_dict().is_none()), "the reset after the submit would clear every field");
+    let clear = annots(&part, 0).remove(1);
+    assert!(clear.get(b"A").is_none(), "the clear button would clear every field");
+    // A reset of every field but the one left behind still resets them all.
+    let aa = part.resolve(clear.get(b"AA").unwrap()).as_dict().cloned().unwrap();
+    assert!(aa.get(b"U").is_some_and(|u| part.resolve(u).as_dict().is_some()));
+    // With every page, the actions still list it.
+    assert!(holds_value(&full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap()), "90000"));
 }
