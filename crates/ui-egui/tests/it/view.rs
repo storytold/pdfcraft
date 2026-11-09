@@ -2805,6 +2805,15 @@ trailer << /Root 1 0 R >>
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
     let n = h.state().views.len() - 1;
+    // Until page 1's raster is in, full screen veils it and the click reaches no field; on a slow
+    // machine that takes more frames than the six above.
+    for _ in 0..600 {
+        if h.state().views[n].presentation_settled() {
+            break;
+        }
+        h.run_steps(1);
+    }
+    assert!(h.state().views[n].presentation_settled(), "page 1 is shown");
     let r = h.state().views[n].page_screen_rect(0).expect("page 1 on screen");
     // One page only: the click can't turn away from the field.
     click_with(&mut h, egui::pos2(r.left() + r.width() * 0.5, r.top() + r.height() * (400.0 - 120.0) / 400.0), Modifiers::NONE);
