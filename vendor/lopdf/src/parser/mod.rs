@@ -103,9 +103,9 @@ fn integer_or_overflow_real(input: ParserInput) -> NomResult<Object> {
     match i64::from_str(int_input) {
         Ok(value) => Ok((i, Object::Integer(value))),
         // PdfCraft patch: integers past i64::MAX/MIN (such as 31-digit MediaBox coordinates)
-        // fall back to a clamped real, matching hayro-syntax and pdfcraft-cos.
+        // fall back to a real, matching hayro-syntax and pdfcraft-cos.
         Err(_) => convert_result(
-            f32::from_str(int_input).map(|v| Object::Real(v.clamp(f32::MIN, f32::MAX))),
+            f32::from_str(int_input).map(Object::Real),
             i,
             ErrorKind::Digit,
         ),
@@ -113,8 +113,7 @@ fn integer_or_overflow_real(input: ParserInput) -> NomResult<Object> {
 }
 
 fn real(input: ParserInput) -> NomResult<f32> {
-    // PdfCraft patch: accept scientific-notation exponents (`1e30`, `1E-5`) and clamp
-    // overflowed reals to finite f32 bounds.
+    // PdfCraft patch: accept scientific-notation exponents (`1e30`, `1E-5`).
     let exponent = || (one_of("eE"), opt(one_of("+-")), digit1);
     let (i, _) = pair(
         opt(one_of("+-")),
@@ -127,11 +126,7 @@ fn real(input: ParserInput) -> NomResult<f32> {
     .parse(input)?;
 
     let float_input = &input[..input.len() - i.len()];
-    convert_result(
-        f32::from_str(str::from_utf8(float_input).unwrap()).map(|v| v.clamp(f32::MIN, f32::MAX)),
-        i,
-        ErrorKind::Digit,
-    )
+    convert_result(f32::from_str(str::from_utf8(float_input).unwrap()), i, ErrorKind::Digit)
 }
 
 pub(crate) fn hex_char(input: ParserInput) -> NomResult<u8> {

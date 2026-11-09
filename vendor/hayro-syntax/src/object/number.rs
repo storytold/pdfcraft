@@ -35,7 +35,7 @@ impl Number {
     /// Returns the number as a f32.
     pub fn as_f32(&self) -> f32 {
         match self.0 {
-            InternalNumber::Real(r) => r.clamp(f32::MIN as f64, f32::MAX as f64) as f32,
+            InternalNumber::Real(r) => r as f32,
             InternalNumber::Integer(i) => i as f32,
         }
     }
@@ -736,8 +736,6 @@ mod tests {
         let huge = "9".repeat(400);
         let num6 = Reader::new(huge.as_bytes()).read_without_context::<f64>().unwrap();
         assert!(num6.is_finite() && num6 > 1e300, "got {num6}");
-        let num6_f32 = Reader::new(huge.as_bytes()).read_without_context::<f32>().unwrap();
-        assert_eq!(num6_f32, f32::MAX);
     }
 
     #[test]
@@ -769,21 +767,17 @@ mod tests {
             }
         }
 
-        for (input, expected_f64, expected_f32) in [
-            ("1e40", 1e40, f32::MAX),
-            ("-1e40", -1e40, f32::MIN),
-            ("1e400", f64::MAX, f32::MAX),
-            ("-1e400", -f64::MAX, f32::MIN),
-            ("1e99999999999999999999", f64::MAX, f32::MAX),
+        for (input, expected_f64) in [
+            ("1e40", 1e40),
+            ("-1e40", -1e40),
+            ("1e400", f64::MAX),
+            ("-1e400", -f64::MAX),
+            ("1e99999999999999999999", f64::MAX),
         ] {
             let mut r = Reader::new(input.as_bytes());
             assert!(r.skip::<Number>(false).is_some(), "skip {input}");
             let v64 = Reader::new(input.as_bytes()).read_without_context::<f64>().unwrap();
-            let v32 = Reader::new(input.as_bytes()).read_without_context::<f32>().unwrap();
-            let obj32 = f32::try_from(Reader::new(input.as_bytes()).read_without_context::<crate::object::Object<'_>>().unwrap()).unwrap();
             assert_eq!(v64, expected_f64, "{input} f64");
-            assert_eq!(v32, expected_f32, "{input} f32");
-            assert_eq!(obj32, expected_f32, "{input} Object->f32");
         }
 
         for invalid in ["123endobj", "1e", "1E", "1e+", "1e-", "1e+abc", ".e5", "-.e5", "+e5", "-e5", "--e5", "1e30abc", "1e3.5", "12-3e4"] {

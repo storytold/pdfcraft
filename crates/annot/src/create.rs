@@ -204,14 +204,110 @@ fn subject(shape: &Shape) -> &'static str {
 pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
     let [x0, y0, x1, y1] = normalize(rect);
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    if knee[0] < x0 {
-        [x0, cy]
-    } else if knee[0] > x1 {
-        [x1, cy]
-    } else if knee[1] > y1 {
-        [cx, y1]
+    match callout_side(rect, knee) {
+        Side::Left => [x0, cy],
+        Side::Right => [x1, cy],
+        Side::Top => [cx, y1],
+        Side::Bottom => [cx, y0],
+    }
+}
+
+/// A side of a callout's text box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Side {
+    /// Whether a knee line on this side is horizontal (it meets the left or right side). Acrobat
+    /// lets a knee line be resized along its own direction only (Acrobat DC Help, 11/28/2019,
+    /// p. 357).
+    pub fn horizontal(self) -> bool {
+        matches!(self, Side::Left | Side::Right)
+    }
+}
+
+/// The side of the text box `rect` that faces `knee`: the one [`callout_attach`] attaches to.
+///
+/// Every position has one side (review on #4094):
+/// - left or right of the box (`x < x0`, `x > x1`): that side, whatever `y` is, so a knee off a
+///   corner diagonally, or on the line of the top or bottom edge past the box, is beside it;
+/// - otherwise above or below it (`y > y1`, `y < y0`): that side, so a knee on the line of the
+///   left or right edge past the box is above or below it;
+/// - on the box's outline, or within `CALLOUT_SLACK` (0.01 pt) inside it, since the page hands
+///   positions back as `f32` values: the side whose edge it lies on, the left or right edge
+///   first, so a corner takes the left or right side as a knee beside the box does. The line
+///   stays out of the box (it was sent across the box to the bottom side);
+/// - inside the box, or with a coordinate that isn't a number: the bottom side.
+pub fn callout_side(rect: [f64; 4], knee: [f64; 2]) -> Side {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let [x, y] = knee;
+    // Before any comparison: one with NaN is false, so the other coordinate alone would decide.
+    if x.is_nan() || y.is_nan() {
+        return Side::Bottom;
+    }
+    if x < x0 {
+        Side::Left
+    } else if x > x1 {
+        Side::Right
+    } else if y > y1 {
+        Side::Top
+    } else if y < y0 {
+        Side::Bottom
+    } else if x - x0 < CALLOUT_SLACK {
+        Side::Left
+    } else if x1 - x < CALLOUT_SLACK {
+        Side::Right
+    } else if y1 - y < CALLOUT_SLACK {
+        Side::Top
     } else {
-        [cx, y0]
+        Side::Bottom
+    }
+}
+
+/// A callout's knee line when Acrobat lays it out: 12 pt, out from the middle of the side. Seen in
+/// Acrobat Pro DC, a 2021 Continuous release: a new callout's knee line, and one laid out again
+/// after its knee was dragged into the box or the side it meets was moved, are all 12 pt, and the
+/// knee can't come nearer the box than that.
+pub const CALLOUT_KNEE_LINE: f64 = 12.0;
+
+/// Where a knee goes on `side` of the text box `rect`: [`CALLOUT_KNEE_LINE`] out from the middle
+/// of that side, so the knee line is level (left, right) or upright (top, bottom).
+pub fn callout_knee_on(rect: [f64; 4], side: Side) -> [f64; 2] {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    match side {
+        Side::Left => [x0 - CALLOUT_KNEE_LINE, cy],
+        Side::Right => [x1 + CALLOUT_KNEE_LINE, cy],
+        Side::Top => [cx, y1 + CALLOUT_KNEE_LINE],
+        Side::Bottom => [cx, y0 - CALLOUT_KNEE_LINE],
+    }
+}
+
+/// A new callout's knee: on the side of its text box `rect` that faces the arrow `point`
+/// ([`callout_knee_on`]).
+pub fn callout_knee(rect: [f64; 4], point: [f64; 2]) -> [f64; 2] {
+    callout_knee_on(rect, callout_side(rect, point))
+}
+
+/// How far apart, in points, two positions of a callout's box or line may be and still count as the
+/// same. The page hands a box back as `f32` values, which moves a coordinate such as 323.05 by a few
+/// hundred-thousandths of a point (review on #4094).
+pub(crate) const CALLOUT_SLACK: f64 = 0.01;
+
+/// Whether `end` lies on `side` of the text box `rect`: the leader line can stay where it meets it.
+pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let near = |a: f64, b: f64| (a - b).abs() < CALLOUT_SLACK;
+    let within = |v: f64, lo: f64, hi: f64| v > lo - CALLOUT_SLACK && v < hi + CALLOUT_SLACK;
+    match side {
+        Side::Left => near(end[0], x0) && within(end[1], y0, y1),
+        Side::Right => near(end[0], x1) && within(end[1], y0, y1),
+        Side::Top => near(end[1], y1) && within(end[0], x0, x1),
+        Side::Bottom => near(end[1], y0) && within(end[0], x0, x1),
     }
 }
 
@@ -296,15 +392,20 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let list = contours.iter().filter(|c| c.len() > 2).map(|c| num_array(&c.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<_>>())).collect();
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
-        Shape::CustomStamp { name, picture, image, size, .. } => {
+        Shape::CustomStamp { name, picture, image, size, line, .. } => {
             let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
             d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
             d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
+            let lined = line.as_deref().map(str::trim).filter(|l| !l.is_empty());
+            if let Some(l) = lined {
+                d.set(b"PCByLine".to_vec(), PdfString::text(l));
+            }
             // An image signature's rectangle is in user space; on a turned page its appearance is
-            // turned back (see `appearance::build`), so it reads upright as displayed.
-            if *image && matches!(clean.as_str(), "Signature" | "Initials") {
+            // turned back (see `appearance::build`), so it reads upright as displayed. A stamp
+            // with a line is laid out in the displayed box, so it needs the turn too.
+            if lined.is_some() || (*image && matches!(clean.as_str(), "Signature" | "Initials")) {
                 let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
                 if turn != 0 {
                     d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
@@ -498,6 +599,22 @@ fn add_popup(doc: &mut Document, parent: ObjRef, rect: Option<[f64; 4]>, annots:
     doc.update_dict(parent, |dict| dict.set(b"Popup".to_vec(), Object::Ref(popup_ref)))?;
     annots.push(Object::Ref(popup_ref));
     Ok(())
+}
+
+/// The share of a custom stamp's height its text line takes (the rest is the picture).
+pub const CUSTOM_LINE_BAND: f64 = 0.22;
+
+/// A custom stamp line's text height as a share of its band.
+pub const CUSTOM_LINE_TEXT: f64 = 0.62;
+
+/// The natural size of a custom stamp whose picture is `picture` points (#1741): with `line`,
+/// the band under the picture is added, and the stamp is as wide as the line at its usual size
+/// when that is wider than the picture.
+pub fn custom_stamp_size(picture: (f64, f64), line: Option<&str>) -> (f64, f64) {
+    let Some(line) = line else { return picture };
+    let h = picture.1 / (1.0 - CUSTOM_LINE_BAND);
+    let text = appearance::text_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
+    (picture.0.max(text), h)
 }
 
 /// Counterrotate a newly placed picture stamp's appearance into displayed-page axes.
