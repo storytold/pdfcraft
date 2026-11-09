@@ -55,7 +55,8 @@ impl Layouter<'_> {
         let som = ctx.som.clone();
         // A container without a width is as wide as its content (a radio group beside its
         // question, say), and so is a text label or a button (as wide as its caption), within
-        // what is available; any other field without one takes what is available.
+        // what is available, and so is a check box (its box and caption); any other field without
+        // one takes what is available.
         let w = match c.w {
             Some(w) => w,
             None => match node {
@@ -69,6 +70,7 @@ impl Layouter<'_> {
                     .as_ref()
                     .and_then(|cap| self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para)))
                     .map_or(avail_w, |t| (t + c.margin.horizontal() + f.ui_margin.horizontal()).min(avail_w)),
+                Node::Field(f) if f.ui == Ui::CheckButton => (self.check_width(f, &ctx) + c.margin.horizontal()).min(avail_w),
                 Node::Field(_) => avail_w,
             },
         };
@@ -153,6 +155,22 @@ impl Layouter<'_> {
         }
     }
 
+    /// How wide check box `f` is without a width of its own (XFA 3.3 Ch.8, growable fields): its
+    /// box and widget margins, plus its caption beside it (its reserve, else its text), or the
+    /// wider of the two when the caption is above or below.
+    fn check_width(&self, f: &Field, ctx: &Ctx) -> f64 {
+        let check = f.check_size.unwrap_or(10.0) + f.ui_margin.horizontal();
+        let Some(cap) = f.caption.as_ref().filter(|c| c.presence.occupies() && c.placement != Placement::Inline) else {
+            return check;
+        };
+        // The 2pt matches `caption_reserve`'s room for a caption without a reserve.
+        let text = || self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para)).map_or(0.0, |t| t + 2.0);
+        match cap.placement {
+            Placement::Top | Placement::Bottom => check.max(text()),
+            _ => check + cap.reserve.unwrap_or_else(text),
+        }
+    }
+
     /// How wide text `v` is unwrapped, in `font` and `para`, with a hair to spare so that laying
     /// it out at that width keeps it on its lines; `None` for what isn't text, or text that draws
     /// nothing.
@@ -233,10 +251,12 @@ impl Layouter<'_> {
         match self.caption_reserve(f, inner_w, ctx) {
             Some((Placement::Top | Placement::Bottom, r)) => ui + r,
             Some((placement, r)) => {
-                // A check box's caption without a reserve is drawn in all the box leaves.
+                // A check box's caption without a reserve is drawn in all the box leaves; any
+                // other caption beside the widget is as wide as its reserve (XFA 3.3 p. 645), the
+                // width `draw_field` gives it.
                 let w = match auto_check_reserve(f, placement, inner_w, None) {
                     Some(auto) => auto,
-                    None => inner_w - r,
+                    None => r.min(inner_w),
                 };
                 let cap = f.caption.as_ref().map(|c| {
                     let rich = match &c.value {
