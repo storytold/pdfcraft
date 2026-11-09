@@ -408,6 +408,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+        view.dynamic_zoom = None;
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() || view.all_text {
