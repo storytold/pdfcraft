@@ -920,7 +920,7 @@ mod tests {
         let widget = Rect::from_min_size(pos2(30.0, 40.0), vec2(20.0, 15.0));
         let size = vec2(24.0, 14.0);
         let original = tab_badge_rect(widget, page, size).unwrap();
-        let moved = dragged(widget, Grab::Move, vec2(12.0, 8.0), false);
+        let moved = dragged(widget, Grab::Move(None), vec2(12.0, 8.0), false);
         assert_eq!(tab_badge_rect(moved, page, size).unwrap().min, original.min + vec2(12.0, 8.0));
 
         let near_edge = Rect::from_min_size(pos2(100.0, 95.0), vec2(8.0, 8.0));
