@@ -1,8 +1,8 @@
 use super::{
-    AnnotationInput, BorderShapeWire, EndingWire, IconWire, MAX_STROKE_POINTS, MAX_STROKES, MarkWire, MarkupWire, ShapeWire, StampWire, StyleFields,
-    StyleWire, WireError,
+    AnnotationInput, BorderShapeWire, EndingWire, IconWire, MAX_STROKE_POINTS, MAX_STROKES, MarkWire, MarkupWire, ReviewStateWire, ShapeWire,
+    StampWire, StyleFields, StyleUpdate, StyleWire, WireError,
 };
-use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NoteIcon, Shape, StampKind, Style};
+use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NoteIcon, ReviewState, Shape, StampKind, Style};
 use serde_json::json;
 
 type BoxError = Box<dyn std::error::Error>;
@@ -175,4 +175,131 @@ fn a_style_wire_round_trips_through_json() -> Result<(), BoxError> {
     let fields: StyleFields = serde_json::from_value(value)?;
     assert_eq!(fields.into_style(&shape)?, style);
     Ok(())
+}
+
+// ── `annotation.update`: the final look of an existing comment ───────────────
+
+/// The properties of a rectangle: a width, a fill, no border of its own.
+fn square() -> pdfcraft_annot::Props {
+    pdfcraft_annot::Props {
+        subtype: "Square".into(),
+        author: "ada".into(),
+        subject: String::new(),
+        color: Some([1.0, 0.0, 0.0]),
+        opacity: 1.0,
+        width: Some(1.0),
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: true,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: Some(1.0),
+        text_opacity: None,
+    }
+}
+
+#[test]
+fn a_style_update_round_trips_and_says_what_it_clears() -> Result<(), BoxError> {
+    let update = StyleUpdate {
+        color: Some([0.0, 0.0, 1.0]),
+        opacity: Some(0.5),
+        width: Some(2.5),
+        fill: Some(None),
+        border_color: Some(Some([0.25, 0.5, 0.75])),
+        border_shape: Some(BorderShapeWire::Oval),
+    };
+    let payload = update.to_payload();
+    assert_eq!(payload["action"], "annotation.update");
+    assert_eq!(payload["style"]["fill"], serde_json::Value::Null, "a null fill takes the fill away");
+    assert_eq!(StyleUpdate::from_payload(&payload)?, update);
+
+    let restyle = update.to_restyle();
+    assert_eq!(restyle.color, Some([0.0, 0.0, 1.0]));
+    assert_eq!(restyle.fill, Some(None));
+    assert_eq!(restyle.border_shape, Some(BorderShape::Oval));
+    Ok(())
+}
+
+#[test]
+fn a_style_update_needs_a_property_and_names_no_unknown_one() {
+    assert!(matches!(StyleUpdate::from_payload(&json!({"action": "annotation.update"})), Err(WireError::Malformed(_))));
+    assert!(matches!(StyleUpdate::from_value(&json!({})), Err(WireError::Malformed(_))));
+    assert!(matches!(StyleUpdate::from_value(&json!(["color"])), Err(WireError::Malformed(_))));
+    assert!(matches!(StyleUpdate::from_payload(&json!({"action": "annotation.update", "style": null})), Err(WireError::Malformed(_))));
+    assert!(matches!(StyleUpdate::from_value(&json!({"shadow": 1})), Err(WireError::Invalid { field: "style", .. })));
+    assert!(matches!(StyleUpdate::from_value(&json!({"opacity": 2.0})), Err(WireError::Invalid { field: "opacity", .. })));
+    assert!(matches!(StyleUpdate::from_value(&json!({"color": [1.0, 0.0]})), Err(WireError::Invalid { field: "color", .. })));
+    assert!(matches!(StyleUpdate::from_value(&json!({"width": -1.0})), Err(WireError::Invalid { field: "width", .. })));
+    assert!(matches!(StyleUpdate::from_value(&json!({"border_shape": "hexagon"})), Err(WireError::Invalid { field: "border shape", .. })));
+    // A comment that has the property reads back what it wrote.
+    let update = StyleUpdate::from_value(&json!({"color": [0.5, 0.5, 0.5], "fill": [0.0, 1.0, 0.0]})).expect("a valid update");
+    assert_eq!(update.fill, Some(Some([0.0, 1.0, 0.0])));
+}
+
+#[test]
+fn a_style_update_refuses_a_property_the_comment_does_not_have() {
+    let mut note = square();
+    note.subtype = "Text".into();
+    note.width = None;
+    note.fillable = false;
+    assert!(matches!(StyleUpdate { width: Some(2.0), ..StyleUpdate::default() }.check_for(&note), Err(WireError::Invalid { field: "width", .. })));
+    assert!(matches!(StyleUpdate { fill: Some(None), ..StyleUpdate::default() }.check_for(&note), Err(WireError::Invalid { field: "fill", .. })));
+    assert!(matches!(
+        StyleUpdate { border_color: Some(None), ..StyleUpdate::default() }.check_for(&square()),
+        Err(WireError::Invalid { field: "border colour", .. })
+    ));
+    assert!(matches!(
+        StyleUpdate { border_shape: Some(BorderShapeWire::Circle), ..StyleUpdate::default() }.check_for(&square()),
+        Err(WireError::Invalid { field: "border shape", .. })
+    ));
+
+    let mut locked = square();
+    locked.locked = true;
+    assert!(matches!(StyleUpdate { color: Some([0.0, 0.0, 0.0]), ..StyleUpdate::default() }.check_for(&locked), Err(WireError::NotRestylable(_))));
+    let mut fixed = square();
+    fixed.restylable = false;
+    assert!(matches!(StyleUpdate { opacity: Some(0.2), ..StyleUpdate::default() }.check_for(&fixed), Err(WireError::NotRestylable(_))));
+
+    // What the comment has, it takes: a width, a fill and a colour.
+    let update = StyleUpdate { color: Some([0.0, 0.0, 1.0]), width: Some(3.0), fill: Some(Some([0.0, 1.0, 0.0])), ..StyleUpdate::default() };
+    assert!(update.check_for(&square()).is_ok());
+}
+
+#[test]
+fn before_records_only_what_the_update_names_and_the_undo_checks_it() {
+    let props = square();
+    let update = StyleUpdate { color: Some([0.0, 0.0, 1.0]), fill: Some(Some([0.0, 1.0, 0.0])), ..StyleUpdate::default() };
+    let before = update.before(&props);
+    assert_eq!(before, StyleUpdate { color: Some([1.0, 0.0, 0.0]), fill: Some(None), ..StyleUpdate::default() });
+    // The undo is a compare-and-set on what the update left, not on the whole style.
+    assert!(!update.still_matches(&props), "the look the update is about to set is not there yet");
+    let mut restyled = props.clone();
+    restyled.color = Some([0.0, 0.0, 1.0]);
+    restyled.fill = Some([0.0, 1.0, 0.0]);
+    assert!(update.still_matches(&restyled), "the look the update left is still there");
+    restyled.opacity = 0.25;
+    assert!(update.still_matches(&restyled), "an unnamed property does not make the undo a conflict");
+    restyled.color = Some([0.0, 1.0, 0.0]);
+    assert!(!update.still_matches(&restyled), "someone restyled the same comment");
+}
+
+#[test]
+fn the_review_state_names_are_stable() {
+    for (state, name) in [
+        (ReviewState::None, "none"),
+        (ReviewState::Accepted, "accepted"),
+        (ReviewState::Rejected, "rejected"),
+        (ReviewState::Cancelled, "cancelled"),
+        (ReviewState::Completed, "completed"),
+    ] {
+        assert_eq!(ReviewStateWire::from(state).name(), name);
+        assert_eq!(ReviewState::from(ReviewStateWire::parse(name).expect("a known state")), state);
+        assert_eq!(serde_json::to_value(ReviewStateWire::from(state)).ok(), Some(json!(name)));
+    }
+    assert!(matches!(ReviewStateWire::parse("approved"), Err(WireError::Invalid { field: "state", .. })));
 }

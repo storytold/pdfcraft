@@ -819,3 +819,207 @@ fn two_clients_insert_and_duplicate_a_page_and_converge() -> Result<(), Box<dyn 
     }
     Ok(())
 }
+
+/// The look of the comment `/NM` on a replica.
+fn style_of(peer: &Peer, nm: &str) -> Result<pdfcraft_engine::CommentProps, Box<dyn std::error::Error>> {
+    let document = peer.session.get(peer.id).ok_or("the peer document is open")?;
+    let comment = document.info.annotations.iter().find(|a| a.name.as_deref() == Some(nm)).ok_or("the comment is not on this replica")?;
+    document.comment_props(comment.page, comment.index).ok_or_else(|| "the comment has no properties".into())
+}
+
+fn near_color(got: Option<[f64; 3]>, want: [f64; 3]) -> bool {
+    got.is_some_and(|got| (0..3).all(|i| (got[i] - want[i]).abs() < 1e-3))
+}
+
+/// Restyling an existing comment is one operation: both replicas see the same
+/// final look, the accepted operation carries the look it replaced (the undo),
+/// and an undo whose look someone else replaced is a conflict, not an overwrite.
+#[test]
+fn two_clients_restyle_a_comment_and_undo_it() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+
+    let doc = DocKey::new("file-1")?;
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 80.0, 40.0] };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.color = [1.0, 0.0, 0.0];
+    style.width = 1.0;
+    let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: "ada".into() };
+    let add = merge_op(doc.clone(), OpId::new("op-add")?, 0, 0, page(0, 0), add_annotation_payload(&new, "ada-rect")?);
+    ada.send(add)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        assert!(near_color(style_of(peer, "ada-rect")?.color, [1.0, 0.0, 0.0]));
+    }
+
+    // Bo restyles the comment: colour, opacity, width and fill in one operation.
+    let update = merge_op(
+        doc.clone(),
+        OpId::new("op-style")?,
+        1,
+        0,
+        annotation("ada-rect", 0),
+        json!({"action": "annotation.update",
+               "style": {"color": [0.0, 0.0, 1.0], "opacity": 0.5, "width": 3.0, "fill": [0.0, 1.0, 0.0]}}),
+    );
+    bo.send(update)?;
+    let mut applied = None;
+    for peer in [&mut ada, &mut bo] {
+        match peer.settle()? {
+            ServerMessage::Applied(applied_op) => applied = Some(applied_op),
+            other => return Err(format!("expected an applied restyle, got {other:?}").into()),
+        }
+    }
+    let applied = applied.ok_or("no applied restyle")?;
+    for peer in [&ada, &bo] {
+        let style = style_of(peer, "ada-rect")?;
+        assert!(near_color(style.color, [0.0, 0.0, 1.0]), "the colour is on every replica");
+        assert!((style.opacity - 0.5).abs() < 1e-6);
+        assert!((style.width.unwrap_or_default() - 3.0).abs() < 1e-6);
+        assert!(near_color(style.fill, [0.0, 1.0, 0.0]), "the fill is on every replica");
+    }
+
+    // The undo is built from the accepted operation: the look the restyle replaced.
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("the restyle has no inverse")?;
+    assert_eq!(undo.payload["action"], "annotation.update");
+    assert_eq!(undo.payload["style"]["color"], json!([1.0, 0.0, 0.0]));
+    ada.send(Op { op_id: OpId::new("op-undo")?, ..undo.clone() })?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        let style = style_of(peer, "ada-rect")?;
+        assert!(near_color(style.color, [1.0, 0.0, 0.0]), "the old colour is back on every replica");
+        assert!((style.width.unwrap_or_default() - 1.0).abs() < 1e-6);
+        assert_eq!(style.fill, None, "the fill the restyle added is gone");
+    }
+
+    // Someone restyles the same comment again: the undo names the look it left
+    // (blue) and is refused, so their look stays.
+    let theirs = merge_op(
+        doc.clone(),
+        OpId::new("op-style-2")?,
+        3,
+        0,
+        annotation("ada-rect", 0),
+        json!({"action": "annotation.update", "style": {"color": [0.0, 1.0, 0.0]}}),
+    );
+    bo.send(theirs)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    let mut late = undo;
+    late.base_version = 4;
+    late.op_id = OpId::new("op-undo-2")?;
+    ada.send(late)?;
+    // A rejection answers its sender only; nothing is broadcast.
+    match ada.settle()? {
+        ServerMessage::Rejected(rejected) => {
+            assert_eq!(rejected.code, ErrorCode::Conflict);
+            assert!(!rejected.retryable);
+        }
+        other => return Err(format!("expected a rejected undo, got {other:?}").into()),
+    }
+    for peer in [&ada, &bo] {
+        assert!(near_color(style_of(peer, "ada-rect")?.color, [0.0, 1.0, 0.0]), "the other restyle is kept");
+    }
+    Ok(())
+}
+
+/// A reply that sets the review status is a named reply with `/State`; it
+/// survives the delete/restore copy, and a reply addressed to a comment that is
+/// gone is refused before anything is added.
+#[test]
+fn two_clients_reply_with_a_status_and_a_deleted_parent_refuses_a_reply() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
+
+    let doc = DocKey::new("file-1")?;
+    let add = merge_op(doc.clone(), OpId::new("op-add")?, 0, 0, page(0, 0), add_note_payload("ada-1", [40.0, 250.0], "please review", "ada"));
+    ada.send(add)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+
+    let reply = merge_op(
+        doc.clone(),
+        OpId::new("op-status")?,
+        1,
+        0,
+        annotation("ada-1", 0),
+        json!({"action": "annotation.reply", "nm": "bo-status", "author": "bo", "state": "accepted"}),
+    );
+    bo.send(reply)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        let document = peer.session.get(peer.id).ok_or("open")?;
+        let status = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("bo-status")).ok_or("the status reply is missing")?;
+        assert_eq!(status.state.as_deref(), Some("Accepted"), "the reply sets /State");
+        assert_eq!(status.in_reply_to.as_deref(), Some("ada-1"), "it answers the comment it names");
+        assert_eq!(status.contents.as_deref(), Some("Accepted set by bo"));
+    }
+
+    // The status survives the server's copy: delete the reply, restore it.
+    let delete = merge_op(doc.clone(), OpId::new("op-del-status")?, 2, 0, annotation("bo-status", 0), json!({"action": "annotation.delete"}));
+    ada.send(delete)?;
+    let mut deleted = None;
+    for peer in [&mut ada, &mut bo] {
+        match peer.settle()? {
+            ServerMessage::Applied(applied) => deleted = Some(applied),
+            other => return Err(format!("expected an applied delete, got {other:?}").into()),
+        }
+    }
+    let deleted = deleted.ok_or("no applied delete")?;
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.names(), vec!["ada-1".to_owned()], "the status reply is gone");
+    }
+    let restore = pdfcraft_collab_client_pdf::inverse_after(&deleted).ok_or("the delete kept no copy")?;
+    bo.send(restore)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        let document = peer.session.get(peer.id).ok_or("open")?;
+        let status = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("bo-status")).ok_or("the status reply did not come back")?;
+        assert_eq!(status.state.as_deref(), Some("Accepted"), "the restored reply is a status reply");
+        assert_eq!(status.in_reply_to.as_deref(), Some("ada-1"));
+    }
+
+    // The parent goes (with its replies): a reply addressed to it is refused and
+    // nothing is added.
+    let delete = merge_op(doc.clone(), OpId::new("op-del-parent")?, 4, 0, annotation("ada-1", 0), json!({"action": "annotation.delete"}));
+    ada.send(delete)?;
+    for peer in [&mut ada, &mut bo] {
+        assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
+    }
+    for peer in [&ada, &bo] {
+        assert!(peer.names().is_empty(), "the comment and its reply are gone");
+    }
+    let late = merge_op(
+        doc.clone(),
+        OpId::new("op-late-reply")?,
+        5,
+        0,
+        annotation("ada-1", 0),
+        json!({"action": "annotation.reply", "nm": "bo-late", "text": "too late", "author": "bo"}),
+    );
+    bo.send(late)?;
+    // A rejection answers its sender only; Ada's replica is the proof that
+    // nothing was added anywhere.
+    match bo.settle()? {
+        ServerMessage::Rejected(rejected) => assert_eq!(rejected.code, ErrorCode::Conflict, "{}", rejected.message),
+        other => return Err(format!("expected a rejected reply, got {other:?}").into()),
+    }
+    for peer in [&ada, &bo] {
+        assert!(peer.names().is_empty(), "the refused reply added nothing");
+    }
+    Ok(())
+}

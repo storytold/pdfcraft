@@ -22,10 +22,16 @@
 //! fields fall back to [`pdfcraft_annot::Style::default_for`] of the shape, so a
 //! minimal payload `{"shape": …, "contents": …}` still produces the same
 //! annotation every replica would draw from the same tool.
+//!
+//! An existing annotation is restyled by `annotation.update` ([`StyleUpdate`]):
+//! the *final* colour, opacity, line width, fill and border, addressed by `/NM`,
+//! checked against the comment before anything changes. A state reply is an
+//! `annotation.reply` that also carries a review state (`/State`,
+//! [`ReviewStateWire`]), named by the client like any other reply.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NewAnnotation, NoteIcon, Shape, StampKind, Style};
+use pdfcraft_annot::{BorderShape, FillMark, LineEnding, Markup, NewAnnotation, NoteIcon, Props, Restyle, ReviewState, Shape, StampKind, Style};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -48,6 +54,8 @@ pub const MAX_AUTHOR_BYTES: usize = 256;
 pub enum WireError {
     #[error("{0} is not shared in a collaboration session yet")]
     UnsupportedShape(&'static str),
+    #[error("{0} cannot be restyled in a shared session")]
+    NotRestylable(&'static str),
     #[error("the annotation payload is malformed: {0}")]
     Malformed(String),
     #[error("{field} is invalid: {why}")]
@@ -286,6 +294,220 @@ fn check_style(style: &Style) -> Result<(), WireError> {
     Ok(())
 }
 
+// ── Restyling an existing annotation ─────────────────────────────────────────
+
+/// How close two style numbers must be to count as the same value: the engine
+/// writes three decimals, and a replica reads back what it wrote.
+const STYLE_EPSILON: f64 = 5e-4;
+
+/// The final style one `annotation.update` sets on an existing annotation,
+/// addressed by its `/NM` (ADR-0002).
+///
+/// Only the properties named are changed; `null` clears a property that can be
+/// taken away — a fill, a border colour. It is one shared operation where the
+/// interactive interface sends several edits (`StyleAnnotation`,
+/// `FillAnnotation`, `BorderColorAnnotation`, `BorderShapeAnnotation`): one
+/// version, one undo step, and the same final look on every replica.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StyleUpdate {
+    pub color: Option<[f64; 3]>,
+    pub opacity: Option<f64>,
+    pub width: Option<f64>,
+    /// `Some(None)` takes the fill away; `Some(Some(colour))` sets it.
+    pub fill: Option<Option<[f64; 3]>>,
+    /// `Some(None)` puts the border back to the text's colour.
+    pub border_color: Option<Option<[f64; 3]>>,
+    pub border_shape: Option<BorderShapeWire>,
+}
+
+impl StyleUpdate {
+    /// Whether the update names no property at all.
+    pub fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.opacity.is_none()
+            && self.width.is_none()
+            && self.fill.is_none()
+            && self.border_color.is_none()
+            && self.border_shape.is_none()
+    }
+
+    /// The body of an `annotation.update`: `{"action": …, "style": {…}}`.
+    pub fn to_payload(&self) -> Value {
+        json!({ "action": "annotation.update", "style": self.to_value() })
+    }
+
+    /// The `style` object on its own, as every place that carries it (the
+    /// accepted operation's `style` and `before`) writes it.
+    pub fn to_value(&self) -> Value {
+        let mut object = Map::new();
+        if let Some(color) = self.color {
+            object.insert("color".into(), json!(color));
+        }
+        if let Some(opacity) = self.opacity {
+            object.insert("opacity".into(), json!(opacity));
+        }
+        if let Some(width) = self.width {
+            object.insert("width".into(), json!(width));
+        }
+        if let Some(fill) = self.fill {
+            object.insert("fill".into(), fill.map_or(Value::Null, |color| json!(color)));
+        }
+        if let Some(color) = self.border_color {
+            object.insert("border_color".into(), color.map_or(Value::Null, |color| json!(color)));
+        }
+        if let Some(shape) = self.border_shape {
+            object.insert("border_shape".into(), json!(shape.name()));
+        }
+        Value::Object(object)
+    }
+
+    /// Read the `style` object of an `annotation.update`.
+    pub fn from_payload(payload: &Value) -> Result<Self, WireError> {
+        let style = payload.get("style").filter(|value| !value.is_null()).ok_or_else(|| WireError::Malformed("the update names no style".into()))?;
+        Self::from_value(style)
+    }
+
+    /// Read a style object: the properties present are the ones the update sets.
+    pub fn from_value(style: &Value) -> Result<Self, WireError> {
+        let object = style.as_object().ok_or_else(|| WireError::Malformed("the style must be an object".into()))?;
+        let mut update = Self::default();
+        for (key, field) in object {
+            match key.as_str() {
+                "color" => update.color = Some(color_field(field, "color")?),
+                "opacity" => update.opacity = Some(unit_field(field, "opacity")?),
+                "width" => update.width = Some(width_field(field)?),
+                "fill" => update.fill = Some(optional_color_field(field, "fill")?),
+                "border_color" => update.border_color = Some(optional_color_field(field, "border colour")?),
+                "border_shape" => {
+                    let name = field.as_str().ok_or_else(|| WireError::Invalid { field: "border shape", why: "expected a name".into() })?;
+                    update.border_shape = Some(BorderShapeWire::parse(name)?);
+                }
+                other => {
+                    return Err(WireError::Invalid { field: "style", why: format!("{other:?} is not a style property") });
+                }
+            }
+        }
+        if update.is_empty() {
+            return Err(WireError::Malformed("the style names no property".into()));
+        }
+        Ok(update)
+    }
+
+    /// Refuse properties the comment does not have, before anything changes: the
+    /// shared operation must fail as a whole or not at all.
+    pub fn check_for(&self, props: &Props) -> Result<(), WireError> {
+        if props.locked {
+            return Err(WireError::NotRestylable("a locked comment"));
+        }
+        let redraw = self.color.is_some() || self.opacity.is_some() || self.width.is_some();
+        if redraw && !props.restylable {
+            return Err(WireError::NotRestylable("this comment's appearance"));
+        }
+        if self.width.is_some() && props.width.is_none() {
+            return Err(WireError::Invalid { field: "width", why: "this comment has no line width".into() });
+        }
+        if self.fill.is_some() && !props.fillable {
+            return Err(WireError::Invalid { field: "fill", why: "this comment has no fill".into() });
+        }
+        // The border's own colour and shape belong to text boxes, typewriter text
+        // and callouts; a callout has no shape to choose.
+        if self.border_color.is_some() && props.font_size.is_none() {
+            return Err(WireError::Invalid { field: "border colour", why: "only text boxes, typewriter text and callouts have one".into() });
+        }
+        if self.border_shape.is_some() && props.border_shape.is_none() {
+            return Err(WireError::Invalid { field: "border shape", why: "only text boxes and typewriter text have one".into() });
+        }
+        Ok(())
+    }
+
+    /// The style the comment had for exactly the properties this update sets —
+    /// what the accepted operation carries as `before`, and what an undo puts
+    /// back. A comment without `/C` is black, so its colour is recorded as black.
+    pub fn before(&self, props: &Props) -> Self {
+        Self {
+            color: self.color.map(|_| props.color.unwrap_or([0.0, 0.0, 0.0])),
+            opacity: self.opacity.map(|_| props.opacity),
+            width: self.width.and(props.width),
+            fill: self.fill.map(|_| props.fill),
+            border_color: self.border_color.map(|_| props.border_color),
+            border_shape: self.border_shape.and(props.border_shape.map(BorderShapeWire::from)),
+        }
+    }
+
+    /// Whether the comment still looks the way `expect` names: an undo is a
+    /// compare-and-set, so a later edit by someone else is a conflict, never an
+    /// overwrite (ADR-0010 §3).
+    pub fn still_matches(&self, props: &Props) -> bool {
+        let color = |value: [f64; 3], current: Option<[f64; 3]>| {
+            let current = current.unwrap_or([0.0, 0.0, 0.0]);
+            (0..3).all(|i| (value[i] - current[i]).abs() <= STYLE_EPSILON)
+        };
+        let same_optional = |value: Option<[f64; 3]>, current: Option<[f64; 3]>| match value {
+            None => current.is_none(),
+            Some(value) => color(value, current),
+        };
+        if self.color.is_some_and(|value| !color(value, props.color)) {
+            return false;
+        }
+        if self.opacity.is_some_and(|value| (value - props.opacity).abs() > STYLE_EPSILON) {
+            return false;
+        }
+        if self.width.is_some_and(|value| props.width.is_none_or(|current| (value - current).abs() > STYLE_EPSILON)) {
+            return false;
+        }
+        if self.fill.is_some_and(|value| !same_optional(value, props.fill)) {
+            return false;
+        }
+        if self.border_color.is_some_and(|value| !same_optional(value, props.border_color)) {
+            return false;
+        }
+        if self.border_shape.is_some_and(|value| props.border_shape.map(BorderShapeWire::from) != Some(value)) {
+            return false;
+        }
+        true
+    }
+
+    /// The engine's one all-or-nothing restyle for this update.
+    pub fn to_restyle(&self) -> Restyle {
+        Restyle {
+            color: self.color,
+            opacity: self.opacity,
+            width: self.width,
+            fill: self.fill,
+            border_color: self.border_color,
+            border_shape: self.border_shape.map(Into::into),
+        }
+    }
+}
+
+fn finite_field(value: &Value, field: &'static str) -> Result<f64, WireError> {
+    value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| WireError::Invalid { field, why: "expected a finite number".into() })
+}
+
+fn unit_field(value: &Value, field: &'static str) -> Result<f64, WireError> {
+    let number = finite_field(value, field)?;
+    if (0.0..=1.0).contains(&number) { Ok(number) } else { Err(WireError::Invalid { field, why: "must be between 0 and 1".into() }) }
+}
+
+fn width_field(value: &Value) -> Result<f64, WireError> {
+    let number = finite_field(value, "width")?;
+    if number >= 0.0 { Ok(number) } else { Err(WireError::Invalid { field: "width", why: "must be a non-negative number".into() }) }
+}
+
+fn color_field(value: &Value, field: &'static str) -> Result<[f64; 3], WireError> {
+    let entries =
+        value.as_array().filter(|entries| entries.len() == 3).ok_or_else(|| WireError::Invalid { field, why: "expected [r, g, b]".into() })?;
+    let mut color = [0.0; 3];
+    for (slot, entry) in color.iter_mut().zip(entries) {
+        *slot = unit_field(entry, field)?;
+    }
+    Ok(color)
+}
+
+fn optional_color_field(value: &Value, field: &'static str) -> Result<Option<[f64; 3]>, WireError> {
+    if value.is_null() { Ok(None) } else { color_field(value, field).map(Some) }
+}
+
 // ── The wire types ───────────────────────────────────────────────────────────
 
 /// A shareable annotation shape. The `kind` tag names the variant; the rest of
@@ -504,6 +726,87 @@ pub enum BorderShapeWire {
     Rectangle,
     Oval,
     Circle,
+}
+
+impl BorderShapeWire {
+    /// The wire name, as `#[serde(rename_all = "snake_case")]` writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rectangle => "rectangle",
+            Self::Oval => "oval",
+            Self::Circle => "circle",
+        }
+    }
+
+    /// Read the wire name; anything else is refused rather than guessed.
+    pub fn parse(name: &str) -> Result<Self, WireError> {
+        match name {
+            "rectangle" => Ok(Self::Rectangle),
+            "oval" => Ok(Self::Oval),
+            "circle" => Ok(Self::Circle),
+            other => Err(WireError::Invalid { field: "border shape", why: format!("{other:?} is not rectangle, oval or circle") }),
+        }
+    }
+}
+
+/// A review state a reply may carry (`/State`, `/StateModel /Review`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStateWire {
+    None,
+    Accepted,
+    Rejected,
+    Cancelled,
+    Completed,
+}
+
+impl ReviewStateWire {
+    /// The wire name, as `#[serde(rename_all = "snake_case")]` writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+            Self::Completed => "completed",
+        }
+    }
+
+    /// Read a review state by name; anything else is refused.
+    pub fn parse(name: &str) -> Result<Self, WireError> {
+        match name {
+            "none" => Ok(Self::None),
+            "accepted" => Ok(Self::Accepted),
+            "rejected" => Ok(Self::Rejected),
+            "cancelled" => Ok(Self::Cancelled),
+            "completed" => Ok(Self::Completed),
+            other => Err(WireError::Invalid { field: "state", why: format!("{other:?} is not a review state") }),
+        }
+    }
+}
+
+impl From<ReviewStateWire> for ReviewState {
+    fn from(value: ReviewStateWire) -> Self {
+        match value {
+            ReviewStateWire::None => Self::None,
+            ReviewStateWire::Accepted => Self::Accepted,
+            ReviewStateWire::Rejected => Self::Rejected,
+            ReviewStateWire::Cancelled => Self::Cancelled,
+            ReviewStateWire::Completed => Self::Completed,
+        }
+    }
+}
+
+impl From<ReviewState> for ReviewStateWire {
+    fn from(value: ReviewState) -> Self {
+        match value {
+            ReviewState::None => Self::None,
+            ReviewState::Accepted => Self::Accepted,
+            ReviewState::Rejected => Self::Rejected,
+            ReviewState::Cancelled => Self::Cancelled,
+            ReviewState::Completed => Self::Completed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

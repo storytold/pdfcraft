@@ -58,6 +58,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ReplyToAnnotation { .. }
         | Edit::ReplyToAnnotationNamed { .. }
         | Edit::SetAnnotationStatus { .. }
+        | Edit::SetAnnotationStatusNamed { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
@@ -72,6 +73,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
         | Edit::BorderShapeAnnotation { .. }
+        | Edit::RestyleAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -647,6 +649,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetAnnotationStatus { page, index, state, author } => {
             pdfcraft_annot::set_review_state(doc, *page, *index, *state, author, &cx.meta())?;
         }
+        Edit::SetAnnotationStatusNamed { page, index, state, author, name } => {
+            pdfcraft_annot::set_review_state_named(doc, *page, *index, *state, author, name, &cx.meta())?;
+        }
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
         }
@@ -717,6 +722,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
         Edit::BorderColorAnnotation { page, index, color } => pdfcraft_annot::set_border_color(doc, *page, *index, *color, &cx.meta())?,
         Edit::BorderShapeAnnotation { page, index, shape } => pdfcraft_annot::set_border_shape(doc, *page, *index, *shape, &cx.meta())?,
+        Edit::RestyleAnnotation { page, index, style } => pdfcraft_annot::restyle(doc, *page, *index, style.clone(), &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }

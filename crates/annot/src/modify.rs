@@ -7,8 +7,8 @@ use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
 use super::types::{
-    BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
-    Shape, Style, StyleChange, TextReplacement,
+    BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, Restyle, ReviewState,
+    Rgb, Shape, Style, StyleChange, TextReplacement,
 };
 use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
 use pdfcraft_fonts::Std14;
@@ -391,8 +391,31 @@ pub fn add_reply_named(
 /// (`/State`, `/StateModel /Review`) by `author`, in reply to `author`'s previous one when there is
 /// one; each reviewer's latest is their status.
 pub fn set_review_state(doc: &mut Document, page: usize, index: usize, state: ReviewState, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
-    let text = format!("{} set by {}", state.name(), if author.is_empty() { "unknown" } else { author });
+    let text = state_text(state, author);
     reply(doc, page, index, &text, author, meta, Some(state))
+}
+
+/// [`set_review_state`] with a caller-chosen `/NM` for the state reply: a collaboration session
+/// names every annotation it adds, so each replica uses one stable id (ADR-0002).
+pub fn set_review_state_named(
+    doc: &mut Document,
+    page: usize,
+    index: usize,
+    state: ReviewState,
+    author: &str,
+    name: &str,
+    meta: &Meta,
+) -> Result<usize, AnnotError> {
+    if name.trim().is_empty() {
+        return Err(AnnotError::Invalid("an annotation name must not be empty".into()));
+    }
+    let text = state_text(state, author);
+    reply(doc, page, index, &text, author, &meta.named(name), Some(state))
+}
+
+/// The text Acrobat's "Set status" writes into its state reply.
+fn state_text(state: ReviewState, author: &str) -> String {
+    format!("{} set by {}", state.name(), if author.is_empty() { "unknown" } else { author })
 }
 
 fn reply(
@@ -810,6 +833,64 @@ pub fn set_border_shape(doc: &mut Document, page: usize, index: usize, shape: Bo
         touch(d, meta);
     })?;
     redraw_or_restore(doc, r, before)
+}
+
+/// Restyle a comment: colour, opacity, line width, fill, border colour and border shape, as one
+/// all-or-nothing edit (Comment Properties ▸ OK, the comment bar).
+///
+/// The interactive edits ([`set_style`], [`set_fill`], [`set_border_color`],
+/// [`set_border_shape`]) are one step each; a shared operation carries them together, so a
+/// replica applies one version and undo takes back one choice (ADR-0010). Every property is
+/// checked before anything changes, and if a later step still fails (a locked comment, an
+/// appearance that can't be redrawn, text the standard fonts can't draw) the comment and its
+/// Replace Text partners are put back as they were.
+pub fn restyle(doc: &mut Document, page: usize, index: usize, change: Restyle, meta: &Meta) -> Result<(), AnnotError> {
+    if change.is_empty() {
+        return Ok(());
+    }
+    let (_, r) = annot_ref(doc, page, index)?;
+    let subtype = {
+        let d = annot_dict(doc, r);
+        String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned()
+    };
+    let free_text = subtype == "FreeText";
+    let callout = free_text && annot_dict(doc, r).contains(b"CL");
+    if change.fill.is_some() && !fillable(&subtype) {
+        return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
+    }
+    if change.border_color.is_some() && !free_text {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a border colour".into()));
+    }
+    if change.border_shape.is_some() && (!free_text || callout) {
+        return Err(AnnotError::Invalid("only text boxes and typewriter text have a border shape".into()));
+    }
+    let redraw = change.color.is_some() || change.opacity.is_some() || change.width.is_some();
+    // What a failed restyle puts back: the comment and the other members of a Replace Text
+    // proposal it is restyled with (`set_style` changes those too).
+    let partners = if redraw { replace_text_partners(doc, page, r)? } else { Vec::new() };
+    let before: Vec<(ObjRef, Dict)> = std::iter::once(r).chain(partners).map(|o| (o, annot_dict(doc, o))).collect();
+    let result = (|| -> Result<(), AnnotError> {
+        if redraw {
+            let style = StyleChange { color: change.color, opacity: change.opacity, width: change.width, endings: None };
+            set_style(doc, page, index, style, meta)?;
+        }
+        if let Some(fill) = change.fill {
+            set_fill(doc, page, index, fill, meta)?;
+        }
+        if let Some(color) = change.border_color {
+            set_border_color(doc, page, index, color, meta)?;
+        }
+        if let Some(shape) = change.border_shape {
+            set_border_shape(doc, page, index, shape, meta)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for (o, d) in before {
+            doc.set(o, Object::Dict(d));
+        }
+    }
+    result
 }
 
 /// At most this many points reshape a comment (a drawn polygon has a handful).

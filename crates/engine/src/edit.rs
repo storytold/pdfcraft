@@ -5,9 +5,9 @@ use std::sync::Arc;
 use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
     ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
-    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
-    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster,
-    open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    PageBox, PrinterMarks, Protection, Restyle, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y,
+    copy_image, decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure,
+    model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -214,6 +214,16 @@ pub enum Edit {
         state: ReviewState,
         author: String,
     },
+    /// [`Edit::SetAnnotationStatus`] with a caller-chosen `/NM` for the state reply: a
+    /// collaboration session names every annotation it adds, so each replica uses one stable id
+    /// (ADR-0002).
+    SetAnnotationStatusNamed {
+        page: usize,
+        index: usize,
+        state: ReviewState,
+        author: String,
+        name: String,
+    },
     /// The Eraser: rub out the parts of drawing `(page, index)` near `path` (user space).
     EraseInk {
         page: usize,
@@ -313,6 +323,15 @@ pub enum Edit {
         page: usize,
         index: usize,
         shape: BorderShape,
+    },
+    /// Restyle a comment as one all-or-nothing edit: colour, opacity, line width, fill and
+    /// border. [`Edit::StyleAnnotation`], [`Edit::FillAnnotation`],
+    /// [`Edit::BorderColorAnnotation`] and [`Edit::BorderShapeAnnotation`] are the interactive
+    /// steps; a shared operation carries them together (one version, one undo step, ADR-0010).
+    RestyleAnnotation {
+        page: usize,
+        index: usize,
+        style: Restyle,
     },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {

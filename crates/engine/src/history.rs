@@ -63,6 +63,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::ReplyToAnnotation { .. }
         | Edit::ReplyToAnnotationNamed { .. }
         | Edit::SetAnnotationStatus { .. }
+        | Edit::SetAnnotationStatusNamed { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::LockAnnotation { .. }
         | Edit::ReplaceText { .. }
@@ -77,6 +78,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
         | Edit::BorderShapeAnnotation { .. }
+        | Edit::RestyleAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,

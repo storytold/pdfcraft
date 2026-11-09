@@ -221,7 +221,7 @@ impl Edit {
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } | Edit::ReplyToAnnotationNamed { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
-            Edit::SetAnnotationStatus { state, .. } => Label::of(match state {
+            Edit::SetAnnotationStatus { state, .. } | Edit::SetAnnotationStatusNamed { state, .. } => Label::of(match state {
                 ReviewState::None => "Set status None",
                 ReviewState::Accepted => "Set status Accepted",
                 ReviewState::Rejected => "Set status Rejected",
@@ -246,6 +246,7 @@ impl Edit {
             | Edit::FontSizeAnnotation { .. }
             | Edit::BorderColorAnnotation { .. }
             | Edit::BorderShapeAnnotation { .. }
+            | Edit::RestyleAnnotation { .. }
             | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),

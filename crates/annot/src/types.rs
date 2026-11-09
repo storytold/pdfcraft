@@ -619,6 +619,31 @@ impl StyleChange {
     }
 }
 
+/// The whole appearance one restyle sets on a comment (Comment Properties ▸ OK, the comment
+/// bar). `None` leaves a property as it is; for a property that can be taken away (a fill, a
+/// border colour) the inner `None` clears it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Restyle {
+    pub color: Option<Rgb>,
+    pub opacity: Option<f64>,
+    pub width: Option<f64>,
+    pub fill: Option<Option<Rgb>>,
+    pub border_color: Option<Option<Rgb>>,
+    pub border_shape: Option<BorderShape>,
+}
+
+impl Restyle {
+    /// Whether the restyle names no property at all.
+    pub fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.opacity.is_none()
+            && self.width.is_none()
+            && self.fill.is_none()
+            && self.border_color.is_none()
+            && self.border_shape.is_none()
+    }
+}
+
 /// Inputs for replacing selected text with a grouped strikeout and caret annotation.
 pub struct TextReplacement<'a> {
     pub page: usize,

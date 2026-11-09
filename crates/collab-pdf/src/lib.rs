@@ -11,6 +11,7 @@
 //! |---|---|---|
 //! | `annotation.add` | merge | page |
 //! | `annotation.set_contents` | merge | annotation (`/NM`) |
+//! | `annotation.update` | merge | annotation (`/NM`) |
 //! | `annotation.reply` | merge | annotation (`/NM`) |
 //! | `annotation.delete` | merge | annotation (`/NM`) |
 //! | `annotation.restore` | merge | annotation (`/NM`) |
@@ -40,7 +41,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_collab_annot::{AnnotationInput, WireError};
+use pdfcraft_collab_annot::{AnnotationInput, ReviewStateWire, StyleUpdate, WireError};
 use pdfcraft_collab_proto::{ActorId, BlobRef, ConflictClass, ErrorCode, MAX_ANNOTATION_NAME, Op, PageRef, Target};
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published};
 use pdfcraft_engine::{DocId, Document, Edit, EditError, FieldConflicts, FieldValue, FormFieldKind, Session};
@@ -273,17 +274,41 @@ impl PdfAdapter {
     }
 
     fn reply(&mut self, page: usize, name: &str, payload: &Value) -> Result<Value, AdapterError> {
-        let text = payload.get("text").and_then(Value::as_str).ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "text is missing", false))?;
+        // A reply may also set the comment's review status (`/State`,
+        // `/StateModel /Review`); the engine writes the status text itself, and
+        // the accepted operation carries it so every replica and the journal
+        // produce the same reply.
+        let state = match payload.get("state").filter(|value| !value.is_null()) {
+            Some(value) => {
+                let state = value.as_str().ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "state must be a name", false))?;
+                Some(ReviewStateWire::parse(state).map_err(map_wire)?.into())
+            }
+            None => None,
+        };
+        let text = payload.get("text").and_then(Value::as_str);
+        if state.is_none() && text.is_none() {
+            return Err(AdapterError::new(ErrorCode::Invalid, "text is missing", false));
+        }
         let author = payload.get("author").and_then(Value::as_str).unwrap_or(DEFAULT_AUTHOR).to_owned();
+        // The parent is resolved before anything is added: a reply to a comment
+        // that is gone is refused, not appended to a thread that no longer exists.
         let index = self.annotation_index(page, name)?;
         let reply_name = Self::requested_name(payload)?;
+        if state.is_some() && reply_name.is_none() {
+            return Err(AdapterError::new(ErrorCode::Invalid, "a state reply needs an nm", false));
+        }
         if let Some(reply_name) = &reply_name {
             self.ensure_free_name(reply_name)?;
         }
+        let text = text.unwrap_or_default().to_owned();
         let before: HashSet<String> = self.document_or_error()?.info.annotations.iter().filter_map(|a| a.name.clone()).collect();
-        match reply_name {
-            Some(reply_name) => self.apply_edit(Edit::ReplyToAnnotationNamed { page, index, text: text.to_owned(), author, name: reply_name })?,
-            None => self.apply_edit(Edit::ReplyToAnnotation { page, index, text: text.to_owned(), author })?,
+        match (state, reply_name) {
+            (Some(state), Some(reply_name)) => {
+                self.apply_edit(Edit::SetAnnotationStatusNamed { page, index, state, author, name: reply_name })?;
+            }
+            (None, Some(reply_name)) => self.apply_edit(Edit::ReplyToAnnotationNamed { page, index, text, author, name: reply_name })?,
+            (None, None) => self.apply_edit(Edit::ReplyToAnnotation { page, index, text, author })?,
+            (Some(_), None) => return Err(AdapterError::new(ErrorCode::Invalid, "a state reply needs an nm", false)),
         }
         let added = self
             .document_or_error()?
@@ -295,8 +320,49 @@ impl PdfAdapter {
             .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the reply was added without a name", false))?;
         let mut body = payload.clone();
         body["nm"] = json!(added);
+        // The status text is the engine's ("Accepted set by ada"); recording it
+        // keeps the accepted operation self-describing for every replica.
+        if state.is_some()
+            && let Some(contents) =
+                self.document_or_error()?.info.annotations.iter().find(|a| a.name.as_deref() == Some(added.as_str())).and_then(|a| a.contents.clone())
+        {
+            body["text"] = json!(contents);
+        }
         self.known.insert(added.clone(), body);
         Ok(json!({ "nm": added }))
+    }
+
+    /// Restyle the comment `/NM` as one all-or-nothing edit: colour, opacity,
+    /// line width, fill and border, the final look of the comment (RFC §3.1.2).
+    ///
+    /// The address is checked before anything changes: a comment that is gone,
+    /// locked, or has no such property is refused, never half-applied. The
+    /// accepted operation carries `before` — the look it replaced — so an undo
+    /// is a normal operation every replica and the journal can replay.
+    fn update_annotation(&mut self, page: usize, name: &str, payload: &mut Value) -> Result<Value, AdapterError> {
+        let update = StyleUpdate::from_payload(payload).map_err(map_wire)?;
+        let index = self.annotation_index(page, name)?;
+        let props = self
+            .document_or_error()?
+            .comment_props(page, index)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Conflict, "the annotation was deleted", false))?;
+        update.check_for(&props).map_err(map_wire)?;
+        // An undo names the look it left: if someone restyled the comment since,
+        // putting the old look back would overwrite their edit (ADR-0010 §3).
+        if let Some(expect) = payload.get("expect").filter(|value| !value.is_null()) {
+            let expect = StyleUpdate::from_value(expect).map_err(map_wire)?;
+            if !expect.still_matches(&props) {
+                return Err(AdapterError::new(ErrorCode::Conflict, "the comment was restyled since; the undo would overwrite it", false));
+            }
+        }
+        let before = update.before(&props);
+        self.apply_edit(Edit::RestyleAnnotation { page, index, style: update.to_restyle() })?;
+        if let Value::Object(map) = payload {
+            map.remove("expect");
+        }
+        payload["style"] = update.to_value();
+        payload["before"] = before.to_value();
+        Ok(json!({ "nm": name }))
     }
 
     fn delete(&mut self, page: usize, name: &str) -> Result<Value, AdapterError> {
@@ -360,7 +426,20 @@ impl PdfAdapter {
                     .map_err(|_| AdapterError::new(ErrorCode::Conflict, "the comment this reply answered is gone", false))?;
                 let text = body.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
                 let author = body.get("author").and_then(Value::as_str).unwrap_or(DEFAULT_AUTHOR).to_owned();
-                self.apply_edit(Edit::ReplyToAnnotationNamed { page, index: parent_index, text, author, name: name.to_owned() })?;
+                // A status reply comes back with its `/State`, not as a plain reply.
+                match body.get("state").and_then(Value::as_str) {
+                    Some(state) => {
+                        let state = ReviewStateWire::parse(state).map_err(map_wire)?;
+                        self.apply_edit(Edit::SetAnnotationStatusNamed {
+                            page,
+                            index: parent_index,
+                            state: state.into(),
+                            author,
+                            name: name.to_owned(),
+                        })?;
+                    }
+                    None => self.apply_edit(Edit::ReplyToAnnotationNamed { page, index: parent_index, text, author, name: name.to_owned() })?,
+                }
             }
             _ => {
                 let input = AnnotationInput::from_payload(&body).map_err(map_wire)?;
@@ -596,6 +675,11 @@ impl Adapter for PdfAdapter {
                 let (page, name) = annotation_target(&effective)?;
                 self.set_contents(self.page_index(page)?, &name, &effective.payload)?
             }
+            ("annotation.update", ConflictClass::Merge) => {
+                let (page, name) = annotation_target(&effective)?;
+                let page = self.page_index(page)?;
+                self.update_annotation(page, &name, &mut effective.payload)?
+            }
             ("annotation.reply", ConflictClass::Merge) => {
                 let (page, name) = annotation_target(&effective)?;
                 self.reply(self.page_index(page)?, &name, &effective.payload)?
@@ -735,7 +819,7 @@ fn annotation_target(op: &Op) -> Result<(PageRef, String), AdapterError> {
 /// `Unsupported`, malformed data is `Invalid`. Neither is retryable.
 fn map_wire(error: WireError) -> AdapterError {
     let code = match &error {
-        WireError::UnsupportedShape(_) => ErrorCode::Unsupported,
+        WireError::UnsupportedShape(_) | WireError::NotRestylable(_) => ErrorCode::Unsupported,
         WireError::Malformed(_) | WireError::Invalid { .. } | WireError::TooMany { .. } => ErrorCode::Invalid,
     };
     AdapterError::new(code, error.to_string(), false)
@@ -1474,6 +1558,249 @@ mod tests {
         let document = fresh.adapter().document().ok_or("gone")?;
         assert_eq!(document.info.annotations.len(), 1);
         assert_eq!(document.info.annotations[0].contents.as_deref(), Some("hello"));
+        Ok(())
+    }
+    /// A rectangle with a width and a fill: the shape whose look has every
+    /// property `annotation.update` may set.
+    fn rectangle(nm: &str, base: u64) -> Result<Op, Box<dyn std::error::Error>> {
+        op(
+            &format!("add-{nm}"),
+            ConflictClass::Merge,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            base,
+            0,
+            json!({"action": "annotation.add", "nm": nm,
+                   "shape": {"kind": "rectangle", "rect": [10.0, 10.0, 80.0, 40.0]},
+                   "style": {"color": [1.0, 0.0, 0.0], "opacity": 1.0, "width": 1.0},
+                   "contents": "", "author": DEFAULT_AUTHOR}),
+        )
+    }
+
+    fn style_of(adapter: &PdfAdapter, nm: &str) -> Result<pdfcraft_engine::CommentProps, Box<dyn std::error::Error>> {
+        let document = adapter.document().ok_or("the document is gone")?;
+        let comment = document.info.annotations.iter().find(|a| a.name.as_deref() == Some(nm)).ok_or("the comment is gone")?;
+        document.comment_props(comment.page, comment.index).ok_or_else(|| "the comment has no properties".into())
+    }
+
+    fn near(got: Option<[f64; 3]>, want: [f64; 3]) -> bool {
+        got.is_some_and(|got| (0..3).all(|i| (got[i] - want[i]).abs() < 1e-3))
+    }
+
+    /// The final look of a comment is one operation: colour, opacity, width and
+    /// fill land together, the accepted operation carries the look it replaced,
+    /// and a fresh replica replaying it draws the same comment.
+    #[test]
+    fn an_update_restyles_a_comment_and_carries_the_look_it_replaced() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &rectangle("r1", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let update = op(
+            "style-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            1,
+            0,
+            json!({"action": "annotation.update",
+                   "style": {"color": [0.0, 0.0, 1.0], "opacity": 0.5, "width": 2.0, "fill": [0.0, 1.0, 0.0]}}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        assert_eq!(applied.result["nm"], "r1");
+        let style = style_of(room.adapter(), "r1")?;
+        assert!(near(style.color, [0.0, 0.0, 1.0]), "the colour is the new one");
+        assert!((style.opacity - 0.5).abs() < 1e-6);
+        assert!((style.width.unwrap_or_default() - 2.0).abs() < 1e-6);
+        assert!(near(style.fill, [0.0, 1.0, 0.0]), "the fill is the new one");
+
+        // The accepted operation says what it replaced, and carries no `expect`:
+        // that is the request's compare-and-set, not part of the result.
+        let before = applied.op.payload.get("before").ok_or("the update records no before")?;
+        assert_eq!(before["color"], json!([1.0, 0.0, 0.0]));
+        assert_eq!(before["width"], json!(1.0));
+        assert_eq!(before["fill"], json!(null), "there was no fill");
+        assert!(applied.op.payload.get("expect").is_none());
+
+        // Replay: the same accepted operation on a fresh replica yields the same look.
+        let mut fresh = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        fresh.apply(&editor, &rectangle("r1", 0)?)?;
+        fresh.apply(&editor, &applied.op)?;
+        let replayed = style_of(&fresh, "r1")?;
+        assert!(near(replayed.color, [0.0, 0.0, 1.0]));
+        assert!((replayed.opacity - 0.5).abs() < 1e-6);
+        assert!(near(replayed.fill, [0.0, 1.0, 0.0]));
+        Ok(())
+    }
+
+    /// An update is refused before anything changes: a comment that is gone, and
+    /// a property the comment does not have, leave the document exactly as it was.
+    #[test]
+    fn an_update_that_cannot_be_applied_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+
+        let ghost = op(
+            "style-ghost",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "ghost".into() },
+            1,
+            0,
+            json!({"action": "annotation.update", "style": {"color": [0.0, 0.0, 1.0]}}),
+        )?;
+        let rejected = room.apply(&editor, &ghost, 0).err().ok_or("an update to a missing comment was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict, "{}", rejected.message);
+
+        // A sticky note has no fill and no width: the whole step is refused.
+        let fill = op(
+            "style-fill",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            1,
+            0,
+            json!({"action": "annotation.update", "style": {"color": [0.0, 0.0, 1.0], "fill": [0.0, 1.0, 0.0]}}),
+        )?;
+        let rejected = room.apply(&editor, &fill, 0).err().ok_or("a fill on a note was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Invalid, "{}", rejected.message);
+
+        let document = room.adapter().document().ok_or("gone")?;
+        assert_eq!(document.info.annotations.len(), 1);
+        let style = style_of(room.adapter(), "n1")?;
+        assert!(!near(style.color, [0.0, 0.0, 1.0]), "the colour did not change");
+        assert_eq!(style.fill, None);
+        Ok(())
+    }
+
+    /// The undo of a restyle puts the old look back, and only while the look it
+    /// replaced is still there: someone else's later restyle is a conflict.
+    #[test]
+    fn an_undo_of_a_restyle_puts_the_old_look_back_unless_someone_restyled_since() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &rectangle("r1", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+
+        let update = op(
+            "style-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            1,
+            0,
+            json!({"action": "annotation.update", "style": {"color": [0.0, 0.0, 1.0], "opacity": 0.5}}),
+        )?;
+        let applied = room.apply(&editor, &update, 0)?;
+        let before = applied.op.payload.get("before").cloned().ok_or("no before")?;
+        let style = applied.op.payload.get("style").cloned().ok_or("no style")?;
+
+        // Someone restyles the same comment before the undo: the undo's
+        // compare-and-set fails and their look is kept.
+        let theirs = op(
+            "style-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            2,
+            0,
+            json!({"action": "annotation.update", "style": {"color": [0.0, 1.0, 0.0]}}),
+        )?;
+        room.apply(&editor, &theirs, 0)?;
+        let undo = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            3,
+            0,
+            json!({"action": "annotation.update", "style": before.clone(), "expect": style.clone()}),
+        )?;
+        let rejected = room.apply(&editor, &undo, 0).err().ok_or("the undo overwrote another restyle")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        assert!(!rejected.retryable);
+        assert!(near(style_of(room.adapter(), "r1")?.color, [0.0, 1.0, 0.0]));
+
+        // With the look still in place, the undo restores what the update replaced.
+        let plain = op(
+            "style-3",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            4,
+            0,
+            json!({"action": "annotation.update", "style": {"color": [0.25, 0.25, 0.25]}}),
+        )?;
+        let applied = room.apply(&editor, &plain, 0)?;
+        let before = applied.op.payload["before"].clone();
+        let style = applied.op.payload["style"].clone();
+        let undo = op(
+            "undo-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            5,
+            0,
+            json!({"action": "annotation.update", "style": before, "expect": style}),
+        )?;
+        room.apply(&editor, &undo, 0)?;
+        assert!(near(style_of(room.adapter(), "r1")?.color, [0.0, 1.0, 0.0]), "the look the update replaced is back");
+        Ok(())
+    }
+
+    /// A reply can set the review status (`/State`, `/StateModel /Review`); the
+    /// status survives a delete and restore, and a reply to a deleted comment is
+    /// refused before anything is added.
+    #[test]
+    fn a_state_reply_sets_the_status_and_a_reply_to_a_deleted_comment_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        room.apply(&editor, &note("n1", "hello", 0)?, 0)?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let reply = op(
+            "reply-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            1,
+            0,
+            json!({"action": "annotation.reply", "nm": "r1", "text": "sounds right", "author": DEFAULT_AUTHOR, "state": "accepted"}),
+        )?;
+        let applied = room.apply(&editor, &reply, 0)?;
+        assert_eq!(applied.result["nm"], "r1");
+        assert_eq!(applied.op.payload["state"], "accepted");
+        let document = room.adapter().document().ok_or("gone")?;
+        let state = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("r1")).ok_or("the reply is gone")?;
+        assert_eq!(state.state.as_deref(), Some("Accepted"), "the reply sets /State");
+        assert_eq!(state.in_reply_to.as_deref(), Some("n1"));
+        assert_eq!(state.contents.as_deref(), Some("Accepted set by editor"), "the status text is the engine's");
+
+        // The status survives the delete: the copy carries the body, the restore
+        // rebuilds the same state reply.
+        let delete = op("del-1", ConflictClass::Merge, Target::Annotation { page, nm: "r1".into() }, 2, 0, json!({"action": "annotation.delete"}))?;
+        let applied = room.apply(&editor, &delete, 0)?;
+        let copy = applied.result["copy"].as_str().ok_or("the delete kept no copy")?.to_owned();
+        let restore = op(
+            "undo-1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "r1".into() },
+            3,
+            0,
+            json!({"action": "annotation.restore", "copy": copy}),
+        )?;
+        room.apply(&editor, &restore, 0)?;
+        let document = room.adapter().document().ok_or("gone")?;
+        let back = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("r1")).ok_or("the reply did not come back")?;
+        assert_eq!(back.state.as_deref(), Some("Accepted"));
+
+        // Deleting the parent takes its replies with it; a reply addressed to it
+        // afterwards is refused, and no annotation is added.
+        let delete =
+            op("del-parent", ConflictClass::Merge, Target::Annotation { page, nm: "n1".into() }, 4, 0, json!({"action": "annotation.delete"}))?;
+        room.apply(&editor, &delete, 0)?;
+        let late = op(
+            "reply-2",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "n1".into() },
+            5,
+            0,
+            json!({"action": "annotation.reply", "nm": "r2", "text": "too late", "author": DEFAULT_AUTHOR}),
+        )?;
+        let rejected = room.apply(&editor, &late, 0).err().ok_or("a reply to a deleted comment was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict, "{}", rejected.message);
+        assert!(room.adapter().document().ok_or("gone")?.info.annotations.is_empty(), "nothing was added");
         Ok(())
     }
 }

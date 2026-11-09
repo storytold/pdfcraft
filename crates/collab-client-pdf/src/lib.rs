@@ -12,7 +12,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_collab_annot::{AnnotationInput, WireError};
+use pdfcraft_collab_annot::{AnnotationInput, BorderShapeWire, ReviewStateWire, StyleUpdate, WireError};
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, Target};
 use pdfcraft_engine::{DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, NoteIcon, Session, Shape};
 use serde_json::{Value, json};
@@ -42,7 +42,7 @@ pub enum ProjectionError {
 impl From<WireError> for ProjectionError {
     fn from(error: WireError) -> Self {
         match error {
-            WireError::UnsupportedShape(_) | WireError::TooMany { .. } => Self::Unsupported(error.to_string()),
+            WireError::UnsupportedShape(_) | WireError::NotRestylable(_) | WireError::TooMany { .. } => Self::Unsupported(error.to_string()),
             WireError::Malformed(_) | WireError::Invalid { .. } => Self::Invalid(error.to_string()),
         }
     }
@@ -99,6 +99,74 @@ pub fn set_contents_payload_expecting(text: &str, expect: &str) -> Value {
 
 pub fn reply_payload(nm: &str, text: &str, author: &str) -> Value {
     json!({"action": "annotation.reply", "nm": nm, "text": text, "author": author})
+}
+
+/// A reply that also sets the comment's review status (`/State`,
+/// `/StateModel /Review`). The engine writes the status text itself, so the
+/// accepted operation carries it.
+pub fn state_reply_payload(nm: &str, state: pdfcraft_engine::ReviewState, author: &str) -> Value {
+    let state = ReviewStateWire::from(state);
+    json!({"action": "annotation.reply", "nm": nm, "author": author, "state": state.name()})
+}
+
+/// The body of an `annotation.update`: the final look of the comment, named by
+/// the operation's target.
+pub fn style_update_payload(update: &StyleUpdate) -> Value {
+    update.to_payload()
+}
+
+/// The update that undoes one: the look `style` puts back, applied only if the
+/// comment still has the look `expect` names (an undo is a compare-and-set).
+pub fn style_restore_payload(style: &StyleUpdate, expect: &StyleUpdate) -> Value {
+    json!({"action": "annotation.update", "style": style.to_value(), "expect": expect.to_value()})
+}
+
+/// One style update for a group of interactive style edits on the same comment.
+///
+/// The interface sends a colour, a width and a border as separate edits in one
+/// batch (one undo step); on the wire they are one `annotation.update`, so every
+/// replica applies one version and the undo puts the whole look back. `None`
+/// when the edits are not all style edits on one comment, or when they carry
+/// something the wire does not: the caller refuses them as a whole.
+pub fn style_update_for_edits(edits: &[Edit]) -> Option<(usize, usize, StyleUpdate)> {
+    let mut target: Option<(usize, usize)> = None;
+    let mut update = StyleUpdate::default();
+    for edit in edits {
+        let (page, index) = match edit {
+            Edit::StyleAnnotation { page, index, .. }
+            | Edit::FillAnnotation { page, index, .. }
+            | Edit::BorderColorAnnotation { page, index, .. }
+            | Edit::BorderShapeAnnotation { page, index, .. } => (*page, *index),
+            _ => return None,
+        };
+        if target.get_or_insert((page, index)) != &(page, index) {
+            return None;
+        }
+        match edit {
+            Edit::StyleAnnotation { color, opacity, width, endings, .. } => {
+                // Line endings are a style of their own (a line's or a callout's)
+                // and do not travel yet: refuse the whole step rather than most of it.
+                if endings.is_some() {
+                    return None;
+                }
+                if let Some(color) = color {
+                    update.color = Some(*color);
+                }
+                if let Some(opacity) = opacity {
+                    update.opacity = Some(*opacity);
+                }
+                if let Some(width) = width {
+                    update.width = Some(*width);
+                }
+            }
+            Edit::FillAnnotation { fill, .. } => update.fill = Some(*fill),
+            Edit::BorderColorAnnotation { color, .. } => update.border_color = Some(*color),
+            Edit::BorderShapeAnnotation { shape, .. } => update.border_shape = Some(BorderShapeWire::from(*shape)),
+            _ => return None,
+        }
+    }
+    let (page, index) = target?;
+    (!update.is_empty()).then_some((page, index, update))
 }
 
 pub fn delete_payload() -> Value {
@@ -160,16 +228,39 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let index = annotation_index(document, page.index as usize, &name)?;
             Ok(Edit::SetAnnotationContents { page: page.index as usize, index, text: text(op, "text")?.to_owned() })
         }
+        ("annotation.update", ConflictClass::Merge) => {
+            // The final look of an existing comment; the address is checked
+            // against this replica's document before the edit is built.
+            let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
+            let index = annotation_index(document, page, &name)?;
+            let update = StyleUpdate::from_payload(&op.payload)?;
+            let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(name.clone(), page))?;
+            update.check_for(&props)?;
+            Ok(Edit::RestyleAnnotation { page, index, style: update.to_restyle() })
+        }
         ("annotation.reply", ConflictClass::Merge) => {
             let (page, name) = annotation_target(op)?;
             let index = annotation_index(document, page.index as usize, &name)?;
-            Ok(Edit::ReplyToAnnotationNamed {
-                page: page.index as usize,
-                index,
-                text: text(op, "text")?.to_owned(),
-                author: op.payload.get("author").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                name: text(op, "nm")?.to_owned(),
-            })
+            let author = op.payload.get("author").and_then(Value::as_str).unwrap_or_default().to_owned();
+            // A reply may also set the review status; the engine writes the
+            // status text, and every replica uses the server's `/NM`.
+            match op.payload.get("state").and_then(Value::as_str) {
+                Some(state) => Ok(Edit::SetAnnotationStatusNamed {
+                    page: page.index as usize,
+                    index,
+                    state: ReviewStateWire::parse(state)?.into(),
+                    author,
+                    name: text(op, "nm")?.to_owned(),
+                }),
+                None => Ok(Edit::ReplyToAnnotationNamed {
+                    page: page.index as usize,
+                    index,
+                    text: text(op, "text")?.to_owned(),
+                    author,
+                    name: text(op, "nm")?.to_owned(),
+                }),
+            }
         }
         ("annotation.delete", ConflictClass::Merge) => {
             let (page, name) = annotation_target(op)?;
@@ -178,11 +269,27 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
         }
         ("annotation.restore", ConflictClass::Merge) => {
             // The accepted operation carries the comment's wire body; the copy
-            // token only means something to the server (RFC §6).
+            // token only means something to the server (RFC §6). A reply comes
+            // back a reply (`parent`), and a state reply keeps its `/State`.
             let (page, name) = annotation_target(op)?;
+            let page = page.index as usize;
             let body = op.payload.get("body").ok_or(ProjectionError::Missing("body"))?;
+            let author = body.get("author").and_then(Value::as_str).unwrap_or_default().to_owned();
+            if let Some(parent) = op.payload.get("parent").and_then(Value::as_str).filter(|parent| !parent.is_empty()) {
+                let index = annotation_index(document, page, parent)?;
+                return match body.get("state").and_then(Value::as_str) {
+                    Some(state) => Ok(Edit::SetAnnotationStatusNamed { page, index, state: ReviewStateWire::parse(state)?.into(), author, name }),
+                    None => Ok(Edit::ReplyToAnnotationNamed {
+                        page,
+                        index,
+                        text: body.get("text").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                        author,
+                        name,
+                    }),
+                };
+            }
             let input = AnnotationInput::from_payload(body)?;
-            Ok(Edit::AddAnnotationNamed(input.to_engine(page.index as usize), name))
+            Ok(Edit::AddAnnotationNamed(input.to_engine(page), name))
         }
         ("field.set_value", ConflictClass::Merge) => {
             let Target::Field { name } = &op.target else {
@@ -387,6 +494,20 @@ pub fn ops_for_edit(
                 reply_payload(&nm, text, author),
             )])
         }
+        Edit::SetAnnotationStatus { page, index, state, author } => {
+            // Acrobat's "Set status" is a reply to the comment that carries
+            // `/State`; the engine writes the status text on every replica.
+            let root = name_at(document, *page, *index)?;
+            let nm = new_annotation_name(client_id);
+            Ok(vec![merge_op(
+                doc,
+                next_id(client_id, counter)?,
+                base_version,
+                epoch,
+                Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm: root },
+                state_reply_payload(&nm, *state, author),
+            )])
+        }
         Edit::DeleteAnnotation { page, index } => {
             let nm = name_at(document, *page, *index)?;
             Ok(vec![merge_op(
@@ -397,6 +518,18 @@ pub fn ops_for_edit(
                 Target::Annotation { page: PageRef { index: *page as u32, epoch }, nm },
                 delete_payload(),
             )])
+        }
+        Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::BorderColorAnnotation { .. } | Edit::BorderShapeAnnotation { .. } => {
+            // One choice of the comment bar is one `annotation.update`.
+            let (page, index, update) =
+                style_update_for_edits(std::slice::from_ref(edit)).ok_or_else(|| ProjectionError::Unsupported(edit.label().to_string()))?;
+            Ok(vec![style_op(document, doc, client_id, base_version, epoch, counter, page, index, update)?])
+        }
+        Edit::Batch { label, edits } => {
+            // One undo step of the interface (Comment Properties ▸ OK) is one
+            // operation when every edit in it restyles the same comment.
+            let (page, index, update) = style_update_for_edits(edits).ok_or_else(|| ProjectionError::Unsupported(label.clone()))?;
+            Ok(vec![style_op(document, doc, client_id, base_version, epoch, counter, page, index, update)?])
         }
         Edit::SetFieldValue { name, value } => {
             let target = Target::Field { name: name.clone() };
@@ -497,6 +630,29 @@ pub fn ops_for_edit(
     }
 }
 
+/// One `annotation.update` for a style change on the comment at `(page, index)`,
+/// addressed by its `/NM`. The comment's own properties are checked first: a
+/// property it does not have is refused on this side too, so the step fails as
+/// a whole instead of half-applying.
+#[allow(clippy::too_many_arguments)]
+fn style_op(
+    document: &Document,
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+    page: usize,
+    index: usize,
+    update: StyleUpdate,
+) -> Result<Op, ProjectionError> {
+    let nm = name_at(document, page, index)?;
+    let props = document.comment_props(page, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page))?;
+    update.check_for(&props)?;
+    let target = Target::Annotation { page: PageRef { index: page as u32, epoch }, nm };
+    Ok(merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, update.to_payload()))
+}
+
 /// The operation that undoes `op`, built from the document as it was *before*
 /// applying it. Undo is a normal operation (ADR-0010), so a conflict with
 /// someone else's later edit is reported, not forced: each inverse names the
@@ -531,6 +687,21 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
                 .ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
             let expect = op.payload.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
             merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, set_contents_payload_expecting(&previous, &expect))
+        }
+        "annotation.update" => {
+            // The undo puts the look the update replaced back, and only if the
+            // comment still has the look this update left (`expect`): a later
+            // restyle by someone else is a conflict, not an overwrite.
+            let (page, nm) = annotation_target(op)?;
+            let index = annotation_index(document, page.index as usize, &nm)?;
+            let props =
+                document.comment_props(page.index as usize, index).ok_or_else(|| ProjectionError::AnnotationGone(nm.clone(), page.index as usize))?;
+            let update = StyleUpdate::from_payload(&op.payload)?;
+            let before = update.before(&props);
+            if before.is_empty() {
+                return Ok(None);
+            }
+            merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, style_restore_payload(&before, &update))
         }
         "annotation.delete" => return Ok(None),
         "field.set_value" => {
@@ -578,9 +749,22 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
 pub fn inverse_after(applied: &Applied) -> Option<Op> {
     let op = &applied.op;
     let action = op.payload.get("action").and_then(Value::as_str)?;
-    let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
     let doc = op.doc.clone();
     let op_id = OpId::new(format!("undo-{}", op.op_id.as_str())).ok()?;
+    // A restyle is undone from the look the server replaced (`before`), not from
+    // this replica's guess: `inverse_for` built one before the operation was
+    // sent, and this is the authority that patches it.
+    if action == "annotation.update" {
+        let style = StyleUpdate::from_value(op.payload.get("style")?).ok()?;
+        let before = StyleUpdate::from_value(op.payload.get("before")?).ok()?;
+        if before.is_empty() {
+            return None;
+        }
+        let Target::Annotation { page, nm } = &op.target else { return None };
+        let target = Target::Annotation { page: *page, nm: nm.clone() };
+        return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, style_restore_payload(&before, &style)));
+    }
+    let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
     match action {
         "annotation.delete" => {
             let Target::Annotation { page, nm } = &op.target else { return None };
@@ -1105,6 +1289,209 @@ mod tests {
         let mut counter = 0;
         let error = super::ops_for_edit(document, &pdfcraft_engine::Edit::AddAnnotation(new), doc()?, "ada", 0, 0, &mut counter);
         assert!(matches!(error, Err(ProjectionError::Unsupported(message)) if message.contains("redaction")));
+        Ok(())
+    }
+
+    /// One choice of the comment bar becomes one `annotation.update`: every
+    /// replica applies one version, and the inverse puts the old look back and
+    /// names the look it leaves.
+    #[test]
+    fn a_style_edit_becomes_one_update_and_its_inverse() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        apply(
+            &mut session,
+            id,
+            &merge_op(
+                doc()?,
+                OpId::new("a1")?,
+                0,
+                0,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                add_note_payload("root", [40.0, 250.0], "hello", "Ada"),
+            ),
+        )?;
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("root")).ok_or("the comment is missing")?;
+        let previous = document.comment_props(0, index).ok_or("no properties")?.color;
+
+        let mut counter = 0;
+        let edit = pdfcraft_engine::Edit::StyleAnnotation { page: 0, index, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None };
+        let ops = super::ops_for_edit(document, &edit, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1, "a restyle is one operation");
+        let target = Target::Annotation { page: PageRef { index: 0, epoch: 0 }, nm: "root".into() };
+        assert_eq!(ops[0].target, target);
+        assert_eq!(ops[0].payload["action"], "annotation.update");
+        assert_eq!(ops[0].payload["style"]["color"], serde_json::json!([0.0, 0.0, 1.0]));
+        assert_eq!(ops[0].payload["style"].get("opacity"), None, "an unnamed property is not in the style");
+
+        let document = session.get(id).ok_or("gone")?;
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("i1")?)?.ok_or("a restyle can be undone")?;
+        assert_eq!(inverse.payload["action"], "annotation.update");
+        assert_eq!(inverse.payload["style"]["color"], serde_json::json!(previous), "the inverse puts the old colour back");
+        assert_eq!(inverse.payload["expect"]["color"], serde_json::json!([0.0, 0.0, 1.0]), "and refuses if the colour changed since");
+        Ok(())
+    }
+
+    /// The batch Comment Properties sends (a width and a fill together) is one
+    /// update, not one operation per edit, and applying the accepted operation
+    /// draws the same comment on a replica.
+    #[test]
+    fn a_batch_of_style_edits_is_one_update_and_round_trips() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let (mut other, other_id) = open()?;
+        let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 80.0, 40.0] };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Ada".into() };
+        // Both replicas add the rectangle from the same operation, so both know
+        // it under the same `/NM`.
+        let add =
+            merge_op(doc()?, OpId::new("a0")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::add_annotation_payload(&new, "rect-1")?);
+        apply(&mut session, id, &add)?;
+        apply(&mut other, other_id, &add)?;
+
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("rect-1")).ok_or("the rectangle is missing")?;
+        let batch = pdfcraft_engine::Edit::Batch {
+            label: "Change comment properties".into(),
+            edits: vec![
+                pdfcraft_engine::Edit::StyleAnnotation { page: 0, index, color: None, opacity: None, width: Some(3.0), endings: None },
+                pdfcraft_engine::Edit::FillAnnotation { page: 0, index, fill: Some([0.0, 1.0, 0.0]) },
+            ],
+        };
+        let mut counter = 0;
+        let ops = super::ops_for_edit(document, &batch, doc()?, "ada", 1, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1, "one undo step is one operation");
+        assert_eq!(ops[0].payload["style"]["width"], serde_json::json!(3.0));
+        assert_eq!(ops[0].payload["style"]["fill"], serde_json::json!([0.0, 1.0, 0.0]));
+
+        // The accepted operation is the same body; the other replica applies it.
+        let accepted = merge_op(doc()?, OpId::new("style-1")?, 1, 0, ops[0].target.clone(), ops[0].payload.clone());
+        let edit = super::edit_for(other.get(other_id).ok_or("gone")?, &accepted)?;
+        assert!(matches!(edit, pdfcraft_engine::Edit::RestyleAnnotation { page: 0, .. }));
+        other.apply_remote(other_id, edit)?;
+        let props = other.get(other_id).ok_or("gone")?.comment_props(0, 0).ok_or("no properties")?;
+        assert!((props.width.unwrap_or_default() - 3.0).abs() < 1e-6);
+        assert_eq!(props.fill, Some([0.0, 1.0, 0.0]));
+        Ok(())
+    }
+
+    /// A line ending is a style the wire does not carry yet: the step is refused
+    /// whole rather than half-applied.
+    #[test]
+    fn a_style_edit_the_wire_cannot_carry_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        apply(
+            &mut session,
+            id,
+            &merge_op(
+                doc()?,
+                OpId::new("a1")?,
+                0,
+                0,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                add_note_payload("root", [40.0, 250.0], "hello", "Ada"),
+            ),
+        )?;
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("root")).ok_or("the comment is missing")?;
+        let edit = pdfcraft_engine::Edit::StyleAnnotation {
+            page: 0,
+            index,
+            color: Some([0.0, 0.0, 1.0]),
+            opacity: None,
+            width: None,
+            endings: Some(vec![pdfcraft_engine::LineEnding::OpenArrow, pdfcraft_engine::LineEnding::None]),
+        };
+        let mut counter = 0;
+        assert!(matches!(super::ops_for_edit(document, &edit, doc()?, "ada", 0, 0, &mut counter), Err(ProjectionError::Unsupported(_))));
+        Ok(())
+    }
+
+    /// A status reply is a named reply with a review state, and its restore
+    /// keeps the `/State` instead of coming back as a plain reply.
+    #[test]
+    fn a_state_reply_keeps_its_status_through_the_wire_and_a_restore() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        apply(
+            &mut session,
+            id,
+            &merge_op(
+                doc()?,
+                OpId::new("a1")?,
+                0,
+                0,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                add_note_payload("root", [40.0, 250.0], "hello", "Ada"),
+            ),
+        )?;
+        let document = session.get(id).ok_or("gone")?;
+        let index = document.info.annotations.iter().position(|a| a.name.as_deref() == Some("root")).ok_or("the comment is missing")?;
+        let mut counter = 0;
+        let edit = pdfcraft_engine::Edit::SetAnnotationStatus { page: 0, index, state: pdfcraft_engine::ReviewState::Accepted, author: "Ada".into() };
+        let ops = super::ops_for_edit(document, &edit, doc()?, "ada", 0, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "annotation.reply");
+        assert_eq!(ops[0].payload["state"], "accepted");
+        assert_eq!(ops[0].target, Target::Annotation { page: PageRef { index: 0, epoch: 0 }, nm: "root".into() });
+
+        // The accepted operation carries the server's `/NM` and the status text.
+        let mut payload = ops[0].payload.clone();
+        payload["nm"] = serde_json::json!("status-1");
+        payload["text"] = serde_json::json!("Accepted set by Ada");
+        let accepted = merge_op(doc()?, OpId::new("s1")?, 0, 0, ops[0].target.clone(), payload);
+        let document = session.get(id).ok_or("gone")?;
+        assert!(matches!(
+            super::edit_for(document, &accepted)?,
+            pdfcraft_engine::Edit::SetAnnotationStatusNamed { state: pdfcraft_engine::ReviewState::Accepted, .. }
+        ));
+
+        // A restore of a status reply comes back a status reply.
+        let restore = merge_op(
+            doc()?,
+            OpId::new("u1")?,
+            1,
+            0,
+            Target::Annotation { page: PageRef { index: 0, epoch: 0 }, nm: "status-1".into() },
+            serde_json::json!({"action": "annotation.restore",
+                               "parent": "root",
+                               "body": {"action": "annotation.reply", "nm": "status-1", "text": "Accepted set by Ada", "author": "Ada", "state": "accepted"}}),
+        );
+        let document = session.get(id).ok_or("gone")?;
+        assert!(matches!(
+            super::edit_for(document, &restore)?,
+            pdfcraft_engine::Edit::SetAnnotationStatusNamed { state: pdfcraft_engine::ReviewState::Accepted, .. }
+        ));
+        Ok(())
+    }
+
+    /// The accepted operation is the authority for a restyle's undo: it carries
+    /// the look the server replaced, which is what the inverse puts back.
+    #[test]
+    fn the_accepted_update_answers_with_the_operation_that_undoes_it() -> Result<(), Box<dyn std::error::Error>> {
+        let target = Target::Annotation { page: PageRef { index: 0, epoch: 0 }, nm: "root".into() };
+        let mut op = merge_op(
+            doc()?,
+            OpId::new("style-1")?,
+            4,
+            0,
+            target,
+            serde_json::json!({"action": "annotation.update", "style": {"color": [0.0, 0.0, 1.0]}}),
+        );
+        op.payload["before"] = serde_json::json!({"color": [1.0, 0.0, 0.0]});
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: op.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 5,
+            epoch: 0,
+            op,
+            result: serde_json::json!({"nm": "root"}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("a restyle can be undone from the accepted operation")?;
+        assert_eq!(undo.payload["action"], "annotation.update");
+        assert_eq!(undo.payload["style"]["color"], serde_json::json!([1.0, 0.0, 0.0]));
+        assert_eq!(undo.payload["expect"]["color"], serde_json::json!([0.0, 0.0, 1.0]));
+        assert_eq!(undo.base_version, 5);
+        assert_eq!(undo.target, applied.op.target);
         Ok(())
     }
 
