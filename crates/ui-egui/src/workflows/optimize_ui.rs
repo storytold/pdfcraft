@@ -561,7 +561,7 @@ mod tests {
         assert!(app.optimize_run.is_none());
 
         app.scan_clean_run = None;
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, destination: None, progress: Arc::default() });
         app.start_scan_clean();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
         assert!(app.scan_clean_run.is_none());
