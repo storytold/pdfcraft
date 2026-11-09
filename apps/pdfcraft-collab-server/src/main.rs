@@ -7,13 +7,14 @@
 //! accepted since it, and what the cabinet is known to hold: an acknowledged
 //! edit survives a crash, a restart replays the tail onto the last base, and a
 //! commit is refused (`409`) when the cabinet's copy changed outside the
-//! session. Session tokens are RS256 JWTs verified with the cabinet's public
-//! key; no token, comment text or PDF byte is logged.
+//! session. Session tokens are HS256 JWTs signed with the cabinet's shared
+//! secret, or RS256 JWTs verified with its public key; exactly one scheme is
+//! configured at start-up and no token, comment text or PDF byte is logged.
 //!
 //! ```text
 //! pdfcraft-collab-server \
 //!   --documents /srv/collab/documents --data /srv/collab/data \
-//!   --jwt-key /srv/collab/cabinet-public.pem --jwt-audience lzmkm \
+//!   --jwt-secret-file /srv/collab/cabinet-jwt-secret --jwt-audience lzmkm \
 //!   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 \
 //!   --control 127.0.0.1:8789 --callback-url http://cabinet.internal/v1/collab/commit
 //! ```
@@ -31,11 +32,11 @@ mod rooms;
 use control::{Control, ControlConfig};
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_server::RoomConfig;
-use pdfcraft_collab_ws::{Config, JwtVerifier, Verifier, WsServer};
+use pdfcraft_collab_ws::{Config, Hs256Verifier, JwtVerifier, Verifier, WsServer};
 use rooms::{CabinetAdapter, Publisher, RoomsConfig};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,7 +53,8 @@ struct Args {
     data: PathBuf,
     callback: Option<String>,
     max_source_bytes: usize,
-    jwt_key: PathBuf,
+    jwt_key: Option<PathBuf>,
+    jwt_secret_file: Option<PathBuf>,
     audience: String,
     app: String,
     origin: Option<String>,
@@ -68,12 +70,63 @@ impl Default for Args {
             data: "collab-data".into(),
             callback: None,
             max_source_bytes: DEFAULT_MAX_SOURCE,
-            jwt_key: "cabinet-public.pem".into(),
+            jwt_key: None,
+            jwt_secret_file: None,
             audience: "lzmkm".into(),
             app: "pdfcraft".into(),
             origin: None,
         }
     }
+}
+
+/// How session tickets are verified, decided once at start-up (RFC §7).
+enum Auth {
+    /// RS256 with the cabinet's public key.
+    Rsa(PathBuf),
+    /// HS256 with the cabinet's shared secret. Never logged.
+    Shared(Vec<u8>),
+}
+
+impl Auth {
+    fn scheme(&self) -> &'static str {
+        match self {
+            Self::Rsa(_) => "rs256",
+            Self::Shared(_) => "hs256",
+        }
+    }
+}
+
+/// Picks exactly one scheme. A key and a secret together, two secrets, or
+/// neither are configuration errors: the daemon never guesses which one the
+/// operator meant, because guessing is how a ticket that should be refused gets
+/// accepted.
+fn resolve_auth(key: Option<&Path>, secret_file: Option<&Path>, environment_secret: Option<&str>) -> Result<Auth, String> {
+    // An empty variable is what a compose file leaves behind when a secret is
+    // not configured; treat it as unset rather than as an empty secret.
+    let environment_secret = environment_secret.map(str::trim).filter(|secret| !secret.is_empty());
+    match (key, secret_file, environment_secret) {
+        (Some(_), Some(_), _) => Err("--jwt-key and --jwt-secret-file are mutually exclusive: use RS256 or HS256, not both".into()),
+        (Some(_), None, Some(_)) => Err("--jwt-key and PDFCRAFT_COLLAB_JWT_SECRET are mutually exclusive: use RS256 or HS256, not both".into()),
+        (None, Some(_), Some(_)) => Err("--jwt-secret-file and PDFCRAFT_COLLAB_JWT_SECRET both set a secret; keep exactly one".into()),
+        (Some(key), None, None) => Ok(Auth::Rsa(key.to_owned())),
+        (None, Some(file), None) => Ok(Auth::Shared(read_secret(file)?)),
+        (None, None, Some(secret)) => Ok(Auth::Shared(secret.as_bytes().to_vec())),
+        (None, None, None) => {
+            Err("no session token key: pass --jwt-key FILE (RS256) or --jwt-secret-file FILE / PDFCRAFT_COLLAB_JWT_SECRET (HS256)".into())
+        }
+    }
+}
+
+/// The secret file's text without the trailing whitespace an editor adds. The
+/// content never reaches a log or an error message.
+fn read_secret(path: &Path) -> Result<Vec<u8>, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("could not read the JWT secret {path:?}: {e}"))?;
+    let text = String::from_utf8(raw).map_err(|_| format!("the JWT secret {path:?} is not UTF-8 text"))?;
+    let secret = text.trim();
+    if secret.is_empty() {
+        return Err(format!("the JWT secret {path:?} is empty"));
+    }
+    Ok(secret.as_bytes().to_vec())
 }
 
 fn main() -> ExitCode {
@@ -88,9 +141,17 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let args = parse_args(std::env::args().skip(1))?;
-    let key = std::fs::read(&args.jwt_key).map_err(|e| format!("could not read the JWT key {:?}: {e}", args.jwt_key))?;
-    let verifier: Arc<dyn Verifier> =
-        Arc::new(JwtVerifier::from_rsa_pem(&key, &args.audience, &args.app).map_err(|e| format!("the JWT key is not usable: {e}"))?);
+    let environment_secret = std::env::var("PDFCRAFT_COLLAB_JWT_SECRET").ok();
+    let auth = resolve_auth(args.jwt_key.as_deref(), args.jwt_secret_file.as_deref(), environment_secret.as_deref())?;
+    let verifier: Arc<dyn Verifier> = match &auth {
+        Auth::Rsa(path) => {
+            let key = std::fs::read(path).map_err(|e| format!("could not read the JWT key {path:?}: {e}"))?;
+            Arc::new(JwtVerifier::from_rsa_pem(&key, &args.audience, &args.app).map_err(|e| format!("the JWT key is not usable: {e}"))?)
+        }
+        Auth::Shared(secret) => {
+            Arc::new(Hs256Verifier::from_secret(secret, &args.audience, &args.app).map_err(|e| format!("the JWT secret is not usable: {e}"))?)
+        }
+    };
 
     let publisher = args
         .callback
@@ -128,10 +189,11 @@ fn run() -> Result<(), String> {
         None => None,
     };
     println!(
-        "pdfcraft-collab-server: {opened} room(s), ws://{}, health http://{}{}, callback {}",
+        "pdfcraft-collab-server: {opened} room(s), ws://{}, health http://{}{}, auth {}, callback {}",
         handle.local_addr(),
         health,
         control.map_or_else(String::new, |addr| format!(", control http://{addr}/v1/sessions")),
+        auth.scheme(),
         publisher.as_ref().map_or("none", |publisher| publisher.url()),
     );
     loop {
@@ -151,7 +213,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--data" => parsed.data = value()?.into(),
             "--callback-url" => parsed.callback = Some(value()?),
             "--max-source-bytes" => parsed.max_source_bytes = value()?.parse().map_err(|_| "--max-source-bytes needs a number".to_owned())?,
-            "--jwt-key" => parsed.jwt_key = value()?.into(),
+            "--jwt-key" => parsed.jwt_key = Some(value()?.into()),
+            "--jwt-secret-file" => parsed.jwt_secret_file = Some(value()?.into()),
             "--jwt-audience" => parsed.audience = value()?,
             "--app" => parsed.app = value()?,
             "--origin" => parsed.origin = Some(value()?),
@@ -159,9 +222,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 println!(
                     "usage: pdfcraft-collab-server [--listen ADDR] [--health ADDR] [--control ADDR]\n\
                      \x20      [--documents DIR] [--data DIR] [--callback-url URL] [--max-source-bytes N]\n\
-                     \x20      [--jwt-key FILE] [--jwt-audience AUD] [--app ID] [--origin URL]\n\n\
+                     \x20      [--jwt-key FILE | --jwt-secret-file FILE] [--jwt-audience AUD]\n\
+                     \x20      [--app ID] [--origin URL]\n\n\
                      --documents is the dev mode: one room per <fileId>.pdf, no cabinet.\n\
-                     The commit callback token is read from PDFCRAFT_COLLAB_CALLBACK_TOKEN."
+                     --jwt-key verifies RS256 tickets; --jwt-secret-file (or\n\
+                     PDFCRAFT_COLLAB_JWT_SECRET) verifies HS256 tickets. Exactly one is\n\
+                     required. The commit callback token is read from\n\
+                     PDFCRAFT_COLLAB_CALLBACK_TOKEN."
                 );
                 std::process::exit(0);
             }
@@ -239,11 +306,12 @@ fn answer(mut stream: TcpStream, server: &WsServer<CabinetAdapter>) -> std::io::
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, parse_args, render};
+    use super::{Args, Auth, parse_args, render, resolve_auth};
     use crate::rooms::{self, RoomError, RoomsConfig};
     use pdfcraft_collab_hub::Hub;
     use pdfcraft_collab_proto::{ActorId, ClientInfo, ClientMessage, ConflictClass, DocKey, Hello, Op, OpId, OpKind, PageRef, Role};
     use pdfcraft_collab_server::{Adapter, RoomConfig};
+    use std::path::Path;
 
     fn fixture() -> Vec<u8> {
         let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -286,6 +354,41 @@ mod tests {
         assert_eq!(parsed.origin.as_deref(), Some("https://a.example"));
         assert_eq!(parsed.app, "pdfcraft");
         assert_eq!(parsed.documents, None, "no directory is the production default");
+    }
+
+    #[test]
+    fn the_secret_file_option_parses() {
+        let parsed = parse_args(args(&["--jwt-secret-file", "/tmp/cabinet-jwt-secret"]).into_iter()).expect("valid options");
+        assert_eq!(parsed.jwt_secret_file, Some("/tmp/cabinet-jwt-secret".into()));
+        assert_eq!(parsed.jwt_key, None, "a secret file does not also select RS256");
+    }
+
+    #[test]
+    fn exactly_one_auth_scheme_is_required() {
+        let key = Path::new("/tmp/cabinet-public.pem");
+        let secret = Path::new("/tmp/cabinet-jwt-secret");
+        let environment = "0123456789abcdef";
+
+        assert!(resolve_auth(None, None, None).is_err(), "neither a key nor a secret must not start");
+        assert!(resolve_auth(Some(key), Some(secret), None).is_err(), "a key and a secret file together are ambiguous");
+        assert!(resolve_auth(Some(key), None, Some(environment)).is_err(), "a key and an environment secret together are ambiguous");
+        assert!(resolve_auth(None, Some(secret), Some(environment)).is_err(), "two secrets are ambiguous");
+        assert!(resolve_auth(None, None, Some("   ")).is_err(), "an empty environment secret is not a secret");
+
+        assert!(matches!(resolve_auth(Some(key), None, None), Ok(Auth::Rsa(_))));
+        assert!(matches!(resolve_auth(None, None, Some(environment)), Ok(Auth::Shared(_))));
+    }
+
+    #[test]
+    fn a_secret_file_is_read_without_its_trailing_newline() -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!("pdfcraft-jwt-secret-{}", std::process::id()));
+        std::fs::write(&path, "0123456789abcdef\n")?;
+        match resolve_auth(None, Some(path.as_path()), None)? {
+            Auth::Shared(secret) => assert_eq!(secret, b"0123456789abcdef"),
+            Auth::Rsa(_) => return Err("a secret file must select HS256".into()),
+        }
+        std::fs::remove_file(&path)?;
+        Ok(())
     }
 
     #[test]

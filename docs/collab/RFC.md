@@ -546,7 +546,8 @@ presence не попадают; смена выделения не создаё�
 
 ## 7. Роли и права (ADR-0008)
 
-JWT в `hello`: `{sub, doc, role, sid, exp}`; `role ∈ owner|editor|commenter|viewer`.
+JWT в `hello`: `{sub, aud, doc|fileId, role, sid|sessionId, exp}`
+(`role ∈ owner|editor|commenter|viewer`). Подпись и обязательные claims — §7.1.
 Проверка на сервере для каждой операции:
 
 - `viewer` — только presence/snapshot;
@@ -557,6 +558,46 @@ JWT в `hello`: `{sub, doc, role, sid, exp}`; `role ∈ owner|editor|commenter|v
 
 Дополнительно проверяются PDF-permissions (`crates/engine/src/edit/run.rs:9-140`).
 Токен не логируется; `Origin` проверяется для web.
+
+### 7.1. Подпись и проверка токена
+
+Кабинет подписывает тикеты **HS256** общим секретом
+(`CRAFT_SYNC_JWT_SECRET` в `internal/application/craft/service.go`), поэтому
+HS256 — основной режим PdfCraft. Сервер получает секрет одним из двух способов:
+
+- `--jwt-secret-file FILE` — файл, содержимое без завершающих пробелов и
+  перевода строки;
+- переменная `PDFCRAFT_COLLAB_JWT_SECRET` (пустая переменная считается
+  незаданной).
+
+Секрет короче 16 байт — отказ старта: кабинет сам не подписывает более
+коротким. **RS256 остаётся опцией**: `--jwt-key FILE` с публичным ключом
+кабинета (PKCS#1/PKCS#8 PEM) для развёртываний, которые перейдут на
+асимметричные тикеты.
+
+Выбор ровно один и только на старте. Ключ и секрет одновременно (файлом или
+переменной) или два секрета — ошибка старта с текстом, какой флаг убрать; не
+задано ничего — тоже ошибка. Молчаливый выбор «что-нибудь одно» принял бы
+тикет, который обязан быть отвергнут. Секрет не попадает ни в лог, ни в
+сообщение об ошибке: в тексте только путь к файлу.
+
+Проверяемые claims (неизвестные игнорируются, чтобы кабинет мог расширять
+тикет):
+
+| claim | проверка |
+|---|---|
+| `aud` | обязателен, равен `--jwt-audience` |
+| `sub` | обязателен и непустой; становится актором сессии |
+| `exp` | обязателен, допуск 30 с |
+| `role` | `owner`/`editor`/`commenter`/`viewer` |
+| `doc` или `fileId` | имя файла; `fileId` принимается строкой (контракт §3.2) и числом (тикет кабинета), `doc` — строкой; пустое значение или два разных — `invalid` |
+| `sid` или `sessionId` | сессия кабинета; те же правила, что у имени файла |
+| `app` | если присутствует — равен `--app`; отсутствие допустимо, приложение связывает `aud` |
+
+Алгоритм фиксирован верификатором, а не заголовком токена: RS256-тикет не
+проверяется HS256-секретом и наоборот — подмена алгоритма даёт `invalid` до
+чтения claims. Имя файла из токена обязано совпадать с `hello.doc` (иначе
+`forbidden`) и с `fileId` в control-plane (иначе `403`).
 
 **Lease — liveness одного писателя, а не право записи.** Право записи даёт
 только роль (ADR-0008 §2–3); lease отвечает на другой вопрос — жив ли
@@ -634,7 +675,7 @@ Control-plane включается флагом `--control ADDR` (отдельн
 без флага его нет). `POST /v1/sessions` создаёт комнату или возобновляет её:
 
 ```json
-{"fileId":"file-123","jwt":"<RS256>","etag":"sha256:…",
+{"fileId":"file-123","jwt":"<session JWT>","etag":"sha256:…",
  "bytes":"<base64 PDF>"}
 ```
 
@@ -749,7 +790,7 @@ Authorization: Bearer <service token>
 → 200 { "fileId", "version", "epoch", "etag", "cabinetVersion", "conflict": false }
 ```
 
-- Токен — тот же RS256 JWT кабинета; `fileId` обязан совпадать с путём, роль —
+- Токен — тот же session JWT кабинета (HS256 или RS256, §7.1); `fileId` обязан совпадать с путём, роль —
   `owner`/`editor`. Ответ `401`/`403`.
 - `expectedVersion` — версия копии в кабинете и `etag` — её etag. Версия
   обязана быть **новее** той, что комната уже знает (`400` иначе): иначе
@@ -827,6 +868,8 @@ Headless, без GUI, 2–3 клиента:
 ## 12. Безопасность
 
 - JWT только в `hello`; не в URL, не в логах.
+- Секрет HS256 читается на старте из env/файла и не попадает ни в лог, ни в
+  текст ошибки; выбор схемы — только на старте (§7.1).
 - `Origin` для web; WSS; размер сообщения и число ops/s ограничены.
 - Сервер не логирует `Contents`, `T`, `payload` аннотаций, байты PDF.
 - Server-side проверка роли и PDF-permissions; не полагаться на UI.
@@ -884,13 +927,16 @@ Headless, без GUI, 2–3 клиента:
 ```bash
 cargo run -p pdfcraft-collab-daemon --release -- \
   --data /srv/collab/data \
-  --jwt-key /srv/collab/cabinet-public.pem --jwt-audience lzmkm \
+  --jwt-secret-file /srv/collab/cabinet-jwt-secret --jwt-audience lzmkm \
   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 \
   --control 127.0.0.1:8789 \
   --callback-url http://cabinet.internal/v1/collab/commit \
   [--max-source-bytes N] [--origin https://cabinet.example] [--app pdfcraft]
 ```
 
+- подпись: `--jwt-secret-file` (HS256, тикет кабинета) **или** `--jwt-key`
+  (RS256, публичный ключ); секрет можно дать переменной
+  `PDFCRAFT_COLLAB_JWT_SECRET`; оба сразу или ни одного — ошибка старта (§7.1);
 - прод: `POST /v1/sessions` заводит комнату (bytes или url, JWT, etag);
   callback-токен — `PDFCRAFT_COLLAB_CALLBACK_TOKEN`;
 - dev: `--documents /srv/collab/documents` открывает по комнате на

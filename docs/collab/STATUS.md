@@ -284,7 +284,7 @@ Server:
 # production: rooms from the cabinet control plane
 cargo run -p pdfcraft-collab-daemon --release -- \
   --data /srv/collab/data \
-  --jwt-key /srv/collab/cabinet-public.pem --jwt-audience lzmkm \
+  --jwt-secret-file /srv/collab/cabinet-jwt-secret --jwt-audience lzmkm \
   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 \
   --control 127.0.0.1:8789 \
   --callback-url http://cabinet.internal/v1/collab/commit \
@@ -295,9 +295,16 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   --documents /srv/collab/documents --data /srv/collab/data [...]
 ```
 
-- JWT: RS256, claims `{iss, sub, aud, fileId, app, role, sessionId, iat, exp,
-  ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` with 30 s leeway;
-  `fileId` must equal `hello.doc`; `app` must equal `--app`.
+- JWT: HS256 with the cabinet's secret (`--jwt-secret-file FILE` or
+  `PDFCRAFT_COLLAB_JWT_SECRET`, at least 16 bytes) — the scheme the cabinet
+  signs with today; RS256 (`--jwt-key FILE`) stays an option. Exactly one is
+  required: a key and a secret, two secrets, or neither are start-up errors,
+  and the secret is never logged (RFC §7.1).
+- Claims: `aud` (must equal `--jwt-audience`), `sub`, `exp` (30 s leeway),
+  `role ∈ owner|editor|commenter|viewer`; the file is `doc` or `fileId`
+  (string or number), the session `sid` or `sessionId`; an empty or
+  contradictory pair is refused. The file name must equal `hello.doc`; `app`,
+  when present, must equal `--app`.
 - `POST /v1/sessions` (`--control`, loopback, JWT required):
   `{"fileId","jwt","etag"?,"bytes"|"initialBytes"|"url"}` → `201`/`200` with
   `{"fileId","version","epoch","etag","created"}`; `401` bad token, `403`
@@ -351,6 +358,53 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Cabinet HS256 tickets — auth/lease (2026-11-10, local; not pushed)
+
+The cabinet signs its session tickets with HS256 only
+(`mail-frontend/internal/application/craft/service.go`), while the daemon
+verified RS256 only (`--jwt-key cabinet-public.pem`), so a PDF did not open in
+the cabinet. The transport now accepts both, one scheme per deployment, and
+refuses an ambiguous configuration instead of guessing.
+
+- `crates/collab-ws/src/token.rs`: `Hs256Verifier` next to `JwtVerifier`. The
+  signature/expiry/audience decode is shared; the algorithm is fixed by the
+  verifier, so a ticket signed with the other scheme is `invalid` before any
+  claim is read. The cabinet's names are accepted next to the RFC's: `doc`/`sid`
+  as well as `fileId`/`sessionId`, and `fileId` as a number as well as a string.
+  Empty or contradictory names, a missing `sub`, and a secret under 16 bytes are
+  refused. `app` is checked when present; the audience binds the application.
+- `apps/pdfcraft-collab-server/src/main.rs`: `--jwt-secret-file FILE` or
+  `PDFCRAFT_COLLAB_JWT_SECRET` selects HS256; `--jwt-key FILE` selects RS256.
+  Key + secret, two secrets, or neither are start-up errors that name the flags;
+  the secret is never logged (errors name the path only). The startup line
+  reports `auth hs256|rs256`. `--jwt-key` no longer defaults to
+  `cabinet-public.pem`: a deployment must say which scheme it uses.
+- Tests: `token.rs` unit tests (valid cabinet ticket, RFC spelling, numeric
+  `fileId`, bad signature, expired, wrong `aud`, wrong `app`, missing names,
+  contradictory names, scheme confusion, short secret); `tests/e2e.rs` opens a
+  real socket with `Hs256Verifier` and checks `welcome` for a valid ticket and
+  `error{code:"auth"}` for one signed with another secret; `main.rs` tests the
+  configuration matrix and the secret file's trailing newline.
+
+Gates on `agents` (`../scripts/remote-build.sh`), all green at this commit:
+
+```text
+$ cargo clippy -p pdfcraft-collab-ws -p pdfcraft-collab-server -p pdfcraft-collab-daemon --all-targets -- -D warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.72s
+$ cargo fmt --all -- --check            # exit 0
+$ cargo test -p pdfcraft-collab-ws
+test result: ok. 24 passed; 0 failed      (e2e, incl. the HS256 socket test)
+test result: ok. 14 passed; 0 failed      (lib, incl. 8 token tests)
+$ cargo test -p pdfcraft-collab-server
+test result: ok. 29 passed; 0 failed
+$ cargo test -p pdfcraft-collab-daemon --bin pdfcraft-collab-server
+test result: ok. 34 passed; 0 failed      (incl. the auth configuration tests)
+$ cargo test -p pdfcraft-collab-daemon --test conflict_resolve --test crash_recovery --test publication_retry
+test result: ok. 1 passed; 0 failed       (each; the real binary still starts with --jwt-key/RS256)
+```
+
+`cargo xtask ci` (the workspace sweep) is CI's job and was not run here.
 
 ### Rebase onto `origin/main` `ba28458ad` (the brief's `d2139e58a`, moved on) and the gate run at the rebased head (2026-11-09)
 
@@ -2520,6 +2574,13 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   check the PID before killing.
 - The smoke-test keys and JWT live under `/tmp` and are disposable; never commit
   a token or a private key.
+- Auth is decided once at start-up: `--jwt-secret-file` /
+  `PDFCRAFT_COLLAB_JWT_SECRET` (HS256) or `--jwt-key` (RS256), never both.
+  `--jwt-key` has no default any more, so a deployment must name its scheme or
+  the daemon exits with a message naming both flags. Do not add a fallback: a
+  daemon that guesses would accept a ticket it must refuse. The secret is never
+  logged, so diagnose a refused ticket from its claims and the configured
+  audience, not from the key.
 - The copy store (`PdfAdapter::copies`) is memory-only on purpose: `replay`
   re-applies the journal in order and rebuilds the same tokens, so nothing is
   written next to `CURRENT`. Changing the order in which copies are made (or

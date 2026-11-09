@@ -16,4 +16,4 @@ pub mod serve;
 pub mod token;
 
 pub use serve::{Config, Metrics, PublicationRetries, ResolveError, ServerHandle, TransportError, WsServer};
-pub use token::{Claims, JwtVerifier, TokenError, Verifier};
+pub use token::{Claims, Hs256Verifier, JwtVerifier, MIN_HS256_SECRET_BYTES, TokenError, Verifier};

@@ -11,7 +11,7 @@
 # прод: комнаты из control-plane кабинета
 pdfcraft-collab-server \
   --data /srv/collab/data \
-  --jwt-key /srv/collab/cabinet-public.pem --jwt-audience lzmkm --app pdfcraft \
+  --jwt-secret-file /srv/collab/cabinet-jwt-secret --jwt-audience lzmkm --app pdfcraft \
   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 --control 127.0.0.1:8789 \
   --callback-url http://cabinet.internal/v1/collab/commit \
   [--max-source-bytes N] [--origin https://cabinet.example]
@@ -22,7 +22,7 @@ pdfcraft-collab-server --documents /srv/collab/documents --data /srv/collab/data
 
 | Порт | Что | Авторизация |
 |---|---|---|
-| `--listen` | WebSocket-протокол (`hello` + RS256 JWT) | JWT в первом сообщении |
+| `--listen` | WebSocket-протокол (`hello` + session JWT) | JWT в первом сообщении |
 | `--health` | `GET /health`, `GET /metrics` | нет (для probes) |
 | `--control` | `POST /v1/sessions`, `POST /v1/sessions/{fileId}/resolve` | JWT в `Authorization: Bearer` |
 
@@ -30,9 +30,17 @@ TLS внутри нет: оба HTTP-порта и WebSocket ожидаются 
 (`https://` в callback/URL источнике отклоняется явной ошибкой). Токены,
 содержимое PDF и тексты комментариев не логируются.
 
-JWT: RS256, claims `{iss, sub, aud, fileId, app, role, sessionId, iat, exp,
-ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` с допуском 30 с; `fileId`
-обязан совпадать с `hello.doc` и с файлом в control-plane.
+JWT: **HS256** общим секретом кабинета (`--jwt-secret-file FILE` или
+`PDFCRAFT_COLLAB_JWT_SECRET`, не короче 16 байт); **RS256** (`--jwt-key FILE` с
+публичным ключом) остаётся опцией. Ровно один способ обязателен: ключ и секрет
+одновременно (или два секрета) — ошибка старта, как и отсутствие обоих.
+Секрет не логируется и не попадает в текст ошибки.
+
+Claims: `aud` (обязателен, равен `--jwt-audience`), `sub` (непустой, актор),
+`exp` (допуск 30 с), `role ∈ owner|editor|commenter|viewer`; имя файла — `doc`
+или `fileId` (строка RFC или число кабинета), сессия — `sid` или `sessionId`;
+`app`, если есть, равен `--app`. Имя файла обязано совпадать с `hello.doc` и с
+файлом в control-plane. Подробнее — RFC §7.1.
 
 ## 2. Control plane
 
@@ -42,7 +50,7 @@ ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` с допуском 30 с
 `hello`). Тело:
 
 ```json
-{"fileId":"file-123","jwt":"<RS256>","etag":"sha256:…",
+{"fileId":"file-123","jwt":"<session JWT>","etag":"sha256:…",
  "bytes":"<base64 PDF>"}
 ```
 
@@ -63,7 +71,7 @@ ver}`; `role ∈ owner|editor|commenter|viewer`; `exp` с допуском 30 с
 ### 2.2. `POST /v1/sessions/{fileId}/resolve` — снять `conflict`
 
 Единственный способ вывести комнату из состояния `conflict` (см. §3).
-Заголовок `Authorization: Bearer <service token>` — тот же RS256 JWT кабинета,
+Заголовок `Authorization: Bearer <service token>` — тот же session JWT кабинета,
 что и у сессии; `fileId` токена обязан совпадать с путём, роль — `owner` или
 `editor` (commenter/viewer файл не сохраняет, поэтому и конфликт не разрешает).
 

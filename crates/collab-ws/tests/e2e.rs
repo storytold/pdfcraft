@@ -6,6 +6,7 @@
 //! a viewer cannot write, that an old epoch is refused, and that a late joiner
 //! catches up from a snapshot tail.
 
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use pdfcraft_collab_client_pdf::{
     add_annotation_payload, add_note_payload, apply, blank_page_payload, combine_pages_payload, duplicate_page_payload, insert_page_payload,
     merge_op, replace_page_payload, reply_payload, rotate_payload, set_contents_payload, split_pages_payload, structural_op,
@@ -16,8 +17,9 @@ use pdfcraft_collab_proto::{
     ActorId, ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, ServerMessage, Target, Viewport,
 };
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Publication, PublishOutcome, RoomConfig};
-use pdfcraft_collab_ws::{Claims, Config, ServerHandle, TokenError, Verifier, WsServer};
+use pdfcraft_collab_ws::{Claims, Config, Hs256Verifier, ServerHandle, TokenError, Verifier, WsServer};
 use pdfcraft_engine::Session;
+use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1817,5 +1819,68 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
     // in the journal it catches up from.
     let mut last = Peer::join(addr, "viewer:frank", "frank")?;
     assert_eq!(last.resync(0)?.len(), 1, "only the rotation is in the journal");
+    Ok(())
+}
+
+/// The ticket the cabinet signs today: HS256 over `doc`/`sid`. The verifier is
+/// unit-tested in `token.rs`; here it meets a real socket.
+fn cabinet_ticket(secret: &[u8], doc: &str, role: &str, exp: u64) -> Result<String, Box<dyn std::error::Error>> {
+    #[derive(Serialize)]
+    struct CabinetClaims<'a> {
+        iss: &'a str,
+        sub: &'a str,
+        aud: &'a str,
+        doc: &'a str,
+        role: &'a str,
+        app: &'a str,
+        sid: &'a str,
+        exp: u64,
+    }
+    let claims = CabinetClaims { iss: "mail.lzmkm.ru", sub: "ada", aud: "lzmkm", doc, role, app: "pdfcraft", sid: "session-9", exp };
+    Ok(encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret))?)
+}
+
+fn hello_frame(token: &str) -> String {
+    json!({
+        "type": "hello",
+        "v": 1,
+        "app": "pdfcraft",
+        "doc": "file-1",
+        "jwt": token,
+        "client": {"name": "ada", "version": "0"},
+    })
+    .to_string()
+}
+
+#[test]
+fn a_cabinet_hs256_ticket_is_welcomed_and_a_forged_one_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
+    let adapter = PdfAdapter::open("e2e.pdf", fixture(2).into())?;
+    let doc = DocKey::new("file-1")?;
+    let mut hub = Hub::new(RoomConfig::default());
+    hub.open_room(doc, adapter)?;
+    let verifier = Arc::new(Hs256Verifier::from_secret(SECRET, "lzmkm", "pdfcraft")?);
+    let handle = WsServer::new(hub, verifier, Config::default()).bind("127.0.0.1:0")?;
+    let addr = handle.local_addr();
+    let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs().saturating_add(600);
+
+    let peer = Peer::join(addr, &cabinet_ticket(SECRET, "file-1", "editor", exp)?, "ada")?;
+    assert_eq!(peer.role, Role::Editor, "the cabinet's editor opens an editable session");
+    assert_eq!(peer.actor.as_str(), "ada", "the actor is the token's `sub`");
+
+    // The same claims signed with another secret never reach the room.
+    let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/"))?;
+    if let MaybeTlsStream::Plain(stream) = ws.get_mut() {
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    }
+    let forged = cabinet_ticket(b"ffffffffffffffffffffffffffffffff", "file-1", "editor", exp)?;
+    ws.send(Message::text(hello_frame(&forged)))?;
+    match ws.read()? {
+        Message::Text(text) => match serde_json::from_str::<ServerMessage>(text.as_str())? {
+            ServerMessage::Error(error) => assert_eq!(error.code, ErrorCode::Auth, "a forged ticket is an auth refusal"),
+            other => return Err(format!("expected an auth error, got {other:?}").into()),
+        },
+        other => return Err(format!("expected a text frame, got {other:?}").into()),
+    }
     Ok(())
 }
