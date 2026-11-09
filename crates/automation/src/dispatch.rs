@@ -129,15 +129,13 @@ impl Automation {
                     Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
                 };
-                let mark = self.session.js_output_mark(id);
-                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
-                let warnings = self.session.take_js_output_since(id, mark).errors;
+                let ((), own) = self.session.with_own_js_output(id, |s| s.enhance_camera_page_at(id, page, corners, look, level)).map_err(failed)?;
                 let r = |v: f32| (v * 100.0).round() / 100.0;
                 let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
                 let mut out = summary(self.doc(&a)?);
                 out["corners"] = json!(used);
                 out["detected"] = json!(given.is_none());
-                a11y::with_warnings(out, warnings)
+                a11y::with_warnings(out, own.errors)
             }
             "page_enhance_scan" => self.page_enhance_scan(&a)?,
             "page_delete" => {
@@ -749,6 +747,7 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "content_copy" => self.content_copy(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "doc_fix_hairlines" => self.fix_hairlines(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;
@@ -836,6 +835,7 @@ impl Automation {
             "accessibility_tag_content" => self.accessibility_tag_content(&a)?,
             "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
             "accessibility_mark_tag_artifact" => self.accessibility_mark_tag_artifact(&a)?,
+            "accessibility_layout_table_to_blocks" => self.accessibility_layout_table_to_blocks(&a)?,
             "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,

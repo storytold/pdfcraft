@@ -442,16 +442,22 @@ impl Document {
         self.editor.as_ref().and_then(|e| e.cos.permissions())
     }
 
+    /// The renderer opened an encrypted file that the editing parser did not, so its permission
+    /// bits are unknown. Unknown is not unrestricted: printing and copying are refused.
+    fn permissions_unknown(&self) -> bool {
+        self.editor.is_none() && self.info.encrypted
+    }
+
     /// Printing is allowed (Table 22, bit 3).
     pub fn allows_printing(&self) -> bool {
-        self.permissions().is_none_or(|p| p.print())
+        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print())
     }
 
     /// Copying or otherwise extracting text and images is allowed (Table 22, bit 5): copying
     /// selected text, snapshots, Save Image As, exporting. Assistive technology may read the
     /// content regardless (§7.6.4.2), so reading aloud and accessibility tools don't ask.
     pub fn allows_copying(&self) -> bool {
-        self.permissions().is_none_or(|p| p.copy())
+        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy())
     }
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
@@ -604,6 +610,12 @@ impl Document {
     /// Remove Hidden Information: what each category would remove.
     pub fn hidden_info(&self) -> Vec<(Hidden, usize)> {
         self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan(&e.cos)).unwrap_or_default()
+    }
+
+    /// [`Self::hidden_info`] for the categories in `which` alone, without the reading the others
+    /// need (see [`pdfcraft_redact::sanitize::scan_only`]).
+    pub fn hidden_info_of(&self, which: &[Hidden]) -> Vec<(Hidden, usize)> {
+        self.editor.as_ref().map(|e| pdfcraft_redact::sanitize::scan_only(&e.cos, which)).unwrap_or_default()
     }
 
     /// Verification: faux redactions (opaque covers over extractable text) and redaction

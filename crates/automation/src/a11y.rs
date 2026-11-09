@@ -557,6 +557,20 @@ impl Automation {
         Ok(with_warnings(self.accessibility_tags(a)?, warnings))
     }
 
+    pub(crate) fn accessibility_layout_table_to_blocks(&mut self, a: &Args) -> Result<Value> {
+        let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
+        if object == 0 {
+            return Err(ToolError::InvalidArgs("object must be a positive tag object number".into()));
+        }
+        let generation = u16::try_from(a.int("generation")?)
+            .map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation from accessibility_tags".into()))?;
+        let id = self.doc(a)?.id;
+        self.session
+            .apply(id, pdfcraft_engine::Edit::LayoutTableToBlocks { object: pdfcraft_cos::ObjRef::new(object, generation) })
+            .map_err(failed)?;
+        self.accessibility_tags(a)
+    }
+
     pub(crate) fn accessibility_move_tag(&mut self, a: &Args) -> Result<Value> {
         let reference = |number: &str, generation: &str| -> Result<pdfcraft_cos::ObjRef> {
             let n = u32::try_from(a.int(number)?).map_err(|_| ToolError::InvalidArgs(format!("{number} must be a positive tag object number")))?;
@@ -582,9 +596,8 @@ impl Automation {
     /// Apply `edit` to document `id` and take out the errors it added to the document's script
     /// output, such as the values of an XFA form that could not be written to its data.
     fn apply_with_warnings(&mut self, id: DocId, edit: pdfcraft_engine::Edit) -> Result<Vec<String>> {
-        let mark = self.session.js_output_mark(id);
-        self.session.apply(id, edit).map_err(failed)?;
-        Ok(self.session.take_js_output_since(id, mark).errors)
+        let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
+        Ok(out.errors)
     }
 }
 

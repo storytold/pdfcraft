@@ -258,9 +258,8 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         match out {
             None => {
-                let mark = self.session.js_output_mark(id);
-                let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
-                let warnings = self.session.take_js_output_since(id, mark).errors;
+                let (found, out) = self.session.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
+                let warnings = out.errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
                 Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
             }

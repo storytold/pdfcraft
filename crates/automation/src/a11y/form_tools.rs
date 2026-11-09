@@ -28,10 +28,9 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let mark = self.session.js_output_mark(id);
-        let mut o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        let (script, field) = (a.str("script")?, a.opt_str("field")?);
         // Applying the script's field changes runs the field scripts again; their output is reported with the script's.
-        let edit = self.session.take_js_output_since(id, mark);
+        let (mut o, edit) = self.session.with_own_js_output(id, |s| s.run_javascript(id, script, field)).map_err(failed)?;
         o.alerts.extend(edit.alerts);
         o.console.extend(edit.console);
         o.requests.extend(edit.requests);
@@ -62,9 +61,7 @@ impl Automation {
             script: a.opt_str("script")?.map(str::to_string),
         };
         let id = self.doc(a)?.id;
-        let mark = self.session.js_output_mark(id);
-        self.session.apply(id, edit).map_err(failed)?;
-        let out = self.session.take_js_output_since(id, mark);
+        let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
         Ok(json!({ "field": a.str("field")?, "event": a.str("event")?, "console": out.console, "errors": out.errors }))
     }
 
@@ -100,11 +97,11 @@ impl Automation {
                 v
             })
             .collect();
-        let mark = self.session.js_output_mark(id);
+        let mut warnings = Vec::new();
         if a.opt_bool("add")?.unwrap_or(true) && !found.is_empty() {
-            self.session.auto_detect_fields(id, &pages).map_err(failed)?;
+            let (_, out) = self.session.with_own_js_output(id, |s| s.auto_detect_fields(id, &pages)).map_err(failed)?;
+            warnings = out.errors;
         }
-        let warnings = self.session.take_js_output_since(id, mark).errors;
         Ok(with_warnings(json!({ "fields": list }), warnings))
     }
 
