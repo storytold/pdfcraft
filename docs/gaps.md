@@ -366,7 +366,9 @@ update the numbers.
 - **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
   colour conversion, printer marks, flattener preview, colour management settings;
   print as image; PostScript output. Fix hairlines is in (Print production ▸ Fix hairlines…).
-- **Evidence:** 17 print-production features planned (L area).
+  Since v0.20.0, `main` also has printer marks (Print production ▸ Add printer marks…) and
+  colour conversion (Print production ▸ Convert colours).
+- **Evidence:** 17 print-production features planned at v0.20.0 (L area).
 - **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 19. Preferences mostly missing
