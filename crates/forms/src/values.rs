@@ -1,5 +1,5 @@
 use super::appearances::{declares_pdfa, need_appearances};
-use super::read::{acroform, field_flags, fields, page_refs};
+use super::read::{acroform, field_flags, fields, listing_fields_named, page_refs};
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
     author, calc_order, flags, invalid, name_obj, scripting,
@@ -89,8 +89,23 @@ impl NamedFields {
 /// Write `value` into the field `name`, without recalculating: `named` are the positions in
 /// `all` (the form as read before this write) of the fields with that name, in field order.
 fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    let f = named.first().and_then(|&i| all.get(i)).ok_or_else(|| FormError::NoSuchField(name.into()))?;
-    if f.read_only() {
+    let mut same = named.iter().filter_map(|&i| all.get(i));
+    let first = same.clone().next().ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    // Fields with the same fully qualified name are one field (ISO 32000-2 §12.7.4.2), so a radio
+    // option any of them draws is an option of the name: it is written through the first one
+    // that draws it, and the others turn off below.
+    let choice = match value {
+        FieldValue::Radio(Some(c)) | FieldValue::Text(c) => Some(c.as_str()),
+        _ => None,
+    };
+    let f = match choice {
+        Some(c) if first.kind == FieldKind::Radio => same.find(|t| t.kind == FieldKind::Radio && t.state_for(c).is_some()).unwrap_or(first),
+        _ => first,
+    };
+    // The name is read-only when the first field of it is, whichever field draws the choice; and
+    // a radio choice reaches every radio field of the name, so none of them may be read-only.
+    let radio_locked = f.kind == FieldKind::Radio && named.iter().filter_map(|&i| all.get(i)).any(|t| t.kind == FieldKind::Radio && t.read_only());
+    if f.read_only() || first.read_only() || radio_locked {
         return Err(FormError::ReadOnly(name.into()));
     }
     write_value(doc, f, value, scripts)?;
@@ -103,6 +118,16 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
         let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
         for t in twins {
             share_value(doc, f.obj, t, &taken, scripts)?;
+        }
+    }
+    // A field whose `/Kids` lists radio fields that don't name it as their `/Parent` has their
+    // name too, so it takes the same value (§12.7.4.2) rather than keep a stale choice.
+    if f.kind == FieldKind::Radio {
+        let objs: Vec<ObjRef> = named.iter().filter_map(|&i| all.get(i)).map(|t| t.obj).collect();
+        if let Some(v) = doc.get(f.obj).as_dict().and_then(|d| d.get(b"V").cloned()) {
+            for p in listing_fields_named(doc, name, &objs) {
+                doc.update_dict(p, |d| d.set(b"V".to_vec(), v.clone()))?;
+            }
         }
     }
     Ok(())
@@ -118,7 +143,13 @@ fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String
         }
         FieldKind::Radio => {
             let choice = value.first().filter(|c| twin.widgets.iter().any(|w| w.on_state.as_deref() == Some(c.as_str())));
-            set_states(doc, twin, choice.map(String::as_str))
+            set_states(doc, twin, choice.map(String::as_str))?;
+            // The same value (§12.7.4.2), even when none of the twin's buttons draws it: they all
+            // stay off, and only the field that draws the choice shows it.
+            match value.first() {
+                Some(v) if choice.is_none() => Ok(doc.update_dict(twin.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?),
+                _ => Ok(()),
+            }
         }
         FieldKind::Text | FieldKind::Combo | FieldKind::List => {
             let src = doc.get(source).as_dict().cloned().unwrap_or_default();

@@ -28,7 +28,9 @@ pub fn set_page_jbig2_work(work: u64) {
 }
 
 /// Pays for reading `bytes` of a stream and its globals out of what the page has left, or `None`.
-/// An image that doesn't decode isn't kept, so a page drawing it again and again reads it again.
+/// An image that doesn't decode isn't always kept (not past the page's allowance, nor drawn under a
+/// transfer function: hayro-interpret patch 91), so a page drawing it again and again can read it
+/// again.
 #[cfg(feature = "std")]
 fn charge_page_reading(bytes: usize) -> Option<()> {
     let mut left = PAGE_WORK_LEFT.with(core::cell::Cell::get);
