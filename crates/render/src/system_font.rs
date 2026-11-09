@@ -596,8 +596,12 @@ mod tests {
         }
         let (bytes, index) = fallback(&query("ABCDEF+SimSun")).expect("installed SimSun");
         let font = skrifa::FontRef::from_index(bytes.as_ref().as_ref(), index).unwrap();
-        let names: Vec<String> = font.localized_strings(StringId::POSTSCRIPT_NAME).map(|n| n.chars().collect()).collect();
-        assert!(names.iter().any(|n| n == "SimSun"), "{names:?}");
+        let names: Vec<String> = [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME]
+            .into_iter()
+            .flat_map(|id| font.localized_strings(id))
+            .map(|n| n.chars().collect())
+            .collect();
+        assert!(names.iter().any(|n| face_key(n).as_deref() == Some("simsun")), "{names:?}");
     }
 
     /// The four regional Adobe collections select their corresponding scripts; Identity

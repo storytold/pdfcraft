@@ -114,10 +114,18 @@ fn windows_draws_an_identity_simsun_font_on_screen_only() {
         eprintln!("SimSun is not installed here: skipped");
         return;
     };
-    let face = (0..8)
-        .filter_map(|index| skrifa::FontRef::from_index(&simsun, index).ok())
-        .find(|font| font.localized_strings(StringId::POSTSCRIPT_NAME).any(|n| n.chars().eq("SimSun".chars())))
-        .expect("simsun.ttc holds SimSun");
+    // The face the renderer takes: the first whose PostScript or family name, compared by its
+    // letters and digits, is SimSun's.
+    let key = |name: &str| name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
+    let Some(face) = (0..8).filter_map(|index| skrifa::FontRef::from_index(&simsun, index).ok()).find(|font| {
+        [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME]
+            .into_iter()
+            .flat_map(|id| font.localized_strings(id))
+            .any(|n| key(&n.chars().collect::<String>()) == "simsun")
+    }) else {
+        eprintln!("simsun.ttc has no face named SimSun: skipped");
+        return;
+    };
     let gids: Vec<u32> = "\u{4E2D}\u{6587}".chars().map(|c| face.charmap().map(c).expect("SimSun maps it").to_u32()).collect();
     let bytes = Arc::new(identity_page("ABCDEF+SimSun", &gids, None));
     let ink = |config: RenderConfig| {
