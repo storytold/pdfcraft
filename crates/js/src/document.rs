@@ -118,7 +118,6 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-
     let text_size_get = getter!(ctx, n, |f, c| JsValue::from(f.text_size));
     let text_size_set = {
         /// Validate a finite text size in 0..=300 points before staging the field appearance change.

@@ -220,7 +220,7 @@ pub(crate) fn run_in_context(
         if setup.initialize {
             install(ctx)?;
         }
-        let ev = event_object(ctx, event);
+        let (ev, value_store) = event_object(ctx, event)?;
         host(ctx)?.borrow_mut().current_event = ev.clone().into();
         if setup.initialize {
             let get = crate::host::function(ctx, NativeFunction::from_fn_ptr(get_event));
@@ -247,6 +247,7 @@ pub(crate) fn run_in_context(
         out.rc = rc.to_boolean();
         let v = ev.get(js_string!("value"), ctx)?;
         out.value = text(&v, ctx)?;
+        out.value_set = value_store.get(js_string!("set"), ctx)?.to_boolean();
         let c = ev.get(js_string!("change"), ctx)?;
         out.change = text(&c, ctx)?;
         Ok(())

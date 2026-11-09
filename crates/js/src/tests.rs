@@ -32,6 +32,21 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert!(o.rc);
 }
 
+/// `event.value` reads and writes as a plain value, numbers included, and the outcome says whether
+/// the script assigned it, even to the value it already had.
+#[test]
+fn the_outcome_says_whether_the_script_assigned_event_value() {
+    let ev = Event::field("Calculate", "total", "7");
+    let o = go("event.value = event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", true));
+    let o = go("event.value = 2; event.value += 3; typeof event.value;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set, o.result.as_deref()), ("5", true, Some("number")));
+    let o = go("var v = event.value; this.getField('price').value = 3;", &ev);
+    assert_eq!((o.value.as_str(), o.value_set), ("7", false));
+    let o = go("Object.keys(event).indexOf('value') >= 0;", &ev);
+    assert_eq!(o.result.as_deref(), Some("true"), "value stays an enumerable property of event");
+}
+
 #[test]
 /// Expose all supported page boxes in rotated-user-space order using only supplied document geometry.
 fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
@@ -138,6 +153,22 @@ fn push_button_caption_methods_read_write_and_reject_other_faces() {
     assert_eq!(cleared.error, None);
     assert_eq!(cleared.value, "");
     assert_eq!(cleared.changed[0].caption.as_deref(), Some(""));
+}
+
+#[test]
+fn widget_rect_reads_and_writes_a_four_number_array() {
+    let o = go(
+        "var t = getField('total'); t.rect = [10, 50, 110, 20]; event.value = getField('total').rect.join(',');",
+        &Event::field("Mouse Up", "agree", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "10,50,110,20");
+    assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 50.0, 110.0, 20.0]));
+    let o = go("getField('total').rect = [110, 20, 10, 50];", &Event::field("Mouse Up", "agree", ""));
+    assert!(o.error.is_some());
+    let o = go("getField('total').rect = [0, 0, Infinity, 10];", &Event::field("Mouse Up", "agree", ""));
+    assert!(o.error.is_some());
+    assert!(o.changed.iter().all(|f| f.name != "total"));
 }
 
 #[test]
@@ -868,6 +899,19 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("7"));
     }
 
+    /// On screen every page is a sheet of its own: `xfa.layout.sheet` counts it from 0, as
+    /// `absPage` does (forms show `sheet(this) + 1`), and `sheetCount` is the page count.
+    #[test]
+    fn the_sheet_is_the_page_on_screen() {
+        let o = go(
+            "[xfa.layout.sheet(this) + 1, xfa.layout.sheetCount(), xfa.layout.absPage(this)].join(',')",
+            "form1[0].page1[0].total[0]",
+            "calculate",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2,3,1"));
+    }
+
     #[test]
     fn field_names_never_shadow_javascript_builtins() {
         let mut f = form();
@@ -1085,6 +1129,23 @@ mod formcalc {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
         let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
         run_formcalc(script, &ev, &doc, &form(), Limits::default())
+    }
+
+    /// `xfa.layout.sheet` and `sheetCount` give what the JavaScript ones give.
+    #[test]
+    fn the_sheet_is_the_page_on_screen() {
+        assert_eq!(calc("xfa.layout.sheet($) + 1"), "2");
+        assert_eq!(calc("xfa.layout.sheetCount()"), "3");
+    }
+
+    /// A layout method's arguments are evaluated, once each, for what they do: a message box
+    /// in one still shows.
+    #[test]
+    fn layout_method_arguments_are_evaluated_once() {
+        let o = go("xfa.layout.sheet($host.messageBox(\"Hi\"), $host.messageBox(\"Yo\")) + 1", "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+        assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::MessageBox(_))).count(), 2, "each argument once: {:?}", o.effects);
     }
 
     /// The value of a script run as a calculate on `total`.
@@ -1359,6 +1420,16 @@ mod formcalc {
         assert_eq!(calc(r#"Date2Num("2000-02-29") <> 0"#), "1");
         assert_eq!(calc(r#"Date2Num("2024-04-30") <> 0"#), "1");
         assert_eq!(calc(r#"Date2Num("2024-12-31") <> 0"#), "1");
+    }
+
+    /// A `YY` year in a date picture splits its century at 30, the XFA picture clause default:
+    /// `00` to `29` are 2000 to 2029 and `30` to `99` are 1930 to 1999.
+    #[test]
+    fn a_two_digit_year_splits_its_century_at_30() {
+        for (text, iso) in [("12/31/29", "2029-12-31"), ("01/01/30", "1930-01-01"), ("12/31/49", "1949-12-31"), ("01/01/50", "1950-01-01")] {
+            assert_eq!(calc(&format!(r#"Num2Date(Date2Num("{text}", "MM/DD/YY"), "YYYY-MM-DD")"#)), iso, "{text}");
+            assert_eq!(calc(&format!(r#"Parse("MM/DD/YY", "{text}")"#)), iso, "{text}");
+        }
     }
 
     #[test]

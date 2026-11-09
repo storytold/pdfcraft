@@ -83,29 +83,70 @@ pub struct JsOutput {
     pub doc_errors: Vec<String>,
 }
 
+/// Console lines one output keeps, from every script an edit runs together (a form's
+/// calculations, say): each run's own cap ([`pdfcraft_js::xfa::MAX_CONSOLE`]) would otherwise
+/// be multiplied by the number of fields a document declares.
+pub const MAX_CONSOLE_LINES: usize = 10_000;
+/// Bytes of console text one output keeps, for the same reason.
+pub const MAX_CONSOLE_BYTES: usize = 1 << 20;
+/// Alerts one output keeps.
+pub const MAX_ALERTS: usize = 1_000;
+
 impl JsOutput {
     /// Whether scripts produced nothing: no alerts, console lines, requests or errors.
     pub fn is_empty(&self) -> bool {
         self.alerts.is_empty() && self.console.is_empty() && self.requests.is_empty() && self.errors.is_empty()
     }
 
+    /// Adds `lines` to the console within [`MAX_CONSOLE_LINES`] and [`MAX_CONSOLE_BYTES`]; what
+    /// is past them is left out, which one closing line says.
+    fn say(&mut self, lines: impl IntoIterator<Item = String>) {
+        let note = format!("more console lines were left out: the scripts printed more than {MAX_CONSOLE_LINES} lines or {MAX_CONSOLE_BYTES} bytes");
+        // Once the notice is written the console is closed: nothing may follow it, and a later
+        // rejection must not add a second copy.
+        if self.console.last() == Some(&note) {
+            return;
+        }
+        let mut bytes: usize = self.console.iter().map(String::len).sum();
+        let mut dropped = false;
+        for l in lines {
+            if self.console.len() >= MAX_CONSOLE_LINES || bytes.saturating_add(l.len()) > MAX_CONSOLE_BYTES {
+                dropped = true;
+                break;
+            }
+            bytes += l.len();
+            self.console.push(l);
+        }
+        if dropped && !self.console.iter().any(|l| l == &note) {
+            self.console.push(note);
+        }
+    }
+
+    /// Adds `alerts` within [`MAX_ALERTS`].
+    fn alert(&mut self, alerts: impl IntoIterator<Item = Message>) {
+        let room = MAX_ALERTS.saturating_sub(self.alerts.len());
+        self.alerts.extend(alerts.into_iter().take(room));
+    }
+
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to show a side panel or open Save As, which is noted on the console
     /// and dropped.
     fn absorb(&mut self, o: &Outcome) {
-        self.alerts.extend(o.alerts.iter().cloned());
-        self.console.extend(o.console.iter().cloned());
+        self.alert(o.alerts.iter().cloned());
+        self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
         // button's may show or hide a side panel, or open Save As.
+        // The warnings go through `say` like any other console line, so they count against the
+        // line and byte caps instead of growing the console past them.
+        let mut notes = Vec::new();
         for r in &o.requests {
             match r {
-                Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
-                Request::SaveAs => {
-                    self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())
-                }
+                Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
+                Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
                 r => self.requests.push(r.clone()),
             }
         }
+        self.say(notes);
         self.errors.extend(o.error.iter().cloned());
         // The document scripts run before every field script, so a failing one would repeat
         // once per calculation; it is reported once.
@@ -118,8 +159,8 @@ impl JsOutput {
     }
 
     pub(crate) fn append(&mut self, other: JsOutput) {
-        self.alerts.extend(other.alerts);
-        self.console.extend(other.console);
+        self.alert(other.alerts);
+        self.say(other.console);
         self.requests.extend(other.requests);
         // As in `absorb`: a document script's error, already reported, is not repeated; a field
         // script's errors are each their own, even one worded like a document script's.
@@ -133,6 +174,49 @@ impl JsOutput {
                 self.doc_errors.push(e.clone());
             }
             self.errors.push(e);
+        }
+    }
+
+    /// Takes out the alerts, console lines, requests and errors. The record of the document
+    /// scripts' errors stays, so they are still reported once.
+    fn set_aside(&mut self) -> JsOutput {
+        JsOutput {
+            alerts: std::mem::take(&mut self.alerts),
+            console: std::mem::take(&mut self.console),
+            requests: std::mem::take(&mut self.requests),
+            errors: std::mem::take(&mut self.errors),
+            doc_errors: Vec::new(),
+        }
+    }
+
+    /// Puts back what [`JsOutput::set_aside`] took out and returns what was added since.
+    fn put_back(&mut self, waiting: JsOutput) -> JsOutput {
+        let own = self.set_aside();
+        self.alerts = waiting.alerts;
+        self.console = waiting.console;
+        self.requests = waiting.requests;
+        self.errors = waiting.errors;
+        own
+    }
+}
+
+impl Session {
+    /// Runs `f` and returns its value with the script output `f` added to document `id`. The
+    /// output limits count that output alone, and the output that was waiting stays for
+    /// [`Session::take_js_output`]. When `f` fails, its output joins the waiting output.
+    pub fn with_own_js_output<T, E>(&mut self, id: DocId, f: impl FnOnce(&mut Session) -> Result<T, E>) -> Result<(T, JsOutput), E> {
+        let waiting = self.docs.iter_mut().find(|d| d.id == id).map(|d| d.js_output.set_aside());
+        let result = f(self);
+        let mut doc = self.docs.iter_mut().find(|d| d.id == id);
+        let own = doc.as_mut().zip(waiting).map(|(d, w)| d.js_output.put_back(w)).unwrap_or_default();
+        match result {
+            Ok(value) => Ok((value, own)),
+            Err(e) => {
+                if let Some(d) = doc {
+                    d.js_output.append(own);
+                }
+                Err(e)
+            }
         }
     }
 }
@@ -432,11 +516,12 @@ impl Scripts for JsRunner {
         self.output.absorb(&o);
         if o.error.is_some() || o.reset_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
+            return ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None };
         }
         ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
+            value_set: o.value_set,
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         }
@@ -462,7 +547,7 @@ impl Scripts for JsRunner {
         if o.error.is_some() || o.reset_limit_exceeded {
             return None;
         }
-        Some(ScriptResult { rc: o.rc, value: o.value.clone(), changes: Vec::new(), message: None })
+        Some(ScriptResult { rc: o.rc, value: o.value.clone(), value_set: o.value_set, changes: Vec::new(), message: None })
     }
 }
 
@@ -550,8 +635,8 @@ impl Session {
             && let Some(field) = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
-            self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
-            let out = self.take_js_output(id);
+            // The click returns only the output of its own edit; output from opening or from earlier edits stays.
+            let ((), out) = self.with_own_js_output(id, |s| s.apply(id, Edit::XfaEvent { som, activity: "click".into() }))?;
             return Ok(Outcome {
                 rc: true,
                 alerts: out.alerts,
@@ -740,12 +825,16 @@ impl Session {
         let mut out = Vec::new();
         for page in list {
             let Some(info) = doc.info.pages.get(page) else { continue };
-            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let shapes = pdfcraft_forms::detect::page_shapes(cos, page);
             let existing: Vec<[f64; 4]> = doc.form.iter().flat_map(|f| f.widgets.iter()).filter(|w| w.page == Some(page)).map(|w| w.rect).collect();
             let (found, turn) = if shapes.boxes.is_empty() && shapes.rules.is_empty() && crate::scan_fields::is_scan(doc, page, info) {
-                self.detect_on_scan(id, &mut r, page, res.text.as_deref(), &existing, &taken)
+                // Labels come from the page's own text. Words that only /ActualText names (a stamp
+                // drawn as outlines) are no labels, and leave the scan to be read.
+                let own = crate::ocr::own_text(&mut r, page).ok();
+                self.detect_on_scan(id, &mut r, page, own.as_ref(), &existing, &taken)
             } else {
+                let res =
+                    r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
                 let words = res.text.map(|t| detection_words(&t, info)).unwrap_or_default();
                 (pdfcraft_forms::detect::detect(&words, &shapes, &existing, &taken), 0)
             };
@@ -799,6 +888,77 @@ impl Session {
 mod review_tests {
     use super::*;
 
+    /// A click returns its own alert when the output waiting in the document is full, and the
+    /// waiting output stays.
+    #[test]
+    fn a_click_returns_its_alert_when_the_waiting_output_is_full() {
+        let mut s = Session::new();
+        let pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let id = s.open("xfa.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        s.take_js_output(id);
+        s.docs.iter_mut().find(|d| d.id == id).unwrap().js_output.alert(vec![Message::plain("waiting"); MAX_ALERTS]);
+        let o = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+        let out = s.take_js_output(id);
+        assert_eq!(out.alerts, vec![Message::plain("waiting"); MAX_ALERTS]);
+    }
+
+    /// With the console full and closed, an operation still gets its own lines. Output of an
+    /// operation that fails joins the waiting output.
+    #[test]
+    fn output_limits_count_only_the_operations_own_output() {
+        let mut s = Session::new();
+        let pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let id = s.open("xfa.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        s.take_js_output(id);
+        fn output(s: &mut Session, id: DocId) -> &mut JsOutput {
+            &mut s.docs.iter_mut().find(|d| d.id == id).unwrap().js_output
+        }
+        output(&mut s, id).say(vec!["waiting".to_string(); MAX_CONSOLE_LINES + 1]);
+        let waiting = output(&mut s, id).console.clone();
+        assert!(waiting.last().unwrap().starts_with("more console lines were left out"));
+        let ((), own) = s
+            .with_own_js_output::<_, ()>(id, |s| {
+                output(s, id).say(["mine".to_string()]);
+                output(s, id).errors.push("own error".into());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(own.console, ["mine"]);
+        assert_eq!(own.errors, ["own error"]);
+        assert_eq!(output(&mut s, id).console, waiting);
+        assert!(output(&mut s, id).errors.is_empty());
+        let failed = s.with_own_js_output::<(), _>(id, |s| {
+            output(s, id).errors.push("failed edit".into());
+            Err("no")
+        });
+        assert_eq!(failed.unwrap_err(), "no");
+        let out = s.take_js_output(id);
+        assert_eq!(out.console, waiting);
+        assert_eq!(out.errors, ["failed edit"]);
+    }
+
+    /// A form of many calculated fields, each printing its own cap of console lines, keeps a
+    /// bounded console: past the budget, lines are left out and one closing line says so.
+    #[test]
+    fn console_output_of_one_edit_is_bounded() {
+        let mut out = JsOutput::default();
+        let line = "x".repeat(4_096);
+        let run = Outcome { console: vec![line; 1_000], alerts: vec![Message::plain("hi"); 100], ..Default::default() };
+        for _ in 0..1_000 {
+            out.absorb(&run);
+        }
+        let bytes: usize = out.console.iter().map(String::len).sum();
+        assert!(bytes <= MAX_CONSOLE_BYTES + 256, "{bytes} bytes kept");
+        assert!(out.console.len() <= MAX_CONSOLE_LINES + 1, "{} lines kept", out.console.len());
+        assert!(out.console.last().unwrap().starts_with("more console lines were left out"));
+        assert_eq!(out.console.iter().filter(|l| l.starts_with("more console lines")).count(), 1, "said once");
+        assert_eq!(out.alerts.len(), MAX_ALERTS);
+        let mut merged = JsOutput::default();
+        merged.append(out);
+        assert!(merged.console.len() <= MAX_CONSOLE_LINES + 1);
+    }
+
     /// A long run of underscores (a form's blank) is read in one pass: each glyph is compared with
     /// the word so far without reading the word again.
     #[test]
@@ -812,7 +972,8 @@ mod review_tests {
         };
         let mut glyphs: Vec<_> = (0..n).map(|i| glyph(i, "_")).collect();
         glyphs.push(glyph(n, "x"));
-        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs };
+        // Built by hand, not read from a page the renderer cut short, so the text is complete.
+        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs, truncated: false };
         UNDERSCORE_CHARS_READ.with(|c| c.set(0));
         let words = words_with(&text, |x, y| [x, y]);
         assert_eq!(words.iter().map(|(w, _)| w.len()).collect::<Vec<_>>(), [n, 1]);
@@ -1206,6 +1367,8 @@ mod widget_budget_review_tests {
             da: String::new(),
             quadding: 0,
             tooltip: None,
+            selected: vec![],
+            single_value_is_array: false,
             widgets: vec![widget; 140_000],
             actions: Default::default(),
             button: None,

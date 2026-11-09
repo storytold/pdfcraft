@@ -234,11 +234,14 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             }
             let mut event = Event::field("Calculate", &field.name, &field.value.first().cloned().unwrap_or_default());
             event.target_id = field.object_id;
-            let object = event_object(ctx, &event);
+            let (object, value_store) = event_object(ctx, &event)?;
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
             ctx.eval(Source::from_bytes(&script))?;
             let rc = object.get(js_string!("rc"), ctx)?;
             if !rc.to_boolean() {
+                continue;
+            }
+            if !value_store.get(js_string!("set"), ctx)?.to_boolean() {
                 continue;
             }
             let value = object.get(js_string!("value"), ctx)?;
@@ -492,7 +495,24 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
+/// The `event` object for `e`, and the store behind its `value`: `value` holds what the script
+/// reads and writes, and `set` turns true once the script assigns `event.value`, even the value it
+/// already had. The store is out of the script's reach.
+pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, JsObject)> {
+    fn get(_: &JsValue, _: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.get(js_string!("value"), c)
+    }
+    fn set(_: &JsValue, args: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.set(js_string!("value"), arg(args, 0), false, c)?;
+        store.set(js_string!("set"), true, false, c)?;
+        Ok(JsValue::undefined())
+    }
+    let store = ObjectInitializer::new(ctx)
+        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .property(js_string!("set"), false, Attribute::all())
+        .build();
+    let value_get = function(ctx, NativeFunction::from_copy_closure_with_captures(get, store.clone()));
+    let value_set = function(ctx, NativeFunction::from_copy_closure_with_captures(set, store.clone()));
     let target = e.target.as_ref().map_or(JsValue::null(), |t| {
         if e.target_id.is_some() {
             crate::document::field_object_by_id(ctx, t, e.target_id).into()
@@ -500,10 +520,10 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
             crate::document::field_object(ctx, t).into()
         }
     });
-    ObjectInitializer::new(ctx)
+    let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
-        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .accessor(js_string!("value"), Some(value_get), Some(value_set), Attribute::CONFIGURABLE | Attribute::ENUMERABLE)
         .property(js_string!("change"), s(&e.change), Attribute::all())
         .property(js_string!("changeEx"), s(&e.change), Attribute::all())
         .property(js_string!("willCommit"), e.will_commit, Attribute::all())
@@ -515,5 +535,6 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("commitKey"), 0, Attribute::all())
         .property(js_string!("modifier"), false, Attribute::all())
         .property(js_string!("shift"), false, Attribute::all())
-        .build()
+        .build();
+    Ok((event, store))
 }
