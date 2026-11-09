@@ -1,4 +1,4 @@
-use super::draft::{Handling, PrintDraft, Which};
+use super::draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
 use super::{
     Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
     Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
@@ -315,7 +315,7 @@ pub(crate) fn body(
                         if ui.add(widgets::radio(custom, tl!("Custom scale:"))).clicked() {
                             d.size = SizeMode::Custom(d.custom_scale);
                         }
-                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(1.0..=1000.0).suffix(" %"))
+                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(CUSTOM_SCALE).suffix(" %"))
                             .accessible_name(tl!("Custom scale"));
                     });
                 }
