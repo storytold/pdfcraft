@@ -14760,3 +14760,111 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+fn four_component_cmyk_jpeg(w: u16, h: u16, adobe: Option<u8>, block: impl Fn(u16, u16) -> [u8; 4]) -> Vec<u8> {
+    fn put(bits: &mut Vec<bool>, value: u32, n: u32) {
+        bits.extend((0..n).rev().map(|i| value >> i & 1 == 1));
+    }
+    let mut v = vec![0xFF, 0xD8];
+    if let Some(t) = adobe {
+        v.extend_from_slice(&[0xFF, 0xEE, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, t]);
+    }
+    v.extend_from_slice(&[0xFF, 0xDB, 0, 67, 0]);
+    v.extend_from_slice(&[1; 64]);
+    v.extend_from_slice(&[0xFF, 0xC0, 0, 20, 8]);
+    v.extend_from_slice(&h.to_be_bytes());
+    v.extend_from_slice(&w.to_be_bytes());
+    v.push(4);
+    for id in 1..=4 {
+        v.extend_from_slice(&[id, 0x11, 0]);
+    }
+    v.extend_from_slice(&[0xFF, 0xC4, 0, 31, 0x00, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    v.extend(0..12u8);
+    v.extend_from_slice(&[0xFF, 0xC4, 0, 20, 0x10, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    v.extend_from_slice(&[0xFF, 0xDA, 0, 14, 4, 1, 0, 2, 0, 3, 0, 4, 0, 0, 63, 0]);
+    let mut bits = Vec::new();
+    let mut pred = [0i32; 4];
+    for by in 0..h / 8 {
+        for bx in 0..w / 8 {
+            for (c, s) in block(bx, by).into_iter().enumerate() {
+                let dc = (i32::from(s) - 128) * 8;
+                let diff = dc - pred[c];
+                pred[c] = dc;
+                let category = 32 - diff.unsigned_abs().leading_zeros();
+                put(&mut bits, category, 4);
+                put(&mut bits, if diff < 0 { (diff + (1 << category) - 1) as u32 } else { diff as u32 }, category);
+                put(&mut bits, 0, 1);
+            }
+        }
+    }
+    bits.resize(bits.len().div_ceil(8) * 8, true);
+    for byte in bits.chunks(8).map(|b| b.iter().fold(0u8, |a, &x| a << 1 | u8::from(x))) {
+        v.push(byte);
+        if byte == 0xFF {
+            v.push(0);
+        }
+    }
+    v.extend_from_slice(&[0xFF, 0xD9]);
+    v
+}
+
+fn cmyk_jpeg_pdf(jpeg: &[u8]) -> Vec<u8> {
+    let mut img_obj = format!(
+        "<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+        jpeg.len()
+    )
+    .into_bytes();
+    img_obj.extend_from_slice(jpeg);
+    img_obj.extend_from_slice(b"\nendstream");
+
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>".to_vec(),
+        b"<< /Length 29 >>\nstream\nq 100 0 0 100 0 0 cm /Im1 Do Q\nendstream".to_vec(),
+        img_obj,
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn doc_convert_colors_converts_device_cmyk_jpeg_to_rgb() {
+    let dir = workdir("convert-cmyk");
+    let jpeg = four_component_cmyk_jpeg(8, 8, Some(0), |_, _| [100, 50, 0, 20]);
+    let pdf_bytes = cmyk_jpeg_pdf(&jpeg);
+    std::fs::write(dir.join("cmyk.pdf"), &pdf_bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "cmyk.pdf" }))["doc"].as_u64().unwrap();
+    let res = ok(&mut a, "doc_convert_colors", json!({ "doc": doc, "path": "rgb.pdf" }));
+
+    assert_eq!(res["converted"], 1);
+    assert_eq!(res["skipped"], 0);
+
+    let rgb_bytes = std::fs::read(dir.join("rgb.pdf")).unwrap();
+    let parsed = pdfcraft_cos::Document::open(std::sync::Arc::new(rgb_bytes)).unwrap();
+    let mut found_rgb = false;
+    for (_, obj) in parsed.scan_objects() {
+        if let pdfcraft_cos::Object::Stream(s) = &*obj
+            && s.dict.name(b"Subtype") == Some(b"Image")
+        {
+            assert_eq!(s.dict.name(b"ColorSpace"), Some(b"DeviceRGB".as_slice()));
+            found_rgb = true;
+        }
+    }
+    assert!(found_rgb, "converted PDF must contain a DeviceRGB image");
+}
