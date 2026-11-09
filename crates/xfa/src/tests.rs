@@ -3212,7 +3212,6 @@ fn rounded_boxes_are_written_as_curved_paths() {
         edge: edge.then_some((2.0, [1.0, 0.0, 0.0], false)),
         open_top: open.0,
         open_bottom: open.1,
-        corners: [None; 4],
     };
     let content = |r: Rounded| crate::pdf::rounded(&r, 792.0);
     let ops = content(shape([false; 4], true, (false, false)));
@@ -6243,24 +6242,6 @@ fn template_fills_with_patterns_gradients_and_stipples_are_drawn() {
     let w = widgets(page).into_iter().find(|w| w.som == "form[0].widget[0]").unwrap();
     assert_eq!(w.border.fill, None, "the widget's own background stays clear");
     assert!(red_lines(w.rect).iter().all(|(f, t)| f.0 == t.0) && !red_lines(w.rect).is_empty(), "vertical strokes under it");
-}
-
-/// A rounded corner that gives its own colour and thickness (XFA 3.3 p. 663) is drawn with them
-/// over the edge; corners not listed take corner 0's, as edges do (p. 38).
-#[test]
-fn a_template_corners_own_stroke_is_drawn() {
-    let form = crate::layout::layout(&drawing_template(), None).unwrap();
-    let rounded: Vec<&crate::layout::Rounded> = form.pages[0]
-        .items
-        .iter()
-        .filter_map(|i| if let Item::Rounded(r) = i { Some(&**r) } else { None })
-        .filter(|r| r.radii.iter().any(|v| *v > 0.0))
-        .collect();
-    let corners: Vec<_> = rounded.iter().filter(|r| r.corners.iter().any(Option::is_some)).collect();
-    assert_eq!(corners.len(), 1, "{rounded:?}");
-    assert_eq!(corners[0].corners, [Some((3.0, rgb255(255.0, 0.0, 0.0))); 4]);
-    let ops = crate::pdf::rounded(corners[0], 792.0);
-    assert!(ops.contains("1 0 0 RG") && ops.contains("3 w"), "{ops}");
 }
 
 /// `lineThrough` (XFA 3.3 p. 742) strikes a draw's text once, and a field's value twice (the

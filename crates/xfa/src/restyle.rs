@@ -92,7 +92,7 @@ fn size_of(list: &[Prop], depth: usize) -> (usize, usize) {
 /// property path are skipped.
 pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, bool) {
     let mut out = base.clone();
-    let (mut elements, mut bytes) = size_of(&out.elements, 0);
+    let mut bytes = size_of(&out.elements, 0).1;
     let mut cut = false;
     // By path, a copy before a write to the same key (the host copies an element before a
     // script writes to it).
@@ -112,7 +112,7 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
                 cut = true;
                 continue;
             }
-            (elements, bytes) = (n, b);
+            bytes = b;
         }
         let Some(p) = find_mut(&mut out.elements, &st, 0) else { continue };
         let old = match attr {
@@ -141,7 +141,6 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
         }
         bytes = grown;
     }
-    let _ = elements;
     (out, cut)
 }
 

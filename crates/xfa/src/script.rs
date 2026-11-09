@@ -972,25 +972,24 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
 
 /// The field at `som` as the template and the property changes in `ov` make it now (its
 /// validation's format test, its calculation's override), for checks after the user changes
-/// its value; `None` when no template field is there.
+/// its value; `None` when no template field is there. Only the field's own changes, kept by its
+/// SOM path, apply to it (what [`apply_overrides_split`] gives it, whether in the template or per
+/// instance), so this restyles one field, not the form.
 pub fn field_now(tpl: &Template, ov: &Overrides, som: &str) -> Option<Field> {
-    if ov.props().is_empty() {
-        return crate::data::template_field(tpl, som).cloned();
-    }
-    let applied = apply_overrides_split(tpl, ov);
-    let f = crate::data::template_field(&applied.template, som)?;
-    Some(match applied.per_instance.get(som) {
+    let f = crate::data::template_field(tpl, som)?;
+    Some(match ov.props().get(som) {
         Some(sets) => crate::restyle::restyled_field(f, sets),
         None => f.clone(),
     })
 }
 
-/// Whether the user overrode the calculation of the field at `som` (its template value says so,
-/// or [`mark_value_override`] did), so that calculations leave it alone.
+/// Whether the user overrode the calculation of the field at `som` (its value says so, as the
+/// template or a script set it, or [`mark_value_override`] did), so that calculations leave it
+/// alone.
 pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
     match ov.overridden.get(som) {
         Some(v) => crate::validation_rules::is_override(Some(v)),
-        None => crate::data::template_field(tpl, som).is_some_and(|f| f.value_override),
+        None => field_now(tpl, ov, som).is_some_and(|f| f.value_override),
     }
 }
 

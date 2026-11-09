@@ -623,33 +623,6 @@ fn fill_patterns_gradients_and_stipples_are_drawn() {
     assert!(items(&form).iter().any(|i| matches!(i, Item::Line { color, .. } if *color == red)));
 }
 
-/// A rounded corner with its own stroke (XFA 3.3 p. 663) is drawn with it over the edge; a
-/// script's change to a corner's colour reaches it.
-#[test]
-fn a_rounded_corners_own_stroke_is_drawn() {
-    let tpl = TEMPLATE.replace(
-        r#"<draw name="label""#,
-        r#"<field name="round" w="2in" h="0.5in"><border><edge thickness="1pt"/><corner radius="8pt"/></border></field><draw name="label""#,
-    );
-    let t = crate::parse(&tpl).unwrap().0;
-    let ov =
-        overrides("form[0].round[0]", &[("border#0/corner#0/color#0", Some("value"), "255,0,0"), ("border#0/corner#0", Some("thickness"), "3pt")]);
-    let form = laid_out(&t, &ov);
-    let r = items(&form)
-        .into_iter()
-        .find_map(|i| match i {
-            Item::Rounded(r) if r.edge.is_some() => Some((**r).clone()),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(r.corners, [Some((3.0, rgb(255.0, 0.0, 0.0))); 4], "one corner listed stands for all four");
-    let content = crate::pdf::rounded(&r, 792.0);
-    assert_eq!(content.matches("1 0 0 RG 3 w").count(), 4, "{content}");
-    // A square corner shows nothing of its stroke.
-    let ov = overrides("form[0].boxed[0]", &[("border#0/corner#0/color#0", Some("value"), "255,0,0")]);
-    assert!(!items(&laid_out(&template(), &ov)).iter().any(|i| matches!(i, Item::Rounded(_))));
-}
-
 /// `font.lineThrough` (XFA 3.3 p. 742) draws a line through the text a draw shows, two for 2.
 #[test]
 fn line_through_strikes_the_text() {
@@ -820,4 +793,29 @@ fn caption_item_and_calculation_changes_take_effect() {
     let sum = field(&applied.template, "sum");
     assert_eq!(sum.calc_override, crate::validation_rules::CalcOverride::Warning);
     assert!(field(&applied.template, "bare").caption.is_none());
+}
+
+/// Review: the field a check after the user's entry reads (`field_now`) is restyled alone, not
+/// the whole form: on a form with 5,000 changed fields, 200 look-ups take well under a second
+/// (they rebuilt every field's properties each time before). The field still has its own
+/// changes, and a calculation override a script wrote counts (`value_overridden`).
+#[test]
+fn checks_after_an_entry_restyle_only_the_field() {
+    let fields: String = (0..5_000).map(|i| format!(r#"<field name="f{i}" w="1in" h="0.3in"><ui><textEdit/></ui></field>"#)).collect();
+    let tpl = TEMPLATE.replace(r#"<draw name="label""#, &format!(r#"{fields}<draw name="label""#));
+    let t = crate::parse(&tpl).unwrap().0;
+    let mut ov = Overrides::default();
+    for i in 0..5_000 {
+        ov.set_prop(&format!("form[0].f{i}[0]"), "border#0/fill#0/color#0", Some("value"), "1,2,3").unwrap();
+    }
+    ov.set_prop("form[0].plain[0]", "validate#0", Some("formatTest"), "error").unwrap();
+    ov.set_prop("form[0].plain[0]", "value#0", Some("override"), "1").unwrap();
+    let start = std::time::Instant::now();
+    for _ in 0..200 {
+        let f = crate::field_now(&t, &ov, "form[0].plain[0]").unwrap();
+        assert_eq!(f.format_test, crate::validation_rules::Test::Error);
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    assert!(crate::value_overridden(&t, &ov, "form[0].plain[0]"), "a script's value@override counts");
+    assert!(!crate::value_overridden(&t, &Overrides::default(), "form[0].plain[0]"));
 }

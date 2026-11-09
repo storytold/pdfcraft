@@ -115,71 +115,19 @@ pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
         c.push_str(&format!("{} rg {}f\n", rgb(color), outline(r.rect, r.radii, r.inverted, (false, false), page_h)));
     }
     if let Some((w, color, dashed)) = r.edge {
-        let (inset, radii) = stroke_inset(r, w);
+        // The edge's centre line, half its width inside the box, so the edge stays in: a corner
+        // curving around the box tightens by as much, and one curving into it widens.
+        let inset = Rect::new(r.rect.x + w / 2.0, r.rect.y + w / 2.0, (r.rect.w - w).max(0.0), (r.rect.h - w).max(0.0));
+        let most = inset.w.min(inset.h) / 2.0;
+        let radii: [f64; 4] = std::array::from_fn(|i| match (r.radii[i], r.inverted[i]) {
+            (v, _) if v <= 0.0 => 0.0,
+            (v, true) => (v + w / 2.0).min(most),
+            (v, false) => (v - w / 2.0).clamp(0.0, most),
+        });
         let path = outline(inset, radii, r.inverted, (r.open_top, r.open_bottom), page_h);
         c.push_str(&format!("q {} RG {} w {}{path}S Q\n", rgb(color), n(w), if dashed { "[2 2] 0 d " } else { "" }));
     }
-    // Corners with a stroke of their own (XFA 3.3 p. 663), over the edge: each one's curve.
-    for (i, corner) in r.corners.iter().enumerate() {
-        let Some((w, color)) = corner else { continue };
-        let cut = (i < 2 && r.open_top) || (i >= 2 && r.open_bottom);
-        let (inset, radii) = stroke_inset(r, *w);
-        let curve = corner_curve(inset, radii, r.inverted, i, page_h);
-        if cut || curve.is_empty() {
-            continue;
-        }
-        let start = point(corner_points(inset, radii, i).1, page_h);
-        c.push_str(&format!("q {} RG {} w {start} m {curve}S Q\n", rgb(*color), n(*w)));
-    }
     c
-}
-
-/// Point `q` (top-left based) on a page `page_h` tall, as content-stream coordinates.
-fn point(q: (f64, f64), page_h: f64) -> String {
-    format!("{} {}", n(q.0), n(page_h - q.1))
-}
-
-/// Corner `i` of `rect` with radius `radii[i]`: its point, then where its curve starts and
-/// ends, going clockwise.
-fn corner_points(rect: Rect, radii: [f64; 4], i: usize) -> ((f64, f64), (f64, f64), (f64, f64)) {
-    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
-    let r = radii.get(i).copied().unwrap_or(0.0);
-    match i {
-        0 => ((x0, y0), (x0, y0 + r), (x0 + r, y0)),
-        1 => ((x1, y0), (x1 - r, y0), (x1, y0 + r)),
-        2 => ((x1, y1), (x1, y1 - r), (x1 - r, y1)),
-        _ => ((x0, y1), (x0 + r, y1), (x0, y1 - r)),
-    }
-}
-
-/// Corner `i`'s curve from its start: a quarter circle as one Bézier curve, around the box or,
-/// `inverted`, centred on the corner itself; empty for a square corner.
-fn corner_curve(rect: Rect, radii: [f64; 4], inverted: [bool; 4], i: usize, page_h: f64) -> String {
-    if radii.get(i).copied().unwrap_or(0.0) <= 0.0 {
-        return String::new();
-    }
-    let (p, a, b) = corner_points(rect, radii, i);
-    const K: f64 = 0.5523;
-    let (c1, c2) = if inverted.get(i).copied().unwrap_or(false) {
-        ((a.0 + (b.0 - p.0) * K, a.1 + (b.1 - p.1) * K), (b.0 + (a.0 - p.0) * K, b.1 + (a.1 - p.1) * K))
-    } else {
-        ((a.0 + (p.0 - a.0) * K, a.1 + (p.1 - a.1) * K), (b.0 + (p.0 - b.0) * K, b.1 + (p.1 - b.1) * K))
-    };
-    format!("{} {} {} c ", point(c1, page_h), point(c2, page_h), point(b, page_h))
-}
-
-/// The edge's centre line of rounded box `r` stroked `w` wide: half the width inside the box,
-/// so the stroke stays in (a corner curving around the box tightens by as much, and one curving
-/// into it widens). The inset box and its corner radii.
-fn stroke_inset(r: &Rounded, w: f64) -> (Rect, [f64; 4]) {
-    let inset = Rect::new(r.rect.x + w / 2.0, r.rect.y + w / 2.0, (r.rect.w - w).max(0.0), (r.rect.h - w).max(0.0));
-    let most = inset.w.min(inset.h) / 2.0;
-    let radii: [f64; 4] = std::array::from_fn(|i| match (r.radii[i], r.inverted[i]) {
-        (v, _) if v <= 0.0 => 0.0,
-        (v, true) => (v + w / 2.0).min(most),
-        (v, false) => (v - w / 2.0).clamp(0.0, most),
-    });
-    (inset, radii)
 }
 
 /// The path around `rect` (top-left based, on a page `page_h` tall) with the corners `radii`
@@ -188,9 +136,32 @@ fn stroke_inset(r: &Rounded, w: f64) -> (Rect, [f64; 4]) {
 /// those are where a page break cut the box. Ends with a space, for the paint operator.
 fn outline(rect: Rect, radii: [f64; 4], inverted: [bool; 4], open: (bool, bool), page_h: f64) -> String {
     let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
-    let pt = |q: (f64, f64)| point(q, page_h);
-    let corner = |i: usize| corner_points(rect, radii, i);
-    let curve = |i: usize| corner_curve(rect, radii, inverted, i, page_h);
+    let pt = |q: (f64, f64)| format!("{} {}", n(q.0), n(page_h - q.1));
+    // Corner `i`: its point, then where its curve starts and ends, going clockwise.
+    let corner = |i: usize| {
+        let r = radii.get(i).copied().unwrap_or(0.0);
+        match i {
+            0 => ((x0, y0), (x0, y0 + r), (x0 + r, y0)),
+            1 => ((x1, y0), (x1 - r, y0), (x1, y0 + r)),
+            2 => ((x1, y1), (x1, y1 - r), (x1 - r, y1)),
+            _ => ((x0, y1), (x0 + r, y1), (x0, y1 - r)),
+        }
+    };
+    // Corner `i`'s curve, from its start: a quarter circle as one Bézier curve.
+    let curve = |i: usize| {
+        if radii.get(i).copied().unwrap_or(0.0) <= 0.0 {
+            return String::new();
+        }
+        let (p, a, b) = corner(i);
+        const K: f64 = 0.5523;
+        let (c1, c2) = if inverted.get(i).copied().unwrap_or(false) {
+            // Centred on the corner itself.
+            ((a.0 + (b.0 - p.0) * K, a.1 + (b.1 - p.1) * K), (b.0 + (a.0 - p.0) * K, b.1 + (a.1 - p.1) * K))
+        } else {
+            ((a.0 + (p.0 - a.0) * K, a.1 + (p.1 - a.1) * K), (b.0 + (p.0 - b.0) * K, b.1 + (p.1 - b.1) * K))
+        };
+        format!("{} {} {} c ", pt(c1), pt(c2), pt(b))
+    };
     // Along corners `from`, joining them with straight sides.
     let along = |from: &[usize]| {
         let mut s = String::new();

@@ -1,8 +1,5 @@
 use super::items::{Action, BorderShape, Item, Rounded, Widget, WidgetBorder};
-use super::{
-    Border, DataNode, DataPath, HashMap, HashSet, Layout, MAX_DEPTH, Node, Presence, Rect, Script, Template, Ui, data_path, date_letters,
-    iso_to_pattern,
-};
+use super::{DataNode, DataPath, HashMap, HashSet, Layout, MAX_DEPTH, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
 use crate::data::{data_date_letters, data_to_iso, fields_with_ids};
 
 /// The value of each field with an `id`, for the rich text that embeds it (floating fields,
@@ -85,16 +82,6 @@ pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: us
             Node::Draw(_) => {}
         }
     }
-}
-
-/// The corners of border `b` drawn with their own stroke (XFA 3.3 p. 663): those that give one
-/// ([`crate::model::Corner::stroke`]), are shown and rounded, on a border whose edge is drawn
-/// (`edged`).
-pub(super) fn corner_strokes(b: &Border, edged: bool) -> [Option<(f64, [f64; 3])>; 4] {
-    b.corners.map(|c| match c.stroke {
-        Some((w, color)) if edged && c.presence == Presence::Visible && c.radius > 0.0 && w > 0.0 => Some((w.clamp(0.1, 20.0), color.0)),
-        _ => None,
-    })
 }
 
 /// `path` with the instance numbers `scope` gives the same names, segment by segment from the

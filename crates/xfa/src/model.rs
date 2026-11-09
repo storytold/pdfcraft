@@ -131,9 +131,6 @@ pub struct Corner {
     pub presence: Presence,
     pub radius: f64,
     pub inverted: bool,
-    /// The corner's own stroke (thickness, colour) when the corner element gives either (XFA 3.3
-    /// p. 663): a rounded corner is drawn with it; `None`, it is drawn as the edges are.
-    pub stroke: Option<(f64, Color)>,
 }
 
 /// What a fill paints over its colour (XFA 3.3 p. 734): nothing more (solid), a hatching

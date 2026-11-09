@@ -66,9 +66,6 @@ pub struct Rounded {
     /// A page break cut the box here: that side has no edge, and its corners are square.
     pub open_top: bool,
     pub open_bottom: bool,
-    /// Corners drawn with their own stroke (width, colour) over the edge, where the corner
-    /// element gives one (XFA 3.3 p. 663) and the corner is rounded.
-    pub corners: [Option<(f64, [f64; 3])>; 4],
 }
 
 #[derive(Clone, Debug, PartialEq)]

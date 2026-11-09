@@ -210,8 +210,6 @@ fn parse_corners(n: XmlNode) -> [Corner; 4] {
             presence: Presence::parse(c.attribute("presence")),
             radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
             inverted: c.attribute("inverted") == Some("1"),
-            stroke: (c.attribute("thickness").is_some() || child(c, "color").is_some())
-                .then(|| (attr_measure(c, "thickness").unwrap_or(0.5).max(0.0), parse_color(child(c, "color")).unwrap_or(Color::BLACK))),
         })
         .collect();
     std::array::from_fn(|i| drawn_side(given.len(), i).and_then(|k| given.get(k).copied()).unwrap_or_default())

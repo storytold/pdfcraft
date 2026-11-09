@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::common::{clean_name, corner_strokes};
+use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
 use super::{
     Arc, Border, Common, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect,
@@ -285,13 +285,12 @@ impl Layouter<'_> {
                 edge,
                 open_top: false,
                 open_bottom: false,
-                corners: corner_strokes(b, vis[0]),
             };
             if b.fill().is_none() || b.fill_kind == FillKind::Solid {
                 return self.push(Item::Rounded(Box::new(shape)));
             }
             // The fill, what it paints over its colour, then the edge on top.
-            self.push(Item::Rounded(Box::new(Rounded { edge: None, corners: [None; 4], ..shape.clone() })))?;
+            self.push(Item::Rounded(Box::new(Rounded { edge: None, ..shape.clone() })))?;
             self.fill_overlay(b, rect)?;
             return self.push(Item::Rounded(Box::new(Rounded { fill: None, ..shape })));
         }
@@ -430,7 +429,6 @@ impl Layouter<'_> {
                         edge: None,
                         open_top: false,
                         open_bottom: false,
-                        corners: [None; 4],
                     };
                     self.push(Item::Rounded(Box::new(oval)))?;
                 }
