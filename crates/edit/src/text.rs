@@ -25,25 +25,26 @@ mod regions;
 #[path = "text_session.rs"]
 mod session;
 pub use fallback::strip_subset_tag;
-use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
+use regions::{alignment_frame, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block};
 pub use session::TextSession;
 
 mod blocks;
 mod editor;
 mod fallback;
+pub mod forms;
 mod interp;
 mod lines;
 mod rewrite;
 
-use blocks::paragraph_separator;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
-use editor::layout_draft;
+use blocks::{kept_words, paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
+use editor::{builtin_thai_choice, layout_draft};
 #[cfg(test)]
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
@@ -54,14 +55,17 @@ use fallback::{
 use fallback::{add_type3_font, is_type3_fallback};
 pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
-use lines::page_dict;
-pub(crate) use lines::{FormBudget, content_streams, content_streams_within, dict_in_place, form_call, resource_dict, rewritten_contents, splice};
+pub(crate) use lines::{
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
+    joined, resource_dict, rewritten_contents, splice,
+};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
+use lines::{page_dict, word_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
+pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
-pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +275,18 @@ mod tests {
         // Pieces of one word join without a space; separate words keep theirs.
         assert_eq!(wrapped("Edit PDFを編集", 6.0), ["Edit", "PDFを編集"]);
         assert_eq!(wrapped("一行目　二行目", 4.0), ["一行目　", "二行目"]);
+    }
+
+    #[test]
+    fn thai_text_wraps_between_dictionary_words_and_keeps_marks_on_their_word() {
+        // Without word breaks the whole run is one word and overflows a single row.
+        assert_eq!(wrapped("ภาษาไทยไม่มีช่องว่าง", 8.0), ["ภาษาไทย", "ไม่มี", "ช่องว่าง"]);
+        // Mai Yamok stays with the word it repeats; pieces join without a space, words keep theirs.
+        assert_eq!(wrapped("เด็กๆชอบกิน ขนม", 6.0), ["เด็กๆ", "ชอบกิน", "ขนม"]);
+        assert_eq!(wrapped("ไฟล์ PDF ประปาส่วนภูมิภาค", 9.0), ["ไฟล์ PDF", "ประปาส่วน", "ภูมิภาค"]);
+        // A wrap between Thai words consumed no separator, so a rejoin puts back no space.
+        let rows = wrap("ภาษาไทยไม่มีช่องว่าง", 8.0, |s| s.chars().count() as f64);
+        assert_eq!(rows.iter().map(|(_, soft, gap)| (*soft, *gap)).collect::<Vec<_>>(), [(false, 0), (true, 0), (true, 0)]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
+use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
@@ -80,6 +80,9 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         Ok(p) => info.pages = p,
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
+    // Never silent: the pages of a file whose last update has no `/Prev` were found by rebuilding
+    // its cross-reference data (`pdfcraft-cos` rebuilds it under the same conditions and logs it).
+    let unlinked = pdf.rebuilt_unlinked_update();
     let options = load_options(password);
     // Geometry no longer needs the renderer parser. Do not overlap its allocations with
     // structural inspection, including the compatibility fallback for damaged files.
@@ -110,8 +113,16 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
     if info.pages.is_empty() {
         return Err(OpenError::Invalid("the document has no pages".into()));
     }
+    if unlinked {
+        info.warnings.push(UNLINKED_UPDATE.into());
+    }
     Ok(info)
 }
+
+/// The warning for a file whose pages were found by rebuilding its cross-reference data because its
+/// last update has no `/Prev` (ISO 32000-2 §7.5.6, §7.5.8.2).
+const UNLINKED_UPDATE: &str =
+    "This file's last update has no link (/Prev) to its earlier revisions; its pages were found by rebuilding the cross-reference data.";
 
 // Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
 pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
@@ -144,13 +155,16 @@ pub(super) struct Inspector<'a> {
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
     pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// The first page widget naming each field as its `/Parent`, built when a field has no widget
+    /// among its `/Kids`.
+    pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,
 }
 
 impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
+        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new(), parent_widgets: OnceCell::new() };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -161,6 +175,9 @@ impl<'a> Inspector<'a> {
         me
     }
 
+    /// Reads what `info` holds beyond the page list: encryption, document information, tagging,
+    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments,
+    /// JavaScript and the opening destination.
     pub(super) fn fill(&self, info: &mut DocInfo) {
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
@@ -204,18 +221,19 @@ impl<'a> Inspector<'a> {
             Ok(notes) => info.warnings.extend(notes.into_iter().map(|note| format!("Page labels: {note}."))),
             Err(reason) => info.warnings.push(format!("Page labels were skipped: {reason}; using physical page numbers.")),
         }
-        if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
-            (info.outline, info.outline_more) = self.outline_window(first);
-        }
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+        if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
+            (info.outline, info.outline_more) = self.outline_window(first, &mut text_budget);
+        }
         self.annotations(info, &mut text_budget);
         self.transitions(info);
-        let mut field_seen = HashSet::new();
+        let mut walk = FieldWalk::default();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
             && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
         {
+            walk.roots = fields.iter().filter_map(|f| if let Object::Reference(id) = f { Some(*id) } else { None }).collect();
             for f in fields {
-                self.field(f, None, &mut info.fields, &mut field_seen, 0);
+                self.field(f, None, &mut info.fields, &mut walk, 0);
             }
         }
         // Widgets no `/Fields` entry reaches are fields too (Acrobat and the browsers fill them);
@@ -231,9 +249,9 @@ impl<'a> Inspector<'a> {
                     continue;
                 }
                 if let Object::Reference(id) = a
-                    && let Some(root) = self.unlisted_field(*id, &field_seen)
+                    && let Some(root) = self.unlisted_field(*id, &walk.seen)
                 {
-                    self.field(&Object::Reference(root), None, &mut info.fields, &mut field_seen, 0);
+                    self.field(&Object::Reference(root), None, &mut info.fields, &mut walk, 0);
                 }
             }
         }
@@ -428,5 +446,42 @@ mod open_action_javascript_tests {
         let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
         let info = inspect(Arc::new(bytes), None).expect("inspects");
         assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod unlinked_update_tests {
+    use super::*;
+
+    /// An update without `/Prev` cuts the page tree off the chain; the pages come from the
+    /// rebuilt table, the page tree's pages in its order, and the file says it was rebuilt.
+    #[test]
+    fn an_update_without_prev_shows_the_page_tree_and_says_it_was_rebuilt() {
+        let info = inspect(Arc::new(pdfcraft_testkit::update_without_prev(false)), None).expect("the unlinked file opens");
+        assert_eq!(info.pages.len(), 3, "{:?}", info.pages);
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        // The structure is read from the rebuilt table as well: the second page's link.
+        assert_eq!(info.links.len(), 1, "{:?}", info.links);
+        let linked = inspect(Arc::new(pdfcraft_testkit::update_without_prev(true)), None).expect("the linked file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert_eq!(linked.links.len(), 1);
+    }
+
+    /// A hybrid update's `/XRefStm` stream is part of that update, not an earlier section: without
+    /// `/Prev` the file is rebuilt as the document model rebuilds it, and with it, it isn't.
+    #[test]
+    fn a_hybrid_update_without_prev_is_rebuilt_as_the_document_model_rebuilds_it() {
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false));
+        let info = inspect(bytes.clone(), None).expect("the unlinked hybrid file opens");
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        assert!(pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true));
+        let linked = inspect(bytes.clone(), None).expect("the linked hybrid file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert!(!pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
     }
 }
