@@ -183,6 +183,32 @@ fn a_page_draws_a_bounded_number_of_tiles_over_the_backdrop() {
     assert!(near(page.at(145, 105), LIGHT), "right square: {:?}", page.at(145, 105));
 }
 
+/// A second fill with the same pattern setting takes the cell drawn for the first one from the
+/// renderer's cache of cells (patch (30)), and that cell still blends: the cache keeps whether it
+/// does, so the second fill multiplies red with the page again instead of painting the cell
+/// pixmap's plain red.
+#[test]
+fn a_cached_cell_still_blends() {
+    let cell = "/GM gs 1 0 0 rg 0 0 10 10 re f";
+    let page = render(page_pdf(&format!("{BACKDROP} /Pattern cs /P1 scn 0 0 200 200 re f 0 0 200 200 re f"), 1, 20, cell));
+    assert!(near(page.at(45, 85), DARK), "left square: {:?}", page.at(45, 85));
+    assert!(near(page.at(145, 105), LIGHT), "right square: {:?}", page.at(145, 105));
+}
+
+/// The page's allowance is spent by what each shape needs, not closed by the first shape refused:
+/// after twenty-nine fills of 144 tiles, the last of which takes the cell pixmap (64 tiles are
+/// left), a small fill reaching a few tiles still draws them over the backdrop. The cell is
+/// uncoloured, so the small fill can paint blue: multiplied with the red under it that is black,
+/// where the cell pixmap would leave blue.
+#[test]
+fn a_fill_that_fits_what_is_left_of_the_page_still_blends() {
+    let cell = "/GM gs 0 0 10 10 re f";
+    let fills = "/CP cs 1 0 0 /P1 scn 0 0 200 200 re f\n".repeat(29);
+    let page = render(page_pdf(&format!("{BACKDROP} {fills}/CP cs 0 0 1 /P1 scn 40 80 10 10 re f"), 2, 20, cell));
+    assert_eq!(page.at(145, 105), [255, 0, 0], "the twenty-ninth fill takes the cell pixmap");
+    assert_eq!(page.at(45, 85), [0, 0, 0], "the small fill multiplies with the red under it");
+}
+
 /// A pattern whose `/Matrix` moves it so far that its tile indices pass what `f64` holds exactly
 /// still paints its cell (from the cell pixmap) instead of drawing it off the page.
 #[test]

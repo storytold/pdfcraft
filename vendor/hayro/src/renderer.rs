@@ -2938,7 +2938,8 @@ const MAX_BACKDROP_TILES: u32 = 256;
 /// fill and stroke and every nesting level (a blending cell drawn inside another one's tile, or
 /// inside a cell pixmap, draws from the same allowance). Each tile interprets its cell again,
 /// rasterizing any pattern inside it, so the per-shape [`MAX_BACKDROP_TILES`] alone doesn't bound
-/// the page. Once it is spent, shapes take the cell pixmap.
+/// the page. A shape needing more tiles than are left takes the cell pixmap; a later one that
+/// fits what is left still draws from it.
 const MAX_PAGE_BACKDROP_TILES: u32 = 4096;
 
 /// PdfCraft patch (32): the largest tile index drawn over the backdrop: integers up to here are
