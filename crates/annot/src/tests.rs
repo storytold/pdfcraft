@@ -213,6 +213,122 @@ fn replies_and_status_thread_onto_the_parent() {
     assert_eq!(text(&all[2], b"Contents"), "Accepted set by Bob");
 }
 
+/// A state reply records a state, not a note (ISO 32000-2 §12.5.6.3: the state is kept "in a
+/// separate text annotation"), so it is written Hidden; a reviewer's next change replies to their
+/// previous state reply ("Additional state changes shall be made by adding text annotations in
+/// reply to the previous reply for a given user"). Another reviewer's state, and another state
+/// model, start their own chain on the comment.
+#[test]
+fn status_and_checkmark_replies_are_hidden_and_chain_per_reviewer() {
+    let mut doc = fixture();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let carol = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Carol", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let mark = set_marked(&mut doc, 0, 0, true, "Bob", &meta("m1")).unwrap();
+    let unmark = set_marked(&mut doc, 0, 0, false, "Bob", &meta("m2")).unwrap();
+    let doc = reopen(&doc);
+    let p = page_refs(&doc).unwrap()[0];
+    let entries = annots(&doc, p);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    for i in [first, carol, second, mark, unmark] {
+        assert_eq!(all[i].int(b"F"), Some(30), "hidden, printable, no zoom, no rotate: {i}");
+    }
+    assert_eq!(all[first].reference(b"IRT"), Some(at(0)));
+    assert_eq!(all[carol].reference(b"IRT"), Some(at(0)), "another reviewer starts on the comment");
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "Bob's change replies to Bob's last status");
+    assert_eq!(all[mark].reference(b"IRT"), Some(at(0)), "a checkmark is its own chain");
+    assert_eq!(all[unmark].reference(b"IRT"), Some(at(mark)));
+    // A reply that isn't a state stays visible.
+    let mut doc = doc;
+    let r = add_reply(&mut doc, 0, 0, "Agreed", "Bob", &meta("r")).unwrap();
+    assert_eq!(list(&doc, 0)[r].int(b"F"), Some(28));
+}
+
+/// Review on #4126: a history has no length limit. The 70th change still replies to the 69th,
+/// and a reviewer whose name was typed with spaces continues their own chain.
+#[test]
+fn a_long_status_history_keeps_chaining_to_the_latest() {
+    let mut doc = fixture();
+    let mut prev: Option<usize> = None;
+    for i in 0..70 {
+        let state = if i % 2 == 0 { ReviewState::Accepted } else { ReviewState::Rejected };
+        let at = set_review_state(&mut doc, 0, 0, state, "Bob", &meta(&format!("s{i}"))).unwrap();
+        if let Some(p) = prev {
+            let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+            assert_eq!(list(&doc, 0)[at].reference(b"IRT"), entries[p].as_ref(), "change {i}");
+        }
+        prev = Some(at);
+    }
+    let padded = set_review_state(&mut doc, 0, 0, ReviewState::Completed, " Bob ", &meta("pad")).unwrap();
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    assert_eq!(list(&doc, 0)[padded].reference(b"IRT"), prev.and_then(|p| entries[p].as_ref()));
+    // Listed newest first, the first reply read walks the whole chain at once.
+    let latest = entries[padded].as_ref();
+    let p = page_refs(&doc).unwrap()[0];
+    let mut reversed = entries.clone();
+    reversed.reverse();
+    set_annots(&mut doc, p, reversed).unwrap();
+    let next = set_review_state(&mut doc, 0, 71, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), latest);
+}
+
+/// Review on #4126: a reply with `/StateModel` but no `/State` has the model's default state
+/// (ISO 32000-2 Table 175), for the reader as for the writer: it is Bob's latest status, None,
+/// and his next change replies to it.
+#[test]
+fn a_state_model_without_a_state_is_the_default_state() {
+    let mut doc = fixture();
+    let bare = add_reply(&mut doc, 0, 0, "", "Bob", &meta("bare")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let r = annots(&doc, p)[bare].as_ref().unwrap();
+    doc.update_dict(r, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Review"));
+        d.set(b"F".to_vec(), Object::Int(30));
+    })
+    .unwrap();
+    let summary = summaries(&doc).into_iter().find(|s| s.index == bare).unwrap();
+    assert_eq!(summary.state.as_deref(), Some("None"));
+    let next = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), Some(r));
+
+    // A model PdfCraft doesn't know isn't a state: a status replying to such a reply is about
+    // that reply, not about the comment, so Bob's next change on the comment starts afresh.
+    let mut doc = fixture();
+    let other = add_reply(&mut doc, 0, 0, "", "Ann", &meta("other")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let o = annots(&doc, p)[other].as_ref().unwrap();
+    // Nor is a `/State` the readers can't read, such as a number (review on #4126).
+    doc.update_dict(o, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Other"));
+        d.set(b"State".to_vec(), Object::Int(5));
+    })
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == other).unwrap().state, None);
+    set_review_state(&mut doc, 0, other, ReviewState::Rejected, "Bob", &meta("on-other")).unwrap();
+    let fresh = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("fresh")).unwrap();
+    assert_eq!(list(&doc, 0)[fresh].reference(b"IRT"), annots(&doc, p)[0].as_ref());
+}
+
+/// A third change replies to the second, not the first; and Bob's status on another comment
+/// is never the one his next change on this comment replies to.
+#[test]
+fn a_reviewers_chain_continues_from_their_latest_status_on_that_comment() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let elsewhere = set_review_state(&mut doc, 0, note, ReviewState::Cancelled, "Bob", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let third = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("s4")).unwrap();
+    let doc = reopen(&doc);
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    assert_eq!(all[elsewhere].reference(b"IRT"), Some(at(note)));
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "not Bob's status on the note");
+    assert_eq!(all[third].reference(b"IRT"), Some(at(second)), "the latest, not the first");
+}
+
 #[test]
 fn delete_takes_popup_and_reply_chain() {
     let mut doc = fixture();
@@ -1312,6 +1428,44 @@ fn urls_are_found_after_length_changing_lowercase() {
     let (range, uri) = found.into_iter().next().unwrap();
     assert_eq!(uri, "http://example.com");
     assert_eq!(range, 21..39, "range is in source-character indices");
+}
+
+/// Review on #4472: an address inside one written with another scheme isn't taken out of it
+/// (`ftp://www.example.com` opened as `http://www.example.com`), and brackets that pair up
+/// inside an address belong to it.
+#[test]
+fn urls_keep_their_written_scheme_and_paired_brackets() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    for s in
+        ["ftp://www.example.com/pub", "file://www.example.com/x", "javascript:www.example.com", "ftp://user@example.com/x", "smb://a@example.org/s"]
+    {
+        assert_eq!(found(s), Vec::<String>::new(), "{s}");
+    }
+    assert_eq!(found("mailto:someone@example.com and (www.example.com)"), ["mailto:someone@example.com", "http://www.example.com"]);
+    assert_eq!(found("See https://en.wikipedia.org/wiki/Mercury_(planet)."), ["https://en.wikipedia.org/wiki/Mercury_(planet)"]);
+    assert_eq!(found("(https://example.com/a_(b)_c)"), ["https://example.com/a_(b)_c"]);
+    assert_eq!(found("https://example.com/a(b c"), ["https://example.com/a"]);
+    // Deeply nested or unbalanced brackets end the address without trouble.
+    let deep = format!("https://example.com/{}x{}", "(".repeat(10_000), ")".repeat(9_999));
+    assert_eq!(found(&deep), ["https://example.com/"]);
+}
+
+/// Review on #4472: brackets that never close in text without spaces (`https://a/(` again and
+/// again) made each address in it read the rest of the text, then start again one character on,
+/// a pass over the page per address. Each is read 2,048 characters at most now, and the
+/// addresses around them are still found. A run of address characters longer than that is no
+/// address.
+#[test]
+fn unclosed_brackets_in_text_without_spaces_are_read_once_per_address() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    let text = format!("www.before.org {} www.after.org", "https://a/(".repeat(60_000));
+    let started = std::time::Instant::now();
+    assert_eq!(found(&text), ["http://www.before.org", "http://www.after.org"]);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let long = format!("https://example.com/{} www.after.org", "a".repeat(3000));
+    assert_eq!(found(&long), ["http://www.after.org"]);
+    let fits = format!("https://example.com/{}", "a".repeat(2000));
+    assert_eq!(found(&fits), std::slice::from_ref(&fits));
 }
 
 #[test]
@@ -3396,6 +3550,366 @@ fn text_boxes_draw_from_any_da_string() {
     }
 }
 
+/// A comment's built appearance for the dictionary `body` (no `/AP`), as text, or `None` when
+/// PdfCraft can't draw it.
+fn built(body: &str) -> Option<String> {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        body.as_bytes(),
+    ]);
+    let d = list(&doc, 0).into_iter().next().unwrap();
+    crate::appearance::build(&doc, &d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// The x and y range a drawing's path covers: its points, and each curve's middle (a curve's
+/// control points lie outside it, so they aren't counted).
+fn extent(ops: &str) -> [f64; 4] {
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    let mut at = (0.0, 0.0);
+    let add = |p: (f64, f64), b: &mut [f64; 4]| *b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+    for line in ops.lines() {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        let Some((op, nums)) = t.split_last() else { continue };
+        let v: Vec<f64> = nums.iter().filter_map(|n| n.parse().ok()).collect();
+        match (*op, v.as_slice()) {
+            ("m" | "l", [x, y]) => {
+                at = (*x, *y);
+                add(at, &mut b);
+            }
+            ("c", [x1, y1, x2, y2, x3, y3]) => {
+                let mid = ((at.0 + 3.0 * x1 + 3.0 * x2 + x3) / 8.0, (at.1 + 3.0 * y1 + 3.0 * y2 + y3) / 8.0);
+                add(mid, &mut b);
+                at = (*x3, *y3);
+                add(at, &mut b);
+            }
+            _ => {}
+        }
+    }
+    b
+}
+
+/// ISO 32000-2 §12.5.4, Table 169: a cloudy border (`/BE /S /C`) applies to squares, circles,
+/// polygons and (PDF 1.6) text boxes, honours the `/BS` width and dashes, and its intensity
+/// `/I` defaults to 0. Squares, circles and text boxes without an appearance were not drawn at
+/// all, so a reviewer's marks vanished; intensity 0 (or none) drew a cloud on polygons.
+#[test]
+fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
+    let base = "/Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 >>";
+    for kind in ["Square", "Circle"] {
+        let ops = built(&format!("<< {base} /Subtype /{kind} /BE << /S /C /I 1 >> >>")).unwrap_or_else(|| panic!("{kind} is drawn"));
+        assert!(ops.matches(" c\n").count() > 8 && !ops.contains(" re\n"), "{kind} as bumps: {ops}");
+        let e = extent(&ops);
+        assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 300.0 && e[3] <= 250.0, "{kind} stays in /Rect: {e:?}");
+    }
+    let dashed = built(&format!("<< {base} /Subtype /Square /BS << /W 2 /S /D /D [6 3] >> /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(dashed.contains("[6 3] 0 d") && dashed.contains(" c\n"), "dashes honoured: {dashed}");
+    let text = built(&format!("<< {base} /Subtype /FreeText /DA (0 0 1 rg /Helv 10 Tf) /Contents (Look here) /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(text.contains(" c\n") && text.contains("(Look here) Tj"), "a cloud around the text: {text}");
+    let dashed_text = built(
+        "<< /Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 /S /D /D [4 2] >> /Subtype /FreeText /DA (0 g /Helv 10 Tf) /Contents (x) /BE << /S /C /I 1 >> >>",
+    )
+    .unwrap();
+    assert!(dashed_text.contains("[4 2] 0 d"), "a text box's cloud is dashed too: {dashed_text}");
+    // Intensity 0, or none: a plain border (the default is 0).
+    for be in ["<< /S /C /I 0 >>", "<< /S /C >>", "<< /S /S /I 2 >>"] {
+        let square = built(&format!("<< {base} /Subtype /Square /BE {be} >>")).unwrap();
+        assert!(square.contains(" re\n") && !square.contains(" c\n"), "{be}: {square}");
+        let polygon =
+            built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE {be} >>"))
+                .unwrap();
+        assert!(!polygon.contains(" c\n"), "{be}: polygon edges stay straight: {polygon}");
+    }
+    let cloudy_polygon =
+        built("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
+            .unwrap();
+    assert!(cloudy_polygon.contains(" c\n"));
+    // A cloudy callout is still left to its own appearance.
+    assert!(
+        built(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
+    );
+}
+
+/// Table 180: `/RD` gives the differences between "the left, top, right, and bottom coordinates
+/// of Rect and those of the square or circle, respectively"; a cloudy square's bumps sit on that
+/// inner square.
+#[test]
+fn a_cloudy_square_follows_rd_left_top_right_bottom() {
+    let ops = built("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [20 40 30 25] >>")
+        .unwrap();
+    // The corners of the inner square are path points: left 120, bottom 125, right 270, top 260.
+    for corner in ["120 125", "270 125", "270 260", "120 260"] {
+        assert!(ops.contains(corner), "corner {corner} in {ops}");
+    }
+}
+
+/// Review on #4195: without `/RD`, a small cloudy square still keeps its bumps inside `/Rect`.
+/// Its edges are short enough that each rounds to a single bump about three radii long, which
+/// bulges further than one radius. An `/RD` leaving less than that margin is widened to it, so
+/// the cloud stays inside `/Rect` too.
+#[test]
+fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
+    for side in [40.0, 48.8, 60.0, 82.0] {
+        let ops = built(&format!(
+            "<< /Type /Annot /Subtype /Square /Rect [100 100 {x} {x}] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> >>",
+            x = 100.0 + side
+        ))
+        .unwrap_or_else(|| panic!("side {side} is drawn"));
+        let e = extent(&ops);
+        assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 101.0 + side && e[3] <= 101.0 + side, "side {side}: {e:?}");
+    }
+    let small_rd =
+        built("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
+    let e = extent(&small_rd);
+    assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 201.0 && e[3] <= 201.0, "/RD [1 1 1 1] keeps the cloud inside /Rect: {e:?}");
+}
+
+/// ISO 32000-2 Table 180: `/RD` gives the differences between `/Rect` and "the actual boundaries
+/// of the underlying square or circle", so a plain square or circle (no cloudy border) is drawn
+/// inside `/Rect` less `/RD` (left, top, right, bottom) too, its stroke centred half the width
+/// inside that box. An `/RD` that isn't four finite non-negative numbers, or leaves no box, is
+/// ignored and the shape fills `/Rect` as before.
+#[test]
+fn plain_squares_and_circles_are_drawn_inside_rect_less_rd() {
+    let square = |rd: &str| built(&format!("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> {rd} >>")).unwrap();
+    // Rect + 15 + 1.5 on every side: a 67 × 67 square from 116.5.
+    assert!(square("/RD [15 15 15 15]").contains("116.5 116.5 67 67 re"), "{}", square("/RD [15 15 15 15]"));
+    // Left 10, top 40, right 20, bottom 30: the box is 110..180 × 130..160.
+    assert!(square("/RD [10 40 20 30]").contains("111.5 131.5 67 27 re"), "{}", square("/RD [10 40 20 30]"));
+    for ignored in ["", "/RD [-1 0 0 0]", "/RD [1 2 3]", "/RD [60 0 60 0]", "/RD [0 50 0 49.5]", "/RD (x)"] {
+        assert!(square(ignored).contains("101.5 101.5 97 97 re"), "{ignored}: {}", square(ignored));
+    }
+    let circle = built("<< /Type /Annot /Subtype /Circle /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> /RD [15 15 15 15] >>").unwrap();
+    // The ellipse starts at its rightmost point: 200 - 15 - 1.5, at mid-height.
+    assert!(circle.starts_with("1 0 0 RG\n3 w\n183.5 150 m"), "{circle}");
+}
+
+/// The circles and rectangles PdfCraft draws write no `/RD`, so their appearance is unchanged by
+/// it: the stroke still sits half its width inside `/Rect`.
+#[test]
+fn pdfcraft_rectangles_and_ellipses_still_fill_their_rect() {
+    let mut doc = fixture();
+    let rect = [10.0, 10.0, 110.0, 60.0];
+    for shape in [Shape::Rectangle { rect }, Shape::Oval { rect }] {
+        let oval = matches!(shape, Shape::Oval { .. });
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("r")).unwrap();
+        let d = list(&doc, 0).remove(i);
+        assert!(!d.contains(b"RD"));
+        let w = appearance::border_width(&d);
+        let ap = ap_content(&doc, &d);
+        let r: Vec<f64> = d.get(b"Rect").and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+        let expected = if oval {
+            format!("{} {} m", n(r[2] - w / 2.0), n((r[1] + r[3]) / 2.0))
+        } else {
+            format!("{} {} {} {} re", n(r[0] + w / 2.0), n(r[1] + w / 2.0), n(r[2] - r[0] - w), n(r[3] - r[1] - w))
+        };
+        assert!(ap.contains(&expected), "{expected} in {ap}");
+    }
+}
+
+/// Review on #4195: a polygon reshaped with `/BE /S /C` and no `/I` (or `/I 0`) is a plain one,
+/// as its appearance is drawn (Table 169: intensity 0 is no cloud), so its `/Rect` gets no room
+/// for bumps; with an intensity above 0 it does.
+#[test]
+fn a_reshaped_polygon_pads_its_rect_only_for_a_drawn_cloud() {
+    // `/BE << /S /C >>` with `/I` when given; no `/BE` at all for `None`.
+    let reshaped = |be: Option<Option<i64>>| {
+        let mut doc = fixture();
+        let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: false };
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        if let Some(intensity) = be {
+            let mut b = pdfcraft_cos::Dict::new();
+            b.set(b"S".to_vec(), Object::name("C"));
+            if let Some(i) = intensity {
+                b.set(b"I".to_vec(), Object::Int(i));
+            }
+            doc.update_dict(r, |d| d.set(b"BE".to_vec(), Object::Dict(b))).unwrap();
+        }
+        set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+        rect(&list(&doc, 0)[i])
+    };
+    let plain = reshaped(None);
+    for be in [None, Some(0)] {
+        assert_eq!(reshaped(Some(be)), plain, "/I {be:?}: no cloud drawn, no room for one");
+    }
+    let cloudy = reshaped(Some(Some(1)));
+    assert!(cloudy[0] < plain[0] && cloudy[2] > plain[2], "room for the bumps: {cloudy:?} around {plain:?}");
+}
+
+/// Review on #4195: a reshaped polygon whose cloud has intensity 2 gets room for its bumps at
+/// that intensity. With room only for intensity 1, the bumps on a 200 pt edge reached past
+/// `/Rect` and the appearance's `/BBox` clipped them.
+#[test]
+fn a_reshaped_intensity_two_cloud_stays_inside_its_rect() {
+    let mut doc = fixture();
+    let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: true };
+    let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+    let mut be = pdfcraft_cos::Dict::new();
+    be.set(b"S".to_vec(), Object::name("C"));
+    be.set(b"I".to_vec(), Object::Int(2));
+    doc.update_dict(r, |d| d.set(b"BE".to_vec(), Object::Dict(be))).unwrap();
+    set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+    let d = &list(&doc, 0)[i];
+    let bbox = rect(d);
+    // Every point along the drawn bumps, with half the 2 pt line, is inside `/Rect`.
+    let content = ap_content(&doc, d);
+    let (mut at, mut lowest, mut leftmost) = ((0.0, 0.0), f64::MAX, f64::MAX);
+    for line in content.lines() {
+        let v: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        if line.ends_with(" m") && v.len() == 2 {
+            at = (v[0], v[1]);
+        } else if line.ends_with(" c") && v.len() == 6 {
+            for step in 0..=20 {
+                let t = f64::from(step) / 20.0;
+                let u = 1.0 - t;
+                let (a, b, c, e) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                lowest = lowest.min(a * at.1 + b * v[1] + c * v[3] + e * v[5]);
+                leftmost = leftmost.min(a * at.0 + b * v[0] + c * v[2] + e * v[4]);
+            }
+            at = (v[4], v[5]);
+        }
+    }
+    assert!(lowest < 100.0 - 8.0, "the bumps bulge below the bottom edge: {lowest}");
+    assert!(lowest - 1.0 >= bbox[1], "the bottom bumps ({lowest}) and the line fit in /Rect {bbox:?}");
+    assert!(leftmost - 1.0 >= bbox[0], "the left bumps ({leftmost}) and the line fit in /Rect {bbox:?}");
+}
+
+/// Review on #4195: a reshaped polygon gets room for the border it is drawn with. With no `/BS`,
+/// a `/Border [0 0 5]` is drawn 5 pt wide (`appearance::border_width`), so the new `/Rect` is the
+/// one `/BS /W 5` gets; it was sized for a 1-pt border, and the cloud's outer bumps were clipped.
+#[test]
+fn a_reshaped_polygon_has_room_for_the_border_it_is_drawn_with() {
+    let reshaped = |border: &[u8], width: Object| {
+        let mut doc = fixture();
+        let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: true };
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        doc.update_dict(r, |d| {
+            d.remove(b"BS");
+            if border == b"BS" {
+                let mut bs = pdfcraft_cos::Dict::new();
+                bs.set(b"W".to_vec(), width);
+                d.set(b"BS".to_vec(), Object::Dict(bs));
+            } else {
+                d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), width]));
+            }
+        })
+        .unwrap();
+        set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+        rect(&list(&doc, 0)[i])
+    };
+    let bs = reshaped(b"BS", Object::Int(5));
+    assert_eq!(reshaped(b"Border", Object::Int(5)), bs, "the same 5-pt border, the same room");
+    assert_ne!(reshaped(b"BS", Object::Int(1)), bs, "a 1-pt border needs less");
+}
+
+/// Every number a drawing writes, which must all be finite.
+fn drawn_numbers(ops: &str) -> Vec<f64> {
+    ops.split_whitespace().filter(|t| t.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')).filter_map(|t| t.parse().ok()).collect()
+}
+
+/// Review on #4195: a cloud around a zero-size, inverted, sliver or huge `/Rect`, at any border
+/// width and any `/BE /I` (tiny, negative, far above Table 169's 2), is either drawn inside
+/// `/Rect` with finite numbers and a bounded number of bumps, or not built at all, never a
+/// panic, a division by zero or a NaN.
+#[test]
+fn hostile_cloud_sizes_widths_and_intensities_draw_inside_rect_or_not_at_all() {
+    let rects = [
+        "0 0 0 0",
+        "100 100 100 100",
+        "100 100 100.5 300",
+        "100 100 101 101",
+        "300 250 100 100",
+        "100 100 300 250",
+        "100 100 110 110",
+        "-1000000000000000 -1000000000000000 1000000000000000 1000000000000000",
+        "0 0 99999999999999999999999 1",
+        &format!("0 0 {} 100", "9".repeat(400)),
+        &format!("-{n} -{n} {n} {n}", n = "9".repeat(308)),
+    ];
+    let (mut drawn, mut refused) = (0, 0);
+    for rect in rects {
+        let r: Vec<f64> = rect.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let bounds = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
+        for width in ["0", "0.001", "2", "1000000", "-3"] {
+            for intensity in ["0.0000001", "2", "1000000000000000000000000000000", "-1"] {
+                for kind in ["Square", "Circle", "FreeText"] {
+                    let body = format!(
+                        "<< /Type /Annot /Subtype /{kind} /Rect [{rect}] /C [1 0 0] /BS << /W {width} >> /BE << /S /C /I {intensity} >> /DA (0 g /Helv 10 Tf) /Contents (x) >>"
+                    );
+                    let Some(ops) = built(&body) else {
+                        refused += 1;
+                        continue;
+                    };
+                    drawn += 1;
+                    assert!(!ops.contains("NaN") && !ops.contains("inf"), "{body}: {ops}");
+                    assert!(drawn_numbers(&ops).iter().all(|v| v.is_finite()), "{body}");
+                    assert!(ops.matches(" c\n").count() <= crate::appearance::MAX_CLOUD_BUMPS + 8, "{body}: bumps are capped");
+                    // A cloud (intensity above 0); a negative one is a plain border (Table 169).
+                    if !intensity.starts_with('-') && ops.contains(" c\n") {
+                        let e = extent(&ops);
+                        let slack = 0.5 + 1e-9 * (bounds[2] - bounds[0]).abs().max((bounds[3] - bounds[1]).abs());
+                        assert!(
+                            e[0] >= bounds[0] - slack && e[1] >= bounds[1] - slack && e[2] <= bounds[2] + slack && e[3] <= bounds[3] + slack,
+                            "{body}: the cloud {e:?} stays in /Rect"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(drawn > 0 && refused > 0, "both outcomes are exercised: {drawn} drawn, {refused} refused");
+}
+
+/// Review on #4195: a cloud around a rotated rectangle (a polygon turned 45°, its corners in
+/// either order) bulges outwards the same way and stays inside its `/Rect`, and `cloud_path`
+/// itself takes a zero, negative, infinite or NaN bump size and repeated corners without
+/// dividing by zero.
+#[test]
+fn a_cloud_around_a_rotated_rectangle_bulges_outwards_either_way_round() {
+    let ccw = "150 100 200 150 150 200 100 150";
+    let cw = "150 100 100 150 150 200 200 150";
+    let extents: Vec<[f64; 4]> = [ccw, cw]
+        .iter()
+        .map(|v| {
+            let ops = built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [80 80 220 220] /C [1 0 0] /Vertices [{v}] /BE << /S /C /I 1 >> >>"))
+                .unwrap();
+            assert!(ops.contains(" c\n"), "{ops}");
+            let e = extent(&ops);
+            assert!(e[0] >= 80.0 && e[1] >= 80.0 && e[2] <= 220.0 && e[3] <= 220.0, "inside /Rect: {e:?}");
+            // Each bump's middle lies outside the turned square |x − 150| + |y − 150| = 50.
+            let mut at = (0.0, 0.0);
+            for line in ops.lines() {
+                let v: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                if line.ends_with(" m") && v.len() == 2 {
+                    at = (v[0], v[1]);
+                } else if line.ends_with(" c") && v.len() == 6 {
+                    let mid = ((at.0 + 3.0 * v[0] + 3.0 * v[2] + v[4]) / 8.0, (at.1 + 3.0 * v[1] + 3.0 * v[3] + v[5]) / 8.0);
+                    assert!((mid.0 - 150.0).abs() + (mid.1 - 150.0).abs() > 50.0 + 1.0, "the bump at {mid:?} bulges outwards");
+                    at = (v[4], v[5]);
+                }
+            }
+            e
+        })
+        .collect();
+    for k in 0..4 {
+        assert!((extents[0][k] - extents[1][k]).abs() < 0.5, "the same cloud either way round: {extents:?}");
+    }
+    let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    for r in [0.0, -1.0, f64::INFINITY, f64::NAN, 1e-300, 1e300] {
+        let path = crate::appearance::cloud_path(&square, r);
+        assert!(!path.contains("NaN") && !path.contains("inf"), "r {r}: {path}");
+        assert!(path.ends_with("h\n"));
+    }
+    for pts in [vec![], vec![(5.0, 5.0)], vec![(5.0, 5.0); 4], vec![(0.0, 0.0), (10.0, 0.0), (10.0, 0.0), (0.0, 0.0)]] {
+        let path = crate::appearance::cloud_path(&pts, 2.0);
+        assert!(!path.contains("NaN") && !path.contains("inf"), "{pts:?}: {path}");
+    }
+}
+
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
@@ -3887,15 +4401,16 @@ fn polyline_whose_vertices_reach_past_its_rect_is_drawn_through_them() {
 fn polygon_whose_vertices_reach_past_its_rect_is_drawn_through_them() {
     let (_, display) = displayed(&[
         b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 1 >> /C [0 0 1] /IC [1 1 0] /Vertices [100 100 200 100 150 180] >>",
-        b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /BE << /S /C >> /Vertices [100 100 200 100 150 180] >>",
+        b"<< /Type /Annot /Subtype /Polygon /Rect [10 10 20 20] /BS << /W 2 >> /C [0 0 1] /BE << /S /C /I 1 >> /Vertices [100 100 200 100 150 180] >>",
     ]);
     let shown = list(&display, 0);
     let rect = |d: &Dict| nums_of(d, b"Rect");
     assert_eq!(rect(&shown[0]), [10.0, 10.0, 200.5, 180.5], "the polygon's /Rect takes in its vertices");
     assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
     assert!(ap_content(&display, &shown[0]).contains("100 100 m"), "the polygon is drawn");
-    // Half the width (1) and twice the cloud radius (2 × (6 + 1.5 × 2)) past the vertices.
-    assert_eq!(rect(&shown[1]), [10.0, 10.0, 219.0, 199.0], "and its cloudy border");
+    // Half the width (1) and the cloud's reach (`cloud_reach`: 1.5 bumps of 6 + 1.5 × 2 at
+    // intensity 1) past the vertices.
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 214.5, 194.5], "and its cloudy border");
 }
 
 /// A line's `/L` (Table 178) outside its `/Rect` is drawn, with its line ending and its leader

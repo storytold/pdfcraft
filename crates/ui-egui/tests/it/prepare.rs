@@ -55,6 +55,17 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().widgets[0].rect
 }
 
+fn text_center_near(h: &Harness<'static, PdfCraftApp>, label: &str, expected: Pos2) -> Option<Pos2> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .min_by(|a, b| a.distance(expected).total_cmp(&b.distance(expected)))
+}
+
 #[test]
 fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
     use egui::{Color32, Event, Modifiers, PointerButton, Shape, StrokeKind};
@@ -646,6 +657,99 @@ fn the_fields_panel_orders_tabs_manually() {
     let after = order(&h);
     assert_eq!(after[0], second, "{before:?} → {after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Set tab order"));
+}
+
+#[test]
+fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.get_by_label("Show tab numbers").click();
+    h.run_steps(3);
+
+    let (order, rects, undo) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info);
+        let rects = order
+            .iter()
+            .map(|(fi, wi)| {
+                let field = doc.form.get(*fi).expect("the traversal field exists");
+                pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, *wi).unwrap()
+            })
+            .collect::<Vec<_>>();
+        (order, rects, doc.can_undo())
+    };
+    assert!(h.state().views[0].prepare.show_tab_numbers);
+    assert_eq!(undo, None, "displaying the numbers does not edit the PDF");
+    let size_widgets = order
+        .iter()
+        .filter(|(fi, _)| h.state().session.get(h.state().views[0].id).unwrap().form.get(*fi).is_some_and(|field| field.name == "size"))
+        .count();
+    assert_eq!(size_widgets, 2, "each radio widget has its own tab stop");
+
+    let drawn: Vec<(String, egui::Pos2, egui::Rect, egui::Rect)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => {
+                Some((text.galley.text().to_owned(), text.visual_bounding_rect().center(), text.visual_bounding_rect(), clipped.clip_rect))
+            }
+            _ => None,
+        })
+        .collect();
+    for (i, rect) in rects.iter().enumerate() {
+        let expected = i.saturating_add(1).to_string();
+        let badge_center = rect.min + egui::vec2(3.0 + 4.0 + 3.0, 3.0 + 2.0 + 5.0);
+        let badge = drawn.iter().find(|(label, center, _, _)| label == &expected && center.distance(badge_center) < 8.0);
+        let Some((_, _, text_rect, clip_rect)) = badge else {
+            panic!("widget {:?} should show tab number {expected} near {:?}; drawn: {drawn:?}", order.get(i), rect.min);
+        };
+        assert!(clip_rect.contains_rect(*text_rect), "the whole tab number {expected} should be visible");
+    }
+}
+
+#[test]
+fn tab_badge_tracks_its_widget_during_a_drag() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.get_by_label("Show tab numbers").click();
+    h.run_steps(3);
+
+    let (name, widget, rect) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info);
+        let (fi, wi) = *order.first().expect("the form has a fillable widget");
+        let field = doc.form.get(fi).expect("the first fillable field exists");
+        (field.name.clone(), wi, pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, wi).unwrap())
+    };
+    let start = rect.center();
+    let badge_before = text_center_near(&h, "1", rect.min + egui::vec2(10.0, 10.0)).expect("the first badge is painted");
+
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.drop_at(start);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|selected| (selected.0.as_str(), selected.1)), Some((name.as_str(), widget)));
+
+    let delta = egui::vec2(24.0, 16.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(start + delta);
+    h.run_steps(3);
+
+    let badge_during_drag = text_center_near(&h, "1", badge_before + delta).expect("the badge stays painted during the drag");
+    assert!(badge_during_drag.distance(badge_before + delta) < 8.0, "badge {badge_before:?} moved to {badge_during_drag:?}");
+    assert!(badge_during_drag.distance(badge_before) > 12.0, "the badge follows the dragged widget");
+    h.drop_at(start + delta);
+    h.run_steps(3);
 }
 
 #[test]
