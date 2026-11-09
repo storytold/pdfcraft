@@ -878,61 +878,71 @@ fn the_opacity_slider_commits_once_when_a_drag_ends() {
     h.run();
     match h.state().1.as_slice() {
         [Edit::StyleAnnotation { page: 0, index: 3, color: None, opacity: Some(o), .. }] => {
-            assert!((0.1..0.6).contains(o), "left of the middle of a 10-100 % rail: {o}");
+            // 30 % of the rail left of its middle: 55 % - 0.3 * 90 % = 28 %, at the 5 % step below.
+            assert!((*o - 0.25).abs() < 1e-9, "the value at the release point, not at the press: {o}");
         }
         other => panic!("one edit, at the end of the drag: {other:?}"),
     }
 }
 
 /// Escape during an opacity drag cancels it: egui aborts the drag (and flags it as stopped), the
-/// popup closes, and no edit, so no undo step, comes of it.
+/// popup closes, and no edit, so no undo step, comes of it. The window losing focus mid-drag
+/// cancels it too: the release, if it comes at all, is no choice of the user's.
 #[test]
-fn escape_drops_an_opacity_drag_without_an_edit() {
+fn escape_or_lost_window_focus_drops_an_opacity_drag_without_an_edit() {
     use egui_kittest::kittest::Queryable;
-    let props = pdfcraft_engine::CommentProps {
-        subtype: "Highlight".into(),
-        author: String::new(),
-        subject: String::new(),
-        color: Some([1.0, 0.94, 0.0]),
-        opacity: 1.0,
-        width: None,
-        icon: None,
-        modified: None,
-        restylable: true,
-        locked: false,
-        endings: None,
-        fillable: false,
-        fill: None,
-        font_size: None,
-        border_color: None,
-        border_shape: None,
-        fill_opacity: None,
-        text_opacity: None,
-    };
-    let mut h = egui_kittest::Harness::new_ui_state(
-        |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
-            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft"), 1) {
-                edits.push(e);
-            }
-        },
-        (props, Vec::new()),
-    );
-    h.run();
-    h.get_by_label("Comment opacity").click();
-    h.run();
-    let rail = h.get_by(|n| n.role() == egui::accesskit::Role::Slider && n.label().as_deref() == Some("Opacity")).rect();
-    let to = pos2(rail.center().x - rail.width() * 0.3, rail.center().y);
-    h.drag_at(rail.center());
-    h.run();
-    h.hover_at(to);
-    h.run();
-    h.key_press(egui::Key::Escape);
-    h.run();
-    h.drop_at(to);
-    h.run();
-    h.run();
-    assert!(h.state().1.is_empty(), "Escape cancels the drag, nothing commits: {:?}", h.state().1);
-    assert!(h.query_by_label("Opacity").is_none(), "and closes the slider");
+    for lost_focus in [false, true] {
+        let props = pdfcraft_engine::CommentProps {
+            subtype: "Highlight".into(),
+            author: String::new(),
+            subject: String::new(),
+            color: Some([1.0, 0.94, 0.0]),
+            opacity: 1.0,
+            width: None,
+            icon: None,
+            modified: None,
+            restylable: true,
+            locked: false,
+            endings: None,
+            fillable: false,
+            fill: None,
+            font_size: None,
+            border_color: None,
+            border_shape: None,
+            fill_opacity: None,
+            text_opacity: None,
+        };
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
+                if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft"), 1) {
+                    edits.push(e);
+                }
+            },
+            (props, Vec::new()),
+        );
+        h.run();
+        h.get_by_label("Comment opacity").click();
+        h.run();
+        let rail = h.get_by(|n| n.role() == egui::accesskit::Role::Slider && n.label().as_deref() == Some("Opacity")).rect();
+        let to = pos2(rail.center().x - rail.width() * 0.3, rail.center().y);
+        h.drag_at(rail.center());
+        h.run();
+        h.hover_at(to);
+        h.run();
+        if lost_focus {
+            h.input_mut().focused = false;
+        } else {
+            h.key_press(egui::Key::Escape);
+        }
+        h.run();
+        h.drop_at(to);
+        h.run();
+        h.run();
+        assert!(h.state().1.is_empty(), "lost focus {lost_focus}: the drag is cancelled, nothing commits: {:?}", h.state().1);
+        if !lost_focus {
+            assert!(h.query_by_label("Opacity").is_none(), "Escape closes the slider");
+        }
+    }
 }
 
 /// The bar's controls take a finger (32 px swatches, a 48 x 32 px opacity button that shows the
@@ -976,4 +986,47 @@ fn the_bar_controls_have_touch_sized_hit_areas_and_count_the_selection() {
     h.get_by_label("Comment colour: Yellow (3 selected)");
     h.get_by_label("Comment opacity (3 selected)");
     assert!(h.query_by_label("Comment opacity").is_none(), "the plain label gives way to the counted one");
+}
+
+/// In a ui narrower than one row of them (a split pane can be 15 % of the page area), the bar's
+/// controls wrap into rows instead of running past the edge, where they could not be pressed.
+#[test]
+fn the_bar_controls_wrap_in_a_narrow_pane() {
+    use egui_kittest::kittest::Queryable;
+    let props = pdfcraft_engine::CommentProps {
+        subtype: "Highlight".into(),
+        author: String::new(),
+        subject: String::new(),
+        color: Some([1.0, 0.94, 0.0]),
+        opacity: 0.5,
+        width: None,
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: false,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: None,
+        text_opacity: None,
+    };
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(160.0, 200.0)).build_ui_state(
+        |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft"), 1) {
+                edits.push(e);
+            }
+        },
+        (props, Vec::new()),
+    );
+    h.run();
+    let rects: Vec<Rect> = h.query_all_by_label_contains("Comment ").map(|n| n.rect()).collect();
+    assert_eq!(rects.len(), 7, "six swatches and the opacity button");
+    assert!(rects.iter().all(|r| r.right() <= 160.0), "every control inside the 160 px ui: {rects:?}");
+    assert!(rects.iter().any(|r| r.top() > rects[0].top() + 1.0), "in more than one row: {rects:?}");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run();
+    assert!(matches!(h.state().1.as_slice(), [Edit::StyleAnnotation { color: Some(_), .. }]), "a wrapped swatch still presses");
 }

@@ -5338,6 +5338,10 @@ fn the_style_bar_recolours_and_fades_the_selected_highlight() {
         s.session.get(s.views[0].id).expect("document").comment_props(0, 0).expect("props")
     };
     assert_eq!((props(&h).color, props(&h).opacity), (Some([1.0, 0.94, 0.0]), 0.5), "a new highlight is half transparent");
+    // One row here: the controls wrap only in a pane narrower than they are.
+    let tops: Vec<f32> = h.query_all_by_label_contains("Comment colour: ").map(|n| n.rect().top()).collect();
+    assert_eq!(tops.len(), 6);
+    assert!(tops.iter().all(|t| (t - tops[0]).abs() < 0.5), "one row of swatches: {tops:?}");
 
     h.get_by_label("Comment colour: Blue").click();
     h.run_steps(3);

@@ -460,12 +460,16 @@ pub(crate) fn style_bar(
         ctx.data_mut(|d| d.remove::<f64>(draft));
         return None;
     };
-    let takes_style = |&(p, i): &(usize, usize)| {
-        (p, i) != (page, index)
-            && info.annotations.iter().any(|a| a.page == p && a.index == i && !a.is_reply())
-            && props_of(p, i).is_some_and(|c| c.restylable && !c.locked)
-    };
-    let others: Vec<(usize, usize)> = view.comments.also.iter().filter(|k| takes_style(k)).copied().collect();
+    // One pass over the annotations against a set of the selection's keys: a scan per selected
+    // comment was quadratic per frame with Select All on a large document.
+    let also: std::collections::HashSet<(usize, usize)> = view.comments.also.iter().copied().collect();
+    let others: Vec<(usize, usize)> = info
+        .annotations
+        .iter()
+        .filter(|a| !a.is_reply() && (a.page, a.index) != (page, index) && also.contains(&(a.page, a.index)))
+        .map(|a| (a.page, a.index))
+        .filter(|&(p, i)| props_of(p, i).is_some_and(|c| c.restylable && !c.locked))
+        .collect();
     let viewport = view.viewport_rect();
     let mut edit = None;
     // Centred just above the comment; `constrain_to` keeps it inside the document area when the
@@ -475,6 +479,9 @@ pub(crate) fn style_bar(
         .pivot(egui::Align2::CENTER_BOTTOM)
         .constrain_to(viewport);
     area.fixed_pos(pos2(bounds.center().x, bounds.top() - 6.0)).show(ctx, |ui| {
+        // No wider than the pane: in a narrower one (a split pane can be 15 % of the page area)
+        // the controls wrap into rows, where past the pane's edge they could not be pressed.
+        ui.set_max_width(viewport.width());
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             edit = style_controls(ui, page, index, &props, draft, 1 + others.len());
         });
@@ -545,13 +552,13 @@ fn opacity_button(ui: &mut egui::Ui, percent: f64, label: &str) -> egui::Respons
 /// and an opacity button, showing the comment's percentage, that opens a slider (`draft`: where
 /// its drag in progress is kept; dropped while the popup is closed). `applies_to`: how many
 /// selected comments a choice reaches; above one, the labels say so. The labels differ from the
-/// quick bar's ("Colour", "Blue", "Opacity"), which can show at the same time. Returns the edit a
-/// choice makes.
+/// quick bar's ("Colour", "Blue", "Opacity"), which can show at the same time. The controls wrap
+/// where the ui is narrower than one row of them. Returns the edit a choice makes.
 pub(super) fn style_controls(ui: &mut egui::Ui, page: usize, index: usize, props: &CommentProps, draft: egui::Id, applies_to: usize) -> Option<Edit> {
     let mut edit = None;
     let style = |color, opacity| Edit::StyleAnnotation { page, index, color, opacity, width: None, endings: None };
     let several = applies_to.to_string();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         for (name, c) in SWATCHES.iter().take(BAR_SWATCHES) {
             let on = props.color.is_some_and(|cur| same_colour(&cur, c));
@@ -587,7 +594,8 @@ pub(super) fn style_controls(ui: &mut egui::Ui, page: usize, index: usize, props
 /// A 10–100 % slider starting at `current`, or at the drag in progress kept under `draft`. The
 /// opacity to commit: on release (a click on the rail, or the end of a drag: one undo step for
 /// the whole drag), or at once for an arrow key (a step of its own). A press moves the value at
-/// once but commits nothing until it is released, and Escape drops the drag with nothing committed.
+/// once but commits nothing until it is released; Escape, or the window losing focus, drops the
+/// drag with nothing committed.
 fn opacity_slider(ui: &mut egui::Ui, current: f64, draft: egui::Id) -> Option<f64> {
     // ponytail: no live preview while dragging; the page shows the new opacity on release. A
     // preview would need an engine edit per frame (undo spam) or a preview path in paint.
@@ -595,9 +603,10 @@ fn opacity_slider(ui: &mut egui::Ui, current: f64, draft: egui::Id) -> Option<f6
     let dragging = ui.data(|d| d.get_temp::<f64>(draft));
     let mut percent = dragging.unwrap_or_else(|| (current * 100.0).round());
     let slider = ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %").text(tl!("Opacity")));
-    // Escape aborts the drag in egui, which flags it as stopped too: a cancel, not a release, so
-    // the draft goes without an edit (the popup closes on the same key).
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // Escape aborts the drag in egui, which flags it as stopped too, and a window that lost focus
+    // mid-drag gets its release, if at all, as no choice of the user's: a cancel, not a release,
+    // so the draft goes without an edit (the popup closes on the same key).
+    if ui.input(|i| i.key_pressed(egui::Key::Escape) || !i.focused) {
         ui.data_mut(|d| d.remove::<f64>(draft));
         return None;
     }
