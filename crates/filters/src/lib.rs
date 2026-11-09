@@ -212,6 +212,18 @@ pub fn decode_tolerant_counted(chain: &[(Filter, Params)], data: &[u8], max_outp
     run(chain, data, max_output, Some(max_output), false, false, None)
 }
 
+/// [`decode_tolerant_counted`] with the two bounds apart: `max_stage` bounds every stage, as
+/// [`decode_tolerant`]'s bound does, and `max_output` the bytes all stages decode together. A
+/// stage stopped by either gives [`FilterError::LimitExceeded`] and the bytes decoded before it.
+pub fn decode_tolerant_counted_each(
+    chain: &[(Filter, Params)],
+    data: &[u8],
+    max_stage: usize,
+    max_output: usize,
+) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)> {
+    run(chain, data, max_stage, Some(max_output), false, false, None)
+}
+
 /// [`decode_tolerant`], spending from `work`, what decoding may still cost across a run of images:
 /// a step for each byte of `data`, paid before anything is decoded, [`FLATE_READ_WORK`] for each
 /// byte a Flate stage reads, paid before it runs (again if it reads them twice), and one for each
@@ -449,6 +461,30 @@ mod tests {
         assert!(read <= 16 * data.len(), "{read} bytes decoded through the chain");
         assert!(matches!(long, Err(super::FilterError::Unsupported(_))), "{long:?}");
         assert_eq!(super::decode(&chain(super::MAX_CHAIN), &data, 1 << 20).ok(), Some(data));
+    }
+
+    /// [`decode_tolerant_counted_each`] holds every stage to its own bound as well as the stages
+    /// to their total: a Flate stage that would make more than that bound stops there, though
+    /// the total has room, and the stage after it gets nothing; within both, the chain reads
+    /// whole, one stage's output charged on top of another's.
+    #[test]
+    fn each_stage_is_held_to_its_own_bound_within_the_total() {
+        let hex = "00".repeat(1 << 16).into_bytes();
+        let data = super::flate::encode(&hex);
+        let chain = [(Filter::Flate, Params::default()), (Filter::AsciiHex, Params::default())];
+        // The total alone lets the Flate stage make all of the hex text, and the hex stage read it.
+        STAGE_BYTES.with(|c| c.set(0));
+        let whole = decode_tolerant_counted(&chain, &data, 3 << 16).map(|(v, _, _)| v);
+        assert_eq!(whole.ok(), Some(vec![0u8; 1 << 16]));
+        assert_eq!(STAGE_BYTES.with(|c| c.get()), data.len() + hex.len());
+        // Each stage held to 64 KiB, the Flate stage stops there and the hex stage gets nothing.
+        STAGE_BYTES.with(|c| c.set(0));
+        let held = decode_tolerant_counted_each(&chain, &data, 1 << 16, 3 << 16);
+        assert!(matches!(held, Err((FilterError::LimitExceeded(m), 0)) if m == 1 << 16), "{held:?}");
+        assert_eq!(STAGE_BYTES.with(|c| c.get()), data.len());
+        // Within both, it reads whole.
+        let (out, _, spent) = decode_tolerant_counted_each(&chain, &data, 2 << 16, 3 << 16).unwrap();
+        assert_eq!((out.len(), spent), (1 << 16, hex.len() + (1 << 16)));
     }
 
     use super::*;

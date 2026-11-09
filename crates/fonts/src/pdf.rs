@@ -122,14 +122,8 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         if budget.remaining() == 0 {
             continue;
         }
-        let stream = doc.with_direct_parms(stream);
-        // As in `Reads::decode`: the stages share the limit once for each of them, which any one
-        // may use, and the program itself must be within it.
-        let stages = stream.filters().len().max(1);
-        let Ok(mut bytes) = budget.decode_within(&stream, MAX_SFNT.saturating_mul(stages)) else { continue };
-        if bytes.len() > MAX_SFNT {
-            continue;
-        }
+        // As in `Reads::decode`: each stage within the limit, the program, the last, too.
+        let Ok(mut bytes) = budget.decode_stages_within(&doc.with_direct_parms(stream), MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -402,13 +396,13 @@ impl<'a> Reads<'a> {
     /// by reference too ([`Document::with_direct_parms`]); `None` when it can't be, noting when the
     /// allowance is why.
     ///
-    /// `max` bounds what the stream decodes to, and its filter stages together may make up to `max`
-    /// for each of them, as much as a decode without an allowance lets them: a map of 65,536 CIDs
-    /// behind ASCIIHex and Flate, its Flate data smaller than the map, makes all of `MAX_CID_TO_GID`
-    /// in its last stage, with the hex stage's output on top. One stage may so make more than `max`, which a decode without an
-    /// allowance stops, so a stream that one leaves unread can read here, never the other way
-    /// round. A stream past `max` is unread, not refused, when what is left can pay for its stages;
-    /// when it can't, the stream spends it and counts as refused.
+    /// Each of its filter stages is held to `max`, as a decode without an allowance holds it, and
+    /// the stages together to `max` for each of them ([`DecodeBudget::decode_stages_within`]): a
+    /// map of 65,536 CIDs behind ASCIIHex and Flate, its Flate data smaller than the map, makes
+    /// all of `MAX_CID_TO_GID` in its last stage, with the hex stage's output on top. So a stream
+    /// reads here when it reads without an allowance and what is left pays for it. A stream past
+    /// `max` is unread, not refused, when what is left can pay for its stages; when it can't, the
+    /// stream spends it and counts as refused.
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
         // Once the allowance is spent the decode refuses the stream; refused here, before the
         // parameters are resolved, which is work the allowance doesn't count.
@@ -416,11 +410,8 @@ impl<'a> Reads<'a> {
             self.refused = true;
             return None;
         }
-        let stream = self.doc.with_direct_parms(stream);
-        let stages = stream.filters().len().max(1);
-        match self.budget.decode_within(&stream, max.saturating_mul(stages)) {
-            Ok(data) if data.len() <= max => Some(data),
-            Ok(_) => None,
+        match self.budget.decode_stages_within(&self.doc.with_direct_parms(stream), max) {
+            Ok(data) => Some(data),
             Err(_) => {
                 self.refused |= self.budget.remaining() == 0;
                 None

@@ -374,6 +374,56 @@ fn a_full_cid_map_reads_behind_one_or_two_filters() {
     }
 }
 
+/// The editor's program read holds every filter stage to the program's limit: a program behind
+/// ASCIIHex and Flate whose Flate stage would make 24 MiB stops at 16 MiB, charged that and what
+/// the hex stage made, where the stages' total alone would let it make all 24 MiB. A program
+/// within the limit behind the same two filters reads (see also
+/// `an_editors_program_reads_behind_ascii_hex_and_flate_within_its_limit`).
+#[test]
+fn an_editors_program_read_holds_each_stage_to_its_limit() {
+    let mut doc = Document::new_empty();
+    let flate = Stream::flate(Dict::new(), &vec![b' '; 24 << 20]);
+    let hex: Vec<u8> = flate.raw.iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+    let program = doc.add(Object::Stream(Stream::from_raw(dict, hex)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+    let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+    assert!(embedded_sfnt_within(&doc, &f, &mut budget).is_none());
+    assert_eq!(usize::MAX / 2 - budget.remaining(), flate.raw.len() + MAX_SFNT);
+}
+
+/// Each stage of a stream a font's metrics are read from is held to the stream's limit, as a
+/// decode without an allowance holds it: a `/CIDToGIDMap` behind Flate and ASCIIHex whose Flate
+/// stage makes hex text past the map's limit is unread, as `Stream::decoded_within` leaves it,
+/// though the two stages together make less than twice the limit; with its hex text within the
+/// limit it reads.
+#[test]
+fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
+    let read = |cids: usize| {
+        let mut doc = Document::new_empty();
+        let (mut f, _) = subset_type0(&mut doc, b"");
+        let map: Vec<u8> = (0..cids).flat_map(|cid| u16::try_from(cid % 2000).unwrap().to_be_bytes()).collect();
+        let hex: Vec<u8> = map.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+        let stream = Stream::from_raw(dict, Stream::flate(Dict::new(), &hex).raw.to_vec());
+        let unread = stream.decoded_within(MAX_CID_TO_GID).is_err();
+        let map = Object::Ref(doc.add(Object::Stream(stream)));
+        let Some(Object::Array(mut descendants)) = f.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+        if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+            d.set(b"CIDToGIDMap".to_vec(), map);
+        }
+        f.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        (Metrics::from_dict(&doc, &f).outlined_cids.is_empty(), unread)
+    };
+    // 0.6 of the limit: its hex text, 1.2 of it, is past the limit; the stages make 1.8 of it.
+    assert_eq!(read(MAX_CID_TO_GID * 6 / 20), (true, true));
+    assert_eq!(read(MAX_CID_TO_GID / 4), (false, false));
+}
+
 /// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program
 /// whose Flate data is about 8 MiB reads behind ASCIIHex and Flate as behind Flate alone, though
 /// the two stages make about 20 MiB together. A program of the limit reads behind either, and one a

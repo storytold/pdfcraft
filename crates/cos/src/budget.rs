@@ -283,6 +283,45 @@ impl DecodeBudget {
         self.charge(stream, max, Stream::decoded_within_counted).map(|(data, _)| data)
     }
 
+    /// Like [`DecodeBudget::decode_within`], with every filter stage held to `max`, as
+    /// [`Stream::decoded_within`] holds it, and the stages together to `max` for each of them. A
+    /// stream so reads here when it reads without an allowance and the allowance can pay for
+    /// what its stages decode, the output of one stage on top of another's. A stage past `max`
+    /// is an error that charges what the stages before it decoded and `max`, the work it took to
+    /// find out; past the stages' total it charges that total, and past what is left it spends
+    /// all of it, as [`DecodeBudget::decode_within`] does.
+    pub fn decode_stages_within(&mut self, stream: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        if self.bytes == 0 && !stream.raw.is_empty() {
+            return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
+        }
+        let total = max.saturating_mul(stream.filters().len().max(1));
+        let room = total.min(self.bytes);
+        match stream.decoded_within_each_counted(max, room) {
+            Ok((data, _, spent)) => {
+                self.bytes = self.bytes.saturating_sub(spent);
+                Ok(data)
+            }
+            // A stage stopped at `max`, below what was left of the room.
+            Err((FilterError::LimitExceeded(_), spent)) if room.saturating_sub(spent) > max => {
+                self.bytes = self.bytes.saturating_sub(spent.saturating_add(max));
+                Err(CosError::Filter(FilterError::LimitExceeded(max).to_string()))
+            }
+            // At the stages' total, with more left.
+            Err((FilterError::LimitExceeded(_), _)) if total < self.bytes => {
+                self.bytes = self.bytes.saturating_sub(total);
+                Err(CosError::Filter(FilterError::LimitExceeded(total).to_string()))
+            }
+            Err((FilterError::LimitExceeded(_), _)) => {
+                self.bytes = 0;
+                Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()))
+            }
+            Err((e, spent)) => {
+                self.bytes = self.bytes.saturating_sub(spent);
+                Err(CosError::Filter(e.to_string()))
+            }
+        }
+    }
+
     /// [`DecodeBudget::decode_within`] (`usize::MAX` for no bound of its own), with the stream's
     /// `/DecodeParms` given by reference read in `doc`, also saying whether the stream is damaged:
     /// `true` when a filter stopped at corrupt data, so the bytes are only what decoded before it.
@@ -1024,5 +1063,44 @@ mod tests {
         assert_eq!(budget.remaining(), (10 << 20) - 2 * charged);
         assert!(budget.decode_strict(&Document::new_empty(), &chained).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - 3 * charged);
+    }
+
+    /// `decode_stages_within` holds every stage to the limit, as a decode without an allowance
+    /// does, and the stages together to the limit for each of them. A stream behind ASCIIHex and
+    /// Flate whose stages each stay within it reads, the hex stage's output charged on top; one
+    /// whose Flate stage would make more stops there, charged what the hex stage made and the
+    /// limit, the rest of the allowance left; a Flate stage making hex text past the limit leaves
+    /// the stream unread though the total has room, as `Stream::decoded_within` leaves it; and a
+    /// stream past what is left spends all of it.
+    #[test]
+    fn each_stage_is_held_to_the_limit() {
+        let chained = |data: &[u8], filters: [&str; 2]| {
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(filters.into_iter().map(Object::name).collect()));
+            Stream::from_raw(dict, data.to_vec())
+        };
+        let hexed = |data: &[u8]| {
+            let flate = Stream::flate(Dict::new(), data);
+            let hex: Vec<u8> = flate.raw.iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+            (chained(&hex, ["ASCIIHexDecode", "FlateDecode"]), flate.raw.len())
+        };
+        let max = 1 << 16;
+        let (fits, inner) = hexed(&vec![0u8; max]);
+        let mut budget = DecodeBudget::new(1 << 20, 0);
+        assert_eq!(budget.decode_stages_within(&fits, max).map(|d| d.len()).ok(), Some(max));
+        assert_eq!(budget.remaining(), (1 << 20) - inner - max);
+        let (bomb, inner) = hexed(&vec![0u8; 8 * max]);
+        let mut budget = DecodeBudget::new(1 << 20, 0);
+        assert!(budget.decode_stages_within(&bomb, max).is_err());
+        assert_eq!(budget.remaining(), (1 << 20) - inner - max, "the Flate stage stopped at the limit");
+        // Flate making 1.2 times the limit of hex text, which ASCIIHex halves: the stages together
+        // make 1.8 times the limit, within twice it, but the Flate stage alone is past it.
+        let text = "00".repeat(max * 6 / 10).into_bytes();
+        let wide = chained(&Stream::flate(Dict::new(), &text).raw, ["FlateDecode", "ASCIIHexDecode"]);
+        assert!(wide.decoded_within(max).is_err());
+        assert!(DecodeBudget::new(1 << 20, 0).decode_stages_within(&wide, max).is_err());
+        let mut budget = DecodeBudget::new(max, 0);
+        assert!(budget.decode_stages_within(&fits, max).is_err());
+        assert_eq!(budget.remaining(), 0);
     }
 }
