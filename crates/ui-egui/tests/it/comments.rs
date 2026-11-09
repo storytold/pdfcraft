@@ -5353,20 +5353,24 @@ fn the_style_bar_recolours_and_fades_the_selected_highlight() {
     h.run_steps(2);
     assert_eq!(props(&h).color, Some([0.0, 0.47, 0.84]), "redo restores the blue");
 
-    // Hide all comments: the bar goes at once, before the pages let the selection go; shown
-    // again and selected again, it is back.
-    let id = h.state().views[0].id;
-    assert!(h.state_mut().session.set_hide_comments(id, true));
-    h.run_steps(2);
-    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over hidden comments");
-    assert!(h.state_mut().session.set_hide_comments(id, false));
-    h.run_steps(2);
-    // The pages let the selection go while the comments were hidden: select it again (with the
-    // Select tool; a markup tool's click marks text, it doesn't pick comments).
+    // Undo and redo let the selection go: select the highlight again (with the Select tool; a
+    // markup tool's click marks text, it doesn't pick comments) and the bar is back.
+    assert_eq!(h.state().views[0].comments.selected, None, "undo and redo let the selection go");
     h.state_mut().set_option("quick", "select").unwrap();
     h.run_steps(2);
     click(&mut h, a);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "selected again");
+    h.get_by_label("Comment colour: Blue");
+
+    // Hide all comments: the bar goes at once, while the comment is still selected; shown again,
+    // it is back.
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the selection is still there");
+    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over hidden comments");
+    assert!(h.state_mut().session.set_hide_comments(id, false));
+    h.run_steps(2);
     h.get_by_label("Comment colour: Blue");
 
     h.get_by_label("Comment opacity").click();
@@ -5886,4 +5890,30 @@ fn the_style_bar_recolours_every_selected_comment() {
     h.state_mut().undo();
     h.run_steps(2);
     assert_eq!(colours(&h), vec![Some([0.89, 0.13, 0.13]); 3], "one undo gives all three their red back");
+}
+
+/// A locked comment among the selected takes no style: the bar's choice goes to the others alone,
+/// as an edit the engine accepts (it refuses a style change to a locked comment, and with it the
+/// whole batch), and the label counts the comments the choice reaches.
+#[test]
+fn the_style_bar_leaves_a_locked_comment_in_the_selection_alone() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    // The locked one first; the handles go to the comment clicked last.
+    click_pt(&mut h, (120.0, 40.0));
+    click_pt_with(&mut h, (40.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!((h.state().views[0].comments.selected, h.state().views[0].comments.also.clone()), (Some((0, 0)), vec![(0, 1)]));
+    assert!(h.query_by_label("Comment colour: Blue (2 selected)").is_none(), "the locked comment isn't counted");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let colour = |h: &Harness<'static, PdfCraftApp>, i: usize| h.state().session.get(id).unwrap().comment_props(0, i).unwrap().color;
+    assert_eq!(colour(&h, 0), Some([0.0, 0.47, 0.84]), "the unlocked comment is blue");
+    assert_eq!(colour(&h, 1), Some([0.89, 0.13, 0.13]), "the locked one keeps its red");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change comment properties"), "one step");
 }

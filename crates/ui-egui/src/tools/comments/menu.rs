@@ -455,7 +455,7 @@ pub(crate) fn style_bar(
 ) -> Option<Edit> {
     // An opacity drag in progress. Forgotten whenever the bar isn't shown, so a drag the bar
     // vanished under (a tool change, Escape) never reaches the next comment the bar opens for.
-    let draft = egui::Id::unique(("comment-style-bar-opacity-draft", view.id.0));
+    let draft = egui::Id::unique(("comment-style-bar-opacity-draft", view.view_key()));
     let Some((page, index, props, bounds)) = bar_placement(view, info, props_of, prefs, allowed && !off) else {
         ctx.data_mut(|d| d.remove::<f64>(draft));
         return None;
@@ -470,7 +470,7 @@ pub(crate) fn style_bar(
     let mut edit = None;
     // Centred just above the comment; `constrain_to` keeps it inside the document area when the
     // comment touches the top.
-    let area = egui::Area::new(egui::Id::unique(("comment-style-bar", view.id.0)))
+    let area = egui::Area::new(egui::Id::unique(("comment-style-bar", view.view_key())))
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::CENTER_BOTTOM)
         .constrain_to(viewport);
@@ -587,7 +587,7 @@ pub(super) fn style_controls(ui: &mut egui::Ui, page: usize, index: usize, props
 /// A 10–100 % slider starting at `current`, or at the drag in progress kept under `draft`. The
 /// opacity to commit: on release (a click on the rail, or the end of a drag: one undo step for
 /// the whole drag), or at once for an arrow key (a step of its own). A press moves the value at
-/// once but commits nothing until it is released.
+/// once but commits nothing until it is released, and Escape drops the drag with nothing committed.
 fn opacity_slider(ui: &mut egui::Ui, current: f64, draft: egui::Id) -> Option<f64> {
     // ponytail: no live preview while dragging; the page shows the new opacity on release. A
     // preview would need an engine edit per frame (undo spam) or a preview path in paint.
@@ -595,6 +595,12 @@ fn opacity_slider(ui: &mut egui::Ui, current: f64, draft: egui::Id) -> Option<f6
     let dragging = ui.data(|d| d.get_temp::<f64>(draft));
     let mut percent = dragging.unwrap_or_else(|| (current * 100.0).round());
     let slider = ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %").text(tl!("Opacity")));
+    // Escape aborts the drag in egui, which flags it as stopped too: a cancel, not a release, so
+    // the draft goes without an edit (the popup closes on the same key).
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.remove::<f64>(draft));
+        return None;
+    }
     let held = slider.is_pointer_button_down_on();
     let released = (slider.drag_stopped() || slider.clicked()) && (dragging.is_some() || slider.changed());
     let keyed = slider.changed() && !held && !slider.dragged();
