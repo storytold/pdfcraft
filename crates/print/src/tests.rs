@@ -126,6 +126,54 @@ fn page_selection_handles_ranges_between_hyphenated_labels() {
     assert_eq!(select_pages(3, Some("A-1-B-C"), &ambiguous, Subset::All, false).unwrap(), [1, 2]);
 }
 
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). With front matter
+/// labelled i–iii and the body 1–7, "1" is the page labelled 1 (the fourth), while "(1)" is the
+/// first page, whatever it is labelled; positions combine with labels and open ends in ranges.
+#[test]
+fn a_number_in_parentheses_names_the_page_at_that_position() {
+    let labels: Vec<String> = ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"].iter().map(|s| s.to_string()).collect();
+    let pages = |range| select_pages(10, Some(range), &labels, Subset::All, false);
+    assert_eq!(pages("1").unwrap(), [3], "a bare number is the label");
+    assert_eq!(pages("(1)").unwrap(), [0], "in parentheses it is the position");
+    assert_eq!(pages("( 2 )").unwrap(), [1]);
+    assert_eq!(pages("(1)-(3)").unwrap(), [0, 1, 2]);
+    assert_eq!(pages("(9)-").unwrap(), [8, 9]);
+    assert_eq!(pages("-(2)").unwrap(), [0, 1]);
+    assert_eq!(pages("(2)-1").unwrap(), [1, 2, 3], "a position and a label");
+    assert_eq!(pages("ii-(5)").unwrap(), [1, 2, 3, 4]);
+    assert_eq!(pages("(4)-(2), 7").unwrap(), [3, 2, 1, 9]);
+    assert_eq!(select_pages(10, Some("(1)-(4)"), &labels, Subset::Even, false).unwrap(), [1, 3], "odd and even stay page numbers");
+    assert_eq!(pages("(0)"), Err(PrintError::OutOfRange(0, 10)));
+    assert_eq!(pages("(11)"), Err(PrintError::OutOfRange(11, 10)));
+    for bad in ["(x)", "()", "(1", "1)", "((1))", "(+3)"] {
+        assert_eq!(pages(bad), Err(PrintError::NotAPage(bad.into())), "{bad}");
+    }
+    // The page box takes positions through `position`, with the same digits-only rule.
+    assert_eq!(crate::position("( 3 )"), Some(3));
+    assert_eq!(crate::position("(+3)"), None, "a sign is not part of a page number");
+    assert!(pages("(-1)").is_err(), "a dash inside parentheses is still a range, of nothing");
+    // A label that is itself "(1)" still names its own page, as every label does.
+    let odd: Vec<String> = ["a", "b", "(1)"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(select_pages(3, Some("(1)"), &odd, Subset::All, false).unwrap(), [2]);
+    // Without labels a position is the same page as its number.
+    assert_eq!(select_pages(5, Some("(2)-4"), &[], Subset::All, false).unwrap(), [1, 2, 3]);
+}
+
+/// Odd and even count page positions, never the numbers inside labels: page indices are fixed
+/// and consecutive, while labels can restart, repeat, use letters or carry no number (ISO 32000-2
+/// §12.4.2). With front matter labelled i–iii the page labelled 1 is the fourth, so it is even, and
+/// a range typed in labels keeps the same pages as the same range typed as positions.
+#[test]
+fn odd_and_even_count_positions_on_a_labelled_document() {
+    let labels: Vec<String> = ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"].iter().map(|s| s.to_string()).collect();
+    let pick = |range: Option<&str>, subset| select_pages(10, range, &labels, subset, false).unwrap();
+    assert_eq!(pick(Some("1-4"), Subset::Even), [3, 5], "labels 1 and 3, the fourth and sixth pages");
+    assert_eq!(pick(Some("1-4"), Subset::Odd), [4, 6], "labels 2 and 4, the fifth and seventh pages");
+    assert_eq!(pick(Some("1-4"), Subset::Even), pick(Some("(4)-(7)"), Subset::Even), "labels or positions, the same pages");
+    assert_eq!(pick(None, Subset::Odd), [0, 2, 4, 6, 8], "i, iii, 2, 4, 6");
+    assert_eq!(pick(None, Subset::Even), [1, 3, 5, 7, 9]);
+}
+
 #[test]
 fn size_modes() {
     let sizes = [(200.0, 300.0), (1000.0, 1500.0)];
@@ -1296,4 +1344,18 @@ fn a_page_form_without_annotations_shares_the_pages_indirect_resources() {
     let form = imposition::page_form(&mut doc, &pages, 1, Content::default(), &mut Default::default()).unwrap();
     let Object::Stream(s) = &*doc.get(form) else { panic!("form stream") };
     assert_eq!(s.dict.get(b"Resources"), Some(&Object::Ref(res)));
+}
+
+/// Many pages asked about at once are answered from one walk of the page tree, each as
+/// [`text_reads_up`] answers it alone; a page past the end is `false`.
+#[test]
+fn texts_read_up_answers_many_pages_from_one_walk() {
+    let doc = fixture(3_000);
+    let all: Vec<usize> = (0..3_001).collect();
+    let started = std::time::Instant::now();
+    let up = texts_read_up(&doc, &all);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    assert_eq!(up.len(), all.len());
+    assert!(up.iter().all(|u| !u), "upright text, and no page 3000");
+    assert_eq!(up[1], text_reads_up(&doc, 1));
 }

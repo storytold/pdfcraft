@@ -1,4 +1,15 @@
-use super::{SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
+use super::{
+    SaveTarget, is_mail_temp_copy, save_dialog_folder, unredacted_file_name, write_atomically, write_atomically_syncing, write_atomically_with,
+};
+
+#[test]
+fn restored_content_is_not_proposed_under_the_redacted_name() {
+    assert_eq!(unredacted_file_name("contract_Redacted.pdf"), "contract.pdf");
+    assert_eq!(unredacted_file_name("SCAN_Redacted.PDF"), "SCAN.PDF");
+    assert_eq!(unredacted_file_name("Untitled_Redacted"), "Untitled");
+    assert_eq!(unredacted_file_name("contract.pdf"), "contract.pdf");
+    assert_eq!(unredacted_file_name("_Redacted.pdf"), "_Redacted.pdf");
+}
 
 #[test]
 fn save_dialogs_open_in_the_documents_folder() {
