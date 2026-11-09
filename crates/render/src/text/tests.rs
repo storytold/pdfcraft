@@ -2214,10 +2214,10 @@ fn text_on_a_page_whose_box_has_no_area_is_extracted() {
         doc.save_to(&mut bytes).unwrap();
         bytes
     }
-    // A4 (595.28 × 841.89 pt) covers 596 × 842 device pixels at scale 1.
-    const A4_PX: (u32, u32) = (596, 842);
+    // US Letter (612 × 792 pt, hayro-syntax patch 44) covers 612 × 792 device pixels at scale 1.
+    const LETTER_PX: (u32, u32) = (612, 792);
     let cases: [Case; 7] = [
-        ("own MediaBox without area", &[], &[("MediaBox", [0, 0, 0, 0])], (25, 500), A4_PX),
+        ("own MediaBox without area", &[], &[("MediaBox", [0, 0, 0, 0])], (25, 500), LETTER_PX),
         ("own CropBox without area", &[], &[("MediaBox", [0, 0, 800, 600]), ("CropBox", [0, 0, 0, 0])], (25, 500), (800, 600)),
         (
             "CropBox touching the media box at a corner",
@@ -2226,7 +2226,7 @@ fn text_on_a_page_whose_box_has_no_area_is_extracted() {
             (25, 500),
             (600, 800),
         ),
-        // Text past A4 but inside the inherited box is kept.
+        // Text past US Letter but inside the inherited box is kept.
         (
             "own MediaBox without area, inherited one with area",
             &[("MediaBox", [0, 0, 1200, 1200])],
@@ -2241,7 +2241,7 @@ fn text_on_a_page_whose_box_has_no_area_is_extracted() {
             (25, 100),
             (300, 300),
         ),
-        ("inherited MediaBox without area", &[("MediaBox", [0, 0, 0, 0])], &[], (25, 500), A4_PX),
+        ("inherited MediaBox without area", &[("MediaBox", [0, 0, 0, 0])], &[], (25, 500), LETTER_PX),
         ("inherited CropBox outside the media box", &[("CropBox", [600, 600, 900, 900])], &[("MediaBox", [0, 0, 500, 500])], (25, 400), (500, 500)),
     ];
     let mut failures = Vec::new();

@@ -5570,6 +5570,148 @@ fn a_font_whose_post_version_has_swapped_halves_is_still_used() {
     assert_eq!(alternate([0, 0, 0, 2]), alternate([0, 2, 0, 0]), "and also with swapped halves");
 }
 
+/// A page with no `/MediaBox`, its own or inherited, is US Letter (612 × 792 pt), as other
+/// readers draw it and as the page model and inspector already sized it; it was A4 (vendored
+/// hayro-syntax patch 44; ISO 32000-2 Table 31 makes the box required and gives no default;
+/// PDFBOX-4001). A `/MediaBox` without area falls back to the same size.
+#[test]
+fn a_page_without_a_media_box_is_letter() {
+    let page_pdf = |media: &str| {
+        format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R {media} /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let pdf = page_pdf(media);
+        let page = render_first_page(pdf.clone());
+        assert_eq!((page.width, page.height), (612, 792), "rendered size, {media:?}");
+        let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+        assert_eq!((info.pages[0].width, info.pages[0].height), (612.0, 792.0), "inspected size, {media:?}");
+    }
+    // The blue square sits at the bottom left of the Letter page, also when the box has no
+    // area: the page is placed and clipped by the same Letter region it is sized by.
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let page = render_first_page(page_pdf(media));
+        assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 792 - 30), [0, 0, 255], "{media:?}");
+    }
+}
+
+/// A page without a `/MediaBox` of its own inherits its `/Pages` parent's (ISO 32000-2 §7.7.3.4)
+/// before any fallback: rendered and inspected at 300 × 400, not US Letter.
+#[test]
+fn a_page_inherits_its_parents_media_box_before_falling_back_to_letter() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "rendered size");
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 400 - 30), [0, 0, 255]);
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
+/// The same through a `/Pages` node without a box: the page takes its grandparent's `/MediaBox`.
+#[test]
+fn a_page_inherits_its_grandparents_media_box() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "rendered size");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
+/// The nearest ancestor's `/MediaBox` wins: an intermediate `/Pages` node's box over the root's,
+/// and a box whose origin isn't 0 0 keeps the content where the box puts it.
+#[test]
+fn a_page_inherits_its_nearest_ancestors_media_box_with_its_origin() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 612 792] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 /MediaBox [100 100 400 500] >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 27 >> stream
+0 0 1 rg 110 110 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "the intermediate box, not the root's");
+    // The square sits 10 pt in from the box's lower-left corner, at (100, 100).
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 400 - 30), [0, 0, 255], "placed by the box's origin");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
+/// A page's own `/MediaBox` wins over its parent's: rendered and inspected at the page's 200 × 100, the content placed by
+/// the page box's origin.
+#[test]
+fn a_pages_own_media_box_wins_over_its_parents() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [50 50 250 150] /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 60 60 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (200, 100), "the page's box, not its parent's");
+    // The square sits 10 pt in from the page box's lower-left corner, at (50, 50).
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 100 - 30), [0, 0, 255], "placed by the page box's origin");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (200.0, 100.0), "inspected size");
+}
+
+/// The nearest ancestor's `/MediaBox` is the inherited one even when it has no area: an intermediate `/Pages` node's
+/// `[0 0 0 0]` gives US Letter, not the grandparent's 300 × 400 (ISO 32000-2 §7.7.3.4).
+#[test]
+fn a_nearest_media_box_without_area_gives_letter_not_a_further_ancestors() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 /MediaBox [0 0 0 0] >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (612, 792), "rendered size");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (612.0, 792.0), "inspected size");
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]
@@ -7405,8 +7547,8 @@ fn raw_crop_unit_floor_preserves_nearly_zero_fallback() {
             let bytes = raw_crop_unit_pdf(unit, 0, [0.0, 0.0, side, side], None);
             let pdf = Pdf::new(Arc::new(bytes)).expect("existing degenerate-page fallback");
             let page = pdf.pages().first().expect("one page");
-            // Existing A4 raw fallback remains raw A4, then scales by the page unit.
-            let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+            // The raw fallback is US Letter (hayro-syntax patch 44), then scales by the page unit.
+            let expected = (612.0, 792.0);
             assert_eq!(page.base_dimensions(), expected, "unit={unit}, raw side={side}");
             assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
         }
