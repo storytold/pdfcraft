@@ -143,6 +143,9 @@ impl PdfCraftApp {
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).
     /// Read mode hides the quick toolbar, so entering it also puts the current tool down.
     pub(crate) fn switch_mode(&mut self, mode: Mode, select_tools: bool) {
+        // The user's own choice ends a host's `?mode=` (or `--mode`): later files open as the
+        // user's default says, not back in the host's workspace.
+        self.mode_override = None;
         let was_read = self.mode == Mode::Read;
         if select_tools {
             self.select_mode(mode);

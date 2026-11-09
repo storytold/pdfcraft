@@ -11,14 +11,21 @@ impl PdfCraftApp {
     }
 
     /// The workspace documents open in for this session (`all`, `read`, `edit`, `convert` or
-    /// `sign`), as `--mode` sets it, for a host that opens a file to read or to sign: the web
-    /// build's `?mode=`. It is never saved, so the user's own default (Preferences) stays theirs.
+    /// `sign`, trimmed and in any case), as `--mode` sets it, for a host that opens a file to read
+    /// or to sign: the web build's `?mode=`. It is never saved, so the user's own default
+    /// (Preferences) stays theirs, and it lasts until the user picks a workspace themselves.
     /// Anything else is refused and changes nothing, where `--mode` falls back to All tools.
     pub fn open_in_mode(&mut self, value: &str) -> Result<(), String> {
-        if Mode::parse(value).is_none() {
+        let name = value.trim().to_ascii_lowercase();
+        if Mode::parse(&name).is_none() {
             return Err(format!("mode must be all, read, edit, convert or sign, not {value:?}"));
         }
-        self.set_option("mode", value)
+        // Read mode starts with the panes closed, as the user's own switch to it does: a right
+        // panel restored from preferences waits until Read mode is left.
+        if Mode::parse(&name) == Some(Mode::Read) && self.mode != Mode::Read {
+            self.right_before_read = self.right.take();
+        }
+        self.set_option("mode", &name)
     }
 
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).

@@ -1286,15 +1286,61 @@ fn a_host_opens_documents_in_its_mode_without_changing_the_users_default() {
         assert_eq!(app.default_mode, Mode::AllTools);
         let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
         assert_eq!(saved["default_mode"], "all", "{value}");
+        // Nothing of the host's mode is saved: a fresh session opens in the user's default.
+        let mut fresh = PdfCraftApp::new();
+        fresh.set_option("language", "en").unwrap();
+        fresh.restore(&app.persist());
+        fresh.open_bytes("third.pdf", None, FIXTURE.to_vec()).unwrap();
+        assert_eq!(fresh.mode, Mode::AllTools, "{value}");
+    }
+    // As a host might write it: trimmed, in any case.
+    for (value, mode) in [(" Read ", Mode::Read), ("SIGN", Mode::Sign), ("sign ", Mode::Sign)] {
+        let mut app = PdfCraftApp::new();
+        app.default_mode = Mode::AllTools;
+        app.open_in_mode(value).unwrap();
+        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        assert_eq!(app.mode, mode, "{value:?}");
     }
     // Anything else is refused and changes nothing (where --mode falls back to All tools).
-    for value in ["", "Read", "view", "sign ", "all-tools"] {
+    for value in ["", "view", "all-tools", "re ad"] {
         let mut app = PdfCraftApp::new();
         app.default_mode = Mode::Read;
         assert!(app.open_in_mode(value).is_err(), "{value:?}");
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         assert_eq!(app.mode, Mode::Read, "{value:?}");
     }
+}
+
+/// A workspace the user picks ends the host's `?mode=`: the next file opens in the user's default,
+/// not back in the host's workspace.
+#[test]
+fn choosing_a_workspace_ends_the_hosts_mode() {
+    use pdfcraft_ui_egui::Mode;
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.default_mode = Mode::AllTools;
+    app.open_in_mode("sign").unwrap();
+    app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+    assert_eq!(app.mode, Mode::Sign);
+    app.run_command("view.read_mode");
+    assert_eq!(app.mode, Mode::Read);
+    app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    assert_eq!(app.mode, Mode::AllTools, "the user's default, not the host's Sign");
+}
+
+/// `?mode=read` opens with the panes closed, as Read mode does when the user enters it: a right
+/// panel restored from preferences comes back when Read mode is left.
+#[test]
+fn a_host_read_mode_opens_with_the_right_panel_closed() {
+    use pdfcraft_ui_egui::{Mode, RightPanel};
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.right = Some(RightPanel::Bookmarks);
+    app.open_in_mode("read").unwrap();
+    app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+    assert_eq!((app.mode, app.right), (Mode::Read, None));
+    app.run_command("view.read_mode");
+    assert_eq!((app.mode, app.right), (Mode::AllTools, Some(RightPanel::Bookmarks)));
 }
 
 #[test]

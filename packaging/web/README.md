@@ -80,8 +80,9 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 - **`?mode=`** chooses the workspace documents open in on that page: `read`, `sign`, `edit`,
   `convert` or `all` (as the desktop's `--mode`). A host opening a file to read passes `?mode=read`
   (the panes start closed), and one asking for a signature `?mode=sign`. It is never saved, so the
-  user's own default (Preferences ▸ Default mode) is unchanged; any other value is ignored, with a
-  console warning. It works with or without `?host=parent`: `src="/pdfcraft/?host=parent&mode=read"`.
+  user's own default (Preferences ▸ Default mode) is unchanged, and it ends when the user picks a
+  workspace themselves. The value is trimmed and may be in any case (`Read`); any other value is
+  ignored, with a console warning. It works with or without `?host=parent`: `src="/pdfcraft/?host=parent&mode=read"`.
 
 ## Same-document host mode (no iframe)
 
