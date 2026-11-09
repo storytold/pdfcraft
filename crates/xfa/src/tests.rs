@@ -4584,7 +4584,8 @@ fn a_field_laid_out_again_keeps_its_own_name() {
  <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption>
 </field>"#;
     let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
-    let names: Vec<(usize, String)> = form.pages.iter().enumerate().flat_map(|(i, p)| widgets(p).into_iter().map(move |w| (i, w.name.clone()))).collect();
+    let names: Vec<(usize, String)> =
+        form.pages.iter().enumerate().flat_map(|(i, p)| widgets(p).into_iter().map(move |w| (i, w.name.clone()))).collect();
     assert_eq!(names, [(1, "notes".to_string())], "moved on whole, under its own name");
 }
 
