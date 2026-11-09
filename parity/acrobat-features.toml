@@ -6340,11 +6340,11 @@ title = "Field locks (FieldMDP)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["sign_list"]
+evidence = ["crates/sign/tests/it/field_locks.rs::changing_a_field_the_signature_locks_invalidates_it", "crates/sign/tests/it/field_locks.rs::exclude_locks_every_field_it_does_not_name", "crates/sign/src/pdf/locks.rs::a_fieldmdp_reference_in_the_value_locks_fields"]
+notes = "validation reads a signed field's /Lock and the FieldMDP references in its value (All, Include, Exclude; a listed name covers the fields below it) from the signed revision; a later change to a locked field or its widgets makes the signature invalid (modification: locked field), and a lock that can't be read or compared leaves it unknown. Not yet: writing a lock when signing, refusing to fill a locked field, and the /Lock /P permissions"
 
 [[feature]]
 id = "sign.document-timestamp"
