@@ -110,8 +110,9 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     let mut names = HashSet::new();
     let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return (out, names) };
     let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return (out, names) };
-    let mut stack: Vec<(Object, String, bool, usize)> =
-        fields.as_array().into_iter().flatten().map(|f| (f.clone(), String::new(), false, 0)).collect();
+    // The accumulated name is shared by the children it is queued for, not copied into each.
+    let mut stack: Vec<(Object, std::rc::Rc<str>, bool, usize)> =
+        fields.as_array().into_iter().flatten().map(|f| (f.clone(), "".into(), false, 0)).collect();
     let mut seen = 0usize;
     while let Some((field, prefix, parent_is_sig, depth)) = stack.pop() {
         seen += 1;
@@ -124,7 +125,7 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             // Generated to name a signature field: only what it holds is looked at.
             if depth < MAX_FIELD_DEPTH {
                 let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-                stack.extend(kids.into_iter().map(|k| (k, String::new(), false, depth + 1)));
+                stack.extend(kids.into_iter().map(|k| (k, "".into(), false, depth + 1)));
             }
             continue;
         }
@@ -139,12 +140,12 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             continue;
         }
         let name = match d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())) {
-            Some(t) if prefix.is_empty() => t,
-            Some(t) => format!("{prefix}.{t}"),
+            Some(t) if prefix.is_empty() => t.into(),
+            Some(t) => format!("{prefix}.{t}").into(),
             None => prefix,
         };
         if !name.is_empty() {
-            names.insert(name.clone());
+            names.insert(name.to_string());
         }
         let is_sig = match d.name(b"FT") {
             Some(ft) => ft == b"Sig",
@@ -154,7 +155,7 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
         if is_sig && let Some(value) = d.get(b"V").filter(|v| doc.resolve(v).as_dict().is_some()) {
             // The appearance is on the field when it is its own widget, or on its one widget.
             let appearance = d.get(b"AP").cloned().or_else(|| kids.iter().find_map(|k| doc.resolve(k).as_dict().and_then(|k| k.get(b"AP").cloned())));
-            out.entry(name.clone()).or_insert(Signed { value: value.clone(), appearance });
+            out.entry(name.to_string()).or_insert(Signed { value: value.clone(), appearance });
         }
         if depth < MAX_FIELD_DEPTH {
             stack.extend(kids.into_iter().map(|k| (k, name.clone(), is_sig, depth + 1)));
