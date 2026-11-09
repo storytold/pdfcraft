@@ -108,25 +108,36 @@ impl Realm {
                     calculations: &job.calculations,
                     initialize: true,
                     reset_calls: 0,
+                    calculation_evaluations: 0,
+                    calculation_limit_exceeded: false,
                 },
                 Limits::default(),
             );
-            let (fields, reset_calls) = crate::host::host(ctx)
+            let (fields, reset_calls, calculation_evaluations) = crate::host::host(ctx)
                 .map(|h| {
                     let h = h.borrow();
-                    (h.fields.clone(), h.reset_calls)
+                    (h.fields.clone(), h.reset_calls, h.calculation_evaluations)
                 })
-                .unwrap_or((job.fields, 0));
+                .unwrap_or((job.fields, 0, 0));
             let mut out = crate::run::run_in_context(
                 ctx,
                 &job.script,
                 &job.event,
                 &job.doc,
                 fields,
-                crate::run::ScriptSetup { doc_scripts: &[], skipped: &[], calculations: &job.calculations, initialize: false, reset_calls },
+                crate::run::ScriptSetup {
+                    doc_scripts: &[],
+                    skipped: &[],
+                    calculations: &job.calculations,
+                    initialize: false,
+                    reset_calls,
+                    calculation_evaluations,
+                    calculation_limit_exceeded: initial.calculation_limit_exceeded,
+                },
                 Limits::default(),
             );
             out.reset_limit_exceeded |= initial.reset_limit_exceeded;
+            out.calculation_limit_exceeded |= initial.calculation_limit_exceeded;
             for field in initial.changed {
                 if !out.changed.iter().any(|f| match (f.object_id, field.object_id) {
                     (Some(a), Some(b)) => a == b,
@@ -153,7 +164,15 @@ impl Realm {
                 &job.event,
                 &job.doc,
                 job.fields,
-                crate::run::ScriptSetup { doc_scripts: &[], skipped: &[], calculations: &job.calculations, initialize: false, reset_calls: 0 },
+                crate::run::ScriptSetup {
+                    doc_scripts: &[],
+                    skipped: &[],
+                    calculations: &job.calculations,
+                    initialize: false,
+                    reset_calls: 0,
+                    calculation_evaluations: 0,
+                    calculation_limit_exceeded: false,
+                },
                 Limits::default(),
             )
         }
@@ -811,5 +830,33 @@ mod review13_tests {
         let out = session.run(j, &[]);
         assert!(out.error.as_deref().is_some_and(|e| e.contains("work limit")), "{:?}", out.error);
         assert_eq!(session.run(job("AFSimple_Calculate('SUM',['f0']);", fields), &[]).result.as_deref(), Some("1"));
+    }
+    #[test]
+    fn calculate_now_continues_after_an_ordinary_field_error() {
+        let mut session = ScriptSession::default();
+        let fields = ["bad", "good"].map(|name| FieldState::new(name, FieldType::Text, vec!["0".into()])).to_vec();
+        let mut j = job("calculateNow(); event.name + ':' + getField('good').value", fields);
+        j.calculations = vec![(0, "throw new Error('broken formula');".into()), (1, "event.value='42';".into())];
+        let out = session.run(j, &[]);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("Test:42"));
+        assert!(out.console.iter().any(|line| line.contains("broken formula")));
+    }
+
+    #[test]
+    fn caught_calculation_exhaustion_stays_sticky_until_the_next_job() {
+        let mut session = ScriptSession::default();
+        let fields = vec![FieldState::new("amount", FieldType::Text, vec!["0".into()])];
+        let mut j = job("for(var i=0;i<4097;i++){try{calculateNow()}catch(e){}} try{calculateNow()}catch(e){} count;", fields.clone());
+        j.calculations = vec![(0, "count += 1;".into())];
+        j.doc_scripts = vec!["var count = 0;".into()];
+        let out = session.run(j.clone(), &[]);
+        assert!(out.calculation_limit_exceeded);
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation work limit")));
+        assert_eq!(out.result.as_deref(), Some("4096"));
+        j.script = "calculateNow();count".into();
+        let next = session.run(j, &[]);
+        assert!(!next.calculation_limit_exceeded);
+        assert_eq!(next.result.as_deref(), Some("4097"));
     }
 }

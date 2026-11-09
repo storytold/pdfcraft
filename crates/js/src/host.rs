@@ -17,6 +17,8 @@ pub(crate) struct Host {
     pub(crate) doc: DocInfo,
     pub(crate) calculations: Vec<(usize, String)>,
     pub(crate) calculate_depth: usize,
+    pub(crate) calculation_evaluations: usize,
+    pub(crate) calculation_limit_exceeded: bool,
     pub(crate) calculation_work: usize,
     pub(crate) current_event: JsValue,
     pub(crate) reset_calls: usize,

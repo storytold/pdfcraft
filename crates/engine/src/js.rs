@@ -19,11 +19,10 @@ const MAX_SCRIPT_RESET_WORK: usize = 1 << 24;
 /// Bound request count, selector storage/scans and estimated form/calculation visits before cloning a PDF.
 fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], requests: &[Request]) -> Result<(), EditError> {
     let invalid = || EditError::Invalid("script reset work limit exceeded; use fewer reset calls or combine field selections".into());
-    let (mut resets, mut named_resets, mut selectors, mut bytes) = (0usize, 0usize, 0usize, 0usize);
+    let (mut resets, mut selectors, mut bytes) = (0usize, 0usize, 0usize);
     for request in requests {
         if let Request::Reset(names) = request {
             resets = resets.saturating_add(1);
-            named_resets = named_resets.saturating_add(usize::from(!names.is_empty()));
             selectors = selectors.saturating_add(names.len());
             if resets > MAX_SCRIPT_RESETS || selectors > MAX_SCRIPT_RESET_SELECTORS {
                 return Err(invalid());
@@ -56,16 +55,30 @@ fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], req
         .saturating_add(source_bytes)
         .saturating_add(name_bytes)
         .saturating_add(widgets);
-    // A named reset may expand to every field. The forms layer validates each expanded
-    // name against all fields and scans the selection again for each field. Charge the
-    // worst case before performing expansion, including bytes read by string comparisons.
-    let expanded = named_resets.saturating_mul(count).saturating_mul(count.saturating_add(name_bytes)).saturating_mul(2);
+    // Bound the expansion scan before doing it, then charge only the actual selections
+    // for the forms layer's membership and validation scans in both reset passes.
     let comparisons = count.saturating_mul(selectors).saturating_add(count.saturating_mul(bytes));
-    let work = resets.saturating_mul(per_pass).saturating_add(expanded).saturating_add(comparisons).saturating_add(bytes).saturating_mul(2);
-    if work > MAX_SCRIPT_RESET_WORK {
+    let mut work = resets.saturating_mul(per_pass).saturating_add(comparisons).saturating_add(bytes);
+    if work > MAX_SCRIPT_RESET_WORK / 2 {
         return Err(invalid());
     }
+    for request in requests {
+        let Request::Reset(names) = request else { continue };
+        if names.is_empty() {
+            continue;
+        }
+        for field in states.iter().filter(|f| reset_name_matches(&f.name, names)) {
+            work = work.saturating_add(count.saturating_mul(field.name.len().saturating_add(1)).saturating_mul(2));
+            if work > MAX_SCRIPT_RESET_WORK / 2 {
+                return Err(invalid());
+            }
+        }
+    }
     Ok(())
+}
+
+fn reset_name_matches(name: &str, selectors: &[String]) -> bool {
+    selectors.iter().any(|selector| name == selector || name.strip_prefix(selector).is_some_and(|rest| rest.starts_with('.')))
 }
 
 /// What scripts produced for the viewer since it last looked.
@@ -514,7 +527,7 @@ impl Scripts for JsRunner {
             Err(_) => Outcome { error: Some("document script runtime is unavailable".into()), ..Default::default() },
         };
         self.output.absorb(&o);
-        if o.error.is_some() || o.reset_limit_exceeded {
+        if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
             return ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None };
         }
@@ -544,7 +557,7 @@ impl Scripts for JsRunner {
         let o = pdfcraft_js::with_english_printd(true, || {
             pdfcraft_js::run_shared_calculations(script, &ev, &self.doc, states, &self.doc_scripts, calculations, Limits::default())
         });
-        if o.error.is_some() || o.reset_limit_exceeded {
+        if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             return None;
         }
         Some(ScriptResult { rc: o.rc, value: o.value.clone(), value_set: o.value_set, changes: Vec::new(), message: None })
@@ -678,6 +691,9 @@ impl Session {
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
+        if o.calculation_limit_exceeded {
+            return Err(EditError::Invalid(o.error.unwrap_or_else(|| "script calculation work limit exceeded".into())));
+        }
         if o.reset_limit_exceeded {
             return Err(EditError::Invalid("script reset call limit exceeded; no script edits were committed".into()));
         }
@@ -706,10 +722,8 @@ impl Session {
         };
         let mut edits = Vec::new();
         for names in resets {
-            let all: Vec<String> = states.iter().map(|f| f.name.clone()).collect();
-            let names: Option<Vec<String>> = (!names.is_empty()).then(|| {
-                all.iter().filter(|n| names.iter().any(|x| *n == x || n.strip_prefix(x).is_some_and(|rest| rest.starts_with('.')))).cloned().collect()
-            });
+            let names = (!names.is_empty())
+                .then(|| states.iter().filter(|field| reset_name_matches(&field.name, &names)).map(|field| field.name.clone()).collect::<Vec<_>>());
             if let Some(doc) = reset_document.as_mut() {
                 // Reuse the actual reset path, whose built-in recalculation uses NoScripts.
                 // Unnamed dependent text/combo values belong to the comparison baseline too.
@@ -1312,6 +1326,13 @@ mod reset_budget_review_tests {
     fn state(name: String) -> pdfcraft_js::FieldState {
         pdfcraft_js::FieldState::new(name, pdfcraft_js::FieldType::Text, Vec::new())
     }
+    #[test]
+    fn reset_budget_accepts_one_selected_field_in_a_large_form() {
+        let states: Vec<_> = (0..1000).map(|i| state(format!("parent.field_{i:04}"))).collect();
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(vec!["parent.field_0001".into()])]).is_ok());
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(vec!["parent".into()])]).is_err());
+    }
+
     #[test]
     fn reset_budget_charges_expanded_descendants() {
         let states: Vec<_> = (0..3000).map(|i| state(format!("parent.{i}"))).collect();

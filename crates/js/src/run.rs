@@ -104,7 +104,15 @@ pub fn run_shared_calculations(
                         event,
                         doc,
                         fields,
-                        ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true, reset_calls: 0 },
+                        ScriptSetup {
+                            doc_scripts: kept,
+                            skipped,
+                            calculations,
+                            initialize: true,
+                            reset_calls: 0,
+                            calculation_evaluations: 0,
+                            calculation_limit_exceeded: false,
+                        },
                         limits,
                     )
                 })
@@ -116,7 +124,22 @@ pub fn run_shared_calculations(
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true, reset_calls: 0 }, limits)
+    run_here(
+        script,
+        event,
+        doc,
+        fields,
+        ScriptSetup {
+            doc_scripts: kept,
+            skipped,
+            calculations,
+            initialize: true,
+            reset_calls: 0,
+            calculation_evaluations: 0,
+            calculation_limit_exceeded: false,
+        },
+        limits,
+    )
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -164,6 +187,8 @@ pub(crate) struct ScriptSetup<'a> {
     pub(crate) calculations: &'a [(usize, String)],
     pub(crate) initialize: bool,
     pub(crate) reset_calls: usize,
+    pub(crate) calculation_evaluations: usize,
+    pub(crate) calculation_limit_exceeded: bool,
 }
 
 /// Create a restricted temporary Boa context and convert initialization failures into script outcomes.
@@ -207,6 +232,8 @@ pub(crate) fn run_in_context(
         doc: doc.clone(),
         calculations: setup.calculations.to_vec(),
         calculate_depth: 0,
+        calculation_evaluations: setup.calculation_evaluations,
+        calculation_limit_exceeded: setup.calculation_limit_exceeded,
         calculation_work: 0,
         current_event: JsValue::undefined(),
         reset_calls: setup.reset_calls,
@@ -260,6 +287,10 @@ pub(crate) fn run_in_context(
     if let Some(h) = ctx.remove_data::<Shared>() {
         let mut h = h.into_inner();
         out.reset_limit_exceeded = h.reset_limit_exceeded;
+        out.calculation_limit_exceeded = h.calculation_limit_exceeded;
+        if h.calculation_limit_exceeded && out.error.is_none() {
+            out.error = Some("script calculation work limit exceeded".into());
+        }
         out.changed = h.changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
         out.alerts = std::mem::take(&mut h.alerts);
         out.console = std::mem::take(&mut h.console);

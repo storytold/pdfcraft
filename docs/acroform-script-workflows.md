@@ -15,7 +15,7 @@ Exposed Field objects are cached by PDF object identity; synthetic fields use na
 icon objects. `eval` and dynamic Function construction remain disabled.
 
 Changing the document-script sources recreates the context. Closing, reopening, reloading,
-Revert and disabling JavaScript release/reset the context. PDF Undo/Redo restores PDF state;
+Revert, disabling JavaScript, and saving a full rewrite release/reset the context. Incremental saves retain it. A rewrite can reuse PDF object numbers, so old Field and icon objects must not be carried across it. PDF Undo/Redo restores PDF state;
 it does not serialize or rewind arbitrary JavaScript variables. Globals are not saved into the
 PDF. A worker fault resets its context; the existing cooperative source/loop/recursion bounds
 remain in force. The source preflight additionally caps active arrow chains at 256 and right-associative
@@ -123,7 +123,7 @@ An asynchronous completion stays reserved until the engine accepts it. An interv
 
 The reset comparison baseline is obtained by running the existing forms reset path on an isolated document copy. It therefore includes unnamed built-in Calculate text/combo dependents, without executing custom Calculate scripts during the preview. Normal automatic calculation after script value writes remains in force; this does not establish a policy that explicit formula-field writes override their formulas. Tests cover saved defaults left untouched by the event and a non-default typed native response as well as existing default/cancellation paths.
 
-Reset writeback is admitted before request copies, preview cloning and PDF mutation only when it fits 64 reset calls, 4,096 aggregate selectors, and 2^24 estimated work units. The estimate charges both preview/commit passes, field/calculation/dependency scans, calculation source lengths and selector scans/bytes. Excess work returns an explicit error without committing PDF edits or an undo entry. Under-budget requests retain their order; duplicate resets are not silently merged because repeated recalculation can be observable. This is an operation/amplification bound, not a hard UI wall-clock deadline. Native start/completion tests cover the 64-call boundary, 65/10,000-call refusal, selector overflow, aggregate large-form refusal, reset/restore, Undo/Redo and save/reopen.
+Reset writeback is admitted before request copies, preview cloning and PDF mutation only when it fits 64 reset calls, 4,096 aggregate selectors, and 2^24 estimated work units. Named resets pay for the bounded selector scan and the fields actually matched. The estimate charges both preview/commit passes, field/calculation/dependency scans, calculation source lengths and selector scans/bytes. Excess work returns an explicit error without committing PDF edits or an undo entry. Under-budget requests retain their order; duplicate resets are not silently merged because repeated recalculation can be observable. This is an operation/amplification bound, not a hard UI wall-clock deadline. Native start/completion tests cover the 64-call boundary, 65/10,000-call refusal, selector overflow, aggregate large-form refusal, reset/restore, Undo/Redo and save/reopen.
 
 The reset admission estimate also charges field-name copies, selector comparison bytes, and the worst-case expansion of each named reset to all fields (including both validation and membership scans). This conservative bound can refuse a named reset even if its eventual selection would be small; full-form resets avoid that named-selection cost. Refusal tests compare saved bytes as well as generation and undo state.
 
@@ -153,3 +153,5 @@ field_id and validates exact name/identity pairs; omitted IDs preserve legacy lo
 icon setter runs. UI waiting helpers use elapsed deadlines rather than machine-speed retry counts.
 
 Comparison script document requests use their source view. Save As captures the source document without changing the comparison tab. Print activates and retains the source tab because the existing print dialog reads the active document throughout its lifetime. Missing source views never fall back to another active document. Regression coverage distinguishes a two-page source from a one-page comparison file and checks saved bytes, print-dialog page state and untouched comparison content.
+
+Explicit calculation logs ordinary field script errors and continues in calculation order. Each job can evaluate at most 4,096 calculation scripts, including nested calls and document initialization on the first event. Exhaustion remains in effect after a JavaScript catch and prevents PDF writeback.

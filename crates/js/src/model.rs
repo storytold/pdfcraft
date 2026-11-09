@@ -339,6 +339,8 @@ impl Panel {
 pub struct Outcome {
     /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
     pub reset_limit_exceeded: bool,
+    /// Calculation exhaustion rejects script writeback even if the script catches the error.
+    pub calculation_limit_exceeded: bool,
     /// `event.rc`: `false` rejects the keystroke or value.
     pub rc: bool,
     /// `event.value` after the script.

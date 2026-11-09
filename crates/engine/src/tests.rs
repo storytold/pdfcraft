@@ -6518,8 +6518,8 @@ fn calculate_now_uses_calculation_order_and_bounds_recursion() {
 
     s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
         .unwrap();
-    let out = s.run_javascript(id, "calculateNow();", None).unwrap();
-    assert!(out.error.as_deref().is_some_and(|e| e.contains("calculateNow recursion limit exceeded")), "{out:?}");
+    let error = s.run_javascript(id, "calculateNow();", None).unwrap_err();
+    assert!(error.to_string().contains("calculateNow recursion limit exceeded"), "{error:?}");
     s.set_javascript(false);
     assert!(s.run_javascript(id, "calculateNow();", None).is_err());
     s.set_javascript(true);
@@ -13073,4 +13073,23 @@ fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_passw
     let saved = s.save_bytes(id).unwrap();
     let reopened = pdfcraft_cos::Document::open(saved).unwrap();
     assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn script_objects_survive_incremental_save_but_not_a_full_rewrite() {
+    let mut session = Session::new();
+    let id = session.open("fields.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session.set_javascript(true);
+    let stored = session.run_javascript(id, "var retainedPrice = getField('price'); retainedPrice.value = '17';", None).unwrap();
+    assert!(stored.error.is_none(), "{stored:?}");
+    let incremental = session.save_bytes(id).unwrap();
+    session.mark_saved(id, incremental.clone(), None).unwrap();
+    let after_incremental = session.run_javascript(id, "String(retainedPrice.value)", None).unwrap();
+    assert_eq!(after_incremental.result.as_deref(), Some("17"));
+    let full = session.save_full_bytes(id).unwrap();
+    assert!(!full.starts_with(incremental.as_slice()));
+    session.mark_saved(id, full, Some("rewritten.pdf".into())).unwrap();
+    let after_full = session.run_javascript(id, "typeof retainedPrice + ':' + getField('price').value", None).unwrap();
+    assert_eq!(after_full.result.as_deref(), Some("undefined:17"));
 }

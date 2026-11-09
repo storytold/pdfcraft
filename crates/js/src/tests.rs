@@ -464,6 +464,8 @@ fn app_alert_titles_are_clipped_and_charged() {
         doc: doc(),
         calculations: Vec::new(),
         calculate_depth: 0,
+        calculation_evaluations: 0,
+        calculation_limit_exceeded: false,
         calculation_work: 0,
         current_event: JsValue::undefined(),
         reset_calls: 0,

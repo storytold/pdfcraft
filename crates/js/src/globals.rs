@@ -207,10 +207,15 @@ fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 /// script. A small depth cap stops calculate scripts from recursing forever.
 fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     const MAX_CALCULATE_DEPTH: usize = 8;
+    const MAX_CALCULATION_EVALUATIONS: usize = 4096;
     let calculations = {
         let shared = host(ctx)?;
         let mut h = shared.borrow_mut();
+        if h.calculation_limit_exceeded {
+            return Err(error("script calculation work limit exceeded"));
+        }
         if h.calculate_depth >= MAX_CALCULATE_DEPTH {
+            h.calculation_limit_exceeded = true;
             return Err(error("calculateNow recursion limit exceeded"));
         }
         h.calculate_depth += 1;
@@ -229,14 +234,35 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     let result = (|| {
         for (index, script) in calculations {
             let Some(field) = host(ctx)?.borrow().fields.get(index).cloned() else { continue };
-            if let Some(why) = super::run::refuse(&script) {
-                return Err(error(why));
+            {
+                let shared = host(ctx)?;
+                let mut h = shared.borrow_mut();
+                if h.calculation_limit_exceeded || h.calculation_evaluations >= MAX_CALCULATION_EVALUATIONS {
+                    h.calculation_limit_exceeded = true;
+                    return Err(error("script calculation work limit exceeded"));
+                }
+                h.calculation_evaluations += 1;
+                if let Some(why) = super::run::refuse(&script) {
+                    h.calculation_limit_exceeded = true;
+                    return Err(error(why));
+                }
             }
             let mut event = Event::field("Calculate", &field.name, &field.value.first().cloned().unwrap_or_default());
             event.target_id = field.object_id;
             let (object, value_store) = event_object(ctx, &event)?;
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
-            ctx.eval(Source::from_bytes(&script))?;
+            if let Err(err) = ctx.eval(Source::from_bytes(&script)) {
+                let shared = host(ctx)?;
+                let mut h = shared.borrow_mut();
+                if err.as_engine().is_some() || h.calculation_limit_exceeded || h.reset_limit_exceeded {
+                    return Err(err);
+                }
+                h.print(format!("Calculate {}: {err}", field.name));
+                continue;
+            }
+            if host(ctx)?.borrow().calculation_limit_exceeded {
+                return Err(error("script calculation work limit exceeded"));
+            }
             let rc = object.get(js_string!("rc"), ctx)?;
             if !rc.to_boolean() {
                 continue;
@@ -277,6 +303,7 @@ fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     let mut h = shared.borrow_mut();
     h.calculation_work = h.calculation_work.saturating_add(work);
     let exhausted = h.calculation_work > 1 << 24;
+    h.calculation_limit_exceeded |= exhausted;
     drop(h);
     if exhausted {
         return Err(error("calculation field lookup exceeds its work limit"));
