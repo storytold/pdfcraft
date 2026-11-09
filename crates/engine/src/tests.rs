@@ -6761,6 +6761,26 @@ fn a_document_script_that_throws_still_lets_the_form_calculate() {
     assert_eq!((o.error, o.result.as_deref(), o.doc_errors.len()), (None, Some("6"), 0));
 }
 
+/// A looping initializer is reported once and later initializers and field events still run.
+#[test]
+fn a_document_script_at_the_vm_limit_does_not_block_field_edits() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form_with(r"while \(true\) {}"))).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "later", Some("function times(a, b) { return a * b; }")).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, bytes, None).unwrap();
+    let initial = s.take_js_output(id);
+    assert_eq!(initial.doc_errors.len(), 1, "{initial:?}");
+    assert!(initial.doc_errors[0].contains("RuntimeLimitError"), "{initial:?}");
+
+    for (qty, total) in [("4", "10"), ("6", "15")] {
+        s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text(qty.into()) }).unwrap();
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, [total]);
+        let out = s.take_js_output(id);
+        assert!(out.errors.is_empty() && out.doc_errors.is_empty(), "{out:?}");
+    }
+}
+
 #[test]
 fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
     let template = pdfcraft_xfa::fixtures::scripted_template().replace(

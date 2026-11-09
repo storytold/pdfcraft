@@ -260,14 +260,10 @@ pub(crate) fn run_in_context(
                 ctx,
             )?;
         }
-        // One document script that throws (calling a method PdfCraft lacks, say) must not keep
-        // every field script in the form from running: what it defined before the error, and
-        // the other scripts, stay available (#3940).
+        // An initializer that throws or reaches a VM limit must not block later scripts.
+        // Definitions it made before the error stay available to field scripts (#3940).
         for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
-                if matches!(e.as_engine(), Some(boa_engine::error::EngineError::RuntimeLimit(_))) {
-                    return Err(e);
-                }
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
