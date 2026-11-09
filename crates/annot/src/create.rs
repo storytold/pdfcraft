@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
-use super::modify::{free_text_da, n, rich_text, set_part_keys, shape_text_box};
+use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -103,12 +103,8 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
             }
             grow(ink_bounds(strokes).unwrap_or_default(), half + 1.0)
         }
-        Shape::Polygon { vertices, cloud } => {
-            let b = bounds(vertices.iter().copied())
-                .filter(|b| vertices.len() >= 3 && vertices.iter().all(|p| finite(p)) && b[2] - b[0] >= 1.0 && b[3] - b[1] >= 1.0);
-            let b = b.ok_or_else(|| bad("polygon (it needs three points)"))?;
-            grow(b, half + 1.0 + if *cloud { 1.5 * appearance::cloud_radius(style.width) } else { 0.0 })
-        }
+        // A new cloud has intensity 1 (`/BE /I 1`).
+        Shape::Polygon { vertices, cloud } => polygon_rect(vertices, style.width, cloud.then_some(1.0))?,
         Shape::PolyLine { vertices, start, end } => {
             let b = bounds(vertices.iter().copied())
                 .filter(|b| vertices.len() >= 2 && vertices.iter().all(|p| finite(p)) && (b[2] - b[0]).max(b[3] - b[1]) >= 1.0);
@@ -133,6 +129,19 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
         }
     };
     Ok(r)
+}
+
+/// Validate a polygon's corners and compute its `/Rect`: room for half the line, and with a
+/// cloud of `cloud` intensity, for the farthest its bumps reach (`appearance::cloud_reach`).
+pub(crate) fn polygon_rect(vertices: &[[f64; 2]], width: f64, cloud: Option<f64>) -> Result<[f64; 4], AnnotError> {
+    let b = bounds(vertices.iter().copied())
+        .filter(|b| vertices.len() >= 3 && vertices.iter().all(|p| finite(p)) && b[2] - b[0] >= 1.0 && b[3] - b[1] >= 1.0);
+    let b = b.ok_or_else(|| AnnotError::Invalid("invalid polygon (it needs three points)".into()))?;
+    let reach = cloud.map_or(0.0, |intensity| {
+        let perimeter: f64 = vertices.iter().zip(vertices.iter().cycle().skip(1)).map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1])).sum();
+        appearance::cloud_reach(perimeter, appearance::cloud_bump(width, intensity))
+    });
+    Ok(grow(b, width.max(0.0) / 2.0 + 1.0 + reach))
 }
 
 pub(crate) fn base_dict(subtype: &str, rect: [f64; 4], page: ObjRef, contents: &str, author: &str, meta: &Meta) -> Dict {
@@ -403,6 +412,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
             // A callout already stores its own /RD for the leader, so it keeps a rectangular box.
             if !matches!(new.shape, Shape::Callout { .. }) {
+                let rect = fit_thai_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
                 shape_text_box(&mut d, rect, style.border_shape, style.width);
             }
         }
@@ -420,6 +430,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     {
         return Err(AnnotError::Undrawable(pdfcraft_fonts::undrawable_message(what, c)));
     }
+    refuse_undrawable_thai(d.name(b"Subtype") == Some(b"FreeText"), &new.contents)?;
     let r = doc.add(Object::Dict(d.clone()));
     draw_appearance(doc, r)?;
     let mut list = annots(doc, page);
@@ -428,6 +439,30 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     add_popup(doc, r, popup, &mut list)?;
     set_annots(doc, page, list)?;
     Ok(index)
+}
+
+/// Text box `tb` (user space; its text upright on a page turned by `turn`), grown down as displayed
+/// until the ink of `text`'s Thai (stacked marks above its first line, descenders below its last)
+/// fits inside the padding `pad`, as the appearance lays it out at `size`. Other text, and a box
+/// tall enough already, keep the box they were given.
+fn fit_thai_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
+    if !text.chars().any(pdfcraft_fonts::shaped_text::is_thai) {
+        return tb;
+    }
+    let [x0, y0, x1, y1] = normalize(tb);
+    let (w, h) = if matches!(turn, 90 | 270) { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) };
+    let need = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size) + 2.0 * pad + 2.0;
+    let by = need - h;
+    if !(by.is_finite() && by > 0.0) {
+        return tb;
+    }
+    // Displayed down is user -y unturned, +x on a page turned 90°, +y at 180° and -x at 270°.
+    match turn {
+        90 => [x0, y0, x1 + by, y1],
+        180 => [x0, y0, x1, y1 + by],
+        270 => [x0 - by, y0, x1, y1],
+        _ => [x0, y0 - by, x1, y1],
+    }
 }
 
 fn validate_style(style: &Style) -> Result<(), AnnotError> {

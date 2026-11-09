@@ -1627,6 +1627,32 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
 }
 
+// Contributor-original PDF. A status is set on a reply (its /IRT names the reply, ISO 32000-2
+// §12.5.6.3), not on the comment; the status reply's text is found only there.
+const REPLY_STATUS_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Alpha) /Contents (Plain root) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [60 140 80 160] /T (Beta) /Contents (Other root) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 5 0 R /T (Reader) /Contents (Ordinary reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 7 0 R /T (Carol) /StateModel /Review /State /Accepted /Contents (Reply-status token) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn search_finds_a_comment_by_the_status_set_on_one_of_its_replies() {
+    let mut h = harness_with_bytes(REPLY_STATUS_FIXTURE.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.search = Some("reply-status token".into());
+    });
+    h.run_steps(2);
+    h.get_by_label("Plain root");
+    h.get_by_label("Ordinary reply");
+    assert_eq!(h.query_all_by_label("Other root").count(), 0, "the other comment has no such status");
+    assert_eq!(h.query_all_by_label("No comments match.").count(), 0);
+}
+
 // Contributor-original PDF, shaped like PyMuPDF output: every page's first comment is named
 // `fitz-A0`, so only the `/IRT` reference tells which comment a reply belongs to.
 const PER_PAGE_NAMES: &[u8] = b"%PDF-1.7
@@ -1706,7 +1732,7 @@ fn one_reply_is_deleted_from_its_menu_and_the_thread_stays() {
     assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
     assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
     h.get_by_label("Right reply");
-    h.get_by_label("Accepted");
+    h.get_by_label("Ben: Accepted"); // One badge per reviewer.
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
 
     // Copy text copies the reply's text.
@@ -2333,6 +2359,68 @@ fn the_panel_filters_by_colour_and_checkmark() {
     assert_eq!(cards(&h), before);
 }
 
+/// ISO 32000-2 §12.5.6.3 and Table 174: a comment shows each reviewer's latest status, with
+/// their name, and a status set back to None stays shown; a checkmark shows only for the
+/// reviewer who set it.
+#[test]
+fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let me = h.state().comment_prefs.author.clone();
+    let other = format!("{me} (other)");
+    for (state, author) in [
+        (pdfcraft_engine::ReviewState::Accepted, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Carol"),
+        (pdfcraft_engine::ReviewState::Rejected, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Dan"),
+        (pdfcraft_engine::ReviewState::None, "Dan"),
+    ] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetAnnotationStatus { page: 0, index: 0, state, author: author.into() });
+    }
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: other.clone() });
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.get_by_label("Bob: Rejected");
+    h.get_by_label("Carol: Completed");
+    h.get_by_label("Dan: None");
+    assert_eq!(h.query_all_by_label("Bob: Accepted").count(), 0, "only Bob's latest");
+    assert!(h.query_all_by_label("Remove checkmark").next().is_none(), "another reviewer's checkmark isn't mine");
+    h.get_by_label("Mark with checkmark");
+
+    // Filters: a comment stays while any reviewer's status is shown; one nobody set a status on
+    // counts as None; the checkmark filter goes by my checkmark only.
+    h.state_mut().set_option("quick", "circle").unwrap();
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    let cards = |h: &Harness<'static, PdfCraftApp>| (h.query_all_by_label("Rectangle").count(), h.query_all_by_label("Oval").count());
+    let shown = cards(&h);
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "Carol's and Dan's statuses still show the rectangle");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0, shown.1 - 1), "the oval has no status, so it counts as None");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into(), "Completed".into(), "None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0 - 1, shown.1 - 1), "every status hidden");
+    h.state_mut().views[0].comments.hidden_statuses.clear();
+    h.state_mut().views[0].comments.hidden_checks = vec!["Checked".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "another reviewer's checkmark isn't mine");
+
+    h.state_mut().views[0].comments.hidden_checks.clear();
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().comment_prefs.author = other;
+    h.run_steps(2);
+    h.get_by_label("Remove checkmark");
+}
+
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {
@@ -2580,24 +2668,57 @@ fn highlighting_an_area_off_the_text() {
     let q = c[0].quads[0];
     assert!((q[0] - 40.0).abs() < 3.0 && (q[1] - 100.0).abs() < 3.0, "{q:?}");
     // Dragging over text still highlights the text (once the text layer is in).
-    let mut glyphs = None;
-    for _ in 0..200 {
-        h.run_steps(1);
+    support::wait_until(&mut h, "the page's text layer", |app| {
+        let v = &app.views[0];
+        v.glyph_screen_pos(0, 4).is_some() && v.glyph_screen_pos(0, 14).is_some()
+    });
+    let (a, b) = {
         let v = &h.state().views[0];
-        if let (Some(a), Some(b)) = (v.glyph_screen_pos(0, 4), v.glyph_screen_pos(0, 14)) {
-            glyphs = Some((a, b));
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let (a, b) = glyphs.expect("text layer");
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
     drag(&mut h, a, b);
     assert_eq!(comments(&h).len(), 2);
+}
+
+/// A Replace Text proposal is picked by its strikeout too, not only by its small caret: the
+/// strikeout is grouped under the caret (`/RT /Group`), and a click on it selects the caret, the
+/// proposal, so it can be deleted or restyled from either part.
+#[test]
+fn clicking_a_replace_text_strikeout_selects_the_proposal() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /IT /Replace /Contents (slow red) >> endobj
+5 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [40 100 130 120] /QuadPoints [40 120 130 120 40 100 130 100] /C [1 0 0] /T (Bob) /IT /StrikeOutTextEdit /IRT 4 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let caret = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+    let p = at(&h, 70.0, 110.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((caret.page, caret.index)), "the strikeout picks the proposal");
+    // Review on #5689 (CodeRabbit): a drag from the strikeout, or from the caret, moves neither:
+    // the proposal lies on the text it replaces, and the caret alone would leave the strikeout.
+    let caret_at = at(&h, 140.0, 100.0);
+    for from in [p, caret_at] {
+        drag(&mut h, from, from + egui::vec2(60.0, 40.0));
+        h.run_steps(3);
+        let now = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+        assert_eq!(now.rect, caret.rect, "the caret stays on the text");
+    }
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), None, "nothing was moved");
 }
 
 #[test]
 fn replacing_text_strikes_it_and_adds_a_caret() {
     let mut h = harness(|app| app.set_option("quick", "replace").unwrap());
+    // Review on #5689 (CodeRabbit): both parts take the Replace text tool's style.
+    h.state_mut().comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::ReplaceText, [0.1, 0.6, 0.2]);
     drag_pt(&mut h, (20.0, 155.0), (120.0, 155.0));
     assert!(h.state().views[0].comments.composer.is_some(), "the composer asks for the replacement");
     field(&h, "Replacement text").type_text("slow red");
@@ -2608,15 +2729,19 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    assert_eq!((strike.color, caret.color), (Some([0.1, 0.6, 0.2]), Some([0.1, 0.6, 0.2])), "one style for the proposal");
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped under the caret, which holds the text");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
-    // so, and Make Current Properties Default updates the Replace text tool.
+    // Both members are the Replace text tool's, not Strikethrough's or Insert text's (#3947), so
+    // Make Current Properties Default updates the Replace text tool.
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    assert_eq!(pdfcraft_ui_egui::comments::tool_for(caret), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    // The panel's card is the caret's, the group's primary: it shows the replacement, and
+    // nothing is named Strikethrough.
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "slow red").is_some(), "the panel shows the replacement");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
@@ -2750,16 +2875,12 @@ fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
     let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
     if cfg!(target_os = "linux") {
-        // Linux latches auto-scroll instead of panning with the drag.
-        assert!(s.views[0].auto_scrolling());
+        // Linux auto-scrolls while the wheel is held and stops on release.
+        assert!(!s.views[0].auto_scrolling());
     } else {
         assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
     }
     // The tool still draws with the primary button afterwards.
-    if cfg!(target_os = "linux") {
-        h.key_press(egui::Key::Escape);
-        h.run_steps(2);
-    }
     drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
     let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
     assert_eq!(kinds, ["Ink"]);
@@ -3435,6 +3556,28 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.run_steps(3);
 }
 
+/// The selection bar stays inside the pages' area: its place was worked out for a 520 pt bar,
+/// so longer labels (German here) pushed it over the side panel next to a selection on the right.
+#[test]
+fn the_selection_bar_stays_inside_the_pages_area() {
+    let mut h = harness(|app| app.set_option("language", "de").unwrap());
+    // Narrower than the harness, as with a side panel open.
+    h.set_size(egui::vec2(1100.0, 900.0));
+    h.run_steps(4);
+    // The rightmost glyph of "The quick brown fox": the bar opens at its left.
+    let last = (0..64).filter_map(|i| h.state().views[0].glyph_screen_pos(0, i).map(|p| (i, p.x))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
+    h.state_mut().views[0].select_text(0, last, last);
+    h.run_steps(4);
+    let viewport = h.state().views[0].viewport_rect();
+    // The bar's whole area, frame included, not only its first and last buttons.
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    // The bar opens at the selection's left edge: past the area's right edge, without the clamp.
+    let anchor = h.state().views[0].glyph_screen_rect(0, last).unwrap().left();
+    assert!(anchor + bar.width() > viewport.right(), "selection at {anchor}, bar {} wide, area {viewport:?}", bar.width());
+    assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
+}
+
 /// `n` pages with one comment each, "Card 1" to "Card n".
 fn one_comment_per_page(n: usize) -> Vec<u8> {
     let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
@@ -3552,6 +3695,40 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     h.query_all_by_role_and_label(Role::Button, "Freehand-Highlight").last().unwrap().click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+}
+
+/// #6548: resting on the hotbar's gear showed two stacked tooltips, "Hotbar settings" and
+/// "Hotbar settings / add tools". It shows the longer one only and keeps its short name.
+#[test]
+fn hotbar_settings_button_shows_one_tooltip() {
+    let mut h = harness(|_| {});
+    h.run_steps(2);
+    h.get_by_label("Hotbar settings").hover();
+    // egui shows a tooltip once the pointer has rested `tooltip_delay` seconds of *input* time,
+    // and the harness advances that clock by a fixed step every frame, so the wait is counted in
+    // simulated seconds rather than slept: it cannot pass early or depend on the machine's speed.
+    let delay = f64::from(h.ctx.global_style().interaction.tooltip_delay);
+    let start = h.ctx.input(|i| i.time);
+    let elapsed = |h: &Harness<'static, PdfCraftApp>| h.ctx.input(|i| i.time) - start;
+    // The button's name; a second tooltip repeating it would make two. Checked after every
+    // frame, so one that shows only briefly is caught too.
+    let names = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label("Hotbar settings").count();
+    let mut frames = 0;
+    while h.query_all_by_label("Hotbar settings / add tools").next().is_none() {
+        assert!(elapsed(&h) < 4.0 * delay && frames < 100, "no tooltip after {:.2}s of rest", elapsed(&h));
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    // Rest two more delays, so a second tooltip would have had its chance to open.
+    let shown = elapsed(&h);
+    while elapsed(&h) < shown + 2.0 * delay && frames < 100 {
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
+    assert_eq!(names(&h), 1, "the button's name, and no second tooltip");
 }
 
 #[test]
@@ -4314,4 +4491,68 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// #5767: Make Properties Default on a text box or callout keeps its font size too, so the next
+/// one (also after a restart) takes it, along with the colour.
+#[test]
+fn properties_dialog_makes_the_text_box_font_size_default() {
+    let blue = [0.0, 0.47, 0.84];
+    let mut h = harness(|_| {});
+    let font_size_of_last = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let last = doc.info.annotations.len() - 1;
+        doc.comment_props(0, last).unwrap()
+    };
+    for (quick, size, first, second, third) in
+        [("freetext", 24.0, (40.0, 60.0), (40.0, 120.0), (40.0, 100.0)), ("callout", 18.0, (150.0, 40.0), (150.0, 100.0), (150.0, 60.0))]
+    {
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, first, (first.0 + 60.0, first.1 + 20.0));
+        } else {
+            click_pt(&mut h, first);
+        }
+        post_text(&mut h, "First");
+        let index = comments(&h).len() - 1;
+        h.state_mut().open_comment_props(0, index);
+        h.run_steps(2);
+        {
+            let d = h.state_mut().comment_props.as_mut().expect("open");
+            d.edited.font_size = Some(size);
+            d.edited.color = Some(blue);
+        }
+        h.get_by_label("Make Properties Default").click();
+        h.run_steps(1);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(font_size_of_last(&h).font_size, Some(size));
+
+        // The next one takes the font size and the colour.
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, second, (second.0 + 60.0, second.1 + 20.0));
+        } else {
+            click_pt(&mut h, second);
+        }
+        post_text(&mut h, "Second");
+        let p = font_size_of_last(&h);
+        assert_eq!(p.font_size, Some(size), "{quick}: the next one takes the default font size");
+        assert_eq!(p.color, Some(blue), "{quick}: and the default colour");
+
+        // The default survives a restart.
+        let json = h.state().persist();
+        let mut fresh = harness(move |app| {
+            app.restore(&json);
+            app.set_option("quick", quick).unwrap();
+        });
+        if quick == "callout" {
+            drag_pt(&mut fresh, third, (third.0 + 60.0, third.1 + 20.0));
+        } else {
+            click_pt(&mut fresh, third);
+        }
+        post_text(&mut fresh, "Third");
+        assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
+    }
 }

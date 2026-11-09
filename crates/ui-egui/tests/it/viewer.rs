@@ -181,7 +181,8 @@ fn find_shortcuts_advance_and_retreat_matches() {
     assert_eq!(n, 15);
     // Surrender text edit focus so canvas shortcut handler receives key events.
     h.state_mut().views[0].find.as_mut().unwrap().focus = false;
-    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("find-input")));
+    let find_input = h.state().views[0].find_input_id();
+    h.ctx.memory_mut(|m| m.surrender_focus(find_input));
     h.run_steps(2);
     let start = h.state().views[0].find.as_ref().unwrap().current.unwrap();
     // ⌘G advances to next match.
@@ -532,6 +533,48 @@ fn restart_page_labels(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(3);
 }
 
+/// End shows the end of the document, the last page's bottom edge, when the page is taller than
+/// the window; Home goes back to the first page's top (#6434).
+#[test]
+fn end_shows_the_bottom_of_the_last_page() {
+    use egui::Key;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(4);
+    let vp = h.state().views[0].viewport_rect();
+    assert!(h.state().views[0].page_screen_rect(0).is_some_and(|r| r.height() > vp.height()), "a page is taller than the window");
+
+    h.key_press(Key::End);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 4, "the last page");
+    let last = v.page_screen_rect(4).expect("the last page is on screen");
+    assert!(last.bottom() <= vp.bottom() + 1.0 && last.bottom() > vp.bottom() - 40.0, "its bottom edge is at the window's: {last:?} in {vp:?}");
+
+    h.key_press(Key::Home);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 0, "the first page");
+    let first = v.page_screen_rect(0).expect("the first page is on screen");
+    assert!(first.top() >= vp.top() - 1.0 && first.top() < vp.top() + 40.0, "its top edge is at the window's: {first:?} in {vp:?}");
+
+    // The keys listed with them for Go to first / last page do the same.
+    let shift_cmd = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    for (last, first) in [(Key::ArrowDown, Key::ArrowUp), (Key::PageDown, Key::PageUp)] {
+        h.key_press_modifiers(shift_cmd, last);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let bottom = v.page_screen_rect(4).map(|r| r.bottom());
+        assert!(v.current == 4 && bottom.is_some_and(|b| (b - vp.bottom()).abs() < 40.0), "{last:?}: {bottom:?} in {vp:?}");
+        h.key_press_modifiers(shift_cmd, first);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let top = v.page_screen_rect(0).map(|r| r.top());
+        assert!(v.current == 0 && top.is_some_and(|t| (t - vp.top()).abs() < 40.0), "{first:?}: {top:?} in {vp:?}");
+    }
+}
+
 #[test]
 fn page_label_input_keeps_current_page_when_submitted_unchanged() {
     let mut h = harness();
@@ -610,6 +653,24 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(h.state().views[0].current, 0, "the current fallback number must not jump to another page labelled 1");
+}
+
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). Typed in the page
+/// box, "(n)" goes to the nth page whatever its label, as print ranges take it, while a bare
+/// number is still a label first. On these pages (i, ii, 1, 2, 3) "1" is the third page and
+/// "(1)" the first; a position past the end, or anything else in parentheses, leaves the page.
+#[test]
+fn page_label_input_takes_a_position_in_parentheses() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.run_steps(3);
+    for (typed, page, displayed) in [("(1)", 0, "i"), ("1", 2, "1"), ("(4)", 3, "2"), ("( 2 )", 1, "ii"), ("(9)", 1, "ii"), ("(x)", 1, "ii")] {
+        type_page_input(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{typed}");
+        assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
+    }
 }
 
 #[test]
@@ -932,6 +993,53 @@ fn initial_view_is_edited_and_honoured_on_open() {
     assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
 }
 
+#[test]
+fn initial_view_magnification_offers_25_and_100_percent() {
+    use egui::accesskit::Role;
+    use pdfcraft_engine::Magnification;
+    use pdfcraft_ui_egui::canvas::Fit;
+    fn open_initial_view(h: &mut Harness<'static, PdfCraftApp>) {
+        h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::InitialView));
+        // The dialog's height settles a frame after it opens; egui centers from the previous size.
+        h.run_steps(6);
+    }
+    fn pick(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+        h.get_by_role_and_label(Role::ComboBox, "Magnification").click();
+        h.run_steps(3);
+        // The list is taller than the popup, so the item may need scrolling into view.
+        h.get_by_role_and_label(Role::Button, label).scroll_to_me();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, label).click();
+        h.run_steps(2);
+    }
+    /// Clicks OK, then reopens the saved file: its initial magnification, and the zoom and fit
+    /// its view opens at.
+    fn save(h: &mut Harness<'static, PdfCraftApp>) -> (Magnification, f32, Fit) {
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let s = h.state();
+        let id = s.views[s.active.unwrap()].id;
+        let bytes = s.session.save_bytes(id).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
+        let view = &app.views[0];
+        (app.session.get(view.id).unwrap().initial_view().magnification, view.zoom, view.fit)
+    }
+    let mut h = harness();
+    open_initial_view(&mut h);
+    for (label, percent) in [("100%", 100.0), ("25%", 25.0)] {
+        pick(&mut h, label);
+        let (_, v) = h.state().view_draft.as_ref().expect("seeded");
+        assert_eq!(v.magnification, Magnification::Percent(percent), "{label}");
+    }
+    assert_eq!(save(&mut h), (Magnification::Percent(25.0), 0.25, Fit::None));
+    // 100% is saved as Actual Size is (/XYZ zoom 1), so it reads back as Actual Size. A file
+    // without an opening zoom also opens at zoom 1, but fitting the width.
+    open_initial_view(&mut h);
+    pick(&mut h, "100%");
+    assert_eq!(save(&mut h), (Magnification::ActualSize, 1.0, Fit::None));
+}
+
 fn drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
     h.hover_at(a);
     h.run_steps(1);
@@ -966,6 +1074,69 @@ fn marquee_zoom_and_snapshot() {
     h.run_steps(4);
     let after = h.state().views[i].zoom;
     assert!(after > before * 2.0, "{before} → {after}");
+}
+
+/// #5716: what a snapshot holds doesn't depend on how far the page is zoomed out.
+#[test]
+fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().system_clipboard = false;
+    let mut sizes = Vec::new();
+    for zoom in ["25", "100"] {
+        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.run_steps(2);
+        // The text line of the page, as a marquee would give it.
+        sizes.push(h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot"));
+    }
+    assert_eq!(sizes[0], sizes[1], "the same pixels at either zoom");
+    assert_eq!(sizes[0], (688, 146), "165 × 35 pt at 300 ppi");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
+
+    // Zoomed in past the minimum, a snapshot has every pixel the screen shows, however far.
+    let ppp = h.ctx.pixels_per_point();
+    for zoom in [400.0_f32, 1600.0] {
+        h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+        h.run_steps(2);
+        let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
+        let on_screen = (165.0 * zoom / 100.0 * pdfcraft_ui_egui::canvas::PT * ppp).ceil() as u32;
+        assert!(w.abs_diff(on_screen) <= 1, "{w} pixels at {zoom}%, {on_screen} on screen");
+    }
+}
+
+/// #5716: at 300 ppi this page is more than the renderer draws in one tile, which would cut off
+/// the side the snapshot was taken for. A 2000 pt square with a black mark in its far corner.
+#[test]
+fn a_snapshot_of_a_large_page_reaches_its_far_corner() {
+    let stream = "0 0 0 rg 1900 0 100 100 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 2000 2000] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{stream}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        stream.len()
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("large.pdf", None, pdf.into_bytes()).unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let (w, hgt) = h.state_mut().snapshot(i, 0, [0.0, 0.0, 2000.0, 2000.0]).expect("a snapshot");
+    assert!(w <= 4096 && hgt <= 4096 && w == hgt, "{w} × {hgt}");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize];
+    assert!(at(w * 98 / 100, hgt * 98 / 100) < 100, "the mark in the far corner is in it");
+    assert!(at(w / 2, hgt / 2) > 200, "and the page around it is white");
 }
 
 #[test]

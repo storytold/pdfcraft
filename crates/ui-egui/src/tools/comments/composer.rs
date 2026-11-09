@@ -55,7 +55,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         anchor = anchor.clamp(viewport.min, viewport.max);
     }
     let pos = pos2(anchor.x + 12.0, anchor.y);
-    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
+    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.pane.key))).order(egui::Order::Foreground).constrain_to(viewport);
     area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
@@ -125,16 +125,18 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             let rotation = page_rotation(info, page);
             let border = prefs.style(CommentTool::TextBox).width;
+            let font_size = prefs.font_size(CommentTool::TextBox).unwrap_or(12.0);
             let rect = match (size, info.pages.get(page)) {
-                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
-                _ => text_box_rect(c.at, &text, 12.0, rotation),
+                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, font_size, border),
+                _ => text_box_rect(c.at, &text, font_size, rotation),
             };
-            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
+            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
             // The box and leader are laid out as the page is displayed, like a text box's.
-            let rect = text_box_rect(c.at, &text, 10.0, page_rotation(info, page));
+            let font_size = prefs.font_size(CommentTool::Callout).unwrap_or(10.0);
+            let rect = text_box_rect(c.at, &text, font_size, page_rotation(info, page));
             let page_info = info.pages.get(page);
             let to_view = |p: [f64; 2]| page_info.map_or(p, |pg| pg.user_to_view(p[0] as f32, p[1] as f32).map(f64::from));
             let to_user = |p: [f64; 2]| page_info.map_or(p, |pg| pg.view_to_user(p[0] as f32, p[1] as f32).map(f64::from));
@@ -150,7 +152,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (left + right) / 2.0
             };
             let knee = to_user([(pv[0] + side) / 2.0, mid_y]);
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
+            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
@@ -161,7 +163,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 text,
                 author: prefs.author.clone(),
                 strike: prefs.style(CommentTool::ReplaceText),
-                caret: prefs.style(CommentTool::Caret),
+                // One proposal, one look: the caret, the group's primary, takes the Replace text
+                // tool's style as the strikeout does, so a default saved from either part (Make
+                // Current Properties Default) applies to the next proposal as a whole.
+                caret: prefs.style(CommentTool::ReplaceText),
             })
         }
         ComposerKind::Caret { size } => {

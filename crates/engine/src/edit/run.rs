@@ -111,9 +111,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::DeleteObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
+        | Edit::PasteObjects { .. }
         | Edit::ClearRedactions
         | Edit::RemoveHidden { .. }
         | Edit::ImportData { .. }
@@ -132,6 +134,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveInTabOrder { .. }
         | Edit::SetCalculationOrder { .. }
         | Edit::SetInitialView(_)
+        | Edit::FixHairlines { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
         | Edit::AutoTagText
@@ -141,6 +144,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
+        | Edit::LayoutTableToBlocks { .. }
         | Edit::AddOcrText { .. }
         | Edit::EnhanceScan { .. }
         | Edit::SetDocumentScript { .. }
@@ -148,6 +152,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::RemoveStandardId { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
+        | Edit::PrepareText { .. }
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
         | Edit::Flatten { .. }
@@ -160,6 +165,47 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::Batch { edits, .. } => edits.iter().try_for_each(|e| check_permission(e, p)),
     }
+}
+
+/// What a comment import left out of comments it did import (an appearance it could not read),
+/// in the repair log as one line: said, not slipped in. The first five are named, each in at
+/// most [`SKIPPED_CHARS`] characters with control characters escaped (a name from the file
+/// holding a line break would otherwise read as a repair of its own).
+fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
+    if report.skipped.is_empty() {
+        return;
+    }
+    let shown: Vec<String> = report.skipped.iter().take(5).map(|s| skipped_text(s)).collect();
+    let more = report.skipped.len().saturating_sub(shown.len());
+    let more = if more > 0 { format!("; and {more} more") } else { String::new() };
+    doc.note_repair(format!(
+        "imported {} comment{} without the appearance the file gave {} (PdfCraft draws it where it can; it may look different or not show): {}{more}",
+        report.skipped.len(),
+        if report.skipped.len() == 1 { "" } else { "s" },
+        if report.skipped.len() == 1 { "it" } else { "them" },
+        shown.join("; ")
+    ));
+}
+
+/// At most this many characters of one skipped comment's description in the repair log.
+const SKIPPED_CHARS: usize = 200;
+
+/// `s` for one line of the repair log: control characters and line separators escaped, cut to
+/// [`SKIPPED_CHARS`] characters.
+fn skipped_text(s: &str) -> String {
+    let mut out = String::new();
+    for (n, c) in s.chars().enumerate() {
+        if n == SKIPPED_CHARS {
+            out.push('…');
+            break;
+        }
+        if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Dates and unique ids stamped onto what an edit creates.
@@ -193,6 +239,9 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
+    /// [`Session::prepare_text`](crate::Session::prepare_text).
+    pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
 }
 
 impl EditCtx {
@@ -222,6 +271,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            prepared: None,
         }
     }
 
@@ -306,6 +356,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
         ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
         ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
+        ImageEdit::Ungroup => pdfcraft_edit::ImageChange::Ungroup,
     };
     let page_model = pdfcraft_model::pages(doc)
         .into_iter()
@@ -411,7 +462,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 ai.image = new_image;
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
-            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete | ImageEdit::Ungroup => {
                 pdfcraft_edit::change_image(doc, page, index, &c)?;
             }
         }
@@ -506,6 +557,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             if report.comments == 0 {
                 return Err(EditError::Invalid("the clipboard holds no comments".into()));
             }
+            note_skipped(doc, &report);
         }
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
@@ -548,13 +600,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
         }
+        Edit::FixHairlines { pages, settings } => {
+            let fixed = pdfcraft_edit::fix_hairlines(doc, pages, settings)?;
+            if fixed.lines == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no hairlines found on those pages".into())));
+            }
+        }
         Edit::AddAttachment { name, bytes, description, mime } => {
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
-            // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
-            // the strikeout's `/NM` (#2666).
+            // One `/NM` each: the strikeout is grouped under the caret, and XFDF names that link by
+            // the caret's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
             pdfcraft_annot::add_text_replacement(
                 doc,
@@ -599,17 +657,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 Some(js) => pdfcraft_forms::set_value_with(doc, name, value, js),
                 None => pdfcraft_forms::set_value(doc, name, value),
             };
-            match set(doc, value) {
-                Ok(()) => {}
-                // A date the field's format doesn't read may be typed by another of an XFA date
-                // field's patterns: it is kept in the first. Only a format refusal is tried
-                // again: it comes before any of the field's scripts run, so they run once.
-                Err(refused @ pdfcraft_forms::FormError::Format(_)) => match xfa::typed_date(doc, cx.xfa.as_deref(), name, value) {
-                    Some(typed) => set(doc, &typed)?,
-                    None => return Err(refused.into()),
-                },
-                Err(refused) => return Err(refused.into()),
-            }
+            // A date typed by another of an XFA date field's patterns is kept in the first, before
+            // the field's format reads it more loosely (`18OCT16` in a `YYYYMMDD|DDMMMYY` field is
+            // the 18th of October 2016, not a day of 2018).
+            let laid_out = pdfcraft_xfa::xfa_shape(doc).is_some_and(|s| s.laid_out);
+            let typed = if laid_out { xfa::typed_date(doc, cx.xfa.as_deref(), name, value) } else { None };
+            set(doc, typed.as_ref().unwrap_or(value))?;
         }
         Edit::ApplyScriptChanges { changes } => match cx.js.as_mut() {
             Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
@@ -723,8 +776,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
+        Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
+        }
+        Edit::PrepareText { page } => {
+            let result = pdfcraft_edit::text::forms::prepare(doc, *page)?;
+            if result.expanded == 0 && result.repaired_fonts == 0 {
+                return Err(EditError::Invalid(
+                    result.refused.first().cloned().unwrap_or_else(|| "this page has no supported grouped text to prepare".into()),
+                ));
+            }
+            cx.prepared = Some(result);
         }
         Edit::RegisterTextFont { page, bytes } => {
             pdfcraft_edit::text::register_text_font(doc, *page, bytes)?;
@@ -735,6 +799,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::MarkTagArtifact { object } => {
             a11y::mark_tag_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::LayoutTableToBlocks { object } => {
+            a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
@@ -855,7 +922,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     // the data importer's error.
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
-                        Ok(_) => *doc = data,
+                        Ok(report) => {
+                            note_skipped(&mut data, &report);
+                            *doc = data;
+                        }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
                             Ok(src) => import_pdf_comments(doc, &src)?,
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
