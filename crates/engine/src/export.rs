@@ -306,6 +306,15 @@ impl Exporter {
         }
         Ok(out)
     }
+
+    /// Text in structure-tree order, with warnings for content that could not be followed.
+    pub fn tagged_text_of(&self, pages: &[usize]) -> Result<pdfcraft_a11y::TaggedText, String> {
+        for page in pages {
+            self.check(*page)?;
+        }
+        let doc = pdfcraft_cos::Document::open_with_password(self.bytes.clone(), self.config.password.as_deref()).map_err(|e| e.to_string())?;
+        Ok(pdfcraft_a11y::tagged_text(&doc, pages))
+    }
 }
 
 /// Premultiplied RGBA → an image file of `format`. A JPEG or TIFF says it is `dpi` dots per inch,
