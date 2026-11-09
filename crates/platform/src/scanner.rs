@@ -256,7 +256,6 @@ try {{
 
         let max_pages = if options.duplex == ScanDuplex::Duplex { 2 } else { 1 };
         let all_pages_val = if options.all_pages { "$true" } else { "$false" };
-        let pages_val = if options.all_pages { 0 } else { max_pages };
 
         format!(
             r#"
@@ -290,19 +289,21 @@ try {{
     if ($handlingSelect -gt 0) {{
         foreach ($p in $dev.Properties) {{
             if ($p.PropertyID -eq 3088) {{
-                try {{ $p.Value = $handlingSelect }} catch {{}}
+                try {{ $p.Value = $handlingSelect }} catch {{
+                    try {{ $p.Value = 5 }} catch {{}}
+                }}
             }}
             if ($p.PropertyID -eq 3096) {{
-                try {{ $p.Value = {pages_val} }} catch {{}}
+                try {{ $p.Value = 1 }} catch {{}}
             }}
         }}
     }}
 
     $item = $dev.Items.Item(1)
     foreach ($p in $item.Properties) {{
-        if ($p.Name -eq 'Horizontal Resolution') {{ $p.Value = {dpi} }}
-        if ($p.Name -eq 'Vertical Resolution') {{ $p.Value = {dpi} }}
-        if ($p.Name -eq 'Current Intent') {{ $p.Value = {intent} }}
+        if ($p.Name -eq 'Horizontal Resolution') {{ try {{ $p.Value = {dpi} }} catch {{}} }}
+        if ($p.Name -eq 'Vertical Resolution') {{ try {{ $p.Value = {dpi} }} catch {{}} }}
+        if ($p.Name -eq 'Current Intent') {{ try {{ $p.Value = {intent} }} catch {{}} }}
     }}
 
     Add-Type -AssemblyName System.Drawing
@@ -318,8 +319,15 @@ try {{
             if ($pageIdx -gt 0) {{
                 break
             }}
-            Write-Error $_.Exception.Message
-            exit 1
+            try {{
+                $image = $item.Transfer()
+            }} catch {{
+                if ($pageIdx -gt 0) {{
+                    break
+                }}
+                Write-Error $_.Exception.Message
+                exit 1
+            }}
         }}
 
         if ($image -eq $null) {{
@@ -354,7 +362,6 @@ try {{
 "#,
             dev_filter = dev_filter,
             handling_select = handling_select,
-            pages_val = pages_val,
             dpi = dpi_num,
             intent = intent_num,
             max_pages = max_pages,
