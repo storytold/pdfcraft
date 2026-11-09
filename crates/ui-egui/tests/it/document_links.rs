@@ -131,6 +131,14 @@ fn click_remote_link(h: &mut Harness<'static, PdfCraftApp>) {
     click_link(h);
 }
 
+/// Relative targets ask first too; this answers Allow so the open itself can be tested.
+fn click_and_allow_remote_link(h: &mut Harness<'static, PdfCraftApp>) {
+    click_remote_link(h);
+    assert!(h.state().pending_remote_link.is_some(), "the link asks before opening");
+    h.get_by_label("Allow").click();
+    h.run_steps(2);
+}
+
 fn click_link(h: &mut Harness<'static, PdfCraftApp>) {
     click_link_at(h, 325.0);
 }
@@ -171,7 +179,7 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("target.pdf"), linked_pages(2, None)).unwrap();
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /FitH 200]");
-    click_remote_link(&mut h);
+    click_and_allow_remote_link(&mut h);
     support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().active, Some(1));
@@ -188,7 +196,7 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
     std::fs::write(dir.join("target.pdf"), linked_pages(2, Some("test-password"))).unwrap();
 
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
-    click_remote_link(&mut h);
+    click_and_allow_remote_link(&mut h);
     support::wait_until(&mut h, "remote password prompt", |app| app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf"));
     assert!(h.state().password_prompt.is_some());
     assert_eq!(h.state().views.len(), 1);
@@ -203,7 +211,7 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
     assert_eq!(h.state().views[1].current, 1, "the destination survives a wrong-password retry");
 
     let mut cancelled = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
-    click_remote_link(&mut cancelled);
+    click_and_allow_remote_link(&mut cancelled);
     support::wait_until(&mut cancelled, "cancelled target password prompt", |app| {
         app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf")
     });
@@ -229,7 +237,7 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
     }
     for target in targets {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), target, "[0 /Fit]");
-        click_remote_link(&mut h);
+        click_and_allow_remote_link(&mut h);
         support::wait_until(&mut h, "relative invalid target refusal", |app| app.toast.is_some());
         assert_eq!(h.state().views.len(), 1, "{target} opens no tab");
         let toast = &h.state().toast.as_ref().unwrap().0;
@@ -247,6 +255,37 @@ fn an_in_memory_source_does_not_resolve_a_relative_gotor_against_cwd() {
     assert_eq!(h.state().views.len(), 1);
     let toast = &h.state().toast.as_ref().unwrap().0;
     assert!(toast.contains("relative link needs a source document path"), "{toast}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_relative_gotor_waits_for_consent_and_opens_the_resolved_path() {
+    let _gpu = gpu();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-gotor-relative-consent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target.pdf");
+    let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "sub/../target.pdf", "[1 /Fit]");
+    let source = h.state().views[0].id;
+    click_remote_link(&mut h);
+    let pending = h.state().pending_remote_link.as_ref().expect("a relative target asks first");
+    assert_eq!(pending.source, source);
+    assert_eq!(pending.path, target, "the prompt shows the resolved path");
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1);
+    assert!(h.state().toast.is_none(), "the nonexistent target is not accessed before consent");
+    let target_bytes = linked_pages(2, None);
+    std::fs::write(&target, &target_bytes).unwrap();
+    h.get_by_label("Allow").click();
+    support::wait_until(&mut h, "approved relative target", |app| app.views.len() == 2);
+    // Opens run one at a time in order, so a read made at click time has reported by now.
+    assert!(h.state().toast.is_none(), "the target was not read before Allow");
+    assert!(h.state().pending_remote_link.is_none());
+    assert_eq!(h.state().views[1].current, 1);
+    let target_doc = h.state().session.get(h.state().views[1].id).unwrap();
+    assert_eq!(target_doc.path.as_deref(), target.to_str());
+    assert_eq!(target_doc.bytes.as_slice(), target_bytes.as_slice());
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

@@ -15,11 +15,7 @@ impl PdfCraftApp {
                 return;
             }
         };
-        if pdfcraft_engine::remote_document_path_is_absolute(&file) {
-            self.pending_remote_link = Some(PendingRemoteLink { source, path, destination });
-            return;
-        }
-        self.open_resolved_remote_link(path, destination);
+        self.pending_remote_link = Some(PendingRemoteLink { source, path, destination });
     }
 
     /// Take a pending request exactly once. Closing its source invalidates the request.
