@@ -5880,6 +5880,9 @@ fn the_style_bar_recolours_every_selected_comment() {
     };
     assert_eq!(colours(&h), vec![Some([0.0, 0.47, 0.84]); 3], "all three blue");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change comment properties"), "one step");
+    // The keys did not change, so the selection, and the bar over it, stay for the next choice.
+    assert_eq!(h.state().views[0].comments.selection().len(), 3, "the selection survives the recolour");
+    h.get_by_label("Comment colour: Blue (3 selected)");
     h.state_mut().undo();
     h.run_steps(2);
     assert_eq!(colours(&h), vec![Some([0.89, 0.13, 0.13]); 3], "one undo gives all three their red back");

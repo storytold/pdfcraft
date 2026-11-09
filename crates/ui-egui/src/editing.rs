@@ -100,7 +100,10 @@ fn select_after_edit(
         }
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
-        Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
+        // A restyled selection too: a batch of style changes moves no keys either (the bar's
+        // swatches and slider, and the context menu's Colour, over several comments).
+        Edit::Batch { edits, .. }
+            if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) || edits.iter().all(|e| matches!(e, Edit::StyleAnnotation { .. })) => {}
         Edit::Batch { .. } => view.comments.clear_selection(),
         // The copies the paste added (and nothing that was there before): select them all.
         Edit::PasteComments { page, .. } => {
