@@ -58,7 +58,7 @@ impl Type0 {
         // PdfCraft patch: see `MAX_SAMPLE_VALUES`.
         let Some(num_expected_entries) = sizes
             .iter()
-            .try_fold(1usize, |n, s| n.checked_mul(*s as usize))
+            .try_fold(1_usize, |n, s| n.checked_mul(*s as usize))
             .filter(|entries| *entries <= MAX_SAMPLE_ENTRIES)
             .and_then(|entries| entries.checked_mul(range.len()))
             .filter(|n| *n <= MAX_SAMPLE_VALUES)
@@ -92,7 +92,7 @@ impl Type0 {
         // Saturating: the grid has at most `MAX_SAMPLE_ENTRIES` points unless a size is 0, and
         // then no point is on it (`entry` checks each coordinate against its size first).
         let mut strides = SmallVec::with_capacity(sizes.len());
-        let mut stride = 1usize;
+        let mut stride = 1_usize;
         for size in &sizes {
             strides.push(stride);
             stride = stride.saturating_mul(*size as usize);
@@ -139,7 +139,7 @@ impl Type0 {
         let interpolated = self.interpolate(&key, &in_prev, &in_next, &mut coord, 0)?;
 
         // PdfCraft patch (31): `2_u32.pow(32)` overflowed (a panic with overflow checks on).
-        let max_sample = ((1u64 << self.bits_per_sample) - 1) as f32;
+        let max_sample = ((1_u64 << self.bits_per_sample) - 1) as f32;
         let mut out = interpolated
             .iter()
             .zip(self.decode.iter())
@@ -197,7 +197,7 @@ impl Type0 {
     /// PdfCraft patch (31): the samples of grid point `coord`, or `None` where it is off the
     /// grid or the stream ended before it (where the hash map had no entry).
     fn entry(&self, coord: &[u32]) -> Option<&[u32]> {
-        let mut index = 0usize;
+        let mut index = 0_usize;
         for ((c, size), stride) in coord.iter().zip(&self.sizes).zip(&self.strides) {
             if c >= size {
                 return None;
@@ -213,7 +213,7 @@ impl Type0 {
 /// PdfCraft patch: the most sample values a sampled function may have, and the most table
 /// entries (one per point of its `/Size` grid). The samples were read into 4-byte values and
 /// then into a table entry each, so a stream inflating to 256 MiB of 1-bit samples asked for
-/// 8 GB; `/Size` sets how many the table expects. The largest real tables are DeviceN tint
+/// 8 GB; `/Size` sets how many the table expects. The largest real tables are `DeviceN` tint
 /// transforms: 33 × 33 × 33 × 33 points with 3 outputs is 1.2 million entries and 3.6 million
 /// values, 17^5 points with 4 outputs 5.7 million values.
 const MAX_SAMPLE_VALUES: usize = 1 << 23;

@@ -623,8 +623,8 @@ enum Place {
     CommaBelow,
 }
 
-/// PdfCraft patch: the stand-ins for the standard fonts (PDFium's Foxit fonts) carry only the
-/// glyphs of the Standard, WinAnsi and Mac Roman encodings, so a font that isn't embedded and
+/// PdfCraft patch: the stand-ins for the standard fonts (`PDFium`'s Foxit fonts) carry only the
+/// glyphs of the Standard, `WinAnsi` and Mac Roman encodings, so a font that isn't embedded and
 /// names other Latin letters in its /Differences (`/Gbreve`, `/Idotaccent`, `/Scedilla`…, as
 /// iText 2 writes Turkish text with Times New Roman left unembedded) drew nothing for them. Each of
 /// these Latin Extended-A letters is a base letter the stand-ins have plus one of their accents,

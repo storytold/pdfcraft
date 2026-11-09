@@ -392,7 +392,7 @@ mod tests {
                 return out;
             }
             out.push(1);
-            let mut offset = 1u8;
+            let mut offset = 1_u8;
             out.push(offset);
             for item in items {
                 offset += item.len() as u8;

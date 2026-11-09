@@ -6,7 +6,7 @@
 //!
 //! PdfCraft patch: backported from hayro-interpret 0.8.0 (Apache-2.0 OR MIT), adapted to this
 //! version's `EncodedShadingType::RadialAxial` variant. Remove when the vendored copy moves to
-//! 0.8. A full-page axial soft mask was sampled pixel by pixel (InDesign fades: 15 s per page).
+//! 0.8. A full-page axial soft mask was sampled pixel by pixel (`InDesign` fades: 15 s per page).
 
 use crate::color::AlphaColor;
 use crate::encode::{EncodedShadingPattern, EncodedShadingType, RadialAxialParams};
