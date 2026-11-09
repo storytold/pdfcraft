@@ -2843,8 +2843,8 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     // a drawing tool: the bar sits just above the selected comment, where the next shape, line
     // or callout often starts, and a press on it would never reach the page.
     let keeps_selection = tool == QuickTool::Select || matches!(tool, QuickTool::Comment(t) if t.markup().is_some());
-    let props = view.comments.selected.filter(|_| keeps_selection).and_then(|(p, i)| doc.comment_props(p, i));
-    if let Some(e) = comments::style_bar(ui.ctx(), view, info, props.as_ref(), prefs, allowed) {
+    let off = comments_hidden || !keeps_selection;
+    if let Some(e) = comments::style_bar(ui.ctx(), view, info, &|p, i| doc.comment_props(p, i), prefs, allowed, off) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), keys, view, info) {
