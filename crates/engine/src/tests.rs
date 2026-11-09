@@ -8985,6 +8985,9 @@ f(1)</script>",
     assert!(out.errors.iter().any(|l| l.contains("nested")), "{out:?}");
     let o = s.run_javascript(id, "", Some("addRow")).unwrap();
     assert!(o.error.is_some() || rows(&s) <= 50, "{o:?}");
+    // The script ran rather than being abandoned (which drops its rows): the time and the
+    // appearances below are those of the full table, not of the opening layout.
+    assert_eq!(rows(&s), 1000, "{o:?}");
     // The click's loop fills the table up to the layout's bound of 1,000 rows, and the form is
     // laid out again after it and after the calculate that adds a row: each layout redraws every
     // field. While each field's redraw read the whole form again (quadratic in the fields), this
