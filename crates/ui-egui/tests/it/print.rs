@@ -23,6 +23,15 @@ fn harness_with_settings(settings: Option<String>) -> Harness<'static, PdfCraftA
     h
 }
 
+/// The page-range field is labelled by the Pages radio button rather than floating unnamed.
+#[test]
+fn the_page_range_field_is_named_for_screen_readers() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::TextInput, "Pages");
+}
+
 #[test]
 fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     // Five distinct painted pages, labelled i, ii, iii, 1, 2.
@@ -62,7 +71,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
         h.run_steps(3);
         assert!(h.state_mut().execute("print.dialog"));
         h.run_steps(3);
-        h.get_by_label("Current page").click();
+        h.get_by_role_and_label(Role::RadioButton, "Current page").click();
         h.run_steps(3);
         assert_eq!(h.state().print_draft.current_page, current);
         h.get_by_label("Sheet 1 of 1");
@@ -207,6 +216,38 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
 }
 
 #[test]
+fn custom_pages_per_sheet_takes_columns_by_rows() {
+    use pdfcraft_engine::print::{Layout, PageOrder};
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 4).unwrap();
+    h.state_mut().open_bytes("narrow.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.state_mut().execute("print.dialog");
+    h.run_steps(3);
+    h.get_by_label("Multiple").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Columns").is_none(), "a predefined count has no grid fields");
+    h.get_by_role_and_label(Role::ComboBox, "Pages per sheet:").click();
+    h.run_steps(2);
+    h.get_by_label("Custom").click();
+    h.run_steps(2);
+    // Two number fields, columns by rows, with 2 by 1 to start.
+    assert_eq!(h.get_by_label("Columns").value().as_deref(), Some("2"));
+    assert_eq!(h.get_by_label("Rows").value().as_deref(), Some("1"));
+    h.get_by_label("by");
+    let d = &h.state().print_draft;
+    assert!(d.custom_grid);
+    let layout = d.settings(4, &[]).unwrap().layout;
+    assert_eq!(
+        layout,
+        Layout::Multiple { cols: 2, rows: 1, per_sheet: 2, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: true }
+    );
+    h.get_by_label("Sheet 1 of 2");
+    // A count outside 1 to 99 (set through the control channel) is explained, not drawn.
+    h.state_mut().print_draft.rows = 0;
+    assert!(h.state().print_draft.settings(4, &[]).is_err());
+}
+
+#[test]
 fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
@@ -221,6 +262,67 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     assert_eq!(h.state().dialog, Some(Dialog::Print), "the dialog stays open, with its settings");
     let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert!(toast.contains("Could not save"), "the user is told why: {toast:?}");
+}
+
+/// #2713, #3739: Print to a CUPS queue tells it when every sheet runs landscape, so a
+/// landscape sheet (an A4 landscape page, or a 6 × 4 label, laid out on Letter) is turned onto
+/// the portrait paper instead of printed unrotated at 100% and cut off at the paper's edge. A
+/// driver choice for the orientation stands and isn't sent twice.
+#[test]
+fn printing_landscape_sheets_tells_cups_to_turn_them() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex};
+    let s = pdfcraft_engine::Session::new();
+    let bytes = s.create_blank(842.0, 595.0, 2).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("landscape.pdf", None, bytes.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let jobs: Arc<Mutex<Vec<spool::Job>>> = Arc::default();
+    let sent = Arc::clone(&jobs);
+    h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &spool::Job| {
+        sent.lock().unwrap().push(job.clone());
+        Ok(String::new())
+    }));
+    // Print to the queue; `choose` sets the driver's choices once the dialog has its printer.
+    let print = |h: &mut Harness<'static, PdfCraftApp>, choose: &dyn Fn(&mut pdfcraft_ui_egui::PrintDraft)| -> spool::Job {
+        let before = jobs.lock().unwrap().len();
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(3);
+        h.state_mut().print_draft.printer = Some("Test_Queue".into());
+        h.run_steps(2);
+        choose(&mut h.state_mut().print_draft);
+        h.run_steps(1);
+        h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+        for _ in 0..400 {
+            h.run_steps(1);
+            if jobs.lock().unwrap().len() > before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+    };
+    let orientation = |job: &spool::Job| job.options.iter().filter(|(k, _)| k == "orientation-requested").map(|(_, v)| v.clone()).collect::<Vec<_>>();
+    // Fit on Letter with Auto orientation lays both pages out on landscape sheets.
+    let job = print(&mut h, &|_| {});
+    assert_eq!(orientation(&job), if cfg!(windows) { vec![] } else { vec!["4".to_string()] }, "{:?}", job.options);
+    // A driver choice for the orientation goes instead, once.
+    let job = print(&mut h, &|d| {
+        let choice = spool::PrinterOption {
+            key: "orientation-requested".into(),
+            label: "Orientation".into(),
+            group: "General".into(),
+            choices: vec![("4".into(), "Landscape".into()), ("5".into(), "Reverse landscape".into())],
+            default: "4".into(),
+        };
+        d.driver_options = Some(("Test_Queue".into(), vec![choice]));
+        d.driver_choices.insert("orientation-requested".into(), "5".into());
+    });
+    assert_eq!(orientation(&job), ["5"], "{:?}", job.options);
 }
 
 /// Properties… shows the printer driver's own options (CUPS) and sends only those changed.
@@ -278,8 +380,8 @@ fn printers_listed_in_the_background_preselect_the_default_unless_one_was_picked
     h.state_mut().printer_source = Some(Arc::new(move || {
         let _open = wait.lock();
         vec![
-            Printer { name: "Office".into(), default: false, two_sided: None },
-            Printer { name: "Front Desk".into(), default: true, two_sided: None },
+            Printer { name: "Office".into(), default: false, two_sided: None, description: String::new() },
+            Printer { name: "Front Desk".into(), default: true, two_sided: None, description: String::new() },
         ]
     }));
     assert!(h.state_mut().execute("print.dialog"));
@@ -335,7 +437,10 @@ fn the_picked_printer_is_kept_for_the_next_print_while_it_is_listed() {
     let source = listed.clone();
     h.state_mut().printer_source = Some(Arc::new(move || {
         let names = source.lock().map(|n| n.clone()).unwrap_or_default();
-        names.into_iter().map(|name| Printer { name: name.into(), default: name == "Front Desk", two_sided: None }).collect()
+        names
+            .into_iter()
+            .map(|name| Printer { name: name.into(), default: name == "Front Desk", two_sided: None, description: String::new() })
+            .collect()
     }));
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
         h.state_mut().dialog = None;
@@ -422,8 +527,8 @@ fn a_printer_without_two_sided_printing_points_to_its_properties() {
     let mut h = harness();
     h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
         vec![
-            Printer { name: "Office PCL".into(), default: true, two_sided: Some(true) },
-            Printer { name: "Office PS".into(), default: false, two_sided: Some(false) },
+            Printer { name: "Office PCL".into(), default: true, two_sided: Some(true), description: String::new() },
+            Printer { name: "Office PS".into(), default: false, two_sided: Some(false), description: String::new() },
         ]
     }));
     assert!(h.state_mut().execute("print.dialog"));
@@ -885,10 +990,10 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(3);
     h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
     h.run_steps(1);
-    assert!(h.query_by_label("Two-sided:").is_some());
+    assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     h.get_by_label("Booklet").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Two-sided:").is_none(), "hidden while Booklet is chosen");
+    assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_none(), "hidden while Booklet is chosen");
     let d = &h.state().print_draft;
     assert_eq!(d.duplex, Some(Duplex::LongEdge), "the Two-sided choice is kept");
     assert_eq!(d.job("x").duplex, Some(Duplex::ShortEdge), "both sides flip on the short edge");
@@ -898,6 +1003,6 @@ fn a_booklet_decides_two_sided_itself() {
     }
     h.get_by_label("Size").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Two-sided:").is_some());
+    assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }

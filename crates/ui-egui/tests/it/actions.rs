@@ -1,11 +1,29 @@
 //! Action Wizard in the real shell (egui_kittest): run a built-in action on files, create an
 //! action, and remember it.
 
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Session;
 use pdfcraft_engine::actions::Step;
 use pdfcraft_ui_egui::PdfCraftApp;
+
+/// The Action Wizard's name, description and step-argument boxes are named by their labels.
+#[test]
+fn action_editor_inputs_have_accessible_names() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(2);
+    assert!(h.state_mut().execute("actions.wizard"));
+    h.run_steps(2);
+    h.get_by_label("New Action…").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Action name:");
+    h.get_by_role_and_label(Role::TextInput, "Description:");
+}
 
 #[test]
 fn run_and_create_actions() {

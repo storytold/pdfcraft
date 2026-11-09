@@ -12,7 +12,7 @@ Third-party material
 This product bundles third-party material under its own licenses, listed below. The per-file
 list (author, source, license) is in ATTRIBUTION.md.
 
-- Lucide icons (assets/icons/*.svg) — ISC License. See assets/icons/LICENSE-lucide.txt.
+- Lucide icons (assets/icons/*.svg) — ISC and MIT licences (Feather-derived icons). See assets/icons/LICENSE-lucide.txt.
   The Windows PDF file icon (assets/app-icon/pdfcraft-document.svg and .ico) adapts Lucide's
   file-text outline and combines it with contributor-original artwork. See
   assets/app-icon/LICENSE-document.txt (ISC AND (MIT OR Apache-2.0)), packaged as
@@ -36,6 +36,9 @@ list (author, source, license) is in ATTRIBUTION.md.
 - egui default fonts (epaint_default_fonts, via eframe) — Ubuntu Light (Ubuntu Font Licence 1.0),
   Hack (MIT / Bitstream Vera licence), Noto Emoji (SIL OFL 1.1), emoji-icon-font (MIT).
 - Colour profile in hayro-interpret — CGATS001Compat-v2-micro.icc (CC0-1.0, Clinton Ingram).
+- ICU4X line-breaking data (icu_segmenter_data, via crates.io) — Unicode-3.0. Its Thai, Lao, Khmer
+  and Burmese word dictionaries are compiled in for wrapping Thai text; notice below, full licence in
+  licenses/ICU4X-LICENSE.txt.
 
 Required notices:
 
@@ -48,6 +51,32 @@ Required notices:
     (https://github.com/adobe-type-tools/cmap-resources/blob/master/LICENSE.txt). Neither the name of
     Adobe nor the names of its contributors are used to endorse or promote this product.
 
+  ICU4X segmenter data (bundled by icu_segmenter_data 2.3.0; word lists, not visual assets):
+    Copyright © 2020-2024 Unicode, Inc. Portions adapted from ICU4C and/or ICU4J:
+    ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of data files and any
+    associated documentation (the "Data Files") or software and any associated documentation (the
+    "Software") to deal in the Data Files or Software without restriction, including without
+    limitation the rights to use, copy, modify, merge, publish, distribute, and/or sell copies of the
+    Data Files or Software, and to permit persons to whom the Data Files or Software are furnished to
+    do so, provided that either (a) this copyright and permission notice appear with all copies of
+    the Data Files or Software, or (b) this copyright and permission notice appear in associated
+    Documentation.
+
+    THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+    PURPOSE AND NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+
+    IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE BE LIABLE FOR ANY CLAIM,
+    OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF
+    USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+
+    Except as contained in this notice, the name of a copyright holder shall not be used in
+    advertising or otherwise to promote the sale, use or other dealings in these Data Files or
+    Software without prior written authorization of the copyright holder.
+
 Showcase PDF (built by `cargo xtask demo-pdf`, not committed): fonts are downloaded at build time from
 google/fonts at a pinned commit, verified by SHA-256, all under the SIL Open Font License 1.1 — see the
 "Downloaded at build time" table in ATTRIBUTION.md.
@@ -58,3 +87,21 @@ dependencies change (plan/adr/0002, 0006).
 Vendored (vendor/, patched; see vendor/README.md):
 - hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in vendor/hayro).
 - hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (LICENSE-APACHE, LICENSE-MIT kept in vendor/hayro-interpret).
+
+Bundled egui font icons
+
+The pinned egui dependency includes egui-icons.ttf, a small subset of John Slegers'
+emoji-icon-font, through default_fonts. The parent emoji-icon-font.ttf face is
+included through monochrome_emoji_fonts. Their upstream project is
+https://github.com/jslegers/emoji-icon-font; both use the same exact copyright
+and permission notice below.
+
+MIT License
+
+Copyright (c) 2014 John Slegers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

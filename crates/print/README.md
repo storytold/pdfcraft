@@ -13,7 +13,10 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
 - **Size**: fit (to the sheet minus an 18 pt margin), actual size, shrink oversized, custom %;
   centred; auto orientation turns the sheet for landscape pages.
 - **Multiple**: 2/4/6/9/16 (or any n) pages per sheet, horizontal/vertical (reversed) order,
-  page borders, auto-rotation of pages that don't match the cell.
+  page borders, auto-rotation of pages that don't match the cell. With auto orientation a
+  predefined count turns the sheet to suit its grid (2 per sheet prints side by side on
+  landscape). A custom grid (`Layout::grid`, `doc_print` `cols`/`rows`, 1-99 each) is laid
+  out across and down the sheet as given and doesn't turn it: auto prints portrait.
 - **Cut and stack** (Multiple's page order): consecutive pages in each cell's pile,
   with aligned cut marks in the gutters. For example, 10 pages at 4 per sheet give
   `[1, 4, 7, 10]`, `[2, 5, 8, blank]`, `[3, 6, 9, blank]`. Print single-sided,
@@ -46,7 +49,11 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`. Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`, and with `orientation-requested=4` when
+every sheet is landscape (`cups_orientation`), since CUPS would otherwise shrink a landscape
+sheet into portrait paper. On macOS they also carry the job name and owner
+(`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog sends them, which
+some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files

@@ -55,13 +55,16 @@ impl Document {
             if w <= 0 || h <= 0 || w > i64::from(MAX_SIDE) || h > i64::from(MAX_SIDE) || w.saturating_mul(h) > MAX_PIXELS as i64 {
                 return Err(SignatureImageError::PlacedSize.to_string());
             }
-            let (_, bytes) = pdfcraft_create::image_file(&editor.cos, picture)?;
+            // Decoded within an allowance sized for the small picture a signature is, not the
+            // document's: a stream that inflates past it is refused before it is held whole.
+            let (_, bytes) =
+                pdfcraft_create::image_file_within(&editor.cos, picture, &mut pdfcraft_cos::ImageBudget::with_work(SIGNATURE_IMAGE_WORK))?;
             let image = SignatureImage::from_bytes(&bytes).map_err(|e| e.to_string())?;
             let opacity =
                 pdfcraft_annot::props(&editor.cos, page, index).map(|p| p.opacity).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0) as f32;
             let turn = pdfcraft_annot::picture_rotation(&editor.cos, page, index).map_err(|e| e.to_string())?;
             let mut cos = editor.cos.clone();
-            pdfcraft_annot::delete_annotation(&mut cos, page, index).map_err(|e| e.to_string())?;
+            pdfcraft_annot::lift_annotation(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(Some(ImageSignaturePreview { image, opacity, turn, page, bytes, config: self.config.clone() }))
         })?
@@ -90,6 +93,9 @@ pub fn upright_box(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Opti
 /// Saved signatures live in settings, so both source and normalized PNG are bounded.
 pub const MAX_SIGNATURE_IMAGE_BYTES: usize = 4 << 20;
 const MAX_PIXELS: u64 = 4 << 20;
+/// Steps of decoding the signature's picture may take: every stage of its filters, for a
+/// picture of at most [`MAX_PIXELS`] samples, fits in it many times over.
+const SIGNATURE_IMAGE_WORK: u64 = 1 << 28;
 const MAX_SIDE: u32 = 4096;
 /// Larger sources (scans, phone photos) are decoded within these bounds, then scaled down.
 const MAX_SOURCE_SIDE: u32 = 8192;
@@ -235,6 +241,7 @@ impl SignatureImage {
                 name: if initials { "Initials" } else { "Signature" }.into(),
                 file: MarkFile { name: "signature.png".into(), bytes: self.bytes.clone(), page: 0 },
                 author: author.into(),
+                line: None,
             }],
         })
     }

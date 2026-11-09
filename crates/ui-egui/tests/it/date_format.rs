@@ -101,6 +101,9 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
 
 #[test]
 fn month_names_follow_the_date_language_or_else_the_interface_language() {
+    if crate::support::skip_without_catalogs("month_names_follow_the_date_language_or_else_the_interface_language") {
+        return;
+    }
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -133,6 +136,13 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
 
 #[test]
 fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
+    if crate::support::skip_without_glyphs(
+        "a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first",
+        "en",
+        "日曜日月曜日火曜日水曜日木曜日金曜日土曜日",
+    ) {
+        return;
+    }
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();

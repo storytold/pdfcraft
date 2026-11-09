@@ -1,7 +1,7 @@
 //! Form tools: list fields, fill them (several at once, one undo step), clear the form, and
 //! prepare a form (add fields one at a time or as a table, change and delete them).
 
-use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format, Validate};
+use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format, NOTATION_NOT_STORABLE, Validate, notation_storable};
 use pdfcraft_engine::{CalculationIssue, Edit, FieldProps, FieldValue, FormField, FormFieldKind, NewField, field_flags};
 use serde_json::{Value, json};
 
@@ -94,13 +94,20 @@ fn look_arg(v: &Value) -> Result<pdfcraft_engine::FieldLookPatch> {
     })
 }
 
-/// `{"min": 0, "max": 100}` or `"none"`.
+/// `{"min": 0, "max": 100}` or `"none"`. A null bound is no bound, as `form_fields` shows it.
 fn validate_arg(v: &Value) -> Result<Validate> {
     if v.as_str() == Some("none") {
         return Ok(Validate::None);
     }
     let o = v.as_object().ok_or_else(|| bad("validate must be {\"min\": …, \"max\": …} or \"none\""))?;
-    let (min, max) = (o.get("min").and_then(Value::as_f64), o.get("max").and_then(Value::as_f64));
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "min" | "max")) {
+        return Err(bad(format!("unknown key {k:?} in validate (min, max)")));
+    }
+    let bound = |k: &str| match o.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(x) => x.as_f64().map(Some).ok_or_else(|| bad(format!("validate {k} must be a number"))),
+    };
+    let (min, max) = (bound("min")?, bound("max")?);
     if min.is_none() && max.is_none() {
         return Err(bad("validate needs min, max or both"));
     }
@@ -113,23 +120,65 @@ fn calculate_arg(v: &Value) -> Result<Calculate> {
         return Ok(Calculate::None);
     }
     let o = v.as_object().ok_or_else(|| bad("calculate must be {\"op\": …, \"fields\": […]}, {\"notation\": …} or \"none\""))?;
-    if let Some(n) = o.get("notation").and_then(Value::as_str) {
+    // Before anything else is read, so a script given beside a notation isn't dropped unnoticed.
+    if o.contains_key("script") {
+        return Err(bad("a custom calculate script is set with form_set_script (event: calculate)"));
+    }
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "op" | "fields" | "notation")) {
+        return Err(bad(format!("unknown key {k:?} in calculate (op and fields, or notation)")));
+    }
+    // A null is no value, as for the tool's own arguments.
+    let get = |k: &str| o.get(k).filter(|v| !v.is_null());
+    if let Some(n) = get("notation") {
+        if get("op").is_some() || get("fields").is_some() {
+            return Err(bad("calculate takes a notation, or op and fields, not both"));
+        }
+        let n = n.as_str().ok_or_else(|| bad("notation must be a string such as \"Price * Qty\""))?;
+        // Refused rather than stored as a different formula.
+        if !notation_storable(n) {
+            return Err(bad(NOTATION_NOT_STORABLE));
+        }
         return Ok(Calculate::Notation(n.to_string()));
     }
-    let op = match o.get("op").and_then(Value::as_str).unwrap_or("") {
-        "sum" => CalcOp::Sum,
-        "product" => CalcOp::Product,
-        "average" => CalcOp::Average,
-        "min" | "minimum" => CalcOp::Minimum,
-        "max" | "maximum" => CalcOp::Maximum,
-        x => return Err(bad(format!("unknown op {x:?} (sum, product, average, min, max)"))),
+    let op = get("op").ok_or_else(|| bad("calculate needs op and fields, or a notation"))?;
+    let op = match op.as_str().ok_or_else(|| bad("op must be one of sum, product, average, min, max"))? {
+        "minimum" => CalcOp::Minimum,
+        "maximum" => CalcOp::Maximum,
+        x => {
+            CalcOp::ALL.into_iter().find(|&op| op_name(op) == x).ok_or_else(|| bad(format!("unknown op {x:?} (sum, product, average, min, max)")))?
+        }
     };
-    let fields: Vec<String> =
-        o.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+    let fields = get("fields").and_then(Value::as_array).ok_or_else(|| bad("calculate fields must be a list of field names"))?;
+    let fields: Vec<String> = fields
+        .iter()
+        .map(|x| x.as_str().map(str::to_owned).ok_or_else(|| bad("calculate fields must be field names (strings)")))
+        .collect::<Result<_>>()?;
     if fields.is_empty() {
         return Err(bad("calculate needs fields"));
     }
     Ok(Calculate::Simple { op, fields })
+}
+
+/// An operation's name in `calculate`, as `form_set_props` takes it and the listings show it.
+fn op_name(op: CalcOp) -> &'static str {
+    match op {
+        CalcOp::Sum => "sum",
+        CalcOp::Product => "product",
+        CalcOp::Average => "average",
+        CalcOp::Minimum => "min",
+        CalcOp::Maximum => "max",
+    }
+}
+
+/// A field's calculation as `form_fields` and `form_calculation_order` show it, in
+/// `form_set_props`'s shape, or `{"script": …}` for a custom Calculate script; `None` without one.
+fn calculate_json(f: &FormField) -> Option<Value> {
+    match (&f.actions.calculate, &f.actions.scripts.calculate) {
+        (Calculate::Simple { op, fields }, _) => Some(json!({ "op": op_name(*op), "fields": fields })),
+        (Calculate::Notation(n), _) => Some(json!({ "notation": n })),
+        (Calculate::None, Some(js)) => Some(json!({ "script": js })),
+        (Calculate::None, None) => None,
+    }
 }
 
 fn format_json(f: &Format) -> Value {
@@ -159,13 +208,58 @@ fn kind_name(k: FormFieldKind) -> &'static str {
     }
 }
 
+/// A JSON number as the radio option it names: its integer spelling when it is a whole number
+/// (`1`, `1.0` and `1e0` are all `1`; `-0` is `0`), otherwise JSON's own spelling (`1.5`), which
+/// names only an option exported as exactly that text. A whole number at or past 2^53, where a
+/// float no longer holds every integer, keeps JSON's spelling too (`1e300`), so it names no option
+/// by accident.
+fn number_option(n: &serde_json::Number) -> String {
+    // Integers as parsed (u64, i64) print exactly.
+    if n.is_u64() || n.is_i64() {
+        return n.to_string();
+    }
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    match n.as_f64() {
+        // Finite, whole and below 2^53 in magnitude, so the cast is exact and in range.
+        Some(x) if x.is_finite() && x.fract() == 0.0 && x.abs() < EXACT => (x as i64).to_string(),
+        _ => n.to_string(),
+    }
+}
+
 /// A JSON value → the value for this field (booleans for check boxes, arrays for lists…).
 fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
     let wrong = |what: &str| ToolError::InvalidArgs(format!("{}: {what}", f.name));
     Ok(match (f.kind, v) {
         (FormFieldKind::CheckBox, Value::Bool(b)) => FieldValue::Check(*b),
+        // {"widget": n} turns on button n (1-based, as form_fields numbers them) and never turns it
+        // off: radio buttons that share an on state stay exclusive (ISO 32000-2 Table 229).
+        (FormFieldKind::CheckBox | FormFieldKind::Radio, Value::Object(o)) => {
+            let n = o.get("widget").and_then(Value::as_u64).filter(|&n| n >= 1).ok_or_else(|| wrong("use {\"widget\": n} with n from 1"))?;
+            let i = usize::try_from(n - 1).map_err(|_| wrong("there is no such widget"))?;
+            if f.widgets.get(i).and_then(|w| w.on_state.as_ref()).is_none() {
+                return Err(wrong(&format!("there is no button {n} with an on state (the field has {})", f.widgets.len())));
+            }
+            FieldValue::Widget(i)
+        }
         (FormFieldKind::Radio, Value::Null) => FieldValue::Radio(None),
-        (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(s.clone())),
+        // An option as `form_fields` lists it (an export value) names its button's on state. The
+        // export values are matched first and the on-state names after them
+        // (`Field::state_for_export`): with `/Opt [(1) (2)]` and states `/0` `/1`, `1` is the first
+        // button, not the second one's state. A value matching neither is refused when written,
+        // with the options listed.
+        (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(f.state_for_export(s).unwrap_or(s).to_owned())),
+        // A number is the same option written without quotes (`1` for the export value `1`).
+        // Below 2^53 it is compared as a number with the export values first, so `1.0` names the button
+        // exported as `1.0` (`/Opt [(1.0) (2.0)]`, states `/0 /1`) and not the one whose state is
+        // `/1`; then as text, as a string would be.
+        (FormFieldKind::Radio, Value::Number(n)) => {
+            if let Some(state) = n.as_f64().and_then(|x| f.state_for_number(x)) {
+                FieldValue::Radio(Some(state.to_owned()))
+            } else {
+                let s = number_option(n);
+                FieldValue::Radio(Some(f.state_for_export(&s).map_or_else(|| s.clone(), str::to_owned)))
+            }
+        }
         (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(
             a.iter().map(|x| x.as_str().map(str::to_owned).ok_or_else(|| wrong("list values must be strings"))).collect::<Result<_>>()?,
         ),
@@ -220,17 +314,14 @@ impl Automation {
                 if let Validate::Range { min, max } = &f.actions.validate {
                     o.insert("validate".into(), json!({ "min": min, "max": max }));
                 }
-                match &f.actions.calculate {
-                    Calculate::Simple { op, fields } => {
-                        o.insert("calculate".into(), json!({ "op": op.code().to_lowercase(), "fields": fields }));
-                    }
-                    Calculate::Notation(n) => {
-                        o.insert("calculate".into(), json!({ "notation": n }));
-                    }
-                    Calculate::None => {}
+                if let Some(c) = calculate_json(f) {
+                    o.insert("calculate".into(), c);
                 }
                 if !f.actions.unsupported.is_empty() {
                     o.insert("unsupported_scripts".into(), json!(f.actions.unsupported));
+                }
+                if matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) {
+                    o.insert("export_values".into(), json!((0..f.widgets.len()).map(|i| f.export_of(i)).collect::<Vec<_>>()));
                 }
                 match f.kind {
                     FormFieldKind::PushButton => {
@@ -248,9 +339,41 @@ impl Automation {
                     }
                     FormFieldKind::Radio => {
                         o.insert("options".into(), json!((0..f.widgets.len()).filter_map(|i| f.export_of(i)).collect::<Vec<_>>()));
+                        // Buttons sharing an on state have the same value: which is on (1-based).
+                        o.insert(
+                            "on_widgets".into(),
+                            json!((0..f.widgets.len()).filter(|&i| f.widget_on(i)).map(|i| i.saturating_add(1)).collect::<Vec<_>>()),
+                        );
+                    }
+                    // A check box whose kids have different on states (ISO 32000-2 §12.7.5.2.3):
+                    // which one is ticked, and the names form_fill takes to tick each. One option
+                    // per distinct on state: kids sharing a state tick together (EXAMPLE 2), so
+                    // their `/Opt` exports are not separate choices. Exports name the options
+                    // unless two states share one (Table 230 allows it) or an export would tick
+                    // another state (form_fill reads a name as an on state first); then the
+                    // states do.
+                    FormFieldKind::CheckBox => {
+                        let mut seen = std::collections::HashSet::new();
+                        let states: Vec<&str> = f.widgets.iter().filter_map(|w| w.on_state.as_deref()).filter(|s| seen.insert(*s)).collect();
+                        if states.len() > 1 {
+                            let mut exports = std::collections::HashSet::new();
+                            let by_export = states.iter().all(|s| {
+                                let e = f.export_for_state(s);
+                                exports.insert(e) && f.state_for(e) == Some(*s)
+                            });
+                            let name = |s: &str| if by_export { f.export_for_state(s).to_owned() } else { s.to_owned() };
+                            // The ticked kid is the one whose `/AS` is its on state: §12.7.5.2.3
+                            // makes `/AS` decide where it and `/V` differ.
+                            let on = (0..f.widgets.len()).find(|&i| f.widget_on(i)).and_then(|i| f.widgets.get(i)?.on_state.as_deref());
+                            o.insert("options".into(), json!(states.iter().map(|s| name(s)).collect::<Vec<_>>()));
+                            o.insert("checked".into(), json!(on.map(name)));
+                        }
                     }
                     FormFieldKind::Combo | FormFieldKind::List => {
                         o.insert("options".into(), f.options.iter().map(|(e, d)| json!({ "value": e, "label": d })).collect());
+                        // The selected options as 1-based positions in `options`: two options can share
+                        // an export value, and `value` alone does not tell them apart.
+                        o.insert("selected".into(), json!(f.selected.iter().map(|i| i.saturating_add(1)).collect::<Vec<_>>()));
                         o.insert("multi_select".into(), json!(f.has(field_flags::MULTI_SELECT)));
                         o.insert("editable".into(), json!(f.has(field_flags::EDIT)));
                     }
@@ -418,8 +541,8 @@ impl Automation {
     }
 
     pub(crate) fn form_set_props(&mut self, a: &Args) -> Result<Value> {
-        if a.get("widget").is_some() && a.get("caption").is_none() {
-            return Err(bad("widget requires caption"));
+        if a.get("widget").is_some() && a.get("caption").is_none() && a.get("export_value").is_none() {
+            return Err(bad("widget requires caption or export_value"));
         }
         let single = a.opt_str("field")?;
         let bulk = a.get("fields").is_some();
@@ -438,7 +561,7 @@ impl Automation {
                     return Err(bad(format!("field {name:?} is listed more than once")));
                 }
             }
-            for key in ["name", "rect", "rotation", "caption", "widget"] {
+            for key in ["name", "rect", "rotation", "caption", "export_value", "widget"] {
                 if a.get(key).is_some() {
                     return Err(bad(format!("{key} applies to one field; use field instead of fields")));
                 }
@@ -502,6 +625,15 @@ impl Automation {
         };
         Ok(FieldProps {
             rect,
+            export_value: a
+                .opt_str("export_value")?
+                .map(|value| -> Result<_> {
+                    let index = a.opt_int("widget")?.unwrap_or(1);
+                    let index =
+                        usize::try_from(index).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| bad("widget must be a positive 1-based index"))?;
+                    Ok((index, value.to_owned()))
+                })
+                .transpose()?,
             name: a.opt_str("name")?.map(str::to_owned),
             tooltip: a.opt_str("tooltip")?.map(str::to_owned),
             caption: a
@@ -600,17 +732,23 @@ impl Automation {
             };
             let mut out = self.apply(a, Edit::MoveInTabOrder { name: field.to_owned(), earlier })?;
             out["tab_order"] = self.tab_sequence(a)?;
+            out["page_tabs"] = self.page_tabs(a)?;
             return Ok(out);
         }
-        let order = match a.str("order")? {
-            "row" | "rows" => pdfcraft_engine::TabOrder::Row,
-            "column" | "columns" => pdfcraft_engine::TabOrder::Column,
-            "structure" => pdfcraft_engine::TabOrder::Structure,
-            "annotations" | "unspecified" => pdfcraft_engine::TabOrder::Annotations,
-            o => return Err(bad(format!("unknown order {o:?} (row, column, structure, annotations)"))),
+        let order = match a.opt_str("order")? {
+            None => None,
+            Some("row" | "rows") => Some(pdfcraft_engine::TabOrder::Row),
+            Some("column" | "columns") => Some(pdfcraft_engine::TabOrder::Column),
+            Some("structure") => Some(pdfcraft_engine::TabOrder::Structure),
+            Some("annotations" | "unspecified") => Some(pdfcraft_engine::TabOrder::Annotations),
+            Some(o) => return Err(bad(format!("unknown order {o:?} (row, column, structure, annotations)"))),
         };
-        let mut out = self.apply(a, Edit::SetTabOrder { pages, order })?;
+        let mut out = match order {
+            Some(order) => self.apply(a, Edit::SetTabOrder { pages, order })?,
+            None => json!({}),
+        };
         out["tab_order"] = self.tab_sequence(a)?;
+        out["page_tabs"] = self.page_tabs(a)?;
         Ok(out)
     }
 
@@ -647,15 +785,28 @@ impl Automation {
         };
         let order = self.doc(a)?.calculation_order();
         let issue = |i: &CalculationIssue| match i {
+            CalculationIssue::MissingField { field } => json!({ "issue": "missing_field", "field": field }),
             CalculationIssue::RunsTooEarly { field } => json!({ "issue": "runs_too_early", "field": field }),
             CalculationIssue::Cycle { fields } => json!({ "issue": "cycle", "fields": fields }),
             CalculationIssue::NotInOrder => json!({ "issue": "not_in_order" }),
+            CalculationIssue::BuiltNames => json!({ "issue": "built_names" }),
         };
+        // By field object, not name: two calculated fields can share a name in a malformed form.
+        let doc = self.doc(a)?;
+        let by_obj: std::collections::HashMap<_, &FormField> = doc.form.iter().map(|f| (f.obj, f)).collect();
         out["calculation_order"] = json!(order.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>());
         out["fields"] = order
             .fields
             .iter()
-            .map(|f| json!({ "name": f.name, "reads": f.reads, "listed": f.listed, "issues": f.issues.iter().map(issue).collect::<Vec<_>>() }))
+            .map(|f| {
+                json!({
+                    "name": f.name,
+                    "formula": by_obj.get(&f.obj).and_then(|x| calculate_json(x)),
+                    "reads": f.reads,
+                    "listed": f.listed,
+                    "issues": f.issues.iter().map(issue).collect::<Vec<_>>(),
+                })
+            })
             .collect();
         out["extra"] = json!(order.extra);
         out["fixable"] = json!(order.fixable());
@@ -671,12 +822,35 @@ impl Automation {
         Ok(json!(seq.iter().map(|x| x.1).collect::<Vec<_>>()))
     }
 
+    /// Each page's tab order (Page properties ▸ Tab order), in page order.
+    fn page_tabs(&self, a: &Args) -> Result<Value> {
+        let names: Vec<&str> = self
+            .doc(a)?
+            .tab_orders()
+            .into_iter()
+            .map(|o| match o {
+                pdfcraft_engine::TabOrder::Row => "row",
+                pdfcraft_engine::TabOrder::Column => "column",
+                pdfcraft_engine::TabOrder::Structure => "structure",
+                pdfcraft_engine::TabOrder::Annotations => "annotations",
+            })
+            .collect();
+        Ok(json!(names))
+    }
+
     pub(crate) fn form_delete_field(&mut self, a: &Args) -> Result<Value> {
         let name = a.str("field")?.to_owned();
         if !self.doc(a)?.form.iter().any(|f| f.name == name) {
             return Err(failed(format!("there is no field named {name:?} (see form_fields)")));
         }
-        self.apply(a, Edit::DeleteField { name })
+        let Some(widget) = a.opt_int("widget")? else { return self.apply(a, Edit::DeleteField { name }) };
+        let count = self.doc(a)?.form.iter().find(|f| f.name == name).map_or(0, |f| f.widgets.len());
+        let widget = usize::try_from(widget)
+            .ok()
+            .and_then(|w| w.checked_sub(1))
+            .filter(|w| *w < count)
+            .ok_or_else(|| bad(format!("widget must be 1 to {count}: {name} has {count} widgets")))?;
+        self.apply(a, Edit::DeleteWidget { name, widget })
     }
 
     pub(crate) fn doc_export_data(&mut self, a: &Args) -> Result<Value> {

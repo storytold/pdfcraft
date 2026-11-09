@@ -118,10 +118,12 @@ pub fn initial_view(doc: &Document) -> InitialView {
             };
         }
     }
-    // The opening destination: an explicit array, or a GoTo action's.
+    // The opening destination: an explicit array, a GoTo action's `/D`, or a named destination (a
+    // name or string, §12.3.2.4) as the explicit one it names, so that the page and magnification
+    // read here are where the document opens. A name that names nothing reads as page 1.
     let dest = c.get(b"OpenAction").map(|o| doc.resolve(o)).and_then(|o| match &*o {
-        Object::Array(a) => Some(a.clone()),
-        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()),
+        Object::Array(_) | Object::Name(_) | Object::String(_) => crate::outline::resolve_dest(doc, &o),
+        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").and_then(|x| crate::outline::resolve_dest(doc, x)),
         _ => None,
     });
     if let Some(d) = dest {
@@ -161,13 +163,23 @@ pub fn displays_doc_title(doc: &Document) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `a` and `b` open at the same magnification. 100% writes the zoom Actual Size writes,
+/// which [`initial_view`] reads back as Actual Size.
+fn same_magnification(a: Magnification, b: Magnification) -> bool {
+    let actual = |m: Magnification| match m {
+        Magnification::Percent(p) if (p / 100.0 - 1.0).abs() < 1e-6 => Magnification::ActualSize,
+        m => m,
+    };
+    actual(a) == actual(b)
+}
+
 /// Write the initial view. An opening action that isn't a plain destination (a script, say) is
 /// kept unless the page or magnification asks for a destination, and an opening action whose page
 /// and magnification `v` leaves as [`initial_view`] reads them is kept as it is.
 pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), OrganizeError> {
     let same_destination = {
         let now = initial_view(doc);
-        now.page == v.page && now.magnification == v.magnification
+        now.page == v.page && same_magnification(now.magnification, v.magnification)
     };
     let (root, c) = catalog(doc)?;
     let pages = crate::walk(doc)?;
@@ -195,9 +207,12 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
     } else {
         vp.remove(b"Direction");
     }
+    // A destination, explicit or named (§12.3.2.4), or a GoTo action to one.
     let open_action_is_dest = match c.get(b"OpenAction").map(|o| doc.resolve(o)) {
         None => true,
-        Some(o) => matches!(&*o, Object::Array(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo")),
+        Some(o) => {
+            matches!(&*o, Object::Array(_) | Object::Name(_) | Object::String(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo"))
+        }
     };
     let dest = match v.magnification {
         Magnification::Default if v.page == 0 => None,
