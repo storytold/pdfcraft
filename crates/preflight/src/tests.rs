@@ -1742,3 +1742,118 @@ fn trailer_file_identifier_is_checked_and_added() {
     convert(&mut doc, Level::A2b).unwrap();
     assert_eq!(first(&doc).map(|b| b.len()), Some(32767));
 }
+
+/// PDF/A-2 6.5.1: the PDF 1.2 SetState and NOP actions aren't allowed, and a Named action may
+/// only name NextPage, PrevPage, FirstPage or LastPage; Save as PDF/A removes the others.
+#[test]
+fn set_state_no_op_and_named_actions_are_checked() {
+    let doc_with = |action: &str| {
+        let outline = format!("<< /Title (x) /Parent 4 0 R /A {action} >>");
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>",
+                "<< /Type /Pages /Kids [] /Count 0 >>",
+                &outline,
+                "<< /Type /Outlines /First 3 0 R /Last 3 0 R /Count 1 >>",
+                "/NextPage",
+                "/Named",
+                "/NOP",
+            ],
+            "",
+        )
+    };
+    let actions = |action: &str| -> Vec<String> {
+        verify(&doc_with(action), Level::A2b).into_iter().filter(|i| i.clause == "6.5.1").map(|i| i.message).collect()
+    };
+    assert_eq!(actions("<< /Type /Action /S /SetState /T [] >>"), ["A SetState action isn't allowed"]);
+    assert_eq!(actions("<< /S /NOP >>"), ["A NOP action isn't allowed"]);
+    assert_eq!(actions("<< /S /Named /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S /Named >>"), ["A Named action isn't allowed"]);
+    // Behind an allowed action, in its /Next.
+    assert_eq!(actions("<< /S /GoTo /D [0 /Fit] /Next << /S /NOP >> >>"), ["A NOP action isn't allowed"]);
+    for allowed in ["NextPage", "PrevPage", "FirstPage", "LastPage"] {
+        assert!(actions(&format!("<< /S /Named /N /{allowed} >>")).is_empty(), "{allowed}");
+    }
+    // The name given by reference (object 5 is /NextPage).
+    assert!(actions("<< /S /Named /N 5 0 R >>").is_empty());
+    // The type given by reference (object 6 is /Named, 7 is /NOP).
+    assert_eq!(actions("<< /S 6 0 R /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S 7 0 R >>"), ["A NOP action isn't allowed"]);
+    assert!(actions("<< /S 6 0 R /N 5 0 R >>").is_empty());
+    // Save as PDF/A removes them.
+    for action in ["<< /S /SetState /T [] >>", "<< /S /NOP >>", "<< /S /Named /N /Print >>"] {
+        let mut doc = doc_with(action);
+        convert(&mut doc, Level::A2b).unwrap();
+        assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.5.1"), "{action}");
+    }
+    // A permitted Named action survives it, also one naming its page move by reference.
+    for action in ["<< /S /Named /N /NextPage >>", "<< /S /Named /N 5 0 R >>"] {
+        let mut doc = doc_with(action);
+        convert(&mut doc, Level::A2b).unwrap();
+        let outline = doc.get(ObjRef { num: 3, generation: 0 });
+        let kept = outline
+            .as_dict()
+            .and_then(|d| d.get(b"A"))
+            .and_then(Object::as_dict)
+            .map(|a| (a.name(b"S").map(<[u8]>::to_vec), a.get(b"N").map(|n| doc.resolve(n))));
+        let (s, n) = kept.unwrap_or_else(|| panic!("{action}: the action is gone"));
+        assert_eq!(s.as_deref(), Some(&b"Named"[..]), "{action}");
+        assert_eq!(n.as_deref().and_then(Object::as_name), Some(&b"NextPage"[..]), "{action}");
+    }
+}
+
+/// The SetState, NOP and Named checks of 6.5.1 apply wherever an action can be: the catalog's
+/// `/OpenAction`, an action standing alone as an object of its own (here one a page's `/AA`
+/// refers to), and a link's `/A`, not only an outline item's. A Named action's `/N` given by
+/// reference to a forbidden name is reported by that name. Save as PDF/A removes each one and
+/// keeps a Named page move in the same places.
+#[test]
+fn set_state_no_op_and_named_actions_are_checked_wherever_actions_are() {
+    // Object 5 is the standalone action, 6 is /Print and 7 is /NextPage.
+    let doc_with = |open_action: &str, page_aa: &str, link_action: &str, standalone: &str| {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {open_action} >>");
+        let page = format!("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] {page_aa} >>");
+        let link = format!("<< /Type /Annot /Subtype /Link /Rect [0 0 0 0] /P 3 0 R /F 4 {link_action} >>");
+        build(&[&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, &link, standalone, "/Print", "/NextPage"], "")
+    };
+    let goto = "<< /S /GoTo /D [3 0 R /Fit] >>";
+    // Where the action is, as (open action, page /AA, link /A, object 5).
+    let placed = |action: &str| {
+        [
+            ("an open action", doc_with(&format!("/OpenAction {action}"), "", "", goto)),
+            ("an open action by reference", doc_with("/OpenAction 5 0 R", "", "", action)),
+            ("a page's /AA", doc_with("", "/AA << /O 5 0 R >>", "", action)),
+            ("a link's /A", doc_with("", "", &format!("/A {action}"), goto)),
+        ]
+    };
+    let forbidden = [
+        ("<< /S /SetState /T [] >>", "A SetState action isn't allowed"),
+        ("<< /S /NOP >>", "A NOP action isn't allowed"),
+        ("<< /S /Named /N /Print >>", "A Named Print action isn't allowed"),
+        ("<< /S /Named /N 6 0 R >>", "A Named Print action isn't allowed"),
+    ];
+    let plain = pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() };
+    for (action, message) in forbidden {
+        for (place, mut doc) in placed(action) {
+            let issues = verify(&doc, Level::A2b);
+            let found: Vec<&str> = issues.iter().filter(|i| i.clause == "6.5.1").map(|i| i.message.as_str()).collect();
+            assert_eq!(found, [message], "{action} in {place}: {issues:#?}");
+            let r = convert(&mut doc, Level::A2b).unwrap();
+            let left: Vec<_> = r.remaining.iter().filter(|i| i.clause.starts_with("6.5")).collect();
+            assert!(left.is_empty(), "{action} in {place}: {left:#?}");
+            let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+            for kind in [&b"/SetState"[..], b"/NOP", b"/Named"] {
+                assert!(!bytes.windows(kind.len()).any(|w| w == kind), "{action} in {place}: {}", String::from_utf8_lossy(&bytes));
+            }
+        }
+    }
+    // A Named page move, with its name given by reference, is allowed and kept outside /AA.
+    for (place, mut doc) in placed("<< /S /Named /N 7 0 R >>") {
+        let issues = verify(&doc, Level::A2b);
+        assert!(!issues.iter().any(|i| i.clause == "6.5.1"), "{place}: {issues:#?}");
+        convert(&mut doc, Level::A2b).unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+        let kept = bytes.windows(6).any(|w| w == b"/Named");
+        assert_eq!(kept, place != "a page's /AA", "{place}: {}", String::from_utf8_lossy(&bytes));
+    }
+}

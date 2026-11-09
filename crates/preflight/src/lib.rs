@@ -10,7 +10,9 @@
 //! - every font embedded;
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
 //! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
-//!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView); no additional actions on the
+//!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView, and the PDF 1.2 SetState and
+//!   NOP that ISO 32000-1 no longer defines); Named actions only for NextPage, PrevPage,
+//!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
 //! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
 //! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
@@ -228,8 +230,23 @@ pub struct Declared {
     pub output_intents: Vec<String>,
 }
 
-const FORBIDDEN_ACTIONS: &[&[u8]] =
-    &[b"JavaScript", b"Launch", b"Sound", b"Movie", b"ResetForm", b"ImportData", b"Hide", b"SetOCGState", b"Rendition", b"Trans", b"GoTo3DView"];
+const FORBIDDEN_ACTIONS: &[&[u8]] = &[
+    b"JavaScript",
+    b"Launch",
+    b"Sound",
+    b"Movie",
+    b"ResetForm",
+    b"ImportData",
+    b"Hide",
+    b"SetOCGState",
+    b"Rendition",
+    b"Trans",
+    b"GoTo3DView",
+    b"SetState",
+    b"NOP",
+];
+/// The named actions of ISO 32000-1 Table 212, the only ones a Named action may name.
+const NAMED_ACTIONS: &[&[u8]] = &[b"NextPage", b"PrevPage", b"FirstPage", b"LastPage"];
 const FORBIDDEN_ANNOTS: &[&[u8]] = &[b"Sound", b"Movie", b"Screen", b"3D", b"RichMedia"];
 
 fn catalog(doc: &Document) -> Dict {
@@ -1059,10 +1076,8 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
         if *read > MAX_ACTION_CHAIN {
             return Some("too deeply chained".into());
         }
-        if let Some(s) = d.name(b"S")
-            && FORBIDDEN_ACTIONS.contains(&s)
-        {
-            return Some(String::from_utf8_lossy(s).into_owned());
+        if let Some(s) = action_forbidden(doc, d) {
+            return Some(s);
         }
         match d.get(b"Next") {
             Some(Object::Dict(next)) => stack.push(next),
@@ -1077,6 +1092,24 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
         }
     }
     None
+}
+
+/// The forbidden kind of the action `d` itself, if it is one: a forbidden type, or a Named
+/// action for anything but the four of [`NAMED_ACTIONS`]. The type and the name may each be given
+/// directly or by reference.
+fn action_forbidden(doc: &Document, d: &Dict) -> Option<String> {
+    let s = doc.resolve(d.get(b"S")?);
+    let s = s.as_name()?;
+    if FORBIDDEN_ACTIONS.contains(&s) {
+        return Some(String::from_utf8_lossy(s).into_owned());
+    }
+    let n = d.get(b"N").map(|n| doc.resolve(n));
+    match n.as_deref().and_then(Object::as_name) {
+        _ if s != b"Named" => None,
+        Some(n) if NAMED_ACTIONS.contains(&n) => None,
+        Some(n) => Some(format!("Named {}", String::from_utf8_lossy(n))),
+        None => Some("Named".into()),
+    }
 }
 
 /// Whether `o` is (or refers to) a forbidden action or one chaining to it, or to nothing.
