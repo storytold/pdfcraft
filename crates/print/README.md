@@ -26,7 +26,9 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   Headless: `doc_print` with `layout: "multiple"`, `order: "cut-stack"` and
   `per_sheet: 4` (or any supported grid size), plus `path` or `printer`.
 - **Booklet**: saddle-stitch imposition padded to a multiple of 4; both sides, front or back
-  only; left or right binding.
+  only; left or right binding; creep compensation, which moves each sheet's pages toward the
+  fold by its place from the outside times the creep (points per sheet, up to `MAX_CREEP`),
+  clipped at the fold. Headless: `doc_print` with `layout: "booklet"` and `creep`.
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.
 - **Comments & forms**: document, + markups, + stamps, or form fields only; annotations print
   only with their Print flag, drawn from their appearance streams (Algorithm 8.1).

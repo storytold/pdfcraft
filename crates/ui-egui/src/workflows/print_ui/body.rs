@@ -410,6 +410,10 @@ pub(crate) fn body(
                         );
                         ui.label(tl!("Binding:"));
                         combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
+                        let creep_label = ui.label(tl!("Creep:"));
+                        ui.add(egui::DragValue::new(&mut d.creep).range(0.0..=print::MAX_CREEP).speed(0.05).suffix(" pt"))
+                            .labelled_by(creep_label.id)
+                            .on_hover_text(tl!("Moves each sheet's pages toward the fold by this much more than the sheet outside it, so the margins match once the booklet is folded and trimmed."));
                     });
                 }
             }

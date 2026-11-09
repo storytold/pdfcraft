@@ -999,6 +999,10 @@ fn a_booklet_decides_two_sided_itself() {
     let d = &h.state().print_draft;
     assert_eq!(d.duplex, Some(Duplex::LongEdge), "the Two-sided choice is kept");
     assert_eq!(d.job("x").duplex, Some(Duplex::ShortEdge), "both sides flip on the short edge");
+    assert!(h.query_all_by_label("Creep:").next().is_some(), "a Creep field beside Binding");
+    h.state_mut().print_draft.creep = 1.5;
+    let layout = h.state().print_draft.settings(4, &[]).map(|s| s.layout);
+    assert!(matches!(layout, Ok(pdfcraft_engine::print::Layout::Booklet { creep, .. }) if creep == 1.5), "the creep reaches the booklet (#6777)");
     for subset in [BookletSubset::FrontOnly, BookletSubset::BackOnly] {
         h.state_mut().print_draft.booklet_subset = subset;
         assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "{subset:?} is one pass of a manual duplex");
