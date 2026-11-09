@@ -1,6 +1,17 @@
 use super::*;
 use crate::file_filter::AddFilterAnyCase as _;
 
+/// Whether an open's reply asks for a password: the file is encrypted and none, or a wrong one,
+/// was given.
+#[cfg(not(target_arch = "wasm32"))]
+fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
+    matches!(
+        kind,
+        open_worker::ResultKind::Prepared { result, .. }
+            if matches!(**result, Err(pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword))
+    )
+}
+
 /// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
 /// current directory (links are not resolved, as in `last_session`).
 pub(crate) fn same_file(a: &str, b: &str) -> bool {
@@ -78,6 +89,9 @@ impl PdfCraftApp {
     }
 
     pub(super) fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
+        // Files opened before the first frame (the ones named at startup) are drawn once, in the
+        // interface language, rather than in English and again when the frame applies it.
+        self.apply_status_captions(i18n::Lang::from_pref(&self.language));
         // Images and text files become new, unsaved PDFs (Create a PDF).
         let active = self.active;
         if let Some(r) = self.open_converted(name, &bytes) {
@@ -119,16 +133,36 @@ impl PdfCraftApp {
             recovered: request.recovered,
             then: request.then,
             display_override: None,
+            ready: None,
         });
         Ok(token)
+    }
+
+    /// Hand waiting files to the worker, oldest first, while its queue has room. Every queued
+    /// job has a `pending_opens` entry, so fewer entries than the bound means room.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn submit_deferred_opens(&mut self) {
+        let mut queue = std::mem::take(&mut self.deferred_opens);
+        while self.deferred_opens.is_empty() && self.pending_opens.len() < open_worker::MAX_QUEUED_OPENS {
+            let Some(next) = queue.pop_front() else { break };
+            self.open_path_request(&next.path, next.then, next.display_override);
+        }
+        // A file put back (the queue filled again) stays ahead of the ones behind it.
+        self.deferred_opens.append(&mut queue);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_pending_opens(&mut self) {
         let pending_opens = std::mem::take(&mut self.pending_opens);
+        // A retry that is no longer waiting holds nothing back.
+        if let Some(token) = self.password_retry
+            && !pending_opens.iter().any(|pending| pending.token == token)
+        {
+            self.password_retry = None;
+        }
         let mut remaining = pending_opens.into_iter();
         let mut waiting = Vec::new();
-        while let Some(pending) = remaining.next() {
+        while let Some(mut pending) = remaining.next() {
             // A tool, password prompt or file picker belongs to the document just admitted.
             // Keep later replies queued so another open cannot change its recipient.
             if self.modal_open() || self.pickers.pending() {
@@ -136,19 +170,41 @@ impl PdfCraftApp {
                 waiting.extend(remaining);
                 break;
             }
-            match pending.receiver.try_recv() {
-                Ok(result) if result.token == pending.token => self.finish_pending_open(pending, result.kind),
-                Ok(_) => waiting.push(pending),
-                Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(pending),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.notify_fmt("Couldn't open {name}: the background worker stopped", &[("name", &pending.name)]);
-                }
+            let retry = self.password_retry == Some(pending.token);
+            let kind = match pending.ready.take() {
+                Some(kind) => kind,
+                None => match pending.receiver.try_recv() {
+                    Ok(result) if result.token == pending.token => result.kind,
+                    Ok(_) | Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        waiting.push(pending);
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        if retry {
+                            self.password_retry = None;
+                        }
+                        self.notify_fmt("Couldn't open {name}: the background worker stopped", &[("name", &pending.name)]);
+                        continue;
+                    }
+                },
+            };
+            // While a closed prompt's password is being tried, a later file that asks for its own
+            // password keeps its reply: its prompt would hide the retry's outcome. Others admit.
+            if !retry && self.password_retry.is_some() && asks_for_password(&kind) {
+                pending.ready = Some(kind);
+                waiting.push(pending);
+                continue;
             }
+            if retry {
+                self.password_retry = None;
+            }
+            self.finish_pending_open(pending, kind);
         }
         // A completion may schedule another open; preserve those requests as well as the
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+        self.submit_deferred_opens();
         self.settle_launch_layout();
     }
 
@@ -386,6 +442,8 @@ impl PdfCraftApp {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = d.path.clone();
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
@@ -400,7 +458,12 @@ impl PdfCraftApp {
                     pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
                     None,
                     move |app, path| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
-                        Ok(()) => app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
+                        Ok(()) => {
+                            // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
+                            // effort: a volume without alternate data streams can't carry it.
+                            let _ = pdfcraft_platform::zone::mark_from(&path, source.as_deref().map(std::path::Path::new));
+                            app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())])
+                        }
                         Err(e) => app.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
                     },
                 );
@@ -449,6 +512,9 @@ impl PdfCraftApp {
                 && let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == *token)
             {
                 pending.display_override = p.display_override;
+                // Replies behind it that ask for a password wait for its outcome
+                // (`poll_pending_opens`).
+                self.password_retry = Some(*token);
             }
             if let Err(error) = result {
                 let mut prompt = p;
@@ -591,10 +657,24 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Pending;
         }
-        if display_override.is_some()
-            && let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path)))
-        {
-            prompt.display_override = display_override;
+        // The same file named again while its password is being asked for joins that prompt
+        // instead of queuing a second one; a display override or a tool it brings is kept.
+        if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            if display_override.is_some() {
+                prompt.display_override = display_override;
+            }
+            if then.is_some() {
+                prompt.then = then;
+            }
+            return OpenOutcome::Pending;
+        }
+        if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
+            if display_override.is_some() {
+                deferred.display_override = display_override;
+            }
+            if then.is_some() {
+                deferred.then = then;
+            }
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
@@ -603,8 +683,10 @@ impl PdfCraftApp {
         // Before the first frame there is no interaction to keep responsive; this also preserves
         // deterministic inline startup and test flows. Once live, reading and preparation use
         // the bounded worker and commit on the UI thread.
-        // Keep flagged launch files behind an existing password prompt or picker.
-        if (self.ctx.is_none() || self.run_inline) && !(display_override.is_some() && (self.modal_open() || self.pickers.pending())) {
+        // Keep later files behind an open password prompt: it belongs to an earlier file, and an
+        // inline open would clear it. Keep flagged launch files behind any dialog or picker too.
+        let held = self.password_prompt.is_some() || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
+        if (self.ctx.is_none() || self.run_inline) && !held {
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
@@ -646,6 +728,12 @@ impl PdfCraftApp {
             }
         } else {
             self.startup_superseded = true;
+            // The worker queue is bounded. A long file list (a launch behind a password prompt,
+            // or many files at once) waits here, in order, and is submitted as opens finish.
+            if self.pending_opens.len() >= open_worker::MAX_QUEUED_OPENS || !self.deferred_opens.is_empty() {
+                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), then, display_override });
+                return OpenOutcome::Pending;
+            }
             match self.schedule_open(OpenRequest {
                 name: name.clone(),
                 path: Some(path.to_string()),
@@ -683,6 +771,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn settle_launch_layout(&mut self) {
         if self.pending_opens.iter().any(|open| open.display_override.is_some())
+            || self.deferred_opens.iter().any(|open| open.display_override.is_some())
             || self.password_prompt.as_ref().is_some_and(|prompt| prompt.display_override.is_some())
         {
             return;

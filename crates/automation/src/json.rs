@@ -279,6 +279,8 @@ pub(crate) fn summary(d: &Document) -> Value {
     })
 }
 
+/// What `doc_info` returns for an open document: its metadata, security, pages, bookmarks,
+/// comments, fields, links, layers, transitions, attachments, fonts, warnings and repairs.
 pub(crate) fn info(d: &Document) -> Value {
     let i = &d.info;
     let page1 = |p: usize| p + 1;
@@ -313,7 +315,7 @@ pub(crate) fn info(d: &Document) -> Value {
         "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),
-        "outline": outline(&i.outline),
+        "outline": outline(i, &i.outline),
         "outline_more": i.outline_more,
         // Rectangles use the tools' convention (top-left of the displayed page, like
         // comment_list and link_list), not raw PDF user space, so they can be fed back to
@@ -352,13 +354,43 @@ pub(crate) fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "warnings": i.warnings,
         "repairs": d.repair_log(),
+        // Objects that could not be read (each reads as null): nothing was repaired, what they held is
+        // lost. Last, so it includes what reading the fields above failed on.
+        "unreadable_objects": d.unreadable_objects(),
     })
 }
 
-/// What a link action does, as `doc_info` lists it.
+/// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the
+/// top-left of the page as displayed, y down, after `/Rotate`), the way every tool reports
+/// rectangles; unchanged when the page is unknown (a malformed annotation that points at no page).
+/// Public so `pdfcraft-cli` reports the same rectangles as the tools.
+pub fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
+    i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
+}
+
+/// Bookmarks with the page each goes to, or the action it runs instead (as a link's `target`).
+fn outline(i: &pdfcraft_render::DocInfo, items: &[pdfcraft_render::OutlineItem]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|o| {
+                json!({
+                    "title": o.title, "page": o.page.map(|p| p + 1),
+                    "action": o.action.as_ref().map(|a| link_target(i, a)), "children": outline(i, &o.children),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Where a link goes, or what a bookmark's action does: a 1-based page, a web address, layer
+/// changes, another PDF, a named, hide or reset-form action, or the name of an action that isn't
+/// run.
 fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarget) -> Value {
+    // A remote page number is the file's, however large.
+    let page1 = |p: usize| p.saturating_add(1);
     match target {
-        pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": p.saturating_add(1) }),
+        pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
         pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
         pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
             "layers": changes.iter().map(|(op, ocg)| json!({
@@ -376,7 +408,7 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             "remote_document": file,
             "destination": match destination {
                 pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
-                pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page.saturating_add(1), "view": format!("{view:?}") }),
+                pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
                 pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
             },
             "new_window": new_window,
@@ -386,16 +418,4 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
         pdfcraft_render::LinkTarget::Hide { fields, hide } => json!({ if *hide { "hide" } else { "show" }: fields }),
         pdfcraft_render::LinkTarget::ResetForm { fields, exclude } => json!({ "reset_form": fields, "exclude": exclude }),
     }
-}
-
-/// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the
-/// top-left of the page as displayed, y down, after `/Rotate`), the way every tool reports
-/// rectangles; unchanged when the page is unknown (a malformed annotation that points at no page).
-/// Public so `pdfcraft-cli` reports the same rectangles as the tools.
-pub fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
-    i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
-}
-
-fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
-    Value::Array(items.iter().map(|o| json!({ "title": o.title, "page": o.page.map(|p| p + 1), "children": outline(&o.children) })).collect())
 }
