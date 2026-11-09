@@ -1343,6 +1343,7 @@ struct PageEnv<'a> {
     precise_scroll: Vec2,
     prefs: &'a comments::CommentPrefs,
     preparing: bool,
+    prepare_tab_order: Option<&'a [(usize, usize)]>,
     rects: &'a Vec<Rect>,
     redact_mark: ([f64; 3], f64),
     scale: f32,
@@ -3232,6 +3233,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
     let env = PageEnv {
         added: &added,
         allowed,
@@ -3273,6 +3275,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         precise_scroll,
         prefs,
         preparing,
+        prepare_tab_order: prepare_tab_order.as_deref(),
         rects: &rects,
         redact_mark,
         scale,
