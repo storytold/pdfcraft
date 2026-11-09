@@ -101,12 +101,12 @@ pub use data::{
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, numbers_pages, parse};
-pub use pdf::{CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
+pub use pdf::{AREA_KEY, CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use picture::typed_date;
 pub use script::{
     FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
-    field_grows_with_text, field_is_embedded, fields_by_som, form_tree, has_focus_scripts, has_scripts, overrides, path_is_embedded, refresh_value,
-    rerender, reset_default, set_overrides, template_of,
+    field_grows_with_text, field_is_embedded, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts, overrides, page_area_uses,
+    path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -161,8 +161,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     }
     let (tpl, parse_warnings) = parse(&packets.xdp)?;
     let data = parse_datasets(&packets.xdp);
-    let laid = apply_overrides(&tpl, &overrides(doc));
-    let mut form = layout(&laid, data.as_ref())?;
+    let ov = overrides(doc);
+    let laid = apply_overrides(&tpl, &ov);
+    let mut form = layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
     form.warnings.splice(0..0, parse_warnings);
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));

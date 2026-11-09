@@ -636,6 +636,10 @@ pub struct Field {
     /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
     /// shows when not being edited, and what scripts read as `formattedValue`.
     pub display_picture: Option<String>,
+    /// Its bind shares one data node among every field that names it: `match="global"`, or an
+    /// explicit data reference (`ref`). On a page area, such a field shows the same value on each
+    /// page made from it (XFA 3.3, "Page Background").
+    pub data_shared: bool,
     /// `<keep intact="contentArea">` or `"pageArea"`: a page break doesn't split the field (XFA 3.3
     /// p. 292). A field's default is `none`.
     pub keep_intact: bool,
