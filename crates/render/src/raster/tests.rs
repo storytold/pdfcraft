@@ -3573,6 +3573,56 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// PDFBOX-771: a fax image whose `/Rows` says more rows than its `/Height` (1,084,975,104 on a
+/// 2,592-column scan) is decoded to its height, as the image is (ISO 32000-2 Table 87): the
+/// decoder was asked for `/Rows` rows, which the size check refused, so every page drew blank.
+/// Also through an `/Indexed` colour space, the filter's other output path. Samples past the
+/// decoded data read as black there, so a second image striped black, white, black, white shows
+/// that every row up to the last is decoded.
+#[test]
+fn group4_fax_with_rows_past_its_height_decodes_to_the_image_height() {
+    const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+    // Each row in horizontal mode: black rows as white 0 + black 8, white rows as white 8 +
+    // black 0 (ITU-T T.6 §2.2.3.3, codes from Table 2/T.6), then EOFB.
+    const STRIPED_8X4: [u8; 12] = [0x26, 0xa2, 0x99, 0x86, 0xe4, 0xd4, 0x53, 0x30, 0xdc, 0x00, 0x40, 0x04];
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    let images: [(&[u8], [[u8; 4]; 4]); 2] = [(&ALL_BLACK_8X4, [BLACK; 4]), (&STRIPED_8X4, [BLACK, WHITE, BLACK, WHITE])];
+    for ((data, expected), space) in images.iter().flat_map(|i| ["/DeviceGray", "[/Indexed /DeviceRGB 1 <000000FFFFFF>]"].map(|s| (i, s))) {
+        for rows in ["/Rows 5", "/Rows 1000000000", "/Rows 4294967295"] {
+            let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
+            let mut pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace {space} /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 {rows} >> /Length {} >> stream
+",
+                content.len(),
+                data.len()
+            )
+            .into_bytes();
+            pdf.extend_from_slice(data);
+            pdf.extend_from_slice(
+                b"
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            );
+            let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(page.error.is_none(), "{space} {rows}: {:?}", page.error);
+            for (y, colour) in [17, 22, 27, 32].into_iter().zip(expected) {
+                assert_eq!(&page.rgba[((y * 40 + 15) * 4)..][..4], colour, "{space} {rows}: image row at y {y}");
+            }
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 255, 255, 255], "{space} {rows}: outside the image stays white");
+        }
+    }
+}
+
 #[test]
 fn tiff_predictor_packed_rgb_rows_keep_their_byte_boundaries() {
     use hayro_syntax::object::{FromBytes, Object};
@@ -4190,6 +4240,23 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
         [255, 255, 255, 255] => false,
         other => panic!("neither the image nor the page: {other:?}"),
     }
+}
+
+/// A `JBIG2Decode` image whose data starts with a JBIG2 file header (ISO 14492 D.4) draws, in
+/// either organization the header declares (hayro-jbig2 patch 17): sequential (flags bit 0 is 1,
+/// D.1) and random access (bit 0 is 0, D.2: the segment headers, ending with an end of file
+/// segment, then their data). A header with reserved flag bits set leaves the image out.
+#[test]
+fn a_jbig2_image_with_a_file_header_draws() {
+    const ID: [u8; 8] = [0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A];
+    let page = black_jbig2_page();
+    let header = |flags: u8| [&ID[..], &[flags], &1u32.to_be_bytes()].concat();
+    let (page_header, page_data) = page.split_at(11);
+    let end_of_file = [0, 0, 0, 1, 51, 0, 1, 0, 0, 0, 0];
+    assert!(jbig2_image_draws(&page), "without a header");
+    assert!(jbig2_image_draws(&[&header(0x01)[..], &page].concat()), "sequential");
+    assert!(jbig2_image_draws(&[&header(0x00)[..], page_header, &end_of_file, page_data].concat()), "random access");
+    assert!(!jbig2_image_draws(&[&header(0x11)[..], &page].concat()), "reserved flag bits");
 }
 
 /// The JBIG2 images of a page share one allowance, down to the step, and the next page starts with
@@ -5622,6 +5689,182 @@ fn a_font_whose_post_version_has_swapped_halves_is_still_used() {
     assert_eq!(alternate([0, 0, 0, 2]), alternate([0, 2, 0, 0]), "and also with swapped halves");
 }
 
+/// A page with no `/MediaBox`, its own or inherited, is US Letter (612 × 792 pt), as other
+/// readers draw it and as the page model and inspector already sized it; it was A4 (vendored
+/// hayro-syntax patch 44; ISO 32000-2 Table 31 makes the box required and gives no default;
+/// PDFBOX-4001). A `/MediaBox` without area falls back to the same size.
+#[test]
+fn a_page_without_a_media_box_is_letter() {
+    let page_pdf = |media: &str| {
+        format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R {media} /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let pdf = page_pdf(media);
+        let page = render_first_page(pdf.clone());
+        assert_eq!((page.width, page.height), (612, 792), "rendered size, {media:?}");
+        let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+        assert_eq!((info.pages[0].width, info.pages[0].height), (612.0, 792.0), "inspected size, {media:?}");
+    }
+    // The blue square sits at the bottom left of the Letter page, also when the box has no
+    // area: the page is placed and clipped by the same Letter region it is sized by.
+    for media in ["", "/MediaBox [0 0 0 0]"] {
+        let page = render_first_page(page_pdf(media));
+        assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 792 - 30), [0, 0, 255], "{media:?}");
+    }
+}
+
+/// A page without a `/MediaBox` of its own inherits its `/Pages` parent's (ISO 32000-2 §7.7.3.4)
+/// before any fallback: rendered and inspected at 300 × 400, not US Letter.
+#[test]
+fn a_page_inherits_its_parents_media_box_before_falling_back_to_letter() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "rendered size");
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 400 - 30), [0, 0, 255]);
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
+/// The same through a `/Pages` node without a box: the page takes its grandparent's `/MediaBox`.
+#[test]
+fn a_page_inherits_its_grandparents_media_box() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "rendered size");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
+/// The nearest ancestor's `/MediaBox` wins: an intermediate `/Pages` node's box over the root's,
+/// and a box whose origin isn't 0 0 keeps the content where the box puts it.
+#[test]
+fn a_page_inherits_its_nearest_ancestors_media_box_with_its_origin() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 612 792] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 /MediaBox [100 100 400 500] >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 27 >> stream
+0 0 1 rg 110 110 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (300, 400), "the intermediate box, not the root's");
+    // The square sits 10 pt in from the box's lower-left corner, at (100, 100).
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 400 - 30), [0, 0, 255], "placed by the box's origin");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (300.0, 400.0), "inspected size");
+}
+
+/// A page's own `/MediaBox` wins over its parent's: rendered and inspected at the page's 200 × 100, the content placed by
+/// the page box's origin.
+#[test]
+fn a_pages_own_media_box_wins_over_its_parents() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [50 50 250 150] /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 60 60 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (200, 100), "the page's box, not its parent's");
+    // The square sits 10 pt in from the page box's lower-left corner, at (50, 50).
+    assert_eq!(rgb_at(&page.rgba, page.width as usize, 30, 100 - 30), [0, 0, 255], "placed by the page box's origin");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (200.0, 100.0), "inspected size");
+}
+
+/// The nearest ancestor's `/MediaBox` is the inherited one even when it has no area: an intermediate `/Pages` node's
+/// `[0 0 0 0]` gives US Letter, not the grandparent's 300 × 400 (ISO 32000-2 §7.7.3.4).
+#[test]
+fn a_nearest_media_box_without_area_gives_letter_not_a_further_ancestors() {
+    let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+5 0 obj << /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 /MediaBox [0 0 0 0] >> endobj
+3 0 obj << /Type /Page /Parent 5 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let page = render_first_page(pdf.clone());
+    assert_eq!((page.width, page.height), (612, 792), "rendered size");
+    let info = crate::inspect(Arc::new(pdf), None).expect("inspect");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (612.0, 792.0), "inspected size");
+}
+
+/// An embedded CMap whose codes are all two bytes long (codespace `<0000> <FFFF>`) and whose
+/// mappings are written as `bfchar` reads `<2041>` as the one code 0x2041 (ISO 32000-2
+/// §9.7.6.2: the codespace ranges decide how many bytes form a code). It drew as two
+/// glyphs: the lone first byte 0x20 matched the two-byte entry `<0020>` (PDFBOX-1282,
+/// `Characters_Arial.pdf` page 3, codes 0x20AC to 0xFFFC). Vendored hayro-cmap patch 4.
+#[test]
+fn a_bfchar_cmap_reads_codes_of_its_codespace_length() {
+    let font = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+    let render = |encoding: &str, text: &str| -> Vec<u8> {
+        let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def
+/CMapName /Test-H def /CMapType 1 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+3 beginbfchar <0020> <0005> <0041> <0006> <2041> <0024> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end";
+        let resources = format!(
+            "<< /Font << /F1 << /Type /Font /Subtype /Type0 /BaseFont /JetBrainsMono-Regular /Encoding {encoding}              /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /JetBrainsMono-Regular              /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 600 /CIDToGIDMap /Identity              /FontDescriptor << /Type /FontDescriptor /FontName /JetBrainsMono-Regular /Flags 4 /FontBBox [-1000 -300 1000 1000]              /ItalicAngle 0 /Ascent 1020 /Descent -300 /CapHeight 730 /StemV 80 /FontFile2 5 0 R >> >>] >> >> >>"
+        );
+        let content = format!("BT /F1 40 Tf 10 20 Td {text} Tj ET");
+        let font_dict = format!("<< /Length {} >>", font.len());
+        let cmap_dict = format!(
+            "<< /Type /CMap /CMapName /Test-H /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /Length {} >>",
+            cmap.len()
+        );
+        let page = render_first_page(image_cache_pdf(&content, &resources, &[(&font_dict, font), (&cmap_dict, cmap)]));
+        page.rgba.to_vec()
+    };
+    let blank = render("/Identity-H", "<>");
+    let reference = render("/Identity-H", "<0024>");
+    assert_ne!(reference, blank, "the reference glyph draws");
+    assert_eq!(render("6 0 R", "<2041>"), reference, "<2041> is one code, CID 0x24");
+    assert_ne!(render("/Identity-H", "<00050006>"), reference, "the two-glyph misreading looks different");
+}
+
 /// A page whose content expands far beyond its compressed stream stops at the expansion budget,
 /// which is 64 times the compressed size and at least `MAX_DECODED_STREAM`, and the page says so.
 #[test]
@@ -5913,6 +6156,92 @@ fn page_contents_and_nested_forms_share_one_budget() {
         "reported once per page, not once per nested paint"
     );
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+}
+
+/// A form XObject that draws itself (PDFBOX-5782, a fuzzed file whose form names a `/Pages`
+/// dictionary as `/X0`, found the form again in the page's resources and spent 38 s drawing
+/// itself until the page's nested-paint budget ran out) is drawn once: the drawing inside
+/// itself is skipped and reported, as other readers draw it. Vendored patch: hayro-interpret
+/// `Context::enter_form` (89).
+#[test]
+fn a_form_that_draws_itself_is_drawn_once() {
+    // Each form paints a 10 x 10 square and draws `/X0` 20 units to its right.
+    let draw = "0 0 1 rg 0 0 10 10 re f q 1 0 0 1 20 0 cm /X0 Do Q";
+    // Two forms that draw each other: blue, then red, then blue again would follow.
+    let other = "1 0 0 rg 0 0 10 10 re f q 1 0 0 1 20 0 cm /X0 Do Q";
+    let other = format!(
+        "6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] /Resources << /XObject << /X0 5 0 R >> >> /Length {} >> stream\n{other}\nendstream endobj\n",
+        other.len()
+    );
+    let cases = [
+        ("its own resources name it", "/Resources << /XObject << /X0 5 0 R >> >>", ""),
+        ("it names a /Pages dictionary and the page's resources name it", "/Resources << /XObject << /X0 2 0 R >> >>", ""),
+        ("it has no resources and the page's name it", "", ""),
+        ("two forms draw each other", "/Resources << /XObject << /X0 6 0 R >> >>", other.as_str()),
+    ];
+    for (what, resources, extra) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n4 0 obj << /Length 7 >> stream\n/X0 Do\nendstream endobj\n".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] {resources} /Length {} >> stream\n{draw}\nendstream endobj\n",
+                draw.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(extra.as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(page.width, 200, "{what}");
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
+        let second = if extra.is_empty() { [255, 255, 255] } else { [255, 0, 0] };
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), second, "{what}: the form one level in");
+        assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
+    }
+}
+
+/// A form that reaches itself through a tiling pattern it fills with, or a Type 3 glyph it
+/// shows, is not drawn inside itself either: the pattern cell or the glyph procedure is
+/// interpreted in a context of its own, which still knows the form is being drawn. The form
+/// paints a blue square, then fills a square 20 units to its right with the pattern, or shows
+/// the glyph there, whose content draws the form. Vendored patch: hayro-interpret
+/// `Context::enter_form` (89).
+#[test]
+fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
+    let cell = "q 1 0 0 1 20 0 cm /X0 Do Q";
+    let pattern = format!(
+        "7 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 200 40] /XStep 200 /YStep 40 /Resources << /XObject << /X0 5 0 R >> >> /Length {} >> stream\n{cell}\nendstream endobj\n",
+        cell.len()
+    );
+    let glyph = "0 0 d0 /X0 Do";
+    let glyph = format!(
+        "7 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 200 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n8 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n",
+        glyph.len()
+    );
+    let cases = [
+        ("a tiling pattern", "/Resources << /Pattern << /P0 7 0 R >> >>", "0 0 1 rg 0 0 10 10 re f /Pattern cs /P0 scn 20 0 10 10 re f", pattern),
+        ("a Type 3 glyph", "/Resources << /Font << /T3 7 0 R >> >>", "0 0 1 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (a) Tj ET", glyph),
+    ];
+    for (what, resources, draw, extra) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n4 0 obj << /Length 7 >> stream\n/X0 Do\nendstream endobj\n".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] {resources} /Length {} >> stream\n{draw}\nendstream endobj\n",
+                draw.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(extra.as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
+    }
 }
 
 /// The page content budget counts what is held at once, not everything decoded: a form
@@ -7371,8 +7700,8 @@ fn raw_crop_unit_floor_preserves_nearly_zero_fallback() {
             let bytes = raw_crop_unit_pdf(unit, 0, [0.0, 0.0, side, side], None);
             let pdf = Pdf::new(Arc::new(bytes)).expect("existing degenerate-page fallback");
             let page = pdf.pages().first().expect("one page");
-            // Existing A4 raw fallback remains raw A4, then scales by the page unit.
-            let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+            // The raw fallback is US Letter (hayro-syntax patch 44), then scales by the page unit.
+            let expected = (612.0, 792.0);
             assert_eq!(page.base_dimensions(), expected, "unit={unit}, raw side={side}");
             assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
         }
@@ -8315,6 +8644,9 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
 mod icc_profile_cache;
 
+// A page past its rasterizer coverage leaves the rest out and says so (vendored vello_cpu patch 1).
+mod coverage_budget;
+
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 
@@ -9099,8 +9431,13 @@ mod default_colour_spaces;
 // (vendored hayro-syntax patch 28, hayro-interpret patch 55).
 mod devicen_inks;
 
-// #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 35).
+// #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 35), and
+// PDFBOX-3932: rows that carry no filter-type byte are read as samples (patch 40).
 mod png_predicted_images;
+
+// TIFF-predicted Flate images at 8 and 16 bits are undone byte by byte (vendored hayro-syntax
+// patch 42).
+mod tiff_predicted_images;
 
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
@@ -9196,6 +9533,183 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
     let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
     let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
     assert!(page.error.is_none(), "the header after a stray number is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 100));
+}
+
+/// A one-page file: a 200 x 100 page, its offsets right.
+fn one_page_file() -> Vec<u8> {
+    one_page_file_with(false)
+}
+
+/// The same, and with `stale` a 999 x 999 copy of the page after it that the table does not
+/// name: a file read through its table shows 200 x 100, one rebuilt from object headers 999 x 999.
+fn one_page_file_with(stale: bool) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >>"]
+    {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    if stale {
+        out.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 999 999] >>\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// `base` with an incremental update appended: a new 300 x 150 first page whose content stream is
+/// `padding` bytes long, and the page tree redefined to hold both pages. With `footer` the update
+/// ends in its trailer, `startxref` and `%%EOF`; without, it stops after its cross-reference rows,
+/// as a save cut short does.
+fn with_update(base: &[u8], padding: usize, footer: bool) -> Vec<u8> {
+    let prev = base
+        .windows(9)
+        .rposition(|w| w == b"startxref")
+        .map(|p| String::from_utf8_lossy(&base[p + 9..]).split_whitespace().next().unwrap_or("").to_string())
+        .unwrap();
+    let mut out = base.to_vec();
+    let mut offsets = vec![(4, out.len())];
+    out.extend_from_slice(b"4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Contents 5 0 R >>\nendobj\n");
+    offsets.push((5, out.len()));
+    out.extend_from_slice(format!("5 0 obj\n<< /Length {padding} >>\nstream\n").as_bytes());
+    out.extend(std::iter::repeat_n(b' ', padding));
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    offsets.push((2, out.len()));
+    out.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [4 0 R 3 0 R] /Count 2 >>\nendobj\n");
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
+    for (num, o) in offsets {
+        out.extend_from_slice(format!("{num} 1\n{o:010} 00000 n \n").as_bytes());
+    }
+    if footer {
+        out.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    }
+    out
+}
+
+/// What the renderer shows of `file` (page count and the first page's size) and what the
+/// document model reads (the page tree's /Count), for comparing the two.
+fn renderer_and_model_pages(file: Vec<u8>) -> ((usize, (u32, u32)), i64) {
+    let bytes = Arc::new(file);
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig::default());
+    let count = r.page_count();
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let model = pages.as_dict().and_then(|d| d.int(b"Count")).unwrap();
+    ((count, (page.width, page.height)), model)
+}
+
+/// PDFBOX-3934, PDFBOX-3787: the last incremental update was cut off after its cross-reference
+/// rows, with no trailer, `startxref` or `%%EOF`, so the last `startxref` in the file is the
+/// older revision's, more than the footer window (4 KiB) from the end, and objects follow it.
+/// The update's objects are the latest revision (ISO 32000-2 §7.5.6); the document model rebuilds
+/// the file from object headers and reads them. The renderer read the older table the last
+/// `startxref` names instead and showed one page where the model has two. It now rebuilds too.
+#[test]
+fn an_update_cut_off_before_its_trailer_shows_its_pages_as_the_model_reads_them() {
+    let file = with_update(&one_page_file(), 5000, false);
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!(model, 2, "the model reads the update");
+    assert_eq!(count, 2, "the renderer shows the update's page tree");
+    assert_eq!(size, (300, 150), "and its new first page");
+}
+
+/// The same update with its footer is read through its table as before: renderer and model both
+/// show its two pages.
+#[test]
+fn a_complete_update_reads_as_before() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 5000, true));
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// A file with data after `%%EOF` that holds no object header (a web page glued to a served file)
+/// is read through its table by the renderer, as before: the file has a stale copy of its page that
+/// only a rebuild would show. The model, finding no `startxref` in its footer window, rebuilds from
+/// object headers and takes that stale 999 x 999 copy, so here the two still differ, as they did
+/// before this change.
+#[test]
+fn trailing_data_without_objects_reads_as_before() {
+    let mut junk = one_page_file_with(true);
+    junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name, 4294967296 0 obj</p>");
+    junk.extend(std::iter::repeat_n(b' ', 5000));
+    junk.extend_from_slice(b"</html>\n");
+    assert_eq!(model_first_media_box(&junk), [0.0, 0.0, 999.0, 999.0], "the model's rebuilt page");
+    let ((count, size), model) = renderer_and_model_pages(junk);
+    assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
+/// The /MediaBox of the first page in the document model's page tree (its first /Kids entry).
+fn model_first_media_box(file: &[u8]) -> Vec<f64> {
+    let doc = pdfcraft_cos::Document::open(Arc::new(file.to_vec())).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let kid = doc.resolve(pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().first().unwrap());
+    kid.as_dict().unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().filter_map(|x| x.as_f64()).collect()
+}
+
+/// A cut-off update on `one_page_file` whose object headers are written `N G obj{after}<<` in place
+/// of `N G obj\n<<`. Only the update is rewritten, so the base file's table stays at the offset
+/// its `startxref` names and reading it raises no error that would rebuild the file anyway: the
+/// update is found only if the header scan accepts what follows `obj`.
+fn cut_off_update_with_headers(after: &str) -> Vec<u8> {
+    let base = one_page_file();
+    let mut file = with_update(&base, 5000, false);
+    let update = String::from_utf8(file.split_off(base.len())).unwrap();
+    assert_eq!(update.matches(" obj\n<<").count(), 3, "every updated header is rewritten");
+    file.extend_from_slice(update.replace(" obj\n<<", &format!(" obj{after}<<")).as_bytes());
+    file
+}
+
+/// A cut-off update whose object headers run straight into their dictionaries (`4 0 obj<<`) is
+/// still found: a delimiter ends the keyword (ISO 32000-2 §7.2.3, Table 2), and the renderer
+/// shows the update's new first page, as the model does.
+#[test]
+fn a_cut_off_update_with_obj_followed_by_a_delimiter_is_rebuilt() {
+    let file = cut_off_update_with_headers("");
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// The same with a comment straight after the keyword (`4 0 obj%comment`): `%` is a delimiter
+/// that starts a comment (ISO 32000-2 §7.2.3 Table 2, §7.2.4), so it ends the keyword too.
+#[test]
+fn a_cut_off_update_with_obj_followed_by_a_comment_is_rebuilt() {
+    let file = cut_off_update_with_headers("%comment\n");
+    assert_eq!(model_first_media_box(&file), [0.0, 0.0, 300.0, 150.0], "the model's first page is the update's");
+    let ((count, size), model) = renderer_and_model_pages(file);
+    assert_eq!((count, size, model), (2, (300, 150), 2));
+}
+
+/// A cut-off update that ends within the footer window leaves the older `startxref` near the end,
+/// which the model reads too: both keep the older revision there.
+#[test]
+fn a_short_cut_off_update_reads_as_before() {
+    let ((count, size), model) = renderer_and_model_pages(with_update(&one_page_file(), 100, false));
+    assert_eq!((count, size, model), (1, (200, 100), 1));
+}
+
+/// A file cut short in the middle of its last update, whose new page tree names a page that is
+/// not there: the rebuilt table finds no page, so the older table is read and the file still
+/// opens with the page it had, rather than not at all.
+#[test]
+fn an_update_cut_off_before_its_new_pages_keeps_the_older_table() {
+    let file = String::from_utf8(with_update(&one_page_file(), 5000, false)).unwrap().replace("4 0 obj", "9 0 obj").into_bytes();
+    let mut r = PageRenderer::new(Arc::new(file), RenderConfig::default());
+    assert_eq!(r.page_count(), 1);
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), (200, 100));
 }
 
@@ -9740,4 +10254,171 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
             assert_eq!(centre(saved), [255, 0, 0, 255], "{algorithm:?}: {what}");
         }
     }
+}
+
+/// Data after `%%EOF` that holds an object header, past the footer window, is read the way the
+/// document model reads it: the model rebuilds the file from object headers and takes the later
+/// definition of the page, and the renderer shows that same page, so the two still agree.
+#[test]
+fn trailing_data_with_an_object_header_reads_as_the_model_reads_it() {
+    let mut f = one_page_file();
+    f.extend_from_slice(
+        b"<html><pre>
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 999 999] >>
+endobj
+</pre>",
+    );
+    f.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = pdfcraft_cos::Document::open(Arc::new(f.clone())).unwrap();
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let model_box = page.as_dict().and_then(|d| d.get(b"MediaBox").cloned());
+    assert_eq!(model_box, Some(pdfcraft_cos::Object::Array([0, 0, 999, 999].map(pdfcraft_cos::Object::Int).to_vec())), "the model");
+    let ((count, size), model) = renderer_and_model_pages(f);
+    assert_eq!((count, size, model), (1, (999, 999), 1), "the renderer, as the model");
+}
+
+/// An encrypted file whose last update was cut off is still refused with a wrong password, and
+/// opened with the right one.
+#[test]
+fn an_encrypted_file_with_a_cut_off_update_still_needs_its_password() {
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let mut doc = Document::open(Arc::new(one_page_file())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let base = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let file = Arc::new(with_update(&base, 5000, false));
+    let open = |password: &str| {
+        let mut r = PageRenderer::new(file.clone(), RenderConfig { password: Some(Arc::from(password)), ..RenderConfig::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        (r.page_count(), page.error.is_none(), (page.width, page.height))
+    };
+    let (_, drawn, _) = open("wrong");
+    assert!(!drawn, "a wrong password opens nothing");
+    let (count, drawn, _) = open("user");
+    assert!(count >= 1 && drawn, "the right one opens it");
+}
+
+/// An encrypted file whose cut-off update ends in a trailer dictionary without `/Encrypt`: the rebuild would take that
+/// later dictionary and read the encrypted content as plain bytes, so it is not taken. A wrong password is still
+/// refused, and the right one opens the table the last `startxref` names, its content decrypted and drawn.
+#[test]
+fn a_rebuild_whose_trailer_lacks_the_encryption_dictionary_is_not_taken() {
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let plain = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj
+4 0 obj << /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let mut doc = Document::open(Arc::new(plain)).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let root = doc.root().unwrap();
+    let mut file = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // The update: one object, past the 4 KiB footer window, and a trailer without `/Encrypt`, cut off before its
+    // `startxref`.
+    file.extend_from_slice(b"900 0 obj\n<< /Length 5000 >>\nstream\n");
+    file.extend(std::iter::repeat_n(b' ', 5000));
+    file.extend_from_slice(format!("\nendstream\nendobj\ntrailer\n<< /Size 901 /Root {} {} R >>\n", root.num, root.generation).as_bytes());
+    let file = Arc::new(file);
+    let open = |password: &str| {
+        let mut r = PageRenderer::new(file.clone(), RenderConfig { password: Some(Arc::from(password)), ..RenderConfig::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        page.error.is_none().then(|| rgb_at(&page.rgba, page.width as usize, 30, page.height as usize - 30))
+    };
+    assert_eq!(open("wrong"), None, "a wrong password opens nothing");
+    assert_eq!(open(""), None, "nor does none");
+    assert_eq!(open("user"), Some([0, 0, 255]), "the right one draws the decrypted content");
+}
+
+/// A stream with no `endstream` after it, as a producer that writes `endstrea` after every stream
+/// leaves it, is the bytes its `/Length` gives: "how many bytes of the PDF file are used for the
+/// stream's data" (ISO 32000-2 7.3.8.2). Nothing found its end, so the page's content was lost and
+/// the page drew blank, while other readers draw it. Vendored hayro-syntax patch 36.
+#[test]
+fn a_content_stream_without_endstream_is_drawn_to_its_length() {
+    use super::*;
+    let content = "1 0 0 rg 0 0 200 200 re f";
+    let centre = |end: &str| -> [u8; 4] {
+        let page = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\n{end}\nendobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let page = PageRenderer::new(Arc::new(page.into_bytes()), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    assert_eq!(centre("endstream"), [255, 0, 0, 255]);
+    for end in ["endstrea", "", "end"] {
+        assert_eq!(centre(end), [255, 0, 0, 255], "{end:?}");
+    }
+}
+
+/// A ToUnicode CMap with a token the scanner can't read before its mappings (a stray `>` after
+/// a CMap name that holds one, as in pdf.js `issue11651.pdf`; a CMap name with spaces in it, as
+/// in `issue7492.pdf`) still maps its codes (vendored hayro-cmap patch 3, hayro-postscript
+/// patch 2): the scan stopped at that token, so the page's text could not be copied or found.
+#[test]
+fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
+    use hayro::hayro_interpret::hayro_cmap::{BfString, CMap};
+    let body = "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfchar\n<002B> <0048>\n<0048> <0065>\nendbfchar\n1 beginbfrange\n<0050> <0052> <0061>\nendbfrange\nendcmap\n";
+    let stray = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CIDSystemInfo <</Registry (Adobe) /Ordering (UC>) /Supplement 0>> def\n/CMapName /Adobe-Identity-UC> def\n/CMapType 2 def\n{body}"
+    );
+    let spaced = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CMapName /-usr-share-fonts-Panton Family-Fontfabric - Panton.otf,000-UTF16 def\n/CMapType 2 def\n{body}"
+    );
+    for (what, data) in [("a stray >", stray), ("a name with spaces", spaced)] {
+        let cmap = CMap::parse(data.as_bytes(), |_| None).unwrap_or_else(|| panic!("{what}: parsed"));
+        assert_eq!(cmap.lookup_bf_string(0x2B), Some(BfString::Char('H')), "{what}");
+        assert_eq!(cmap.lookup_bf_string(0x48), Some(BfString::Char('e')), "{what}");
+        assert_eq!(cmap.lookup_bf_string(0x51), Some(BfString::Char('b')), "{what}: bfrange");
+    }
+    // Unreadable tokens are stepped over a bounded number of times (1,024 per CMap): a long run
+    // of them ends the scan, and the mappings read before it are kept.
+    let flood = format!("{body}{}", "-".repeat(1 << 16));
+    assert!(CMap::parse(flood.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x2B).is_some()));
+    // A run past the limit before the mappings ends the scan before them, and a CMap that read
+    // no mappings, like one of unreadable tokens only, reports failure. (A run of `-` with
+    // nothing between them is one token, as in PostScript, so these are spaced.)
+    let flood_first = format!("{}\n{body}", "- ".repeat(1025));
+    assert!(CMap::parse(flood_first.as_bytes(), |_| None).is_none());
+    assert!(CMap::parse("-".repeat(1 << 16).as_bytes(), |_| None).is_none());
+    // Unclosed strings after the mappings: the scan ends and keeps them. (That the first one,
+    // which reads to the end of the data, is not read again for each `(` inside it is
+    // hayro-postscript's `parse_object_or_skip_does_not_read_a_failed_read_again`.)
+    let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
+    assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
