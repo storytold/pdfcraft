@@ -3096,6 +3096,52 @@ fn drawn_images(doc: &Document) -> Vec<Stream> {
         .collect()
 }
 
+/// A tolerated row must not be regrouped after its highest tile moves during X sorting.
+#[test]
+fn fragment_row_tolerance_preserves_every_tiles_pixels() {
+    for aligned in [true, false] {
+        for merge_fragments in [false, true] {
+            let mut doc = Document::new_empty();
+            let mut refs = Vec::new();
+            for gray in [20u8, 80, 140, 220] {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("XObject"));
+                d.set(b"Subtype".to_vec(), Object::name("Image"));
+                d.set(b"Width".to_vec(), Object::Int(10));
+                d.set(b"Height".to_vec(), Object::Int(10));
+                d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                refs.push(doc.add(Object::Stream(Stream::flate(d, &[gray; 100]))));
+            }
+            let content = if aligned {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 10 10 0 cm /T1 Do Q q 10 0 0 10 20 0 cm /T2 Do Q q 10 0 0 10 30 0 cm /T3 Do Q"
+            } else {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 9.992 10 0.009 cm /T1 Do Q q 10 0 0 9.982 20 0.018 cm /T2 Do Q q 10 0 0 9.991 30 0.009 cm /T3 Do Q"
+            };
+            page(&mut doc, &[("T0", refs[0]), ("T1", refs[1]), ("T2", refs[2]), ("T3", refs[3])], content);
+            let off = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+            let report = optimize(&mut doc, &Settings { merge_fragments, color: off, gray: off, ..Settings::default() }).unwrap();
+            // Save and reopen, then inspect only images still drawn by the optimized page.
+            let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let drawn = drawn_images(&doc);
+            if report.fragments_merged == 0 {
+                assert_eq!(report.merged_images, 0);
+                assert_eq!(drawn.len(), 4);
+                for (image, gray) in drawn.iter().zip([20u8, 80, 140, 220]) {
+                    assert_eq!(image.decoded().unwrap(), [gray; 100]);
+                }
+            } else {
+                assert!(merge_fragments);
+                assert_eq!((report.fragments_merged, report.merged_images, drawn.len()), (4, 1, 1));
+                let image = &drawn[0];
+                assert_eq!((image.dict.int(b"Width"), image.dict.int(b"Height")), (Some(40), Some(10)));
+                let row: Vec<_> = [20u8, 80, 140, 220].into_iter().flat_map(|gray| [gray; 10]).collect();
+                assert_eq!(image.decoded().unwrap(), row.repeat(10), "aligned={aligned}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image() {
     // 120 strips, every other one JPEG and half as wide (as one PDF printer writes them).
@@ -4194,6 +4240,107 @@ fn mixed_text_and_small_halftone_regions_keep_their_tones_with_wide_white_margin
         let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
         assert_eq!(render(&saved), before, "local halftone {side}x{side}");
     }
+}
+
+#[test]
+fn dictionary_destinations_broken_named_destinations_and_both_dest_tables() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let dict_dest = |target: ObjRef| {
+        let mut d = Dict::new();
+        d.set(b"D".to_vec(), Object::Array(vec![Object::Ref(target), Object::name("Fit")]));
+        Object::Dict(d)
+    };
+    let link = |doc: &mut Document, dest: Object| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        d.set(b"Dest".to_vec(), dest);
+        Object::Ref(doc.add(Object::Dict(d)))
+    };
+    let missing = ObjRef::new(999, 0);
+    // Links: (1) explicit dictionary destination to `p` (valid), (2) explicit dictionary
+    // destination to `missing` (invalid), (3) named destination "dict_ok" whose value is
+    // `<< /D [p /Fit] >>` (valid), (4) named destination "broken_tree" whose target page is
+    // `missing` (invalid).
+    let annots = vec![
+        link(&mut doc, dict_dest(p)),
+        link(&mut doc, dict_dest(missing)),
+        link(&mut doc, Object::Array(vec![Object::Int(i64::from(u32::MAX) + 1), Object::name("Fit")])),
+        link(&mut doc, s("dict_ok")),
+        link(&mut doc, s("broken_tree")),
+    ];
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    // Bookmark with an indirect GoTo action pointing to "broken_old" in catalog /Dests (whose
+    // page is `missing`), and a second bookmark pointing to "old_ok" in catalog /Dests.
+    let outlines = doc.add(Object::Null);
+    let mut goto_broken = Dict::new();
+    goto_broken.set(b"S".to_vec(), Object::name("GoTo"));
+    goto_broken.set(b"D".to_vec(), Object::name("broken_old"));
+    let goto_broken = doc.add(Object::Dict(goto_broken));
+    let mut bm_broken = Dict::new();
+    bm_broken.set(b"Title".to_vec(), s("Broken"));
+    bm_broken.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_broken.set(b"A".to_vec(), Object::Ref(goto_broken));
+    let bm_broken = doc.add(Object::Dict(bm_broken));
+    let mut bm_ok = Dict::new();
+    bm_ok.set(b"Title".to_vec(), s("Ok"));
+    bm_ok.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_ok.set(b"Dest".to_vec(), Object::name("old_ok"));
+    let bm_ok = doc.add(Object::Dict(bm_ok));
+    doc.update_dict(bm_broken, |d| d.set(b"Next".to_vec(), Object::Ref(bm_ok))).unwrap();
+    let mut o = Dict::new();
+    o.set(b"First".to_vec(), Object::Ref(bm_broken));
+    o.set(b"Last".to_vec(), Object::Ref(bm_ok));
+    doc.set(outlines, Object::Dict(o));
+
+    // /Names /Dests has "broken_tree" (pointing to `missing`) and "dict_ok" (`<< /D [p /Fit] >>`).
+    let broken_dest = doc.add(dict_dest(missing));
+    let ok_dest = doc.add(dict_dest(p));
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("broken_tree"), Object::Ref(broken_dest), s("dict_ok"), Object::Ref(ok_dest)]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+
+    // Catalog /Dests has "broken_old" (pointing to `missing`) and "old_ok" (`<< /D [p /Fit] >>`).
+    let mut old_dests = Dict::new();
+    old_dests.set(b"broken_old".to_vec(), Object::Array(vec![Object::Ref(missing), Object::name("Fit")]));
+    old_dests.set(b"old_ok".to_vec(), dict_dest(p));
+    let old_dests = doc.add(Object::Dict(old_dests));
+
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"Names".to_vec(), Object::Dict(names));
+        c.set(b"Dests".to_vec(), Object::Ref(old_dests));
+        c.set(b"Outlines".to_vec(), Object::Ref(outlines));
+    })
+    .unwrap();
+
+    // Space audit claims both /Names /Dests and catalog /Dests under NamedDestinations.
+    let only_tree = {
+        let mut d = doc.clone();
+        d.update_dict(root, |c| {
+            c.remove(b"Dests");
+        })
+        .unwrap();
+        audit_space(&d, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes
+    };
+    let both_tables = audit_space(&doc, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes;
+    assert!(both_tables > only_tree, "catalog /Dests is counted alongside /Names /Dests: {both_tables} vs {only_tree}");
+
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((report.invalid_links, report.invalid_bookmarks, report.unreferenced_dests), (3, 1, 2), "{report:?}");
+    let left_links = doc.get(p).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(left_links, 2, "the two valid dictionary/named links remain");
+    assert!(doc.get(bm_broken).as_dict().unwrap().get(b"A").is_none(), "broken bookmark action is cleared");
+    assert!(doc.get(bm_ok).as_dict().unwrap().get(b"Dest").is_some(), "valid bookmark destination stays");
+    assert_eq!(named_dest_keys(&doc), vec![b"dict_ok".to_vec()]);
+    let left_old = doc.get(old_dests).as_dict().cloned().unwrap();
+    assert!(left_old.contains(b"old_ok") && !left_old.contains(b"broken_old"), "{left_old:?}");
 }
 
 /// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.
