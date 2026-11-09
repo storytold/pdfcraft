@@ -16,6 +16,7 @@ mod list_selection;
 mod model_3d;
 mod model_render;
 mod optimize_content_boundaries;
+mod portfolio_info;
 mod protect_certificate_command;
 mod protect_certificate_schema;
 mod redact_after_stray_q_form;

@@ -46,6 +46,14 @@ pub(crate) const MAX_DEPTH: usize = 50;
 // A form a reader still shows must be walkable here, or a redaction removes content that is
 // visible; the build says so rather than a test, so the two limits cannot drift apart.
 const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
+/// Bounds on the removed text collected for the metadata check (#2448).
+const MAX_RUNS: usize = 100_000;
+const MAX_RUN_BYTES: usize = 64 * 1024;
+/// The removed text kept for the whole document, in bytes. A glyph's `/ToUnicode` text has no
+/// length limit, so a short content stream can make many runs of nearly [`MAX_RUN_BYTES`] each,
+/// on every page; past this the rest is not kept and the metadata check fails closed, as for
+/// any other text it couldn't keep (review on #2539).
+pub(crate) const MAX_REMOVED_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -162,6 +170,19 @@ pub(crate) struct Scope<'a> {
     xobject_oc_cache: HashMap<ObjRef, bool>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
+    /// Apply: the text of the glyphs removed under the regions, one entry per run of adjacent
+    /// glyphs (#2448), so the document's metadata can be checked for it. Call [`Scope::flush`]
+    /// after processing to close the last run.
+    pub removed_text: Vec<String>,
+    /// Some removed text was not kept (too many runs, or a run too long): the metadata check
+    /// can't search for it and must fail closed.
+    pub removed_cut: bool,
+    /// Bytes of removed text this scope may still keep: what is left of the document's
+    /// [`MAX_REMOVED_BYTES`] (see [`Scope::with_removed_room`]).
+    pub removed_room: usize,
+    /// The run being collected, and where its last glyph ended (device space) with its height.
+    run: String,
+    run_end: Option<((f64, f64), f64)>,
     /// Collects the glyph runs removed under a region in apply mode (`None` = not collected).
     /// The redaction proof's snapshot is what sets it: it must know what applying is about to
     /// remove, by the interpreter's own judgement, without trusting anything else to it.
@@ -193,6 +214,11 @@ impl<'a> Scope<'a> {
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
+            removed_text: Vec::new(),
+            removed_cut: false,
+            removed_room: MAX_REMOVED_BYTES,
+            run: String::new(),
+            run_end: None,
             removed: None,
             shown: 0,
             fonts: HashMap::new(),
@@ -200,6 +226,49 @@ impl<'a> Scope<'a> {
             depth: 0,
             budget,
         }
+    }
+
+    /// Keep at most `room` bytes of removed text: what earlier pages left of the document's
+    /// [`MAX_REMOVED_BYTES`].
+    pub fn with_removed_room(mut self, room: usize) -> Self {
+        self.removed_room = room;
+        self
+    }
+
+    /// Close the run of removed text being collected.
+    pub fn flush(&mut self) {
+        self.run_end = None;
+        let run = std::mem::take(&mut self.run);
+        if !run.trim().is_empty() {
+            if self.removed_text.len() < MAX_RUNS && run.len() <= self.removed_room {
+                self.removed_room -= run.len();
+                self.removed_text.push(run);
+            } else {
+                self.removed_cut = true;
+            }
+        }
+    }
+
+    /// Note a removed glyph's text: `origin` and `end` are where it starts and ends in device
+    /// space, `height` its size there. A glyph that starts where the last one ended continues the
+    /// run, one a little further along the line is a new word of it, and anything else starts a
+    /// new run, so separate marks don't join their text.
+    fn removed(&mut self, text: &str, origin: (f64, f64), end: (f64, f64), height: f64) {
+        if let Some((last, h)) = self.run_end {
+            let gap = (origin.0 - last.0).hypot(origin.1 - last.1);
+            let h = h.max(height);
+            if !(gap.is_finite() && h.is_finite()) || gap > 1.5 * h {
+                self.flush();
+            } else if gap > 0.15 * h && !self.run.ends_with(char::is_whitespace) {
+                self.run.push(' ');
+            }
+        }
+        if self.run.len().saturating_add(text.len()) <= MAX_RUN_BYTES {
+            self.run.push_str(text);
+        } else {
+            self.removed_cut = true;
+        }
+        self.run_end = Some((end, height));
     }
 
     /// Sanitizing visits every form XObject (not only those under a region).
@@ -856,6 +925,26 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
                             !rects.is_empty()
                         }
                     };
+                    if scope.mode == Mode::Apply && scope.hidden_text.is_none() {
+                        if hit {
+                            // The glyph ends after its character and word spacing, in `trm`'s
+                            // units (the size is in `trm`), so letter-spaced text stays one word.
+                            let spaced = if size != 0.0 { w0 + spacing / size } else { w0 };
+                            let end = trm.apply(spaced, 0.0);
+                            let top = trm.apply(0.0, 1.0);
+                            let height = (top.0 - origin.0).hypot(top.1 - origin.1);
+                            let text = f.text_of(code);
+                            // A glyph whose text isn't known could stand for anything in the
+                            // metadata, so the metadata check can't rely on the text it has
+                            // (review on #2539): it fails closed, as for text it couldn't keep.
+                            if text.is_none() {
+                                scope.removed_cut = true;
+                            }
+                            scope.removed(text.as_deref().unwrap_or(""), origin, end, height);
+                        } else {
+                            scope.flush();
+                        }
+                    }
                     glyphs.push(Glyph { bytes: pos..pos + len, advance, hit, rects });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
                     pos += len;
@@ -1001,6 +1090,8 @@ fn xobject(
                     return None;
                 }
                 scope.report.forms_removed += 1;
+                // Its text was never read, so the metadata check can't know what went with it.
+                scope.removed_cut = true;
                 out.replaced.push(name);
                 out.doomed.push(r);
                 return Some(None);
@@ -1027,6 +1118,7 @@ fn xobject(
                 }
                 Err(_) if scope.mode == Mode::Apply => {
                     scope.report.forms_removed += 1;
+                    scope.removed_cut = true;
                     out.replaced.push(name);
                     out.doomed.push(r);
                     return Some(None);
