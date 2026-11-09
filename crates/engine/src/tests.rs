@@ -11916,6 +11916,25 @@ fn many_comments_imported_without_their_appearances_are_summed_up_in_one_line() 
     assert_eq!(line.matches(": the appearance").count(), 4, "five named, the long one cut before its reason: {line}");
 }
 
+/// PDF/A-2 6.1.2 through the ordinary save: Save as PDF/A on a file without a binary comment, or
+/// with a 2.0 header, saves a file whose header verifies.
+#[test]
+fn save_as_pdfa_saves_a_compliant_file_header() {
+    let plain = fixture(1);
+    assert!(plain.starts_with(b"%PDF-1.7\n1 0 obj"), "the fixture has no binary comment");
+    let mut newer = plain.clone();
+    newer.splice(5..8, *b"2.0");
+    for bytes in [plain, newer] {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, Arc::new(bytes), None).unwrap();
+        s.apply(id, Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"), "{:?}", String::from_utf8_lossy(&saved[..20]));
+        let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+        assert!(pdfcraft_preflight::verify(&reopened, pdfcraft_preflight::Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    }
+}
+
 /// ISO 32000-2 §7.6.6, Table 25: a document whose only encryption is for its embedded files,
 /// authorised when one is opened (`/AuthEvent /EFOpen`), opens without a password, lists its
 /// attachment, and saves with the attachment still encrypted.
