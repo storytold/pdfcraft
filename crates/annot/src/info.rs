@@ -2,6 +2,7 @@ use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
+use super::text_style;
 use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -281,10 +282,15 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let direct = crate::draw::with_direct_values(doc, raw);
     let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { drawn_color(d, b"C") };
+    // A text box reports the colour and size it is drawn in (`/DA`, or `/DS` where it sets one).
+    let style = (subtype == "FreeText").then(|| text_style::text_style(d, None));
+    let color = match &style {
+        Some(s) => Some(s.color),
+        None => drawn_color(d, b"C"),
+    };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
         if subtype == "FreeText" {
-            if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
+            appearance::border_width(d)
         } else {
             d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0)
         }
@@ -301,7 +307,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
-        font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        font_size: style.map(|s| s.size),
         border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
         border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),

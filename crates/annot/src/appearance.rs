@@ -8,19 +8,25 @@
 //! itself; for the other values, callers that hold the document follow references first
 //! (`draw::with_direct_values`).
 //!
-//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding, and draw Thai from the craft-fonts Thai face as Type 3
-//! glyphs (`pdfcraft_fonts::shaped_text`, the writer Add text uses); line breaking uses
-//! [`text_width`], the standard-14 metrics and the Thai face's shaped advances.
+//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
+//! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
+//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face as Type 3 glyphs
+//! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
+//! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
-use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, win_ansi, wrap_with};
+use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
 
 /// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
 /// face that text boxes draw it with.
 pub fn text_width(text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, helvetica_width)
+    text_width_in(pdfcraft_fonts::Std14::Helvetica, text, size)
+}
+
+/// [`text_width`] in the standard `face` a text box draws its other text in.
+pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
+    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -410,13 +416,17 @@ pub fn da_border(d: &Dict) -> Option<Rgb> {
     col
 }
 
-/// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt.
+/// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt: a `Tf` without a
+/// usable size (missing, zero, negative or not a number) keeps 12 pt, and sizes past 400 pt are
+/// capped. A text box has no automatic size, so a zero size, which means auto-size in a form
+/// field's `/DA` (ISO 32000-2 §12.7.4.3), is the default here. An operand that isn't a finite
+/// number (`NaN`, `inf`, which Rust's parser would otherwise accept) is ignored with its operator.
 pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
     let toks: Vec<&str> = da.split_whitespace().collect();
     let mut col = [0.0; 3];
     let mut size = 12.0;
-    let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok());
+    let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite());
     for (i, t) in toks.iter().enumerate() {
         match *t {
             "rg" if i >= 3 => {
@@ -554,18 +564,19 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
 pub(crate) fn helvetica_resource() -> Object {
-    Object::Dict(helvetica_fonts())
+    Object::Dict(font_resources(pdfcraft_fonts::Std14::Helvetica))
 }
 
-/// [`helvetica_resource`]'s dictionary.
-fn helvetica_fonts() -> Dict {
+/// `/Font` resources naming one standard face with WinAnsiEncoding, under the resource name
+/// [`crate::text_style::resource_name`] gives it (`/Helv` for Helvetica).
+fn font_resources(face: pdfcraft_fonts::Std14) -> Dict {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
-    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    font.set(b"BaseFont".to_vec(), Object::name(face.base_font()));
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let mut fonts = Dict::new();
-    fonts.set(b"Helv".to_vec(), Object::Dict(font));
+    fonts.set(crate::text_style::resource_name(face).as_bytes().to_vec(), Object::Dict(font));
     fonts
 }
 
@@ -661,7 +672,8 @@ pub(crate) fn build_on_page(doc: &Document, d: &Dict, page: Option<[f64; 4]>) ->
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
         b"FileAttachment" => return draw_icon(&context, "PushPin", [0.0, 0.47, 0.84], drawing),
         b"Stamp" => return draw_stamp(&context, drawing),
-        b"FreeText" => return draw_free_text(&context, drawing),
+        // The face a text box's `/DA` font names in the form's `/DR`, when it names one.
+        b"FreeText" => return draw_free_text(&context, drawing, crate::text_style::dr_face(doc, d)),
         _ => {}
     }
     let mut drawing = drawing;
@@ -971,11 +983,31 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
 }
 
 fn draw_redaction(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
+    let d = context.dict;
     let stroke = context.stroke;
     let c = &mut drawing.content;
     // While marked: the outline of each area (the fill comes when applied).
-    let q = quads(context)?;
-    let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
+    // ISO 32000-2 gives a mark no outline colour (§12.5.6.23, Table 195). An array `/OC` of
+    // three numbers is the one some writers give it, and is drawn (the observation is in
+    // `parity/acrobat-features.toml`); `/OC` as ISO 32000-2 defines it (Table 166) is an
+    // optional-content dictionary, which this leaves alone.
+    let outline = nums(d, b"OC").and_then(|c| match c.as_slice() {
+        [r, g, b] if c.iter().all(|x| x.is_finite()) => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
+        _ => None,
+    });
+    // Quadrilaterals are outlined in the `/OC` colour, else in `/C` as they always were.
+    let (q, col) = match d.get(b"QuadPoints") {
+        Some(_) => (quads(context)?, outline.or(stroke)),
+        // Without `/QuadPoints`, `/Rect` is the area (Table 195): outlined just inside its
+        // edges when the mark names an outline colour, else not drawn while marked.
+        None => {
+            let outline = outline?;
+            let rect = context.rect;
+            let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
+            (vec![[x0, y1, x1, y1, x0, y0, x1, y0]], Some(outline))
+        }
+    };
+    let col = col.unwrap_or([0.89, 0.13, 0.13]);
     c.push_str(&format!("{}1 w\n", rg_stroke(col)));
     for quad in q.iter() {
         c.push_str(&format!(
@@ -1359,7 +1391,7 @@ fn shaped_border(
     Some(rect)
 }
 
-fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
+fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     let d = context.dict;
     let parts = context.parts;
     let rect = context.rect;
@@ -1367,11 +1399,12 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let mut c = std::mem::take(&mut drawing.content);
     let mut res = std::mem::take(&mut drawing.resources);
     let _tail = std::mem::take(&mut drawing.tail);
-    let (text_color, size) = parse_da(d);
+    let crate::text_style::TextStyle { face, size, color: text_color } = crate::text_style::text_style(d, dr_face);
     // The box's border and a callout's leader line: their own colour, else the text's.
     let line_color = da_border(d).unwrap_or(text_color);
     let bg = stroke;
-    let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
+    // Without `/BS` or `/Border`, the `/Border` default [0 0 1]: a 1-pt border (Table 166).
+    let bw = border_width(d);
     // A callout: the leader line (arrowhead at its first point), and the text box inside
     // `/Rect` by `/RD`.
     // Text added to a turned page is drawn upright in its displayed box, which the form
@@ -1469,37 +1502,38 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         c.push_str("/GS1 gs\n");
     }
     c.push_str(&format!(
-        "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
+        "{} {} {} {} re W n\nBT\n/{} {} Tf\n{}",
         n(rect[0]),
         n(rect[1]),
         n(rect[2] - rect[0]),
         n(rect[3] - rect[1]),
+        crate::text_style::resource_name(face),
         n(size),
         rg(text_color)
     ));
     let mut out = c.into_bytes();
-    let lines = wrap(&text, size, width);
+    let lines = pdfcraft_fonts::wrap_with(&text, size, width, |s, size| text_width_in(face, s, size));
     let mut y = rect[3] - pad - size * reach(&lines)[0];
     if round {
         y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
     // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
     // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
-    // `?`, which `undrawable_text` reports), in Helvetica.
-    let mut fonts = helvetica_fonts();
+    // `?`, which `undrawable_text` reports), in the box's standard face.
+    let mut fonts = font_resources(face);
     let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
     let mut current = None;
     for pieces in &pieces {
         if y < rect[1] - size {
             break;
         }
-        let lw = shaped_text::pieces_width(pieces, size, 0.0, helvetica_width);
+        let lw = shaped_text::pieces_width(pieces, size, 0.0, |s, size| face.text_width(s, size));
         let x = match q {
             1 => rect[0] + pad + (width - lw) / 2.0,
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        shaped.show_line(&mut out, pieces, x, y, size, "Helv", win_ansi, |s| helvetica_width(s, size), &mut current);
+        shaped.show_line(&mut out, pieces, x, y, size, crate::text_style::resource_name(face), win_ansi, |s| face.text_width(s, size), &mut current);
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
