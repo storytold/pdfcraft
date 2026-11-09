@@ -305,7 +305,8 @@ impl Session {
 
     /// [`Self::combine_unlocked`] where sources with the same `groups` key (by position) are one
     /// file split into several runs placed apart: each file is opened and copied once, so it keeps
-    /// one bookmark, its links between its own pages, its fields and its attachments whole (see
+    /// one bookmark, and its links between its own pages and its fields whole across its runs; its
+    /// attachments come along when its runs use all of its pages (see
     /// `pdfcraft_organize::combine_grouped`). A group's later sources use its first source's bytes
     /// and password; a source without a key is a file of its own.
     pub fn combine_grouped(&self, sources: &[CombineSource], groups: &[u64], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {
