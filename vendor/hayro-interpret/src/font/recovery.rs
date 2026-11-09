@@ -574,11 +574,23 @@ const WINANSI_GUESS: &str = "the strict text is the code read as WinAnsi, a last
      /ToUnicode or a Unicode cmap";
 
 /// The last glyph id [`MacGlyphOrder`] reads. Fonts made for Windows (Arial, Times New Roman,
-/// the `TTE…t00` subsets of their printer drivers) keep the standard Macintosh order through
-/// the accented letters and the first symbols, but not to its end: past about this id a glyph is
-/// often its neighbour's (the en dash where the order has `oe`, the right quote where it has the
-/// left one, the euro sign where it has `fraction`), so those ids read as nothing.
+/// Tahoma, Verdana, the `TTE…t00` subsets of their printer drivers) keep the standard Macintosh
+/// order through the ellipsis (171) and leave it at 172, where they have `Agrave` and the order
+/// the no-break space: from there on a glyph is its neighbour's (the en dash where the order has
+/// `oe`, the right quote where it has the left one, the euro sign where it has `fraction`), so
+/// those ids read as nothing.
 const MAC_ORDER_HOLDS: u32 = 171;
+
+/// Glyph ids up to [`MAC_ORDER_HOLDS`] where fonts of those families put another glyph than the
+/// order: `notequal` (143, Courier's `AE`), `pi` (155, a private-use glyph in Franklin Gothic),
+/// `Omega` (159, Arial Narrow) and `Delta` (168, Trebuchet). They read as nothing.
+const MAC_ORDER_DIFFERS: [u32; 4] = [143, 155, 159, 168];
+
+/// Whether [`MacGlyphOrder`] reads glyph id `gid`: up to [`MAC_ORDER_HOLDS`], but not the ids of
+/// [`MAC_ORDER_DIFFERS`].
+fn mac_order_reads(gid: u32) -> bool {
+    gid <= MAC_ORDER_HOLDS && !MAC_ORDER_DIFFERS.contains(&gid)
+}
 
 /// Accented letters of the standard Macintosh order and their base letters (glyph ids): in a
 /// Latin typeface an accented letter is as wide as its base letter (`Ä` as `A`, `é` as `e`). The
@@ -862,13 +874,13 @@ impl Rule for MacGlyphOrder {
             MacSource::Names => {
                 let id = g_name_number(glyph.name?)?;
                 let c = Some(id)
-                    .filter(|id| *id <= MAC_ORDER_HOLDS)
+                    .filter(|id| mac_order_reads(*id))
                     .and_then(mac_glyph_char)?;
                 Some((BfString::Char(c), RecoveryMode::Fill))
             }
             MacSource::Program { override_strict } => {
                 let c = Some(glyph.gid.to_u32())
-                    .filter(|id| *id <= MAC_ORDER_HOLDS)
+                    .filter(|id| mac_order_reads(*id))
                     .and_then(mac_glyph_char)?;
                 let mode = if *override_strict {
                     RecoveryMode::Override {

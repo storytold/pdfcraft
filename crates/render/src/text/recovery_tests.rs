@@ -248,8 +248,9 @@ fn accented_letters_wider_than_their_base_letters_reject_the_font() {
 }
 
 /// The two thresholds of the drift checks, at every value around them: a glyph id beside a text
-/// reads one more character exactly when it is 171 or less (172, a no-break space, is blank),
-/// and an accent reads exactly when its width is within 1% of its base letter's (500).
+/// reads one more character exactly when it is 171 or less (172, a no-break space, is blank) and
+/// not one of the ids where some Windows fonts differ from the order (≠, π, Ω, ∆), and an accent
+/// reads exactly when its width is within 1% of its base letter's (500).
 #[test]
 fn the_drift_thresholds_hold_at_every_value_around_them() {
     let letters = gids("some more words here");
@@ -258,11 +259,11 @@ fn the_drift_thresholds_hold_at_every_value_around_them() {
     };
     let base = visible(&letters, subset(300, &letters, Cmap::None, None));
     assert_eq!(base, 17);
-    for id in (160..=185).filter(|id| *id != 172) {
+    for id in (140..=185).filter(|id| *id != 172) {
         let mut ids = letters.clone();
         ids.push(id);
         let read = visible(&ids, subset(300, &ids, Cmap::None, None));
-        assert_eq!(read, base + usize::from(id <= 171), "glyph {id}");
+        assert_eq!(read, base + usize::from(id <= 171 && ![143, 155, 159, 168].contains(&id)), "glyph {id}");
     }
     let mut ids = letters.clone();
     ids.push(112);
