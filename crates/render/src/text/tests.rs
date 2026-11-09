@@ -195,9 +195,10 @@ fn redraws_of_a_long_replacement_share_a_text_budget() {
 fn text_after_an_inline_image_survives_a_non_ascii_byte_before_a_later_ei() {
     // Everyday content both ways: a string with a byte above 0x7F, and a later word holding
     // a capital "EI". The end-of-data look-ahead used to read the string's bytes as image
-    // data, so the image swallowed the rest of the page.
+    // data, so the image swallowed the rest of the page. The image is filtered, so its
+    // length isn't known up front and the look-ahead decides.
     let pdf = marked_pages(&[
-        "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \0 EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
+        "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray /F /AHx ID 00> EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
     ]);
 
     assert!(marked_text(&pdf, 0).plain_text().contains("EINGANG"), "the text after the inline image was not extracted");
@@ -663,10 +664,12 @@ fn the_annex_d2_alias_codes_read_as_an_ordinary_hyphen_and_space() {
 
 /// #3169, #3170: glyph names outside the Adobe Glyph List still read as text. Ligature
 /// (`f_i`) and suffixed (`hyphen.case`) names go by the glyph list specification's full
-/// mapping. A name that only numbers the glyph (`c251` small caps, `C39`, `C174`, `C39.sc`)
-/// reads as nothing, not as a guess from the code (review on #3239: with `/C1` at 233,
-/// StandardEncoding's 233 would read `Ø` for a glyph drawn as `é`), and so do a ZapfDingbats
-/// name (`a12`) and a name with no meaning left (`foo`).
+/// mapping. A name that only numbers the glyph reads as nothing, not as a guess from the code
+/// (review on #3239: with `/C1` at 233, StandardEncoding's 233 would read `Ø` for a glyph drawn
+/// as `é`). `C39` at 39 and `C174` at 174 name their own codes, but this font's other numbered
+/// names (`c251` at 97, `C39.sc` at 61, `C1` at 233, `a12` at 88) don't, so they read as
+/// nothing too (see `numbered_glyph_names_read_as_their_own_code`). A name with no meaning
+/// left (`foo`) reads as nothing.
 #[test]
 fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     use lopdf::{Object, dictionary};
@@ -695,11 +698,145 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     assert_eq!(lines, ["fi", "fl", "-", "fi"], "{text:?}");
 }
 
+/// A glyph name that only numbers its glyph, with no `/ToUnicode` (ISO 32000-2 §9.10.2 has no
+/// route for it), reads as its code's Latin-1 character when the number is that very code, in
+/// decimal (`C70` at 70, `C0071` at 71, `MT72` at 72, `C39` at 39, `C174` at 174) or
+/// hexadecimal (`G49` at 0x49, `GE9` at 0xE9), as pdftotext, PDFium and MuPDF read
+/// it: Windows printer drivers and typesetters name subset glyphs so. Only in a font where every
+/// numbered name names its own code: one more name numbering another code (`/C1` at 233, review
+/// on #3239) turns the whole font back to nothing, and so does a font whose names number
+/// something else, where a name can match its code by coincidence (`/MT40` at 0x40). A subset
+/// that counts its glyphs in order of first use from code 1 (`/Differences [1 /C1 /C2 … /C80]`)
+/// names its own codes too, but `/C65` there is the 65th glyph used, not `A`: a numbered name at
+/// a control code (`C1` at 1, `C9` at 9) gives the counter away and the font reads nothing.
+/// Code 32 is the first code a numbered name may name: `C32` at 32 reads as a space.
+#[test]
+fn numbered_glyph_names_read_as_their_own_code() {
+    use lopdf::{Object, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let encoding = |differences: Vec<Object>| Object::Dictionary(dictionary! { "Type" => "Encoding", "Differences" => differences });
+    // One glyph per line, as in `glyph_names_outside_the_glyph_list_still_read_as_text`.
+    let one_per_line = |codes: &[u8]| {
+        let mut content = b"BT /F1 20 Tf 20 290 Td".to_vec();
+        for code in codes {
+            content.extend_from_slice(format!(" <{code:02x}> Tj 0 -25 Td").as_bytes());
+        }
+        content.extend_from_slice(b" ET");
+        content
+    };
+    let own = encoding(vec![
+        Object::Integer(70),
+        name("C70"),
+        name("C0071"),
+        name("MT72"),
+        name("G49"),
+        Object::Integer(233),
+        name("GE9"),
+        Object::Integer(39),
+        name("C39"),
+        Object::Integer(174),
+        name("C174"),
+    ]);
+    let one_other = encoding(vec![Object::Integer(70), name("C70"), Object::Integer(233), name("C1")]);
+    let numbered_otherwise = encoding(vec![Object::Integer(1), name("C70"), name("C105"), Object::Integer(64), name("MT40")]);
+    let counter = encoding(std::iter::once(Object::Integer(1)).chain((1..=80).map(|n| name(&format!("C{n}")))).collect());
+    let own_and_a_control = encoding(vec![Object::Integer(9), name("C9"), Object::Integer(70), name("C70"), name("C0071")]);
+    // Code 32 is the first code a numbered name may name: `/C32` at 32 is a space, not a counter.
+    let own_from_32 = encoding(vec![Object::Integer(32), name("C32"), Object::Integer(70), name("C70"), name("C0071")]);
+    let pages = [
+        one_per_line(b"FGHI\xe9'\xae"),
+        one_per_line(b"F\xe9"),
+        one_per_line(b"\x01\x02@"),
+        one_per_line(b"\x01\x20\x41\x42\x50"),
+        one_per_line(b"\x09FG"),
+        b"BT /F1 20 Tf 20 290 Td <462047> Tj ET".to_vec(),
+    ];
+    let pdf = encoded_pages(&[
+        (own, &pages[0][..]),
+        (one_other, &pages[1][..]),
+        (numbered_otherwise, &pages[2][..]),
+        (counter, &pages[3][..]),
+        (own_and_a_control, &pages[4][..]),
+        (own_from_32, &pages[5][..]),
+    ]);
+    let lines = |page| {
+        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
+        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(lines(0), ["F", "G", "H", "I", "\u{e9}", "'", "\u{ae}"]);
+    assert!(lines(1).is_empty(), "/C1 at 233 beside /C70 at 70: {:?}", lines(1));
+    assert!(lines(2).is_empty(), "/MT40 at 0x40 among names numbering other codes: {:?}", lines(2));
+    assert!(lines(3).is_empty(), "a first-use counter /C1 … /C80 from code 1: {:?}", lines(3));
+    assert!(lines(4).is_empty(), "/C9 at 9 beside /C70 at 70: {:?}", lines(4));
+    let page5 = extract_page(&pdf, 5, &InterpreterSettings::default()).unwrap().plain_text();
+    assert_eq!(page5.trim_matches('\n'), "F G", "/C32 at 32 beside /C70 at 70 reads as a space");
+}
+
+/// `numbered_glyph_names_read_as_their_own_code` in a Type 3 font, which already reads codes
+/// 32-126 by the code: above 126, `C174` at 174, `C176` at 176 and `GE9` at 0xE9 read as the
+/// code's Latin-1 character, unless one numbered name in the font numbers another code
+/// (`/C1` at 233) or sits at a control code, as a first-use counter's `/C1` at 1 does.
+#[test]
+fn numbered_type3_glyph_names_read_as_their_own_code() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    // Each font's /Differences as (code, glyph name) pairs, and the codes its page shows.
+    type Names<'a> = &'a [(i64, &'a str)];
+    let fonts: [(Names, &[u8]); 3] = [
+        (&[(70, "C70"), (174, "C174"), (176, "C176"), (233, "GE9")], b"F\xae\xb0\xe9"),
+        (&[(174, "C174"), (176, "C176"), (233, "C1")], b"\xae\xb0\xe9"),
+        (&[(1, "C1"), (2, "C2"), (174, "C174"), (176, "C176")], b"\xae\xb0"),
+    ];
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let mut kids = Vec::new();
+    for (names, codes) in fonts {
+        let glyph = doc.add_object(Stream::new(dictionary! {}, b"600 0 0 0 500 700 d1 0 0 500 700 re f".to_vec()));
+        let mut differences = Vec::new();
+        let mut procs = lopdf::Dictionary::new();
+        for &(code, glyph_name) in names {
+            differences.extend([Object::Integer(code), name(glyph_name)]);
+            procs.set(glyph_name, glyph);
+        }
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type3",
+            "FontBBox" => vec![0.into(), 0.into(), 1000.into(), 1000.into()],
+            "FontMatrix" => vec![0.001.into(), 0.into(), 0.into(), 0.001.into(), 0.into(), 0.into()],
+            "CharProcs" => procs,
+            "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => differences },
+            "FirstChar" => 0, "LastChar" => 255, "Widths" => vec![Object::Integer(600); 256],
+        });
+        // One glyph per line, as in `glyph_names_outside_the_glyph_list_still_read_as_text`.
+        let mut content = b"BT /T3 20 Tf 20 290 Td".to_vec();
+        for code in codes {
+            content.extend_from_slice(format!(" <{code:02x}> Tj 0 -25 Td").as_bytes());
+        }
+        content.extend_from_slice(b" ET");
+        let content = doc.add_object(Stream::new(dictionary! {}, content));
+        let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 300.into(), 300.into()], "Resources" => dictionary! {"Font" => dictionary! {"T3" => font}}, "Contents" => content });
+        kids.push(Object::Reference(page));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(pages_id, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages_id});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let lines = |page| {
+        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
+        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
+    };
+    assert_eq!(lines(0), ["F", "\u{ae}", "\u{b0}", "\u{e9}"]);
+    assert!(lines(1).is_empty(), "/C1 at 233 beside /C174 at 174: {:?}", lines(1));
+    assert!(lines(2).is_empty(), "a counter's /C1 at 1 beside /C174 at 174: {:?}", lines(2));
+}
+
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex
 /// digits only, and map a name with lowercase ones to nothing ("uni20ac" in its examples).
 /// Names upstream's own lookup can't read (several groups, a suffix) show it: lowercase reads
-/// as nothing, uppercase as its characters. A bare `uni20ac` or `u1040c` is still read by
-/// upstream's lenient `unicode_from_name`, outside this mapping.
+/// as nothing, uppercase as its characters. A bare `uni20ac` or `u1040c` reads as nothing too
+/// (`agl_unicode_from_name_rule_reads_text`).
 #[test]
 fn glyph_names_with_lowercase_hex_read_as_nothing() {
     use lopdf::{Object, dictionary};
@@ -717,6 +854,34 @@ fn glyph_names_with_lowercase_hex_read_as_nothing() {
     let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     assert_eq!(lines, ["\u{20ac}\u{308}", "\u{1040c}", "f", "f\u{20ac}"], "{text:?}");
+}
+
+/// The glyph list specification's `uni` form is `uni` and groups of exactly four uppercase hex
+/// digits, its `u` form `u` and four to six, outside the surrogate range: `uni65`, `u65`,
+/// `uni20ac`, `u1f600`, `uni+065` and `uniD800` name no character, and their glyphs read as
+/// nothing rather than as `e`, `€` or an emoji. The well-formed names read as before.
+#[test]
+fn agl_unicode_from_name_rule_reads_text() {
+    use lopdf::{Object, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let names = ["uni65", "u65", "uni20ac", "u1f600", "uni+065", "uniD800", "u10FFFF0", "uni0065", "u0066", "u1F600", "uni20AC"];
+    let differences = Object::Dictionary(dictionary! {
+        "Type" => "Encoding",
+        "Differences" => std::iter::once(Object::Integer(65)).chain(names.iter().map(|n| name(n))).collect::<Vec<_>>(),
+    });
+    // One glyph per line, so each name's text stays its own (and a name read as nothing
+    // leaves no line).
+    let mut content = b"BT /F1 20 Tf 20 290 Td".to_vec();
+    for code in (b'A'..).take(names.len()) {
+        content.extend_from_slice(b" (");
+        content.push(code);
+        content.extend_from_slice(b") Tj 0 -25 Td");
+    }
+    content.extend_from_slice(b" ET");
+    let pdf = encoded_pages(&[(differences, &content[..])]);
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines, ["e", "f", "\u{1f600}", "\u{20ac}"], "{text:?}");
 }
 
 #[test]
@@ -768,6 +933,113 @@ fn vertical_ligatures_stay_in_their_column() {
     assert_eq!(text.plain_text(), "日株式語");
     assert_eq!(text.glyphs.len(), 3);
     assert_eq!(text.line_rects(0..3).len(), 1, "one column");
+}
+
+/// A column of Latin capitals in a vertical font, tracked out with negative character spacing
+/// (pdf.js issue 20930: `-40 Tc` puts 40 pt between 24 pt letters). Across the column each glyph
+/// is as wide as its `/W` width w0 and centred on the column (ISO 32000-2 §9.7.4.3), so the
+/// letters stay one line and Find matches the word. Boxes as wide as each outline made a narrow
+/// letter's line allowance smaller than the tracking, and the column broke into lines.
+#[test]
+fn tracked_vertical_latin_stays_one_line() {
+    tracked_vertical_latin(-40.0, 100.0);
+}
+
+#[test]
+fn horizontally_scaled_vertical_latin_box_is_scaled_across_the_column() {
+    // Horizontal scaling Th = Tz / 100 scales the glyph's width w0 across the column (ISO 32000-2
+    // §9.4.4, the text rendering matrix), and not the advance down it. The tracking is 20 pt here:
+    // the line's gap allowance is three times the narrower box across it, 3 × 8 pt at 50 Tz.
+    tracked_vertical_latin(-20.0, 50.0);
+}
+
+/// `ABCDE` down one Identity-V column at 24 pt with `tc Tc` and `tz Tz`.
+fn tracked_vertical_latin(tc: f32, tz: f32) {
+    let text = vertical_latin(
+        &[(36, 667), (37, 667), (38, 722), (39, 722), (40, 667)],
+        None,
+        &format!("BT /F1 24 Tf {tc} Tc {tz} Tz 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET"),
+    );
+    assert_eq!(text.plain_text(), "ABCDE");
+    assert_eq!(text.find("ABCDE"), vec![0..5]);
+    // Each box spans w0 (here 24 pt × 0.667 or 0.722, times Th) centred on the column at x = 100.
+    assert_eq!(text.glyphs.len(), 5);
+    for (g, w0) in text.glyphs.iter().zip([667.0, 667.0, 722.0, 722.0, 667.0]) {
+        let [x0, _, x1, _] = g.rect;
+        assert!((x1 - x0 - 24.0 * w0 / 1000.0 * tz / 100.0).abs() < 0.01, "{:?} is w0 wide: {:?}", g.text, g.rect);
+        assert!(((x0 + x1) / 2.0 - 100.0).abs() < 0.01, "{:?} is centred on the column: {:?}", g.text, g.rect);
+    }
+}
+
+/// The text of a page showing `content` in a vertical CIDFontType2 `/F1` with `/DW 1000`, the
+/// `widths` (CID, w0) in `/W`, and CIDs 36 to 41 reading `A` to `F`. `cmap` is the body of an
+/// embedded vertical CMap mapping codes to CIDs (`begincidchar` … `endcidchar`); `None` uses
+/// Identity-V.
+fn vertical_latin(widths: &[(i64, i64)], cmap: Option<&str>, content: &str) -> crate::text::PageText {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let to_unicode = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 6 beginbfchar <0024> <0041> <0025> <0042> <0026> <0043> <0027> <0044> <0028> <0045> <0029> <0046> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let unicode = doc.add_object(Stream::new(dictionary! {}, to_unicode.to_vec()));
+    let widths: Vec<Object> = widths.iter().flat_map(|&(cid, w)| [Object::Integer(cid), Object::Array(vec![Object::Integer(w)])]).collect();
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestVerticalLatin",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "DW" => 1000, "W" => widths, "DW2" => vec![Object::Integer(880), Object::Integer(-1000)], "CIDToGIDMap" => "Identity"
+    });
+    let encoding = match cmap {
+        Some(body) => {
+            let stream = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def /CMapName /TestCodes-V def /CMapType 1 def /WMode 1 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {body} endcmap CMapName currentdict /CMap defineresource pop end end"
+            );
+            Object::Reference(doc.add_object(Stream::new(
+                dictionary! { "Type" => "CMap", "CMapName" => "TestCodes-V", "WMode" => 1, "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 } },
+                stream.into_bytes(),
+            )))
+        }
+        None => Object::Name(b"Identity-V".to_vec()),
+    };
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestVerticalLatin", "Encoding" => encoding, "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+    let content = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(500)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap()
+}
+
+/// A CID that `/W` doesn't list is `/DW` wide across the column (ISO 32000-2 §9.7.4.3), and the
+/// widths are looked up by CID, not by character code: an embedded vertical CMap maps the codes
+/// `<0024>`… (which `/W` lists 500 wide as CIDs) to CIDs 50…. The tracked column stays one line
+/// that Find matches.
+#[test]
+fn vertical_latin_widths_come_from_dw_and_are_looked_up_by_cid() {
+    let cmap = "5 begincidchar <0024> 50 <0025> 51 <0026> 52 <0027> 53 <0028> 54 endcidchar";
+    // CID 52 (`C`) has no /W entry: it is /DW = 1000 wide.
+    let widths = [(36, 500), (37, 500), (38, 500), (39, 500), (40, 500), (50, 667), (51, 667), (53, 722), (54, 667)];
+    let text = vertical_latin(&widths, Some(cmap), "BT /F1 24 Tf -40 Tc 1 0 0 1 100 340 Tm <00240025002600270028> Tj ET");
+    assert_eq!(text.plain_text(), "ABCDE");
+    assert_eq!(text.find("ABCDE"), vec![0..5]);
+    let got: Vec<f32> = text.glyphs.iter().map(|g| g.rect[2] - g.rect[0]).collect();
+    assert_eq!(got.len(), 5);
+    for (w, w0) in got.iter().zip([667.0, 667.0, 1000.0, 722.0, 667.0]) {
+        assert!((w - 24.0 * w0 / 1000.0).abs() < 0.01, "{got:?}");
+    }
+}
+
+/// Two vertical columns of `/DW`-wide letters set 13.5 pt apart at 20 pt overlap across the
+/// column (each box is 20 pt wide), and still read as two lines, in order, with Find matching
+/// each column and not a word spanning both.
+#[test]
+fn close_vertical_columns_of_dw_wide_letters_stay_apart() {
+    let text = vertical_latin(&[], None, "BT /F1 20 Tf 1 0 0 1 113.5 340 Tm <002400250026> Tj 1 0 0 1 100 340 Tm <002700280029> Tj ET");
+    assert_eq!(text.plain_text().lines().map(str::trim).collect::<Vec<_>>(), ["ABC", "DEF"]);
+    assert_eq!(text.find("ABC").len(), 1);
+    assert_eq!(text.find("DEF").len(), 1);
+    assert!(text.find("CD").is_empty() && text.find("ABCDEF").is_empty(), "{:?}", text.plain_text());
 }
 
 #[test]
@@ -2173,6 +2445,161 @@ fn text_outside_the_crop_box_is_clipped() {
     for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
         assert_eq!(text_with(Some(crop)), media, "{crop:?}");
     }
+}
+
+/// A one-page document showing `codes` in a Type 0 font with `encoding` over an embedded
+/// `descendant` (`CIDFontType0` takes the bundled CFF program, `CIDFontType2` a TrueType one)
+/// of the Adobe-Japan1 collection, with `to_unicode` as its `/ToUnicode` CMap when given.
+fn japan1_page(encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, codes: &str) -> String {
+    collection_page(("Adobe", "Japan1"), encoding, descendant, to_unicode, codes)
+}
+
+/// [`japan1_page`] for the character collection `(registry, ordering)`.
+fn collection_page(collection: (&str, &str), encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, codes: &str) -> String {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let (registry, ordering) = collection;
+    let mut doc = Document::with_version("1.7");
+    let (key, program): (&str, &[u8]) = if descendant == "CIDFontType0" {
+        ("FontFile3", include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb"))
+    } else {
+        ("FontFile2", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"))
+    };
+    let mut file = dictionary! {};
+    if descendant == "CIDFontType0" {
+        file.set("Subtype", "CIDFontType0C");
+    }
+    let program = doc.add_object(Stream::new(file, program.to_vec()));
+    let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "TestJapan1", "Flags" => 4, key => program });
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => descendant, "BaseFont" => "TestJapan1",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal(registry), "Ordering" => Object::string_literal(ordering), "Supplement" => 6 },
+        "FontDescriptor" => descriptor, "DW" => 1000, "CIDToGIDMap" => "Identity"
+    });
+    let mut font = dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestJapan1", "Encoding" => encoding, "DescendantFonts" => vec![Object::Reference(cid)] };
+    if let Some(cmap) = to_unicode {
+        font.set("ToUnicode", doc.add_object(Stream::new(dictionary! {}, cmap.to_vec())));
+    }
+    let font = doc.add_object(font);
+    let content = doc.add_object(Stream::new(dictionary! {}, format!("BT /F1 20 Tf 1 0 0 1 20 250 Tm <{codes}> Tj ET").into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+}
+
+/// An embedded font of an Adobe character collection reads as text through the collection's
+/// UCS2 CMap, code to CID to Unicode (ISO 32000-2 §9.10.2), where its `/ToUnicode` is missing or
+/// has nothing for a code: with Identity-H or a predefined CMap such as `/H`, CFF or TrueType.
+/// Only fonts that are not embedded took that route, so Japanese and Chinese pages whose fonts
+/// are embedded without a `/ToUnicode` had no text to select, find or copy. `/ToUnicode` still
+/// comes first where it maps a code.
+#[test]
+fn an_embedded_adobe_collection_font_reads_through_its_ucs2_cmap() {
+    // Adobe-Japan1 CIDs 34, 1125 and 843: A, 亜 and あ.
+    assert_eq!(japan1_page("Identity-H", "CIDFontType0", None, "00220465034B"), "A亜あ", "Identity-H, CFF, no /ToUnicode");
+    assert_eq!(japan1_page("Identity-H", "CIDFontType2", None, "00220465034B"), "A亜あ", "Identity-H, TrueType, no /ToUnicode");
+    // `/H` maps JIS X 0208 codes to CIDs: 3021 亜, 2422 あ, 2341 Ａ.
+    assert_eq!(japan1_page("H", "CIDFontType2", None, "302124222341"), "亜あＡ", "predefined /H");
+    let empty = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Empty def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(japan1_page("Identity-H", "CIDFontType2", Some(empty), "00220465034B"), "A亜あ", "a /ToUnicode with no mappings");
+    let one = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /One def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0022> <005A> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(japan1_page("Identity-H", "CIDFontType0", Some(one), "00220465034B"), "Z亜あ", "/ToUnicode first, the UCS2 CMap for the rest");
+}
+
+/// The same route for the other Adobe collections, each through its own UCS2 CMap
+/// (Adobe-GB1-UCS2, Adobe-CNS1-UCS2, Adobe-Korea1-UCS2), and for vertical writing (Identity-V)
+/// and a predefined CMap over a CFF program. The pairs are read from the bundled CMaps.
+#[test]
+fn every_adobe_collection_reads_through_its_own_ucs2_cmap() {
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        // Adobe-GB1 CID 4000 is 姓, Adobe-CNS1 CID 4000 is 團, Adobe-Korea1 CID 2000 is 밧; CID 34
+        // is A in each.
+        for (ordering, codes, text) in [("GB1", "00220FA0", "A姓"), ("CNS1", "00220FA0", "A團"), ("Korea1", "002207D0", "A밧")] {
+            assert_eq!(collection_page(("Adobe", ordering), "Identity-H", descendant, None, codes), text, "Adobe-{ordering}, {descendant}");
+        }
+        assert_eq!(japan1_page("Identity-V", descendant, None, "00220465034B"), "A亜あ", "Identity-V, {descendant}");
+    }
+    assert_eq!(japan1_page("H", "CIDFontType0", None, "302124222341"), "亜あＡ", "predefined /H, CFF");
+}
+
+/// A Type 0 font outside the Adobe collections has no UCS2 CMap: without a `/ToUnicode` its codes
+/// give no text through this route (the CIDs mean nothing outside their collection).
+#[test]
+fn a_font_outside_the_adobe_collections_gets_no_text_from_a_ucs2_cmap() {
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        assert_eq!(collection_page(("Example", "Custom"), "Identity-H", descendant, None, "00220465034B"), "", "{descendant}");
+    }
+}
+
+/// A Type 0 font whose `/ToUnicode` is written as a CID CMap (`begincidchar`, destinations as
+/// numbers, as Word writes it) reads each number as the code's Unicode value (vendored
+/// hayro-interpret patch 85), as glyph lookup already did and as pdftotext and PDFium extract it.
+/// Read as a bfchar map only, such text extracted nothing (pdf.js `issue9367`).
+#[test]
+fn a_tounicode_written_as_cid_ranges_gives_text() {
+    let two = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 begincidchar <0001> 84 <0002> 101 <0004> 116 endcidchar 1 begincidrange <0003> <0003> 120 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(two), "Text", "two-byte entries");
+    // Entries written with four-byte codes are found too (review on #6359).
+    let four = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <00000000> <FFFFFFFF> endcodespacerange 2 begincidchar <00000001> 84 <00000002> 101 endcidchar 1 begincidrange <00000003> <00000004> 120 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(four), "Texy", "four-byte entries");
+}
+
+/// When a `/ToUnicode` gives one code both a bf entry and a CID entry, the bf entry is the
+/// code's text (ISO 32000-2 §9.10.3 defines `/ToUnicode` by `beginbfchar` / `beginbfrange`); the
+/// CID number is read only for codes no bf entry covers (vendored hayro-interpret patch 85).
+#[test]
+fn a_tounicode_bf_entry_wins_over_a_cid_entry_for_the_same_code() {
+    // Codes 1 and 3 have both kinds of entry: bf says `T` / `x`, CID says `X` / `Y`. Codes 2 and 4
+    // have CID entries only.
+    let two = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 begincidchar <0001> 88 <0002> 101 <0004> 116 endcidchar 1 begincidrange <0003> <0003> 89 endcidrange 1 beginbfchar <0001> <0054> endbfchar 1 beginbfrange <0003> <0003> <0078> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(two), "Text", "two-byte entries");
+    // The same with one-byte entries. For two-byte entries the CID lookup, tried at one byte
+    // first, already falls back to the bf entries at that length; one-byte entries are where
+    // reading CID entries before bf entries would show, as `XeYt`.
+    let one = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange 3 begincidchar <01> 88 <02> 101 <04> 116 endcidchar 1 begincidrange <03> <03> 89 endcidrange 1 beginbfchar <01> <0054> endbfchar 1 beginbfrange <03> <03> <0078> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(one), "Text", "one-byte entries");
+}
+
+/// The page [`a_tounicode_written_as_cid_ranges_gives_text`] and
+/// [`a_tounicode_bf_entry_wins_over_a_cid_entry_for_the_same_code`] read: four codes in a Type 0 font
+/// (Inter, Identity-H) whose `/ToUnicode` is `cmap`.
+fn cid_range_to_unicode_text(cmap: &[u8]) -> String {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let program = doc.add_object(Stream::new(dictionary! {}, include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec()));
+    let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "Inter-Regular", "Flags" => 4, "FontFile2" => program });
+    let cid_font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "CIDFontType2",
+        "BaseFont" => "Inter-Regular",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "FontDescriptor" => descriptor,
+        "CIDToGIDMap" => "Identity",
+    });
+    let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.to_vec()));
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type0",
+        "BaseFont" => "Inter-Regular",
+        "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(cid_font)],
+        "ToUnicode" => to_unicode,
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 20 Tf 20 200 Td <0001000200030004> Tj ET".to_vec()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim().to_string()
 }
 
 /// A page box that encloses no area is read as a missing one (vendored hayro-syntax patch 38,
