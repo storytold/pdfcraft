@@ -402,6 +402,13 @@ fn the_calculate_tab_shows_and_edits_a_custom_calculation_script() {
     h.run_steps(2);
     assert!(h.query_by_label(refusal).is_some(), "the refusal is said");
     assert_eq!(boxes(&h), [edited], "the box keeps what was typed");
+    // The next edit is taken, and the refusal is no longer said.
+    let edited = "event.value = 2;";
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).type_text(edited);
+    h.run_steps(2);
+    assert_eq!(boxes(&h), [edited]);
+    assert!(h.query_by_label(refusal).is_none(), "said only for the refused edit");
     ok(&mut h);
     assert_eq!(script(&h), (Calculate::None, Some(edited.to_owned())));
     // "Value is not calculated" removes it.

@@ -141,6 +141,9 @@ pub struct FieldDraft {
     pub format: Format,
     pub validate: Validate,
     pub calculate: Calculate,
+    /// Calculate tab: the last edit of the custom script was refused for its length (said until
+    /// the next edit is taken, another calculation is chosen, or the dialog is opened again).
+    pub script_refused: bool,
     /// Every other field's name (the Calculate tab picks from them).
     pub others: Vec<String>,
     /// Actions tab: each trigger's action, and the one being added.
@@ -216,6 +219,7 @@ impl FieldDraft {
                 (Calculate::None, Some(js)) => Calculate::Custom(js.clone()),
                 (c, _) => c.clone(),
             },
+            script_refused: false,
             others: Vec::new(),
             actions: Vec::new(),
             new_action: ActionDraft::default(),
