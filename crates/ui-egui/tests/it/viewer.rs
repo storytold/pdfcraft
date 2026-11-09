@@ -532,6 +532,48 @@ fn restart_page_labels(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(3);
 }
 
+/// End shows the end of the document, the last page's bottom edge, when the page is taller than
+/// the window; Home goes back to the first page's top (#6434).
+#[test]
+fn end_shows_the_bottom_of_the_last_page() {
+    use egui::Key;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(4);
+    let vp = h.state().views[0].viewport_rect();
+    assert!(h.state().views[0].page_screen_rect(0).is_some_and(|r| r.height() > vp.height()), "a page is taller than the window");
+
+    h.key_press(Key::End);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 4, "the last page");
+    let last = v.page_screen_rect(4).expect("the last page is on screen");
+    assert!(last.bottom() <= vp.bottom() + 1.0 && last.bottom() > vp.bottom() - 40.0, "its bottom edge is at the window's: {last:?} in {vp:?}");
+
+    h.key_press(Key::Home);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 0, "the first page");
+    let first = v.page_screen_rect(0).expect("the first page is on screen");
+    assert!(first.top() >= vp.top() - 1.0 && first.top() < vp.top() + 40.0, "its top edge is at the window's: {first:?} in {vp:?}");
+
+    // The keys listed with them for Go to first / last page do the same.
+    let shift_cmd = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    for (last, first) in [(Key::ArrowDown, Key::ArrowUp), (Key::PageDown, Key::PageUp)] {
+        h.key_press_modifiers(shift_cmd, last);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let bottom = v.page_screen_rect(4).map(|r| r.bottom());
+        assert!(v.current == 4 && bottom.is_some_and(|b| (b - vp.bottom()).abs() < 40.0), "{last:?}: {bottom:?} in {vp:?}");
+        h.key_press_modifiers(shift_cmd, first);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let top = v.page_screen_rect(0).map(|r| r.top());
+        assert!(v.current == 0 && top.is_some_and(|t| (t - vp.top()).abs() < 40.0), "{first:?}: {top:?} in {vp:?}");
+    }
+}
+
 #[test]
 fn page_label_input_keeps_current_page_when_submitted_unchanged() {
     let mut h = harness();

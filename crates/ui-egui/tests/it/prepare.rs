@@ -156,6 +156,48 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
 }
 
+/// Shift keeps a dragged field on the axis it set off along, even when the drag then turns and
+/// crosses the diagonal: 40 points right and then 60 down still moves it 40 points right and not
+/// at all down, where choosing the axis from the whole drag each frame made it jump to 60 down.
+#[test]
+fn a_shift_drag_keeps_its_axis_when_it_crosses_the_diagonal() {
+    let mut h = harness();
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    // The default text field is 144 by 22 points with its top-left at the click.
+    let c = at(&h, 110.0, 261.0);
+    let (right, down) = (at(&h, 150.0, 261.0), at(&h, 150.0, 321.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(c + (right - c) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    for k in 1..=4 {
+        h.hover_at(right + (down - right) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(down);
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    let after = rect_of(&h, &name);
+    assert!((after[0] - before[0] - 40.0).abs() < 1.5, "40 points right: {before:?} → {after:?}");
+    assert!((after[1] - before[1]).abs() < 0.01, "not down: {before:?} → {after:?}");
+}
+
 /// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
 /// leave the field where it is, even when Alt is let go in the same frame as the arrow, so the
 /// frame has no modifiers and only the press carries Alt.
