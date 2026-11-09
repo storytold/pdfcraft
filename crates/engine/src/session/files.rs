@@ -114,6 +114,19 @@ impl Session {
         .map_err(EditError::Write)
     }
 
+    /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
+    /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
+    pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        guard(|| pdfcraft_xfdf::export_xfdf_comments(&cos, which, &doc.name)).map_err(EditError::Write)
+    }
+
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
@@ -156,6 +169,11 @@ impl Session {
         // hidden layer stays off on paper too; untouched, the document's own configuration prints.
         if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
+        }
+        // Signature states as the screen shows them, so not when its display copy could not be
+        // written. This copy is only printed, never saved.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
         }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
@@ -384,7 +402,7 @@ impl Session {
 
     /// A new file (Combine, Extract, Split, Create) as bytes, checked like a save before anyone
     /// writes it (#1698, #2166): it reopens, and shows the pages it was built from.
-    fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    pub(crate) fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
         let bytes = self.write_unchecked(doc)?;
         let expected = pdfcraft_organize::page_count(doc)?;
         pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;

@@ -8,6 +8,9 @@ pub(crate) fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
     std::fs::read(path).map(Arc::new).map_err(|e| format!("{path}: {e}"))
 }
 
+/// `info FILE`: a JSON summary of the document as the app opens it (pages, fields, metadata, the
+/// standards it declares, and the notes about damage repaired while opening it), with none of
+/// its scripts run.
 pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     validate_options("info", args, INFO_OPTIONS)?;
     let path = *positional(args, INFO_OPTIONS).first().ok_or("info: missing file")?;
@@ -18,24 +21,33 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
+    // The document as the app opens it: the notes about damage repaired while opening, which the
+    // app shows in Document Properties, and for a dynamic XFA form the laid-out pages and fields.
+    // Inspection runs none of the document's scripts: an XFA form's initialize and calculate
+    // scripts, which the app runs on opening, are left alone, as with JavaScript turned off.
+    let mut session = pdfcraft_engine::Session::new();
+    session.set_javascript(false);
+    let opened = session.open("info.pdf", None, bytes.clone(), password).ok().and_then(|id| session.get(id));
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
-    let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
-        .then(|| {
-            let mut s = pdfcraft_engine::Session::new();
-            let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
-            let d = s.get(id)?;
-            d.xfa.as_ref().map(|x| {
-                info = d.info.clone();
-                // The in-memory layout is an appended revision, not the file being inspected.
-                info.file_size = bytes.len();
-                serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
-            })
+    let xfa_layout = opened.filter(|_| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)).and_then(|d| {
+        d.xfa.as_ref().map(|x| {
+            info = d.info.clone();
+            // The in-memory layout is an appended revision, not the file being inspected.
+            info.file_size = bytes.len();
+            serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
         })
-        .flatten();
-    // What the document declares as a standard, read the way the Standards panel reads it, so
-    // `info` and the app agree. A file that declares nothing leaves these null and empty.
-    let declared =
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map(|doc| pdfcraft_preflight::declared(&doc)).unwrap_or_default();
+    });
+    // What the document declares as a standard, as the Standards panel reads it, and the notes
+    // Document Properties shows, which include what the app repaired after reading the objects (a
+    // page tree rebuilt from the pages found by scanning), both from the session's own reading. A
+    // file the app cannot open is read once more for what the object reader declares and repaired.
+    // A file that declares nothing leaves the standards null and empty.
+    let (declared, repairs) = match opened {
+        Some(d) => (d.standards(), d.repair_log()),
+        None => pdfcraft_cos::Document::open_with_password(bytes.clone(), password)
+            .map(|cos| (pdfcraft_preflight::declared(&cos), cos.repair_log().to_vec()))
+            .unwrap_or_default(),
+    };
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
@@ -56,6 +68,7 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
         "custom_properties": info.custom.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
         "warnings": info.warnings,
+        "repairs": repairs,
     });
     stdout_line(format_args!("{}", serde_json::to_string_pretty(&json).unwrap_or_default()))?;
     Ok(())
@@ -366,8 +379,9 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
         Some("pam") => None,
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
-    // The app renders a display copy that draws comments missing their /AP streams; the CLI
-    // must agree with it (and with independent viewers), while keeping the file it reads intact.
+    // The app renders a display copy that draws comments missing their /AP streams and the state
+    // of named-layer signatures (here with no trusted certificates); the CLI must agree with it
+    // (and with independent viewers), while keeping the file it reads intact.
     let bytes = read(path)?;
     let password = flag(args, "--password");
     // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
