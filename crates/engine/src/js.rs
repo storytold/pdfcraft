@@ -11,6 +11,15 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// A field gaining or losing focus ([`Session::field_focus`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldFocus {
+    /// The field gained focus: its `enter` scripts run.
+    Enter,
+    /// The field lost focus: its `exit` scripts run.
+    Exit,
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -374,6 +383,25 @@ impl crate::Document {
     }
 }
 
+/// When a signature field's XFA signing scripts run ([`Session::run_sign_event`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignEvent {
+    /// Just before the field is signed (`preSign`): what it changes is signed too.
+    Before,
+    /// Once the field is signed (`postSign`).
+    After,
+}
+
+impl SignEvent {
+    /// The template's name for the event.
+    pub fn activity(self) -> &'static str {
+        match self {
+            SignEvent::Before => "preSign",
+            SignEvent::After => "postSign",
+        }
+    }
+}
+
 impl Session {
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
     pub fn set_javascript(&mut self, on: bool) {
@@ -410,6 +438,67 @@ impl Session {
             _ => true,
         });
         last
+    }
+
+    /// Widget `widget` of field `name` in document `id` gained or lost focus: on a laid-out XFA form,
+    /// run the field's `enter` or `exit` scripts, as one undoable edit when they change something
+    /// (and none when they don't). An exit that the field's new value already ran (the value's
+    /// change runs it) isn't run a second time. Returns whether the document changed; what the
+    /// scripts showed or asked for is in [`Session::take_js_output`].
+    pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let activity = match focus {
+            FieldFocus::Enter => "enter",
+            FieldFocus::Exit => "exit",
+        };
+        if !crate::xfa::has_event(cos, &tpl, &som, activity) {
+            doc.xfa_exited.remove(&som);
+            return Ok(false);
+        }
+        // Gaining focus starts afresh; losing it runs the exit unless the change just did.
+        if doc.xfa_exited.remove(&som) && focus == FieldFocus::Exit {
+            return Ok(false);
+        }
+        let before = doc.generation;
+        self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
+        Ok(self.get(id).is_some_and(|d| d.generation != before))
+    }
+
+    /// Run signature field `field`'s XFA signing scripts for `event` in document `id`: `preSign`
+    /// before it is signed, `postSign` after, as one undoable step, as a form's signing events run
+    /// (DA 31's dates the signature and locks the date). `Ok(false)`, with nothing changed, when
+    /// there are none: not a laid-out XFA form, JavaScript off, no such field, or no such script.
+    /// What the scripts said or asked for is in [`Session::take_js_output`].
+    pub fn run_sign_event(&mut self, id: DocId, field: &str, event: SignEvent) -> Result<bool, EditError> {
+        if self.get(id).is_none() {
+            return Err(EditError::NoDocument);
+        }
+        let Some(som) = self.sign_event_som(id, field, event) else { return Ok(false) };
+        self.apply(id, Edit::XfaEvent { som, activity: event.activity().into() })?;
+        Ok(true)
+    }
+
+    /// Whether signature field `field` of document `id` has XFA signing scripts for `event` that
+    /// [`Session::run_sign_event`] would run, without running them.
+    pub fn sign_event_scripted(&self, id: DocId, field: &str, event: SignEvent) -> bool {
+        self.sign_event_som(id, field, event).is_some()
+    }
+
+    /// The SOM path of signature field `field` when it has scripts for `event` to run.
+    fn sign_event_som(&self, id: DocId, field: &str, event: SignEvent) -> Option<String> {
+        if self.js_off {
+            return None;
+        }
+        let doc = self.get(id)?;
+        let (tpl, editor) = (doc.xfa_template.as_ref()?, doc.editor.as_ref()?);
+        let f = doc.form.iter().find(|f| f.name == field)?;
+        crate::xfa::scripted_som(&editor.cos, tpl, f, event.activity())
     }
 
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
