@@ -18,6 +18,18 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+fn harness_with_bytes(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
 fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
@@ -85,6 +97,41 @@ fn a_read_only_fields_tooltip_shows_on_hover() {
     set_city(&mut h, pdfcraft_engine::FieldProps { tooltip: Some("Where you live".into()), read_only: Some(true), ..Default::default() });
     rest_on_field(&mut h, "city");
     assert!(h.query_all_by_label("Where you live").next().is_some());
+}
+
+#[test]
+fn read_only_widgets_are_skipped_by_tab_navigation() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 7 0 R 8 0 R 9 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 120] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 10 0 R 7 0 R 8 0 R 9 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (first) /Rect [20 80 150 100] /P 3 0 R /F 4 >>",
+        "<< /FT /Tx /T (locked) /Kids [6 0 R 10 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff 1 /Rect [20 50 150 70] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (empty) /Rect [20 50 20 50] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (off-page) /Rect [220 50 240 70] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 20 150 40] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [20 35 150 45] /P 3 0 R /F 4 >>",
+    ]);
+    let mut h = harness_with_bytes("readonly-widget.pdf", bytes);
+    {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let locked = doc.form.iter().find(|field| field.name == "locked").unwrap();
+        assert!(!locked.read_only(), "the field itself is editable");
+        assert!(locked.widgets[0].read_only, "only its widget is read-only");
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info)
+            .into_iter()
+            .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.as_str(), wi)))
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![("first", 0), ("locked", 1), ("last", 0)], "read-only, empty and off-page widgets are excluded");
+    }
+    click_field(&mut h, "first", 0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("locked".into(), 1)), "the writable widget in the same field remains in tab order");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("last".into(), 0)));
 }
 
 /// A `/TU` of only spaces shows no tooltip (no empty box under the pointer).
@@ -303,6 +350,84 @@ fn tab_and_space_fill_in_a_check_box_between_text_fields() {
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     h.run_steps(3);
     assert_eq!(focused(&h), Some(("agree".into(), 0)), "Shift+Tab comes back to it");
+}
+
+#[test]
+fn tab_uses_the_first_remaining_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "pick", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "pick".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 230.0, 336.0, 246.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "Tab replaces the off-page focus with the group's remaining widget");
+}
+
+#[test]
+fn shift_tab_uses_the_previous_remaining_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "last", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "last".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 270.0, 340.0, 292.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("agree".into(), 0)), "Shift+Tab restores focus to the last stop before the removed widget");
+}
+
+#[test]
+fn shift_tab_wraps_to_the_last_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "first", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "first".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 350.0, 340.0, 372.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "Shift+Tab wraps to the last remaining stop");
+}
+
+#[test]
+fn tab_and_shift_tab_follow_widget_order_across_pages() {
+    let mut h = check_box_harness();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 1,
+        rect: [20.0, 350.0, 180.0, 372.0],
+        kind: pdfcraft_engine::NewField::Text { multiline: false },
+        name: Some("second_page".into()),
+    });
+    h.run_steps(4);
+    let order = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info)
+            .into_iter()
+            .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.clone(), wi)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order.first().map(|entry| entry.0.as_str()), Some("first"));
+    assert_eq!(order.last().map(|entry| entry.0.as_str()), Some("second_page"));
+    click_field(&mut h, "first", 0);
+    for expected in order.iter().skip(1) {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(focused(&h), Some(expected.clone()), "forward traversal: {order:?}");
+    }
+    for expected in order.iter().rev().skip(1) {
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(focused(&h), Some(expected.clone()), "reverse traversal: {order:?}");
+    }
 }
 
 #[test]

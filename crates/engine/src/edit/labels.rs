@@ -260,6 +260,7 @@ impl Edit {
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
+            Edit::LayoutTableToBlocks { .. } => Label::of("Change tag properties"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
             Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
