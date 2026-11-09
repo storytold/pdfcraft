@@ -21,6 +21,7 @@ use pdfcraft_platform::mail::{self, Answer, Compose, MailError, Why};
 
 use crate::theme::{self, Tokens};
 use crate::{Dialog, PdfCraftApp, widgets};
+use pdfcraft_engine::DocId;
 
 /// What starts a request: [`mail::send`]. A test puts a stand-in here, so nothing on the machine
 /// running the tests is asked.
@@ -50,13 +51,15 @@ pub struct SendEmailState {
     waiting: Option<Waiting>,
     /// The file that couldn't be attached, for the dialog.
     pub problem: Option<Problem>,
-    /// The person chose to send this document with its redaction marks unapplied.
-    send_with_marks: bool,
+    /// The document the person chose to send with its redaction marks unapplied.
+    send_with_marks: Option<DocId>,
+    /// The document the marks question was asked about.
+    marks_for: Option<DocId>,
 }
 
 impl Default for SendEmailState {
     fn default() -> Self {
-        Self { sender: send, reveal, waiting: None, problem: None, send_with_marks: false }
+        Self { sender: send, reveal, waiting: None, problem: None, send_with_marks: None, marks_for: None }
     }
 }
 
@@ -103,7 +106,8 @@ impl PdfCraftApp {
             return;
         }
         let Some(doc) = self.session.get(id) else { return };
-        if doc.redaction_marks() > 0 && !std::mem::take(&mut self.send_email.send_with_marks) {
+        if doc.redaction_marks() > 0 && self.send_email.send_with_marks.take() != Some(id) {
+            self.send_email.marks_for = Some(id);
             self.dialog = Some(Dialog::SendEmailMarks);
             return;
         }
@@ -233,9 +237,13 @@ pub(crate) fn marks_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
             close = true;
         }
         if widgets::pill_button(ui, tl!("Send anyway"), false).clicked() {
-            app.send_email.send_with_marks = true;
-            app.send_by_email();
-            app.send_email.send_with_marks = false;
+            // The consent is for the document the question was asked about, not whichever is
+            // active by now.
+            if app.active_ids().map(|(_, id)| id) == app.send_email.marks_for.take() {
+                app.send_email.send_with_marks = app.active_ids().map(|(_, id)| id);
+                app.send_by_email();
+                app.send_email.send_with_marks = None;
+            }
             close = true;
         }
     });

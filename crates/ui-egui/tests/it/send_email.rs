@@ -171,6 +171,28 @@ fn unapplied_redaction_marks_ask_before_sending() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// The consent is for the document the question was asked about: if another one has become the
+/// active document by the time "Send anyway" is pressed, nothing is sent.
+#[test]
+fn consent_to_send_marks_is_not_carried_to_another_document() {
+    let (mut h, path) = harness("marks-other");
+    let shape = Shape::Redact { quads: vec![rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
+    let style = Style::default_for(&shape);
+    let mark = NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Test".into() };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(mark.clone())));
+    assert!(h.state_mut().execute("file.send_email"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::SendEmailMarks));
+
+    h.state_mut().open_bytes("other.pdf", None, PDF.to_vec()).unwrap();
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(mark)));
+    h.run_steps(2);
+    h.get_by_label("Send anyway").click();
+    h.run_steps(3);
+    assert!(sent().is_empty(), "the consent was for the first document");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// A program that didn't answer, or no email app at all: the dialog says so, and Close closes it.
 #[test]
 fn every_failure_is_said_and_close_closes() {
