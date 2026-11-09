@@ -1714,7 +1714,7 @@ fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
             assert_eq!(script, JS);
             assert_eq!(target.name, "amount");
             self.calls += 1;
-            ScriptResult { rc: false, value: value.into(), changes: Vec::new(), message: Some("custom validation ran".into()) }
+            ScriptResult { rc: false, value: value.into(), value_set: false, changes: Vec::new(), message: Some("custom validation ran".into()) }
         }
     }
     let mut doc = one_page();
