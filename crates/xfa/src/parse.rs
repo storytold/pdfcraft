@@ -566,6 +566,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         validate_message,
         numeric,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }
 }
 
@@ -663,7 +664,9 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     }
     let column_widths: Vec<f64> =
         n.attribute("columnWidths").map(|s| s.split_whitespace().filter_map(measure).map(|w| w.max(0.0)).take(256).collect()).unwrap_or_default();
-    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_none_or(|t| t == "pageArea" || t == "contentArea"));
+    // A break to a page or content area. With no targetType, the default is `auto`: "layout
+    // continues using the current layout container" (XFA 3.3 p. 638), so no break.
+    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
     Subform {
         common,
         layout: Layout::parse(n.attribute("layout")),
