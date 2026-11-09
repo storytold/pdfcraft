@@ -3,11 +3,13 @@
 mod audit;
 mod automation_roots;
 mod batch;
+mod batch_exit;
 mod check;
 mod combine;
 mod edit;
 mod extract;
 mod help;
+mod info_repairs;
 mod info_standards;
 mod mcp_compact;
 mod options;

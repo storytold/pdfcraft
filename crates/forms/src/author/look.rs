@@ -323,8 +323,10 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
         let mut missing = None;
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let (s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
+                let (mut s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
                 missing = m;
+                // Thai glyphs are streams of their own.
+                pdfcraft_fonts::shaped_text::store_streams(doc, &mut s.dict);
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
                 d.set(b"N".to_vec(), Object::Ref(r));
