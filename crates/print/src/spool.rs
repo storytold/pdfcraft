@@ -3,7 +3,8 @@
 
 pub use craft_print::{
     Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed, query_printers, query_two_sided, two_sided,
+    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printer_queues, printers, printers_parsed, query_printers, query_two_sided,
+    two_sided,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

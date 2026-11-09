@@ -61,6 +61,68 @@ fn reopen(doc: &Document) -> Document {
     Document::open(Arc::new(write_incremental(doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// A word drawn as outlines names itself in /ActualText. A mark over part of it removes the
+/// outlines (a shading painting them is clipped instead), and the name, which would still read the
+/// whole word, goes with them. A word the mark misses keeps its own.
+#[test]
+fn redacted_paint_loses_the_actual_text_that_names_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (SECRET)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f EMC /Span <</ActualText (KEPT)>> BDC 100 200 60 20 re f EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_clipped, r.paths_removed), (0, 1));
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("KEPT"), "{c}");
+
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(b"/Span <</ActualText (SHADED)>> BDC /Sh0 sh EMC", "/Shading << /Sh0 7 0 R >>", vec![shading.as_bytes().to_vec()]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    apply(&mut doc, None).unwrap();
+    let c = content(&doc, 0);
+    // Drawn after a clip that cuts the region out.
+    assert!(!c.contains("SHADED") && c.find("W*").zip(c.find(" sh")).is_some_and(|(w, s)| w < s), "{c}");
+
+    // A path that clips as it paints.
+    let mut doc = one_page(b"q /Span <</ActualText (CLIPS)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h W f EMC Q", "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("CLIPS"), "{c}");
+}
+
+/// Nested names around redacted paint all go, the innermost too, whichever scope was cut first.
+#[test]
+fn redacted_paint_loses_every_name_around_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (OUTER)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f /Span <</ActualText (INNER)>> BDC 100 130 m 160 130 l 160 150 l 100 150 l h f EMC EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 155.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 2);
+    let c = content(&doc, 0);
+    assert!(!c.contains("OUTER") && !c.contains("INNER"), "{c}");
+}
+
+/// Removing hidden text clips nothing, so a shading on the same page keeps the words that name it.
+#[test]
+fn removing_hidden_text_keeps_the_alt_text_of_a_shading() {
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 3 Tr 10 200 Td (SECRET) Tj ET /Figure <</Alt (chart)>> BDC /Sh0 sh EMC",
+        "/Shading << /Sh0 7 0 R >>",
+        vec![shading.as_bytes().to_vec()],
+    );
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("(chart)"), "{c}");
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.
@@ -79,6 +141,91 @@ fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     assert!(c.contains("0 0 0 rg") && c.contains("20 95 20 15 re f"), "{c}");
     let doc = reopen(&doc);
     assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// `content` behind a PNG Up predictor whose `/DecodeParms` is an indirect object added to `doc`,
+/// in a stream with `dict`'s entries too.
+fn predicted(doc: &mut Document, dict: pdfcraft_cos::Dict, content: &[u8]) -> pdfcraft_cos::Stream {
+    use pdfcraft_cos::{Dict, Object, Stream};
+    // One column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let parms = doc.add(Object::Dict([(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect::<Dict>()));
+    let mut s = Stream::flate(Dict::new(), &rows);
+    for (k, v) in dict.iter() {
+        s.dict.set(k.to_vec(), v.clone());
+    }
+    s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    s
+}
+
+/// Content whose `/DecodeParms` is given by reference is read through the reference, on the page
+/// and in a form: the text under a mark goes. Read with the predictor's tag bytes left in, no glyph
+/// was found under the mark, and the redaction left the text in the file and said it was done.
+#[test]
+fn content_with_parameters_given_by_reference_is_redacted() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let secret = b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET";
+    let marked = [[5.0, 90.0, 120.0, 115.0]];
+    let mut page = one_page(b"", "", vec![]);
+    let s = predicted(&mut page, Dict::new(), secret);
+    page.set(ObjRef::new(4, 0), s);
+    // The parameters take object 7 and the form 8.
+    let mut form = one_page(b"/Fm Do", "/XObject << /Fm 8 0 R >>", vec![]);
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 300, 300].into_iter().map(Object::Int).collect()));
+    dict.set(
+        b"Resources".to_vec(),
+        Object::Dict(
+            [(b"Font".to_vec(), Object::Dict([(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0)))].into_iter().collect()))].into_iter().collect(),
+        ),
+    );
+    let s = predicted(&mut form, dict, secret);
+    form.set(ObjRef::new(8, 0), s);
+    for (mut doc, what) in [(page, "page"), (form, "form")] {
+        assert_eq!(under(&mut doc, 0, &marked), 6, "{what}");
+        mark(&mut doc, 0, &marked, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 6), "{what}");
+        let mut saved = reopen(&doc);
+        assert_eq!(under(&mut saved, 0, &marked), 0, "{what}");
+        // Nor is the text left in a stream the page no longer draws, read with its parameters.
+        for (r, o) in saved.scan_objects() {
+            let Object::Stream(s) = &*o else { continue };
+            let data = pdfcraft_cos::DecodeBudget::new(usize::MAX, 0).decode_with_damage(&saved, s, usize::MAX).map(|(d, _)| d).unwrap_or_default();
+            assert!(!data.windows(6).any(|w| w == b"SECRET"), "{what}: {r:?}");
+        }
+    }
+}
+
+/// An image removed under a mark stays in the page's resources while another of its content
+/// streams, with `/DecodeParms` given by reference, still draws it. Read without the parameters,
+/// that stream seemed not to draw it, and the page lost the image there.
+#[test]
+fn an_image_drawn_again_in_content_with_parameters_by_reference_stays() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let img = stream("/Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", [255, 255, 255, 255]);
+    let mut doc = one_page(b"q 10 0 0 10 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+    let again = predicted(&mut doc, Dict::new(), b"q 10 0 0 10 200 200 cm /Im1 Do Q");
+    let again = doc.add(Object::Stream(again));
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(again)])))
+        .unwrap();
+    mark(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let doc = reopen(&doc);
+    assert!(content(&doc, 0).contains("200 200 cm /Im1 Do"), "{}", content(&doc, 0));
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    // The save numbers objects afresh: the image is told by what it is.
+    let Some(Object::Stream(image)) = xo.reference(b"Im1").map(|r| (*doc.get(r)).clone()) else { panic!("no /Im1: {xo:?}") };
+    assert_eq!((image.dict.name(b"Subtype"), image.decoded().ok()), (Some(&b"Image"[..]), Some(vec![255; 4])));
 }
 
 /// #2130: a font with no /Widths is drawn with its embedded program's advances. Measured with a
@@ -288,6 +435,200 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     assert!(!c.contains("300 300 re"), "the intersecting rect is removed: {c}");
     assert!(!c.contains("BI"), "{c}");
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
+}
+
+/// A tiling pattern's cell is a content stream of its own and can draw text. Redacting a shape
+/// filled with such a pattern removed the fill from the page but left the pattern in the page's
+/// resources, so its cell -- with the text that was under the mark -- stayed in the saved file
+/// (#3647). A pattern nothing paints with any more now leaves the resources; one some surviving
+/// paint still uses stays.
+#[test]
+fn a_pattern_whose_only_painting_was_redacted_leaves_the_page() {
+    fn page_with(fills: &str) -> Document {
+        let cell = stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300              /Resources << /Font << /F1 5 0 R >> >>",
+            b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+        );
+        let content = format!("BT /F1 10 Tf 10 280 Td (PUBLIC) Tj ET {fills}");
+        one_page(content.as_bytes(), "/Pattern << /P0 7 0 R >>", vec![cell])
+    }
+    let has_pattern = |doc: &Document| {
+        pdfcraft_model::pages(doc)[0]
+            .dict
+            .get(b"Resources")
+            .and_then(|r| doc.resolve(r).as_dict().cloned())
+            .is_some_and(|res| res.get(b"Pattern").is_some())
+    };
+
+    // One box, marked: the pattern is no longer painted, so it goes with the fill.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(report.patterns_removed, 1, "the pattern left the page");
+    assert!(!has_pattern(&doc), "the page has no /Pattern left");
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+
+    // Two boxes share a text-bearing cell. The second still needs its pattern, but it is not
+    // safe to infer that it visibly displays every byte of the cell.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f /Pattern cs /P0 scn 20 40 100 30 re f");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal keeps the pending mark and original bytes");
+
+    // Paint is not only path painting: text shows with the fill pattern too, and the text here
+    // survives the mark. Dropping the pattern would take the fill away from text still on the
+    // page, so a pattern is kept for every operator that can paint with it.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f BT /F1 10 Tf 10 240 Td (KEEP) Tj ET");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert!(has_pattern(&doc), "the refused operation keeps the original pattern");
+    assert!(content(&doc, 0).contains("(KEEP)"), "the text is still there: {}", content(&doc, 0));
+
+    // Text in render mode 3 paints nothing, so it keeps no pattern: the unpainted pattern goes.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f BT 3 Tr /F1 10 Tf 10 240 Td (KEEP) Tj ET");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "invisible text paints no pattern");
+
+    // `/Pattern` may be an indirect object, like any value. Reading the reference itself as a
+    // dictionary found none, so nothing was pruned and the cell stayed in the saved file.
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+    );
+    let mut doc = one_page(b"/Pattern cs /P0 scn 20 140 100 30 re f", "/Pattern 8 0 R", vec![cell, b"<< /P0 7 0 R >>".to_vec()]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "an indirect /Pattern is resolved before it is pruned");
+    assert!(!has_pattern(&doc), "the page has no /Pattern left");
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+}
+
+/// Pruning takes the pattern out of `/Resources` but leaves the `/P0 scn` that selected it, so
+/// the saved page names a pattern that is no longer there. ISO 32000-1 (8.6.6.2) says that
+/// operand is a key of the `/Pattern` subdictionary, so this is what a reader is handed: the
+/// question is whether it stops reading the stream there. Asked in the review of #3647.
+#[test]
+fn a_page_whose_pruned_pattern_is_still_selected_renders() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+    );
+    // `0 g` after the fill puts the text back on a plain colour: with the pattern still selected
+    // the text would paint with it, and a pattern something still paints with is never pruned.
+    // The text is *after* the selector on purpose -- that is what a reader would lose if it gave
+    // up on the stale `/P0`.
+    let content_stream = b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g BT /F1 24 Tf 10 40 Td (PUBLIC) Tj ET";
+    let mut doc = one_page(content_stream, "/Pattern << /P0 7 0 R >>", vec![cell]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "the pattern is pruned");
+
+    // The state this test is about: the selector outlived the resource it names.
+    let after = content(&doc, 0);
+    assert!(after.contains("/P0 scn"), "the selector is still in the content: {after}");
+    assert!(!after.contains("20 140 100 30 re"), "the fill that used it is gone: {after}");
+
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+    let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "the page still renders: {:?}, warnings {:?}", out.error, out.warnings);
+    assert_eq!((out.width, out.height), (300, 300), "the page box is unchanged");
+
+    // The text after the stale selector is still drawn: 24 pt at y 40, so the top-left origin
+    // puts it in the rows around 240..265. Without it the reader gave up at the bad operand.
+    let painted = |rows: std::ops::Range<u32>, cols: std::ops::Range<u32>| {
+        rows.flat_map(|y| cols.clone().map(move |x| (y, x))).any(|(y, x)| {
+            let i = ((y * out.width + x) * 4) as usize;
+            out.rgba[i..i + 3] != [255, 255, 255]
+        })
+    };
+    assert!(painted(236..268, 8..120), "the text after the stale selector is still painted");
+    // The mark itself is drawn over the area the pattern filled -- `apply` writes a black
+    // overlay there (`q 0 0 0 rg 15 135 115 40 re f Q`), so the cell cannot show through it
+    // even if a reader kept the stale selector.
+    let black = |y: u32, x: u32| {
+        let i = ((y * out.width + x) * 4) as usize;
+        out.rgba[i..i + 3] == [0, 0, 0]
+    };
+    assert!(black(145, 70), "the redaction overlay is painted over the pattern's box");
+}
+
+#[test]
+fn redaction_cannot_leave_hidden_cell_text_when_pattern_is_used_elsewhere() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"0.9 g 0 0 300 300 re f 0 g BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let content = b"/Pattern cs /P0 scn 20 140 100 30 re f 20 40 100 30 re f";
+    let mut doc = one_page(content, "/Pattern << /P0 7 0 R >>", vec![cell]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal must be atomic");
+}
+
+#[test]
+fn redaction_cannot_leave_hidden_cell_text_on_an_unselected_page() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P0 7 0 R >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 20 140 100 30 re f"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        cell,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R /Resources << /Pattern << /P0 7 0 R >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 20 40 100 30 re f"),
+    ]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    match apply(&mut doc, Some(&[0])) {
+        Ok(_) => {
+            let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+            assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the unselected page kept the hidden cell text");
+        }
+        Err(RedactError::Pattern { reason: PatternProblem::Content, .. }) => {
+            assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal must keep both pages and the mark");
+        }
+        Err(error) => panic!("unexpected refusal: {error}"),
+    }
+}
+
+#[test]
+fn redacted_form_must_not_retain_its_own_pattern_cell_text() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Pattern << /P0 7 0 R >> >>",
+        b"/Pattern cs /P0 scn 20 140 100 30 re f",
+    );
+    let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 8 0 R >>", vec![cell, form]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "form-owned pattern refusal must be atomic");
+}
+
+#[test]
+fn redacted_form_must_not_retain_inherited_pattern_cell_text() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"20 140 100 30 re f");
+    let mut doc = one_page(b"/Pattern cs /P0 scn /Fm Do", "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >>", vec![cell, form]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "inherited pattern refusal must be atomic");
 }
 
 #[test]
@@ -2064,6 +2405,165 @@ fn an_unreadable_mark_on_another_page_does_not_stop_the_selected_page() {
     assert!(!content(&doc, 0).contains("1234"));
 }
 
+/// The quad over "1234" in `AB1234CD` (x 20–40) and the one over "CD" (x 40–50).
+const OVER_1234: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];
+const OVER_CD: [f64; 8] = [40.0, 110.0, 50.0, 110.0, 40.0, 95.0, 50.0, 95.0];
+
+/// `AB1234CD` with one mark whose `/QuadPoints` is `quads`, whose `/Rect` is `rect` (removed when
+/// `None`) and which has a fill (`/IC`) only when `fill` is set.
+fn quad_mark(quads: Vec<Object>, rect: Option<[i64; 4]>, fill: bool) -> (Document, ObjRef) {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::Array(quads));
+        if let Some(r) = rect {
+            d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Int(*v)).collect()));
+        } else {
+            d.remove(b"Rect");
+        }
+        if !fill {
+            d.remove(b"IC");
+        }
+    })
+    .unwrap();
+    (doc, m.obj)
+}
+
+fn reals(v: &[f64]) -> Vec<Object> {
+    v.iter().map(|x| Object::Real(*x)).collect()
+}
+
+/// An all-NaN quad folded to `[MAX, MAX, MIN, MIN]`: a finite, inverted box that passed as a
+/// readable area. Without a fill the mark was applied and removed nothing; with one the overlay
+/// failed. With no `/Rect` either, the mark has no area and apply refuses it.
+#[test]
+fn an_all_nan_quad_without_a_rect_is_refused_not_applied_as_nothing() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), None, fill);
+        assert!(marks(&doc).is_empty(), "fill {fill}: the NaN quad is no area");
+        assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)), "fill {fill}");
+        assert!(content(&doc, 0).contains("(AB1234CD) Tj"), "fill {fill}: nothing changed");
+    }
+}
+
+/// With a usable `/Rect`, an all-NaN mark redacts exactly the `/Rect`.
+#[test]
+fn an_all_nan_quad_falls_back_to_the_rect() {
+    for fill in [false, true] {
+        let (mut doc, _) = quad_mark(reals(&[f64::NAN; 8]), Some([20, 95, 40, 110]), fill);
+        assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]], "fill {fill}");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 4), "fill {fill}");
+        assert!(!content(&doc, 0).contains("1234"), "fill {fill}");
+    }
+}
+
+/// One NaN among finite entries made `f64::min`/`max` ignore it and fold the other three corners:
+/// a quad the document never described. Such a quad is unusable.
+#[test]
+fn a_quad_with_one_nan_entry_is_unusable() {
+    let mut q = OVER_1234;
+    q[0] = f64::NAN;
+    let (mut doc, _) = quad_mark(reals(&q), None, false);
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    // Next to a usable quad, only that one applies.
+    let (mut doc, _) = quad_mark(reals(&[q, OVER_CD].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// A name in the middle of `/QuadPoints` was dropped, which moved every later coordinate into the
+/// wrong slot and folded the first quad to a box over most of the page.
+#[test]
+fn a_non_number_entry_drops_its_quad_without_shifting_the_rest() {
+    let mut quads = reals(&[OVER_1234, OVER_CD].concat());
+    quads[2] = Object::name("oops");
+    let (mut doc, _) = quad_mark(quads, None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[40.0, 95.0, 50.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(2));
+}
+
+/// Twelve entries are one quad and half of another: only the whole one applies.
+#[test]
+fn a_trailing_partial_quad_is_ignored() {
+    let (mut doc, _) = quad_mark(reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), None, false);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0]]);
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(4));
+}
+
+/// Finite quads redact what they always did, one box each, and the `/Rect` is not consulted.
+#[test]
+fn finite_quads_redact_their_areas_as_before() {
+    let (mut doc, _) = quad_mark(reals(&[OVER_1234, OVER_CD].concat()), Some([0, 0, 1, 1]), true);
+    assert_eq!(marks(&doc)[0].rects, vec![[20.0, 95.0, 40.0, 110.0], [40.0, 95.0, 50.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 6));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// The boxes a reader's quads outline, or its `/Rect` when it has none (as the comment outlines
+/// fall back to it).
+fn outline(quads: &[[f32; 8]], rect: [f32; 4]) -> Vec<[f32; 4]> {
+    if quads.is_empty() {
+        return vec![rect];
+    }
+    quads
+        .iter()
+        .map(|q| {
+            let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+            let (lo, hi) = (|v: [f32; 4]| v.into_iter().fold(f32::MAX, f32::min), |v: [f32; 4]| v.into_iter().fold(f32::MIN, f32::max));
+            [lo(xs), lo(ys), hi(xs), hi(ys)]
+        })
+        .collect()
+}
+
+/// The outline the comment list draws (`pdfcraft_annot::summaries`, and the inspector's listing
+/// of the saved file) is the area apply removes, for malformed `/QuadPoints` too. The readers
+/// used to disagree: the summaries and the inspector read non-numbers as zeros, apply dropped
+/// them.
+#[test]
+fn the_outline_shown_is_the_area_apply_removes() {
+    // (entries, whether a saved file can say them: PDF syntax has no NaN). `forty` is an indirect
+    // number, which every reader follows.
+    let cases = |forty: ObjRef| -> Vec<(Vec<Object>, bool)> {
+        let mut name_inside = reals(&[OVER_1234, OVER_CD].concat());
+        name_inside[2] = Object::name("oops");
+        let mut by_reference = reals(&OVER_1234);
+        by_reference[2] = Object::Ref(forty);
+        let mut one_nan = OVER_1234;
+        one_nan[5] = f64::NAN;
+        let mut one_huge = OVER_1234;
+        one_huge[5] = 4e38;
+        vec![
+            (reals(&[OVER_1234, OVER_CD].concat()), true),
+            (name_inside, true),
+            (reals(&[&OVER_1234[..], &OVER_CD[..4]].concat()), true),
+            (by_reference, true),
+            (vec![Object::name("oops"); 8], true),
+            (reals(&[one_nan, OVER_CD].concat()), false),
+            (reals(&[one_huge, OVER_CD].concat()), true),
+            (reals(&[f64::NAN; 8]), false),
+        ]
+    };
+    for i in 0.. {
+        let (mut doc, obj) = quad_mark(Vec::new(), Some([20, 95, 40, 110]), true);
+        let forty = doc.add(Object::Int(40));
+        let Some((quads, saved)) = cases(forty).into_iter().nth(i) else { break };
+        doc.update_dict(obj, |d| d.set(b"QuadPoints".to_vec(), Object::Array(quads))).unwrap();
+        let applied: Vec<[f32; 4]> = marks(&doc)[0].rects.iter().map(|r| r.map(|v| v as f32)).collect();
+        let summary = pdfcraft_annot::summaries(&doc).into_iter().find(|s| s.subtype == "Redact").unwrap();
+        assert_eq!(outline(&summary.quads, summary.rect), applied, "case {i}: comment summaries");
+        if saved {
+            let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            let info = pdfcraft_render::inspect(Arc::new(bytes), None).unwrap();
+            let listed = info.annotations.iter().find(|a| a.subtype == "Redact").unwrap();
+            assert_eq!(outline(&listed.quads, listed.rect), applied, "case {i}: inspector");
+        }
+    }
+}
+
 /// A document with something in every hidden-information category.
 fn hidden_fixture() -> Document {
     let content = b"BT /F1 10 Tf 10 100 Td (Visible) Tj 3 Tr (Hidden) Tj 0 Tr ET BT /F1 10 Tf 500 500 Td (Offpage) Tj ET /OC /L1 BDC BT /F1 10 Tf 10 50 Td (Layer) Tj ET EMC";
@@ -2270,6 +2770,154 @@ fn inline_outline_children_count_towards_the_total_budget() {
     }
     let doc = outlined_document(items);
     assert_eq!(scan(&doc).iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 100_000)));
+}
+
+/// A redacted copy and a sanitized copy are different files from their source: neither may keep
+/// the source's file identifier (ISO 32000-2 §14.4). A save without the rewrite keeps it.
+#[test]
+fn a_redacted_or_sanitized_copy_gets_a_new_identifier() {
+    fn with_id(mut doc: Document) -> Document {
+        let id = Object::Array(vec![
+            Object::String(pdfcraft_cos::PdfString::literal(vec![0x11; 16])),
+            Object::String(pdfcraft_cos::PdfString::literal(vec![0x22; 16])),
+        ]);
+        doc.trailer_mut().set(b"ID".to_vec(), id);
+        doc
+    }
+    fn saved_ids(doc: &Document) -> Vec<Vec<u8>> {
+        let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+        match saved.trailer().get(b"ID") {
+            Some(Object::Array(a)) => a.iter().map(|s| s.as_string().map(|s| s.bytes.clone()).unwrap_or_default()).collect(),
+            _ => Vec::new(),
+        }
+    }
+    let source = vec![vec![0x11; 16], vec![0x22; 16]];
+    let assert_new = |ids: &[Vec<u8>], what: &str| {
+        assert_eq!(ids.len(), 2, "{what}");
+        for (new, old) in ids.iter().zip(&source) {
+            assert_eq!(new.len(), 16, "{what}");
+            assert_ne!(new, old, "{what}: the copy keeps the source's identifier");
+        }
+    };
+
+    // Redaction: the same save keeps the identifier until the redaction asks for a new one.
+    let mut doc = with_id(one_page(b"BT /F1 10 Tf 10 100 Td (Secret) Tj ET", "", vec![]));
+    mark(&mut doc, 0, &[[0.0, 95.0, 300.0, 110.0]], "");
+    assert_eq!(saved_ids(&doc), source, "before the redaction");
+    apply(&mut doc, None).unwrap();
+    assert!(doc.new_id_required());
+    assert_new(&saved_ids(&doc), "redaction");
+
+    // Sanitizing with hidden information to remove.
+    let mut doc = with_id(hidden_fixture());
+    crate::sanitize::sanitize(&mut doc).unwrap();
+    assert!(doc.new_id_required());
+    assert_new(&saved_ids(&doc), "sanitizing");
+
+    // Sanitizing a file with nothing hidden still rewrites it, so it gets a new identifier too.
+    let mut doc = with_id(one_page(b"BT ET", "", vec![]));
+    assert!(crate::sanitize::sanitize(&mut doc).unwrap().is_empty());
+    assert_new(&saved_ids(&doc), "sanitizing without hidden information");
+}
+
+/// A copy that lost hidden information through `remove_hidden` itself is a different file from its
+/// source, so it does not keep the source's identifier either: the remove-hidden edit and the
+/// optimizer's discard option call `remove_hidden` directly, not through `sanitize`.
+#[test]
+fn a_remove_hidden_copy_gets_a_new_identifier() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let with_id = |mut doc: Document| {
+        doc.trailer_mut().set(
+            b"ID".to_vec(),
+            Object::Array(vec![
+                Object::String(pdfcraft_cos::PdfString::literal(vec![0x11; 16])),
+                Object::String(pdfcraft_cos::PdfString::literal(vec![0x22; 16])),
+            ]),
+        );
+        doc
+    };
+    let saved_ids = |doc: &Document| {
+        let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+        match saved.trailer().get(b"ID") {
+            Some(Object::Array(a)) => a.iter().map(|s| s.as_string().map(|s| s.bytes.clone()).unwrap_or_default()).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+
+    let mut doc = with_id(hidden_fixture());
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]).unwrap().len(), 1, "the fixture has metadata to remove");
+    assert!(doc.new_id_required());
+    let ids = saved_ids(&doc);
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], vec![0x11; 16], "the copy keeps the source's first identifier string");
+    assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
+}
+
+/// Links, actions and JavaScripts takes the scripts out of bookmarks that stay: an item that runs
+/// JavaScript loses its action, a jump with a script chained after it keeps only the jump, and a
+/// plain jump is left alone.
+#[test]
+fn bookmarks_that_stay_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>".to_vec(),
+        // 6 runs a script, 7 jumps and then runs one, 8 only jumps; 9 the script
+        b"<< /Title (Runs) /Parent 5 0 R /Next 7 0 R /A 9 0 R >>".to_vec(),
+        b"<< /Title (Jumps then runs) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [3 0 R /Fit] /Next 9 0 R >> >>".to_vec(),
+        b"<< /Title (Jumps) /Parent 5 0 R /Prev 7 0 R /A << /S /GoTo /D [3 0 R /Fit] >> >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 2)]);
+    let item = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    assert!(!item(6).contains(b"A"), "{:?}", item(6));
+    let jump = |n: u32| item(n).get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    assert_eq!((jump(7).name(b"S"), jump(7).contains(b"D"), jump(7).contains(b"Next")), (Some(&b"GoTo"[..]), true, false));
+    assert_eq!(jump(8).name(b"S"), Some(&b"GoTo"[..]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(7).any(|w| w == b"(Jumps)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "the bookmark's script survived the save");
+}
+
+/// A damaged outline may reach an item only backwards (`/Last`, `/Prev`, `/Parent`). The full save
+/// keeps that item all the same, so its script goes too.
+#[test]
+fn bookmarks_reached_only_backwards_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    // /First and /Next reach only 6; 7, 8 and 9 hang off its /Last, /Prev and /Parent and share script 10
+    let mut doc = outlined_document(vec![
+        b"<< /Title (Reached) /Last 7 0 R /Prev 8 0 R /Parent 9 0 R >>".to_vec(),
+        b"<< /Title (Last) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Prev) /A 10 0 R >>".to_vec(),
+        b"<< /Title (Parent) /A 10 0 R >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 3)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 3)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"(Parent)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "a script reached only backwards survived the save");
+}
+
+/// Outline items written in place count towards the outline budget too: 60,000 items with an inline
+/// child each are 120,000 items, so the outline is refused rather than walked past the budget.
+#[test]
+fn an_outline_past_the_budget_with_inline_items_is_refused() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let siblings = 60_000;
+    let mut items = Vec::with_capacity(siblings);
+    for i in 0..siblings {
+        let next = if i + 1 < siblings { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        items.push(format!("<< /Title (a){next} /First << /Title (c) >> >>").into_bytes());
+    }
+    let mut doc = outlined_document(items);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 1)));
+    let out = remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]);
+    assert!(matches!(out, Err(RedactError::TooDeep)), "{out:?}");
 }
 
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
@@ -3465,6 +4113,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 }
 
 mod descriptions;
+mod hidden_scope;
 mod inline_images;
 mod limits;
 mod property_retirement;
@@ -3872,6 +4521,41 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     }
 }
 
+/// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
+/// characters beyond WinAnsi) is redacted like any other text: its glyphs are hit-tested by
+/// their real advances, removed, and the verifier passes.
+#[test]
+fn a_type3_text_layer_is_redacted_like_any_other() {
+    // One glyph (code 1): a filled box, 500 units wide, with a ToUnicode CMap that reads it
+    // back as U+3042.
+    let t3 = b"<< /Type /Font /Subtype /Type3 /Name /PCOcr /FontBBox [0 0 700 700] /FontMatrix [0.001 0 0 0.001 0 0] \
+        /FirstChar 1 /LastChar 1 /Widths [500] /Encoding << /Type /Encoding /Differences [1 /g01] >> \
+        /CharProcs << /g01 8 0 R >> /ToUnicode 9 0 R >>";
+    let charproc = b"500 0 0 0 0 700 700 d1\n0 0 700 700 re f\n";
+    let cmap = b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <01>\nendcodespacerange\n1 beginbfchar\n<01> <3042>\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    let layer = b"BT 3 Tr /T3 10 Tf 100 100 Td (\x01) Tj ET";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>".to_vec(),
+        stream("", layer),
+        t3.to_vec(),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream("", charproc),
+        stream("", cmap),
+    ]);
+    // The glyph box at size 10: 5 pt wide, from the font's descent to its ascent.
+    assert_eq!(under(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]]), 1, "the Type3 glyph is found under the mark");
+    assert_eq!(under(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]]), 0, "elsewhere the page is clean");
+    mark(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(report.glyphs, 1, "{report:?}");
+    // The verified apply left no text-showing operator: the re-read page is empty of them.
+    assert!(!content(&doc, 0).contains("Tj"), "{}", content(&doc, 0));
+    assert_eq!(under(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]]), 0, "nothing is left under the mark");
+}
+
 #[test]
 fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
     // A form drawing invisible text whose dictionary repeats it in /PCAdded.
@@ -3896,4 +4580,255 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+/// Private data takes an image's prepress data too: its OPI link to the original file and its
+/// alternate images, which can be the unedited original.
+#[test]
+fn private_data_takes_opi_links_and_alternate_images() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R /Fm 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q /Fm Do"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Alternates [<< /Image 7 0 R /DefaultForPrinting true >>]",
+            b"SHOWNIMAGE!",
+        ),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /OPI << /1.3 << /Type /OPI /Version 1.3 /F (OPISERVERPATH.tif) >> >>", b""),
+        stream("/Type /XObject /Subtype /Image /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"ALTERNATEORIGINAL"),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::PrivateData), Some((Hidden::PrivateData, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 2)]);
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"SHOWNIMAGE!"), "the image the page shows stays");
+    assert!(!has(b"ALTERNATEORIGINAL"), "the alternate image survived the save");
+    assert!(!has(b"OPISERVERPATH"), "the OPI link survived the save");
+}
+
+/// The full rewrite of the document made of `objs` after Remove Hidden Information, run for its
+/// metadata so it has something to do.
+fn hidden_information_removed(objs: Vec<Vec<u8>>) -> Vec<u8> {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(objs);
+    let info = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Title".to_vec(), pdfcraft_cos::PdfString::text("Plan"));
+        d
+    }));
+    doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
+    remove_hidden(&mut doc, &[Hidden::Metadata]).unwrap();
+    write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap()
+}
+
+fn gray_image(data: &[u8]) -> Vec<u8> {
+    stream(&format!("/Type /XObject /Subtype /Image /Width {} /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", data.len()), data)
+}
+
+/// An image Delete Image took off the page is still listed in its resources: Remove Hidden
+/// Information unlinks it, so the full rewrite leaves it out, as it does one only an unused form
+/// draws. Images a page still draws stay, directly, through a form without /Resources, or on
+/// another page sharing the dictionary, its name and `Do` in two content streams.
+#[test]
+fn images_no_page_draws_leave_with_hidden_information() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [6 0 R 15 0 R] /Resources 7 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Shown Do Q /Fm Do"),
+        stream("", b"q 50 0 0 50 20 20 cm /Other"),
+        b"<< /XObject << /Shown 8 0 R /Deleted 9 0 R /Nested 10 0 R /Other 11 0 R /Fm 12 0 R /Unused 13 0 R /Orphan 14 0 R >> >>".to_vec(),
+        gray_image(b"SHOWNIMAGEBYTES"),
+        gray_image(b"DELETEDIMAGEBYTES"),
+        gray_image(b"NESTEDIMAGEBYTES"),
+        gray_image(b"OTHERPAGEIMAGE"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"q 10 0 0 10 200 200 cm /Nested Do Q"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/Orphan Do"),
+        gray_image(b"ORPHANIMAGEBYTES"),
+        stream("", b"Do Q"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    assert!(!has(b"ORPHANIMAGEBYTES"), "an image only an unused form draws survived the save");
+    for kept in [&b"SHOWNIMAGEBYTES"[..], b"NESTEDIMAGEBYTES", b"OTHERPAGEIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// A page listed under two /Pages nodes draws through either one's resources, whichever a reader
+/// comes to it from: neither loses the image it draws.
+#[test]
+fn a_page_listed_twice_keeps_both_parents_images() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 /Resources << /XObject << /Im 7 0 R >> >> >>".to_vec(),
+        b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 3 0 R /MediaBox [0 0 300 300] /Contents 6 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 20 cm /Im Do Q"),
+        gray_image(b"FIRSTPARENTIMAGE"),
+        gray_image(b"SECONDPARENTIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    for kept in [&b"FIRSTPARENTIMAGE"[..], b"SECONDPARENTIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// Unlinking an image nothing draws is a removal of its own: with nothing else to remove, it is
+/// still applied, not reported as nothing to do.
+#[test]
+fn unlinking_alone_still_applies() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Deleted 4 0 R >> >> >>".to_vec(),
+        gray_image(b"DELETEDIMAGEBYTES"),
+    ]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]), Ok(Vec::new()));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(17).any(|w| w == b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+}
+
+/// A name a pattern, a form, an appearance or a soft mask doesn't define is looked up in the
+/// page's resources, /Resources of its own or not: an image drawn only that way is still shown,
+/// so it stays, as one drawn by a form named through an object that holds only a reference. One
+/// no content names goes.
+#[test]
+fn images_drawn_through_the_page_resources_stay() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [6 0 R] >>".to_vec(),
+        stream("", b"q /Pattern cs /Pt scn 0 0 10 10 re f Q /Own Do /Loop Do q /Gs gs 0 0 5 5 re f Q /Chained Do"),
+        b"<< /XObject << /ByPattern 7 0 R /ByOwnForm 8 0 R /ByAppearance 9 0 R /ByMask 10 0 R /Deleted 11 0 R /Own 12 0 R /Loop 16 0 R \
+           /Chained 17 0 R /ByChain 19 0 R >> /Pattern << /Pt 13 0 R >> /ExtGState << /Gs << /SMask << /S /Luminosity /G 14 0 R >> >> >> >>"
+            .to_vec(),
+        b"<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 15 0 R >> >>".to_vec(),
+        gray_image(b"BYPATTERNIMAGE"),
+        gray_image(b"BYOWNFORMIMAGE"),
+        gray_image(b"BYAPPEARANCEIMAGE"),
+        gray_image(b"BYMASKIMAGE"),
+        gray_image(b"DELETEDIMAGEBYTES"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ProcSet [/PDF] >>", b"/ByOwnForm Do"),
+        stream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10", b"/ByPattern Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Group << /S /Transparency /CS /DeviceGray >>", b"/ByMask Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 50 50]", b"/ByAppearance Do"),
+        // Draws itself: read once.
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /Loop 16 0 R >> >>", b"/Loop Do"),
+        b"18 0 R".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/ByChain Do"),
+        gray_image(b"BYCHAINIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    for kept in [&b"BYPATTERNIMAGE"[..], b"BYOWNFORMIMAGE", b"BYAPPEARANCEIMAGE", b"BYMASKIMAGE", b"BYCHAINIMAGE"] {
+        assert!(has(kept), "{} is drawn and must stay", String::from_utf8_lossy(kept));
+    }
+}
+
+/// A Type 3 glyph draws through the page's resources too, as does a form in the font's own
+/// resources: their images stay, and the dictionary is still cleaned of what nothing draws.
+#[test]
+fn images_drawn_by_type3_glyphs_stay() {
+    let bytes = hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 12 Tf (a) Tj ET"),
+        b"<< /XObject << /ByGlyph 7 0 R /Deleted 8 0 R /ByFontForm 11 0 R >> /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 9 0 R >> \
+           /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /Fx 10 0 R >> >> >>"
+            .to_vec(),
+        gray_image(b"BYGLYPHIMAGE"),
+        gray_image(b"DELETEDIMAGEBYTES"),
+        stream("", b"10 0 d0 /ByGlyph Do /Fx Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/ByFontForm Do"),
+        gray_image(b"BYFONTFORMIMAGE"),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"), "the deleted image survived the save");
+    assert!(has(b"BYGLYPHIMAGE"), "the glyph's image is drawn and must stay");
+    assert!(has(b"BYFONTFORMIMAGE"), "the image a form in the font's resources draws must stay");
+}
+
+/// Layer lists that name one array many times, through arrays that do the same, are cleaned once
+/// where each array is, not copied once per path: the file stays as small as it was.
+#[test]
+fn a_shared_layer_list_is_cleaned_once() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [9 0 R 9 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
+        FONT.replace("95 0 R", "8 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (SECRETLAYERNAME) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown layer) >>".to_vec(),
+        widths(),
+    ];
+    // Objects 9 to 22 each name the next one twice; 23 names both layers.
+    objs.extend((10..24).map(|n| format!("[{n} 0 R {n} 0 R]").into_bytes()));
+    objs.push(b"[6 0 R 7 0 R]".to_vec());
+    let mut doc = pdf(objs);
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Shown layer)") && !has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+    assert!(bytes.len() < 32 * 1024, "the shared lists were copied once per path: {} bytes", bytes.len());
+}
+
+/// A removed off layer leaves every list that names it, or its dictionary, name included, stays in
+/// the file: a sub-list of the default `/Order` (its heading too, once it names no layer), a
+/// radio-button group (a group left empty goes), a usage rule (one that names it directly too), and
+/// the alternate configurations in `/Configs`.
+#[test]
+fn a_removed_layer_leaves_every_configuration() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [7 0 R [(Group) 6 0 R]] /RBGroups [[6 0 R 7 0 R] [6 0 R]] /AS [<< /Event /Print /OCGs [6 0 R] /Category [/Print] >> << /Event /View /OCGs 6 0 R /Category [/View] >>] >> /Configs [8 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R >> >> >>".to_vec(),
+        stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (Gone) Tj ET EMC BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
+        FONT.replace("95 0 R", "9 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (SECRETLAYERNAME) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown layer) >>".to_vec(),
+        b"<< /Name (Other view) /OFF [7 0 R] /ON [6 0 R] /Order [6 0 R 7 0 R] >>".to_vec(),
+        widths(),
+    ]);
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Shown layer)") && has(b"(Other view)"), "the layer that stays and the configuration stay");
+    assert!(!has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+    assert!(!has(b"(Group)"), "the heading of a sub-list left with no layer stayed");
+    let catalog = doc.get(doc.root().unwrap());
+    let config = catalog.as_dict().and_then(|c| c.get(b"OCProperties")).and_then(Object::as_dict).and_then(|p| p.get(b"D")).and_then(Object::as_dict);
+    let group = Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]);
+    assert_eq!(config.and_then(|d| d.get(b"RBGroups")), Some(&Object::Array(vec![group])), "a radio-button group left empty stayed");
+}
+
+/// A layer the default configuration lists on but a View usage rule turns off is hidden on screen
+/// (ISO 32000-2, 8.11.4.4): Hidden layers removes it. A Print rule leaves its layer as it is.
+#[test]
+fn a_layer_a_view_rule_turns_off_is_hidden() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /AS [<< /Event /View /OCGs [6 0 R] /Category [/View] >> << /Event /Print /OCGs [7 0 R] /Category [/Print] >>] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R /L2 7 0 R >> >> >>".to_vec(),
+        stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (ScreenOff) Tj ET EMC /OC /L2 BDC BT /F1 10 Tf 10 100 Td (PrintOff) Tj ET EMC"),
+        FONT.replace("95 0 R", "8 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (Screen) /Usage << /View << /ViewState /OFF >> >> >>".to_vec(),
+        b"<< /Type /OCG /Name (Print) /Usage << /Print << /PrintState /OFF >> >> >>".to_vec(),
+        widths(),
+    ]);
+    assert!(scan(&doc).into_iter().any(|(h, n)| h == Hidden::HiddenLayers && n > 0));
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("ScreenOff") && c.contains("(PrintOff)"), "{c}");
 }
