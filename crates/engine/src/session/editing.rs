@@ -6,7 +6,7 @@ use super::{
     inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
     undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
-use crate::{EditNotice, MarkKind};
+use crate::{EditNotice, MarkKind, print_preview_layers};
 
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
@@ -59,6 +59,7 @@ impl Session {
         // in the paper's colour and draw the new text in the ink's.
         let edit = match edit {
             Edit::EditTextBlock { page, block, text, mut style } => {
+                let plain = style == pdfcraft_edit::BlockStyle::default();
                 // Only invisible text is sampled; the blocks are usually cached from opening it.
                 if style.cover.is_none()
                     && let Some(info) = doc.info.pages.get(page)
@@ -67,6 +68,12 @@ impl Session {
                 {
                     style.cover = Some(paper);
                     style.color = style.color.or(Some(ink));
+                    // A text edit alone leaves the words it doesn't change as the scan shows them.
+                    style.changed_words_only = plain;
+                    // Nothing to redraw: leave undo history and the dirty flag alone.
+                    if plain && b.same_words(&text) {
+                        return Ok(None);
+                    }
                 }
                 Edit::EditTextBlock { page, block, text, style }
             }
@@ -434,7 +441,7 @@ impl Session {
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
                     | Edit::EditPageImage { .. }
-            ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
+            ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
             matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })
@@ -515,6 +522,8 @@ impl Session {
     }
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+        #[cfg(test)]
+        crate::record_full_refresh();
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {
@@ -545,6 +554,7 @@ impl Session {
             }
         }
         doc.info = info;
+        doc.config.print_layers = print_preview_layers(Some(&editor.cos), &doc.info.layers);
         doc.fonts_stale = false;
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);

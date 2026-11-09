@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
-use super::modify::{free_text_da, n, rich_text, set_part_keys, shape_text_box};
+use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -407,6 +407,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
+                let rect = fit_thai_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
                 // An oval or a circle goes around the text box, its text wrapped as displayed:
                 // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
                 shape_text_box(&mut d, rect, style.border_shape, style.width);
@@ -426,6 +427,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     {
         return Err(AnnotError::Undrawable(pdfcraft_fonts::undrawable_message(what, c)));
     }
+    refuse_undrawable_thai(d.name(b"Subtype") == Some(b"FreeText"), &new.contents)?;
     let r = doc.add(Object::Dict(d.clone()));
     draw_appearance(doc, r)?;
     let mut list = annots(doc, page);
@@ -434,6 +436,30 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     add_popup(doc, r, popup, &mut list)?;
     set_annots(doc, page, list)?;
     Ok(index)
+}
+
+/// Text box `tb` (user space; its text upright on a page turned by `turn`), grown down as displayed
+/// until the ink of `text`'s Thai (stacked marks above its first line, descenders below its last)
+/// fits inside the padding `pad`, as the appearance lays it out at `size`. Other text, and a box
+/// tall enough already, keep the box they were given.
+fn fit_thai_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
+    if !text.chars().any(pdfcraft_fonts::shaped_text::is_thai) {
+        return tb;
+    }
+    let [x0, y0, x1, y1] = normalize(tb);
+    let (w, h) = if matches!(turn, 90 | 270) { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) };
+    let need = appearance::text_lines_height(&appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)), size) + 2.0 * pad + 2.0;
+    let by = need - h;
+    if !(by.is_finite() && by > 0.0) {
+        return tb;
+    }
+    // Displayed down is user -y unturned, +x on a page turned 90°, +y at 180° and -x at 270°.
+    match turn {
+        90 => [x0, y0, x1 + by, y1],
+        180 => [x0, y0, x1, y1 + by],
+        270 => [x0 - by, y0, x1, y1],
+        _ => [x0, y0 - by, x1, y1],
+    }
 }
 
 fn validate_style(style: &Style) -> Result<(), AnnotError> {

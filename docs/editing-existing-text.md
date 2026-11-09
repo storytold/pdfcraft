@@ -122,6 +122,13 @@ sign before an amount: the line-start and line-end rules of JIS X 4051, as in Un
 breaking (UAX #14). Latin words inside such text are not split. Korean and Thai still break only
 at spaces.
 
+Text pasted from a browser or a word processor often carries an invisible break instead of a
+newline. Every Unicode row break starts a new row: U+2028 LINE SEPARATOR, U+2029 PARAGRAPH
+SEPARATOR, U+0085 NEXT LINE, the vertical tab, the form feed and the information separators
+(U+001C to U+001E), alongside the carriage return and the newline. These move the text down a
+row rather than being looked up in a font, so a paste no longer fails because no face has an
+outline for them. Other white space is still written as one space.
+
 Select text within the editor before changing size, colour, font, underline or spacing to
 format that selection. Automation supports up to 1024 disjoint UTF-8 byte ranges with the
 same properties; invalid or overlapping ranges fail atomically. Untouched source formatting
@@ -153,8 +160,14 @@ scanned line kept apart. Applying an edit draws the new text visibly in the scan
 the one chosen) and first covers the old words with the paper colour sampled around them. Each
 word keeps its position and width, and a longer phrase grows rightwards rather than wrapping.
 OCR sizes each word from its own box, so a phrase's words can come out several points apart: the
-editor and the rewrite set the whole phrase in one size, the median of its words' sizes. The
-cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
+editor and the rewrite set the whole phrase in one size, the median of its words' sizes.
+A text edit covers and redraws only the words it changes: the rest of the line stays the scan, and
+a deleted word leaves its gap, because the words after it are pixels. A replacement a little too
+wide is squeezed across to fit its place (by up to a quarter); wider than that it takes over the
+word it would run into, and new words with nothing to replace take a neighbour.
+The whole phrase is redrawn for a change of formatting or a new line, and for a layer whose words
+would move without the ones before them. While the phrase is open, the editor still shows all of
+it in the layer's Helvetica. The cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
 This applies to any invisible text (rendering mode 3), not just a PdfCraft OCR layer: editing
 invisible text, such as another OCR tool's layer, makes the rewritten paragraph visible over a
 painted cover in the sampled paper colour. Edit text also groups invisible text differently: its lines never
