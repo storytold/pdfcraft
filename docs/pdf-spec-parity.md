@@ -2,7 +2,7 @@
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (§7.4: redaction decodes CCITT fax images, Group 3 on bytes aside; earlier, §7.4: CCITT decoding in `pdfcraft-filters`) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -23,7 +23,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 |---|---|---|---|---|
 | §7.2–7.5 | Syntax, objects, file structure, xref tables and streams, object streams, hybrid files, incremental updates | full | **own**, tolerant, repairs damaged files | `crates/cos`; corpus 958 files; fuzzed nightly |
 | §7.4 | Stream filters: Flate, LZW, ASCII85, ASCIIHex, RunLength, predictors | full | **own** | `crates/filters` |
-| §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode); CCITT Group 4 and lossless JBIG2 encoding | `core.image-filters` partial; own codecs M1.1/M1.2; CCITT decoding in `pdfcraft-filters` (`decode_ccitt`, through `hayro-ccitt`) for export, redaction and the Optimizer, which encodes Group 4 (`optimize.mono-compression`); lossless JBIG2 generic-region or exact-copy symbol encoding and image export; no lossy substitution |
+| §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode); CCITT Group 4 and lossless JBIG2 encoding | `core.image-filters` partial; own codecs M1.1/M1.2; CCITT decoding in `pdfcraft-filters` (`decode_ccitt`, through `hayro-ccitt`) for export, redaction and the Optimizer, which encodes Group 4 (`optimize.mono-compression`); JBIG2 decoding there too (`decode_jbig2`, through `hayro-jbig2`) for export and redaction; lossless JBIG2 generic-region or exact-copy symbol encoding; no lossy substitution |
 | §7.5.8 | Linearization | R W | R only | `core.linearization` planned |
 | §7.6.4 | Standard security handler R2–R6 (RC4 40/128, AES-128, AES-256), crypt filters, `/EncryptMetadata`, SASLprep | full | **own**, read and write | `crates/crypt`; written files open in Acrobat DC since #836 (#774: Acrobat needs the catalog outside object streams) |
 | §7.6.5 | Public-key security handler | full | none | `core.open-public-key`, `protect.certificate-encryption` planned |
@@ -121,7 +121,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | PDF/A-1a/b (ISO 19005-1) | verify, convert | none | |
 | PDF/A-2a/b/u, PDF/A-3a/b/u | verify, convert | **partial**: 2b and 3b structural rules and conversion (sRGB intent; not CMYK) | |
 | PDF/A-4, 4e, 4f | verify, convert | none | |
-| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | none | |
+| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | **partial**: PDF/X declarations are carried through Combine and can be removed (`standards_remove_id`, which matches the `pdfxid:` prefix only); no verifier, no converter | |
 | PDF/UA-1, PDF/UA-2 (ISO 14289) | verify (Preflight), checker | Accessibility Checker (32 rules, Acrobat's own), no PDF/UA verification | |
 | PDF/E, PDF/VT | verify, convert | none | |
 | Preflight (profiles, fixups, reports) | hundreds of profiles | none | |
@@ -132,6 +132,8 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter. No feature status changed |
+| 2026-10-30 | minor | §7.4: JBIG2 decoding (`hayro-jbig2`) in `pdfcraft-filters`, which `Document::decoded_image` uses with the image's `/JBIG2Globals`: export reads JBIG2 behind other filters too, and redaction clears pixels in JBIG2 images instead of removing them whole (one whose page isn't its size still is) |
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |
 | 2026-10-26 | minor | §7.4: CCITT decoding (`hayro-ccitt`) in `pdfcraft-filters`, for export and the Optimizer |
 | 2026-10-26 | minor | §7.4: CCITT Group 4 encoding (`fax`) in the Optimizer |

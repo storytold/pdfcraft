@@ -40,7 +40,7 @@ pub fn subtype_label(s: &str) -> &str {
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
-        Some("StrikeOutTextEdit") => "Replace text",
+        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -239,8 +239,15 @@ pub(crate) fn show(
     {
         view.comments.collapsed_pages.retain(|&c| c != p);
     }
+    // The cards in the order shown, for a ⇧-click range (folded pages' cards aren't shown).
+    let order: Vec<(usize, usize)> =
+        roots.iter().filter(|a| !(sort == SortBy::Page && view.comments.collapsed_pages.contains(&a.page))).map(|a| (a.page, a.index)).collect();
     let mut page = usize::MAX;
     let mut group: Option<String> = None;
+    // A card (or page header) out of view that was measured at this width only takes up its
+    // height: laying out hundreds of them every frame put the panel over the frame budget
+    // (#5488). Shorter lists are laid out whole, so every card stays in the accessibility tree.
+    let virtual_list = roots.len() > LAY_OUT_WHOLE;
     for a in roots {
         if sort != SortBy::Page {
             let g = group_of(a);
@@ -252,46 +259,116 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let n = page_counts.get(&page).copied().unwrap_or_default();
-            let open = !view.comments.collapsed_pages.contains(&page);
-            ui.add_space(6.0);
-            let clicked = ui
-                .horizontal(|ui| {
-                    let chevron = if open { "chevron-down" } else { "chevron-right" };
-                    let toggle = icons::button(ui, chevron, 18.0, false, if open { tl!("Collapse") } else { tl!("Expand") }).clicked();
-                    let label = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &info.pages[page].label)]))
-                                .font(theme::semibold(12.5))
-                                .color(t.text_muted),
-                        )
-                        .sense(Sense::click()),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(egui::RichText::new(n.to_string()).color(t.text_faint).small())
-                    });
-                    toggle || label.clicked()
-                })
-                .inner;
-            if clicked {
-                if open {
-                    view.comments.collapsed_pages.push(page);
-                } else {
-                    view.comments.collapsed_pages.retain(|&c| c != page);
+            // Per document: two documents shown at the same width don't share heights.
+            let header = ui.scope_id().with(("comment-page-header", view.id, page));
+            if !(virtual_list && skip_if_hidden(ui, header)) {
+                let top = ui.cursor().min.y;
+                page_header(ui, t, info, page, page_counts.get(&page).copied().unwrap_or_default(), &mut view.comments.collapsed_pages);
+                if virtual_list {
+                    remember_height(ui, header, top);
                 }
             }
-            ui.add_space(2.0);
         }
         if sort == SortBy::Page && view.comments.collapsed_pages.contains(&a.page) {
             continue;
         }
+        let key = (a.page, a.index);
         let thread = replies_of(a);
+        let selected = view.comments.selected == Some(key);
+        // A height is kept for what the card showed when it was measured: its document, what the
+        // thread says, whether it was the selected card (which draws its menu and editor) and
+        // whether an editor was open on it. An
+        // edit, undo or redo that changes the card measures it afresh; other cards keep theirs.
+        // A card with an editor open on it or on a reply is always drawn too (CodeRabbit on
+        // #5583): a kept height would show it at its size before the editor opened.
+        let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key || thread.iter().any(|r| (r.page, r.index) == (*p, *i)));
+        let id = ui.scope_id().with(("comment-card", view.id, key, card_signature(a, thread), selected, editing));
+        // The selected card is always drawn, so it can scroll itself into view and keep its menu
+        // and editor.
+        if virtual_list && !selected && !editing && skip_if_hidden(ui, id) {
+            continue;
+        }
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
+        let top = ui.cursor().min.y;
+        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, order: &order, doc, prefs, allowed, nav }) {
             edit = Some(e);
+        }
+        if virtual_list {
+            remember_height(ui, id, top);
         }
     }
     edit
+}
+
+/// The "Page N" group header with its fold chevron and comment count `n`; a click folds or
+/// unfolds the page.
+fn page_header(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, page: usize, n: usize, collapsed: &mut Vec<usize>) {
+    let open = !collapsed.contains(&page);
+    ui.add_space(6.0);
+    let clicked = ui
+        .horizontal(|ui| {
+            let chevron = if open { "chevron-down" } else { "chevron-right" };
+            let toggle = icons::button(ui, chevron, 18.0, false, if open { tl!("Collapse") } else { tl!("Expand") }).clicked();
+            let label = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", info.pages.get(page).map_or("?", |p| p.label.as_str()))]))
+                        .font(theme::semibold(12.5))
+                        .color(t.text_muted),
+                )
+                .sense(Sense::click()),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(egui::RichText::new(n.to_string()).color(t.text_faint).small()));
+            toggle || label.clicked()
+        })
+        .inner;
+    ui.add_space(2.0);
+    if clicked {
+        if open {
+            collapsed.push(page);
+        } else {
+            collapsed.retain(|&c| c != page);
+        }
+    }
+}
+
+/// What a card's height depends on in the document: the comment and its replies as shown (their
+/// kind, author, text, date, status, colour and lock). Two cards with the same signature lay out
+/// alike at one width.
+fn card_signature(a: &Annotation, thread: &[&Annotation]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for x in std::iter::once(a).chain(thread.iter().copied()) {
+        (&x.subtype, &x.author, &x.contents, &x.modified, &x.state, x.locked).hash(&mut h);
+        x.color.map(|c| c.map(f32::to_bits)).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Comment lists up to this long are laid out whole; longer ones lay out only what is in view.
+const LAY_OUT_WHOLE: usize = 100;
+
+/// For a part of the list (a card or a page header) that was measured at this width and would
+/// fall out of view: takes up its height without laying it out, and returns `true`.
+fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id) -> bool {
+    let width = ui.available_width();
+    let Some(height) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).filter(|(w, _)| (w - width).abs() < 0.5).map(|(_, h)| h) else {
+        return false;
+    };
+    if ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(width, height))) {
+        return false;
+    }
+    ui.allocate_space(vec2(width, height));
+    true
+}
+
+/// Records the height part `id` took since the cursor was at `top`, for [`skip_if_hidden`]: less
+/// the spacing `allocate_space` adds back after it.
+fn remember_height(ui: &egui::Ui, id: egui::Id, top: f32) {
+    let height = ui.cursor().min.y - top - ui.spacing().item_spacing.y;
+    if height.is_finite() && height > 0.0 {
+        let width = ui.available_width();
+        ui.data_mut(|d| d.insert_temp(id, (width, height)));
+    }
 }
 
 /// Draw one comment thread card, including author, body or inline editor, replies, status and per-comment
@@ -302,6 +379,8 @@ struct CardContext<'a> {
     // The clockwise `/Rotate` of the comment's page.
     rotation: u16,
     thread: &'a [&'a Annotation],
+    /// The cards in the order shown, for a ⇧-click range.
+    order: &'a [(usize, usize)],
     doc: &'a pdfcraft_engine::Document,
     prefs: &'a CommentPrefs,
     allowed: bool,
@@ -309,11 +388,14 @@ struct CardContext<'a> {
 }
 
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
-    let CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav } = context;
+    let CardContext { theme: t, annotation: a, rotation, thread, order, doc, prefs, allowed, nav } = context;
     let info = &doc.info;
     let mut edit = None;
     let key = (a.page, a.index);
-    let selected = view.comments.selected == Some(key);
+    let selected = view.comments.is_selected(key);
+    // Several comments may be selected; the reply field (one draft) belongs to the one with
+    // the handles.
+    let primary = view.comments.selected == Some(key);
     let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
     let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.as_deref());
     let marked = is_marked(thread);
@@ -359,7 +441,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                     buttons_left = ui.min_rect().left();
                 });
             });
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
+            let body = egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if editing {
                     if let Some(e) = inline_editor(ui, t, view, key, 2) {
@@ -430,7 +512,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 }
                 above = me;
             }
-            if selected && allowed {
+            if primary && allowed {
                 ui.add_space(8.0);
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
                     // The field fills its line and Post sits right-aligned under it: a field sized
@@ -457,7 +539,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             // The header selects the card, except where its buttons are.
             let mut r = head.response.rect;
             r.max.x = r.max.x.min(buttons_left - 2.0);
-            r
+            (r, body.response.rect)
         });
     let rect = frame.response.rect;
     if selected {
@@ -471,17 +553,30 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
     ui.add_space(5.0);
     // The header row selects the card (and shows the comment on the page); unselected cards are
     // clickable everywhere.
-    let hit = if selected { frame.inner } else { rect };
+    let (head, body) = frame.inner;
+    let hit = if selected { head } else { rect };
     let click = ui
         .interact(hit, ui.scope_id().with(("card", key)), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
     if click.clicked() {
-        view.comments.selected = Some(key);
+        // ⌘/Ctrl-click adds the comment to the selection, as on the page; ⇧-click selects the
+        // cards from the one with the handles to this one, as lists do.
+        let modifiers = ui.input(|i| i.modifiers);
+        if modifiers.shift && !modifiers.command {
+            view.comments.select_range(order, key);
+        } else if modifiers.command {
+            view.comments.toggle(key);
+        } else {
+            view.comments.select_only(key);
+        }
         view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.shown_rect(rotation)));
     }
-    if click.double_clicked() && allowed {
+    // On the selected card a double-click on the text edits it too (dragging over it selects
+    // words of it, for copying).
+    let body = (selected && !editing).then(|| ui.interact(body, ui.scope_id().with(("card-body", key)), Sense::click()));
+    if (click.double_clicked() || body.is_some_and(|b| b.double_clicked())) && allowed {
         view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
     }
     let menu_id = ui.scope_id().with(("card-menu", key));
@@ -521,14 +616,20 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 view.comments.props_request = Some((a.page, a.index));
                 ui.close();
             }
-            if ui.add_enabled(crate::comments::tool_for(a).is_some(), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
+            if ui.add_enabled(crate::comments::defaultable(a), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
                 view.comments.default_request = Some((a.page, a.index));
+                ui.close();
+            }
+            if ui.button(tl!("Copy comment")).clicked() {
+                // The card's comment alone (the page's menu copies the whole selection).
+                view.comments.select_only(key);
+                view.comments.copy_request = true;
                 ui.close();
             }
             ui.separator();
             // A locked reply can't be deleted, so it keeps the comment it answers too.
             if ui.add_enabled(doc.annotation_deletable(a.page, a.index), egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
+                view.comments.clear_selection();
                 edit = Some(Edit::DeleteAnnotation { page: a.page, index: a.index });
                 ui.close();
             }

@@ -83,16 +83,23 @@ pub enum Auth {
     User,
 }
 
-/// Permission bits from `/P` (§7.6.4.2, Table 22). Owners have every permission.
+/// Permission flags from `/P`, read the way the handler's revision reads them (ISO 32000-1:2008,
+/// Table 22). Owners have every permission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Permissions {
     pub bits: i32,
     pub owner: bool,
+    /// The `/R` value of the handler that read `bits`.
+    pub revision: i64,
 }
 
 impl Permissions {
     fn bit(&self, n: u32) -> bool {
         self.owner || (self.bits >> (n - 1)) & 1 == 1
+    }
+    /// Revision 3 and later read the full flag list of Table 22; revision 2 has its own.
+    fn is_revision_3_or_later(&self) -> bool {
+        self.revision >= 3
     }
     pub fn print(&self) -> bool {
         self.bit(3)
@@ -108,17 +115,22 @@ impl Permissions {
         self.bit(6)
     }
     pub fn fill_forms(&self) -> bool {
-        self.bit(9) || self.bit(6)
+        if self.is_revision_3_or_later() { self.bit(9) || self.bit(6) } else { self.bit(6) }
     }
+    /// Revision 2 covers accessibility with the copy flag (bit 5); revision 3 and later with bit 10.
     pub fn extract_for_accessibility(&self) -> bool {
-        self.bit(10)
+        if self.is_revision_3_or_later() { self.bit(10) } else { self.bit(5) }
     }
-    /// Insert, rotate or delete pages; create bookmarks and thumbnails.
+    /// Insert, rotate or delete pages; create bookmarks and thumbnails. Revision 3 and later grant
+    /// it by bit 11 alone. Table 22 defines bit 11 for those revisions only, so at revision 2 the
+    /// modify flag (bit 4) covers it.
     pub fn assemble(&self) -> bool {
-        self.bit(11) || self.bit(4)
+        if self.is_revision_3_or_later() { self.bit(11) } else { self.bit(4) }
     }
+    /// Revision 3 and later need bit 3 as well as bit 12. Table 22 defines bit 12 for those
+    /// revisions only: at revision 2 the print flag (bit 3) is all there is.
     pub fn print_high_quality(&self) -> bool {
-        self.bit(12)
+        if self.is_revision_3_or_later() { self.print() && self.bit(12) } else { self.print() }
     }
 }
 
@@ -251,7 +263,7 @@ impl SecurityHandler {
     /// edited `/P` grants nothing extra. Without a readable `/Perms`, `/P` applies as before.
     pub fn permissions(&self) -> Permissions {
         let bits = self.perms_p().map_or(self.dict.p, |p| self.dict.p & p);
-        Permissions { bits, owner: self.auth == Auth::Owner }
+        Permissions { bits, owner: self.auth == Auth::Owner, revision: self.dict.r }
     }
 
     /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.
