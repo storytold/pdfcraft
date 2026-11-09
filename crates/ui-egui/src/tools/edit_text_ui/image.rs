@@ -12,6 +12,7 @@ pub(crate) struct ImageCx<'a> {
     pub xf: &'a PageXform,
     pub ptr: &'a PagePointer,
     pub page: usize,
+    pub doc: &'a pdfcraft_engine::Document,
     pub info: &'a DocInfo,
     /// What the press the pages hold is to this page.
     pub press: PagePress,
@@ -268,7 +269,7 @@ fn same_rect(a: [f64; 4], b: [f64; 4]) -> bool {
 /// (the pointer is the crop's while it lasts; its keys are read by [`picture_keys`]).
 #[allow(clippy::cognitive_complexity)]
 fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_engine::PageImage) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, press, gate } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, press, gate, .. } = *cx;
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
     let hover_pos = ptr.pos;
@@ -693,7 +694,7 @@ pub(super) fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
 /// pointer was used.
 #[allow(clippy::cognitive_complexity)]
 pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage], view: &mut DocView) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, press, gate } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, doc, info, press, gate } = *cx;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ptr.pos;
@@ -984,18 +985,32 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             return true;
         }
     }
-    // A click selects the picture its press was on; its cursor is the hit's. One nobody holds on this
-    // page leaves it unselected (where the page's objects can be selected together, the area
-    // selection the press starts has done so already).
+    // A click selects the picture its press was on; its cursor is the hit's. One on grouped
+    // artwork with text prepares the page instead (one undoable step), and the paragraph clicked
+    // opens once it has (`edit_text_ui::page_input`): a drag still moves the group selected. Not
+    // while an edit is queued or a paragraph is open, whose typing that edit would overtake. One
+    // nobody holds on this page leaves the picture unselected (where the page's objects can be
+    // selected together, the area selection the press starts has done so already).
     let owner = match press {
         PagePress::Mine(Owner::Picture { index, .. }) => Some(index),
         _ => None,
     };
     if gate && resp.clicked() {
-        match owner {
-            Some(index) => view.image_selection = Some(ImageSelection::at(page, index)),
-            None if press == PagePress::Free && ptr.released.is_some_and(|p| xf.rect.contains(p)) => view.image_selection = None,
-            None => {}
+        // Where grouped artwork with text was clicked; the page is read for it once, on the click.
+        let grouped_text = owner
+            .filter(|i| images.get(*i).is_some_and(|im| im.is_form) && view.pending_edit.is_none() && view.line_editor.is_none())
+            .zip(ptr.released.or(ptr.origin))
+            .filter(|(i, _)| doc.grouped_text_at(page, *i));
+        match (owner, grouped_text) {
+            (_, Some((_, at))) => {
+                let (x, y) = screen_to_user(xf, info, page, at);
+                view.image_selection = None;
+                view.pending_edit = Some(Edit::PrepareText { page });
+                view.grouped_text_click = Some((page, [x, y]));
+            }
+            (Some(index), None) => view.image_selection = Some(ImageSelection::at(page, index)),
+            (None, _) if press == PagePress::Free && ptr.released.is_some_and(|p| xf.rect.contains(p)) => view.image_selection = None,
+            (None, _) => {}
         }
     }
     owner.is_some()
@@ -1108,6 +1123,12 @@ pub(crate) fn image_context_menu(
         }
     });
 
+    // Grouped Form artwork: draw its content in place, so its text and pictures edit one by
+    // one (#2964, #3005).
+    if img.is_form && item(ui, true, tl!("Ungroup")) {
+        view.image_selection = None;
+        view.pending_edit = edit(E::Ungroup);
+    }
     if item(ui, raster, tl!("Replace image")) {
         *action = Some(ImageAction::Replace(page, hit));
     }

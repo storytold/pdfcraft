@@ -15,6 +15,24 @@ enum ClipboardPaste {
     Image(std::sync::Arc<egui::ColorImage>),
 }
 
+/// What objects copied in Edit a PDF put on the system clipboard for other applications, so ⌘V
+/// can tell whether it still holds that copy or something copied since: their text, or else the
+/// first picture's pixels (a hash of them), or nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum ObjectClipMark {
+    Text(String),
+    Picture(u64),
+    #[default]
+    None,
+}
+
+fn picture_hash(width: usize, height: usize, rgba: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (width, height, rgba).hash(&mut h);
+    h.finish()
+}
+
 impl PdfCraftApp {
     /// Whether text and images may be copied out of document `id`; says why not when they may
     /// not. Reading aloud and accessibility tools don't ask (assistive technology may read
@@ -53,8 +71,14 @@ impl PdfCraftApp {
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
         let paste = ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
 
+        // Objects selected together in Edit a PDF take ⌘C and ⌘X.
+        let objects = (copy || cut) && self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.objects.count() > 0);
+        if objects {
+            self.copy_objects(i, ctx, cut);
+        }
         let text_selected = copy && self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
         if copy
+            && !objects
             && (text_selected || !self.copy_selected_comments(i))
             && !self.copy_selected_text(i, ctx)
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
@@ -64,11 +88,17 @@ impl PdfCraftApp {
             self.copy_page_image(sel.page, sel.index);
         }
         if cut
+            && !objects
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
             self.cut_page_image(sel.page, sel.index);
+        }
+        if (paste || !pastes.is_empty()) && self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(&pastes)
+        {
+            self.paste_objects(i);
+            return;
         }
         if !pastes.is_empty() {
             self.receive_pastes(i, pastes, true);
@@ -90,6 +120,90 @@ impl PdfCraftApp {
             let page = self.views.get(i).map_or(0, |v| v.current);
             self.paste_image(page, None);
         }
+    }
+
+    /// ⌘C / ⌘X in Edit a PDF with objects selected together: copy them for ⌘V in any open
+    /// document, and put their text (or else their first picture) on the system clipboard for
+    /// other applications. A cut then deletes them, as one undo step.
+    pub(crate) fn copy_objects(&mut self, i: usize, ctx: &egui::Context, cut: bool) -> bool {
+        let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.objects.selection())) else { return false };
+        if !self.may_copy(id) {
+            return false;
+        }
+        let Some(doc) = self.session.get(id) else { return false };
+        if cut && !doc.allows_modification() {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+        let clip = match doc.copy_objects(page, &targets) {
+            Ok(clip) => clip,
+            Err(e) => {
+                self.notify_error(e);
+                return false;
+            }
+        };
+        // A newer copy wins over a whole-document copy still reading its pages.
+        self.document_copy = None;
+        let text = clip.text();
+        let picture =
+            clip.objects().iter().find(|o| o.target.kind == pdfcraft_engine::ObjectKind::Image && o.content_type == "image").map(|o| o.target.index);
+        self.object_clip_mark = if !text.is_empty() {
+            ctx.copy_text(text.clone());
+            ObjectClipMark::Text(text)
+        } else if let Some(index) = picture.filter(|_| self.system_clipboard && cfg!(not(target_arch = "wasm32")))
+            && self.copy_page_image(page, index)
+            && let Some((w, h, rgba)) = &self.last_copied_image
+        {
+            ObjectClipMark::Picture(picture_hash(*w as usize, *h as usize, rgba))
+        } else {
+            ObjectClipMark::None
+        };
+        self.object_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
+        if cut && let Some(delete) = pdfcraft_engine::Edit::delete_objects(page, targets) {
+            self.apply_edit(delete);
+        }
+        true
+    }
+
+    /// Whether ⌘V's `pastes` (what the system clipboard gave, if anything) are the objects
+    /// copied in Edit a PDF, rather than something copied since, here or in another application.
+    fn pastes_objects(&self, pastes: &[ClipboardPaste]) -> bool {
+        pastes.iter().all(|paste| match (paste, &self.object_clip_mark) {
+            (ClipboardPaste::Text(text), ObjectClipMark::Text(copied)) => text.replace("\r\n", "\n").trim_end() == copied.trim_end(),
+            (ClipboardPaste::Text(text), ObjectClipMark::None) => !pdfcraft_engine::is_xfdf_comments(text),
+            (ClipboardPaste::Image(image), ObjectClipMark::Picture(hash)) => {
+                let rgba: Vec<u8> = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
+                picture_hash(image.size[0], image.size[1], &rgba) == *hash
+            }
+            (ClipboardPaste::Image(_), ObjectClipMark::None) => true,
+            _ => false,
+        })
+    }
+
+    /// ⌘V in Edit a PDF: the copied objects onto the current page of tab `i`, as page content
+    /// that draws the same (one undo step), and selected.
+    pub(crate) fn paste_objects(&mut self, i: usize) -> bool {
+        let Some((id, page)) = self.views.get(i).map(|v| (v.id, v.current)) else { return false };
+        let (Some(doc), Some(clipboard)) = (self.session.get(id), self.object_clipboard.as_mut()) else { return false };
+        if !doc.allows_modification() {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+        let before = doc.editable_objects(page).unwrap_or_default();
+        let edit = match clipboard.paste(doc, page) {
+            Ok(edit) => edit,
+            Err(e) => {
+                self.notify_error(e);
+                return false;
+            }
+        };
+        if !self.apply_edit(edit) {
+            return false;
+        }
+        if let (Some(Ok(after)), Some(view)) = (self.session.get(id).map(|d| d.editable_objects(page)), self.views.get_mut(i)) {
+            view.objects.select_pasted(page, &before, after);
+        }
+        true
     }
 
     /// `on_canvas`: the paste is the canvas's (no text field, dialog or page grid has it), so
