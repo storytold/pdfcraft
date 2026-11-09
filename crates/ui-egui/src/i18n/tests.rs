@@ -549,6 +549,13 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
             _ => 2,
         }
     }
+    fn he(n: u64) -> usize {
+        match n {
+            1 => 0,
+            2 => 1,
+            _ => 2,
+        }
+    }
     fn cs(n: u64) -> usize {
         match n {
             1 => 0,
@@ -602,6 +609,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
         "sl" => sl,
         "lt" => lt,
         "ro" => ro,
+        "he" => he,
         _ => one_other,
     }
 }
@@ -1270,7 +1278,7 @@ fn arabic_is_registered_and_persists() {
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["ar", "ckb", "fa", "he"], "Arabic, Kurdish, Persian and Hebrew are the right-to-left languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1351,6 +1359,39 @@ fn persian_is_registered_and_persists() {
     assert_eq!(restored.language, "fa");
     assert!(restored.set_option("language", "xx").is_err());
     assert_eq!(restored.language, "fa");
+}
+
+fn hebrew() -> Lang {
+    Lang::from_code("he").expect("he registered")
+}
+
+#[test]
+fn hebrew_is_registered_and_persists() {
+    needs_catalogs!();
+    let he = hebrew();
+    assert_eq!(he.name(), "עברית");
+    assert_eq!(he.english_name(), "Hebrew");
+    assert!(he.rtl());
+    // CLDR `he`: 1 is singular, 2 the dual, every other count the plural.
+    let form = plural_fixture("he", 3);
+    assert_eq!([0, 1, 2, 3, 10, 11, 20, 100].map(&form), [2, 0, 1, 2, 2, 2, 2, 2]);
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "iw", "iw_IL", "iw-IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    assert_eq!(first_supported("he-IL\r\nen-US"), Some(he));
+    // Lookups return Hebrew in logical order; epaint handles visual ordering.
+    assert_eq!(tr(he, "Save"), "שמירה");
+    assert_eq!(tr(he, "Cancel"), "ביטול");
+    assert_eq!(tr(he, "File"), "קובץ");
+    // Unknown strings and user text are never reordered by a lookup.
+    assert_eq!(tr(he, "דוח סופי {n}.pdf"), "דוח סופי {n}.pdf");
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "HE").unwrap();
+    assert_eq!(app.language, "he");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "he");
 }
 
 /// A form picker for `code`: a fixture row with `forms` plural forms, and for a count the form
