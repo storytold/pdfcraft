@@ -122,14 +122,10 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        // As in `Reads::decode`: once the allowance is spent the decode refuses a program with
-        // data, so it is passed over before its parameters are resolved, work the allowance doesn't
-        // count; an empty one is no program either way.
-        if budget.remaining() == 0 {
-            continue;
-        }
-        // As in `Reads::decode`: each stage within the limit, the program, the last, too.
-        let Ok(mut bytes) = budget.decode_stages_within(&doc.with_direct_parms(stream), MAX_SFNT) else { continue };
+        // As in `Reads::decode`: each stage within the limit, the program, the last, too, read
+        // through a view of the stream; once the allowance is spent a program with data is refused
+        // before its parameters are resolved.
+        let Ok(mut bytes) = budget.decode_stages_within(doc, stream, MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -408,8 +404,8 @@ impl<'a> Reads<'a> {
     }
 
     /// `stream` decoded within `max` and the allowance, its `/DecodeParms` read where they are given
-    /// by reference too ([`Document::with_direct_parms`]); `None` when it can't be, noting when the
-    /// allowance is why.
+    /// by reference too, through a view of the stream that copies no more of its dictionary than
+    /// its filters and parameters; `None` when it can't be, noting when the allowance is why.
     ///
     /// Each of its filter stages is held to `max`, as a decode without an allowance holds it, and
     /// the stages together to `max` for each of them ([`DecodeBudget::decode_stages_within`]): a
@@ -421,13 +417,7 @@ impl<'a> Reads<'a> {
     /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
     /// with no more left than that total, it spends all of it and counts as refused.
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
-        // Once the allowance is spent the decode refuses the stream; refused here, before the
-        // parameters are resolved, which is work the allowance doesn't count.
-        if self.budget.remaining() == 0 && !stream.raw.is_empty() {
-            self.refused = true;
-            return None;
-        }
-        match self.budget.decode_stages_within(&self.doc.with_direct_parms(stream), max) {
+        match self.budget.decode_stages_within(self.doc, stream, max) {
             Ok(data) => Some(data),
             Err(_) => {
                 self.refused |= self.budget.remaining() == 0;
@@ -488,8 +478,15 @@ fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option
     let mut union: Option<[f64; 4]> = None;
     for proc in chosen {
         let Object::Stream(s) = &*doc.resolve(proc) else { continue };
+        // Once the reading's allowance is spent the rest go unread, before their parameters are
+        // resolved.
+        if reads.budget.refuses(s) {
+            reads.refused = true;
+            complete = false;
+            break;
+        }
         let before = reads.budget.remaining();
-        let read = reads.budget.decode_within(&doc.with_direct_parms(s), MAX_TYPE3_GLYPH_BYTES.min(left));
+        let read = reads.budget.decode_with_damage(doc, s, MAX_TYPE3_GLYPH_BYTES.min(left)).map(|(data, _)| data);
         left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
         let Ok(data) = read else {
             if reads.budget.remaining() == 0 {

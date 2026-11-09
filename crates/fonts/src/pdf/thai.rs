@@ -173,7 +173,7 @@ fn embedded_truetype(doc: &Document, descendant: &Dict) -> Option<Vec<u8>> {
     let descriptor = dict(doc, descendant.get(b"FontDescriptor"))?;
     let program = doc.resolve(descriptor.get(b"FontFile2")?);
     let Object::Stream(program) = program.as_ref() else { return None };
-    DecodeBudget::new(super::MAX_SFNT, 0).decode_within(&doc.with_direct_parms(program), super::MAX_SFNT).ok()
+    DecodeBudget::new(super::MAX_SFNT, 0).decode_with_damage(doc, program, super::MAX_SFNT).ok().map(|(data, _)| data)
 }
 
 /// Source glyph positions and the original PDF character codes that draw them. Empty codes
