@@ -1446,7 +1446,7 @@ pub(crate) fn list_object(ctx: &mut Context, items: Vec<(usize, String)>) -> JsR
         let found = {
             let h = host(ctx)?.borrow();
             let named = |(n, p): &&(usize, String)| {
-                if p.is_empty() { h.nodes.get(*n).is_some_and(|x| &*x.name == name) } else { attr(&h, *n, p, "name").is_some_and(|v| v == name) }
+                if p.is_empty() { h.nodes.get(*n).is_some_and(|x| x.name == name) } else { attr(&h, *n, p, "name").is_some_and(|v| v == name) }
             };
             items.iter().find(named).or_else(|| items.iter().find(|(_, p)| !p.is_empty() && tag_of(p) == name)).cloned()
         };
