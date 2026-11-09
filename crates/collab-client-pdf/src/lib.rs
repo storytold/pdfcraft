@@ -1308,6 +1308,7 @@ mod tests {
     };
     use pdfcraft_collab_proto::{DocKey, OpId, PageRef, Target};
     use pdfcraft_engine::Session;
+    use std::sync::Arc;
 
     fn fixture(n: usize) -> Vec<u8> {
         let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -2400,6 +2401,70 @@ mod tests {
         assert_eq!(ok.payload["action"], "page.combine");
         assert_eq!(ok.payload["count"], 1);
         assert_eq!(ok.target, Target::Page(PageRef { index: 2, epoch: 0 }), "the page count is an append");
+        Ok(())
+    }
+
+    /// Two replicas of the same file: the Split dialog's intent
+    /// (`split_pages_op`) is accepted by the room, both replicas lose the same
+    /// range, and the undo — the `page.combine` the accepted operation gives
+    /// `inverse_after` — joins the part back on both. The combine's own inverse
+    /// splits it out again, so the pair is a redo as well.
+    #[test]
+    fn two_replicas_split_a_range_out_and_join_it_back() -> Result<(), Box<dyn std::error::Error>> {
+        let bytes: Arc<Vec<u8>> = fixture(4).into();
+        let mut a = Session::new();
+        let mut b = Session::new();
+        let (id_a, id_b) = (a.open_new("fixture.pdf", bytes.clone())?, b.open_new("fixture.pdf", bytes)?);
+
+        let mut counter = 0;
+        let intent = super::split_pages_op(a.get(id_a).ok_or("gone")?, 1, 2, doc()?, "ada-1", 0, 0, &mut counter)?;
+        assert_eq!(intent.payload["action"], "page.split");
+        assert_eq!(intent.target, Target::Page(PageRef { index: 1, epoch: 0 }));
+
+        // The room cuts the part from its own copy and broadcasts the accepted form.
+        let part = fixture(2);
+        let mut accepted = intent.clone();
+        accepted.payload["from"] = serde_json::json!(1);
+        accepted.payload["to"] = serde_json::json!(3);
+        accepted.payload["kept"] = serde_json::json!(2);
+        accepted.payload["bytes"] = serde_json::json!(super::encode_base64(&part));
+        super::apply(&mut a, id_a, &accepted)?;
+        super::apply(&mut b, id_b, &accepted)?;
+        assert_eq!(a.get(id_a).ok_or("gone")?.info.pages.len(), 2, "the range left the first replica");
+        assert_eq!(b.get(id_b).ok_or("gone")?.info.pages.len(), 2, "the range left the second replica");
+
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 1,
+            epoch: 1,
+            op: accepted,
+            result: serde_json::json!({"part": {"sha256": "0", "len": part.len()}}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("the accepted split carries its part")?;
+        assert_eq!(undo.payload["action"], "page.combine");
+        assert_eq!(undo.payload["count"], 2);
+        super::apply(&mut a, id_a, &undo)?;
+        super::apply(&mut b, id_b, &undo)?;
+        for (session, id) in [(&a, id_a), (&b, id_b)] {
+            assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 4, "Undo joins the part back on every replica");
+        }
+
+        // Redo: the combine's inverse is a split of the same range, addressed to
+        // the head the join left.
+        let mut redo = super::inverse_for(a.get(id_a).ok_or("gone")?, &undo, OpId::new("redo-1")?)?.ok_or("a combine is undone by a split")?;
+        assert_eq!(redo.payload["action"], "page.split");
+        assert_eq!(redo.payload["count"], 2);
+        redo.base_version = 2;
+        redo.epoch = 2;
+        if let Target::Page(page) = &mut redo.target {
+            page.epoch = 2;
+        }
+        super::apply(&mut a, id_a, &redo)?;
+        super::apply(&mut b, id_b, &redo)?;
+        for (session, id) in [(&a, id_a), (&b, id_b)] {
+            assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 2, "the split runs on both replicas again");
+        }
         Ok(())
     }
 

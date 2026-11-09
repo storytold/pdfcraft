@@ -1018,15 +1018,31 @@ fn dialog_split(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
         crate::SplitPlan::Size(_) => None,
     };
     ui.add_space(8.0);
-    let text = match files {
-        Some(f) => {
-            if f == 1 {
-                crate::i18n::fmt(tl!("Creates 1 file from {n} pages."), &[("n", &n.to_string())])
-            } else {
-                crate::i18n::fmt(tl!("Creates {f} files from {n} pages."), &[("f", &f.to_string()), ("n", &n.to_string())])
-            }
+    #[cfg(feature = "collab")]
+    let shared = app.collab_shares(id);
+    #[cfg(not(feature = "collab"))]
+    let shared = false;
+    let text = if shared {
+        // In a room the only shape one `page.split` can carry is one part: the
+        // pages after the plan's first cut leave (RFC §3.1.5).
+        match app.split_cut(id, &plan) {
+            Some(cut) => crate::i18n::fmt(
+                tl!("A shared split takes the pages from page {p} out of the document ({n} pages leave); Undo brings them back."),
+                &[("p", &(cut + 1).to_string()), ("n", &n.saturating_sub(cut).to_string())],
+            ),
+            None => tl!("A shared split takes one part out of the document; Undo brings it back.").to_string(),
         }
-        None => crate::i18n::fmt(tl!("Each file holds as many of the {n} pages as fit."), &[("n", &n.to_string())]),
+    } else {
+        match files {
+            Some(f) => {
+                if f == 1 {
+                    crate::i18n::fmt(tl!("Creates 1 file from {n} pages."), &[("n", &n.to_string())])
+                } else {
+                    crate::i18n::fmt(tl!("Creates {f} files from {n} pages."), &[("f", &f.to_string()), ("n", &n.to_string())])
+                }
+            }
+            None => crate::i18n::fmt(tl!("Each file holds as many of the {n} pages as fit."), &[("n", &n.to_string())]),
+        }
     };
     ui.label(egui::RichText::new(text).color(t.text_muted));
     if files.is_none_or(|f| f > 1) {

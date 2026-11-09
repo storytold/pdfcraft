@@ -14,10 +14,10 @@
 use crate::PdfCraftApp;
 use crate::canvas::{DocView, RemoteSelection, RemoteSelectionKind};
 use crate::hooks::HostSession;
-use pdfcraft_collab_client_pdf::{apply, inverse_after, inverse_for, ops_for_edit};
+use pdfcraft_collab_client_pdf::{ProjectionError, apply, combine_pages_op, inverse_after, inverse_for, ops_for_edit, split_pages_op};
 use pdfcraft_collab_proto::{ActorId, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, Viewport};
 use pdfcraft_collab_session::{Config as WireConfig, Event, Sink};
-use pdfcraft_engine::{DocId, Edit};
+use pdfcraft_engine::{DocId, Document, Edit};
 use pdfcraft_render::DocInfo;
 use std::collections::BTreeMap;
 use web_time::{Duration, Instant, SystemTime};
@@ -748,6 +748,85 @@ impl PdfCraftApp {
         Some(true)
     }
 
+    /// Whether the open session shares this document. The Split and Combine
+    /// dialogs ask before they fall back to their single-user file workflow.
+    pub(crate) fn collab_shares(&self, doc: DocId) -> bool {
+        self.collab.as_ref().is_some_and(|collab| collab.doc == doc)
+    }
+
+    /// The document a session shares, if one is open. `None` without a
+    /// session: the caller then keeps its single-user behaviour.
+    pub(crate) fn collab_document(&self) -> Option<DocId> {
+        self.collab.as_ref().map(|collab| collab.doc)
+    }
+
+    /// Take `count` pages out of the shared document, starting at the 0-based
+    /// `from` (RFC §3.1.5). `None` when no session shares this document, so
+    /// the caller runs its file workflow; `Some(sent)` otherwise. The part is
+    /// cut by the server, so the intent carries the range alone and the undo
+    /// is patched from the accepted operation (`inverse_after`).
+    pub(crate) fn collab_split_pages(&mut self, doc: DocId, from: usize, count: usize) -> Option<bool> {
+        self.collab_send_pages_op(doc, "Split pages", |document, key, client_id, version, epoch, counter| {
+            split_pages_op(document, from, count, key, client_id, version, epoch, counter)
+        })
+    }
+
+    /// Join `part` into the shared document at the 0-based `at` (RFC §3.1.5):
+    /// Combine Files inside a room, one version for the whole part. `None`
+    /// when no session shares this document.
+    pub(crate) fn collab_combine_pages(&mut self, doc: DocId, at: usize, part: &[u8]) -> Option<bool> {
+        self.collab_send_pages_op(doc, "Combine pages", |document, key, client_id, version, epoch, counter| {
+            combine_pages_op(document, at, part, key, client_id, version, epoch, counter)
+        })
+    }
+
+    /// Send one structural page operation the way [`Self::collab_apply_edit`]
+    /// sends an edit: refused before anything is sent when the session is not
+    /// ready or the role cannot change pages, and the inverse is computed here
+    /// when it can be (a combine's split); a split's combine is patched from the
+    /// accepted operation.
+    fn collab_send_pages_op(
+        &mut self,
+        doc: DocId,
+        label: &str,
+        build: impl FnOnce(&Document, DocKey, &str, u64, u64, &mut u64) -> Result<Op, ProjectionError>,
+    ) -> Option<bool> {
+        let collab = self.collab.as_mut()?;
+        if collab.doc != doc {
+            return None;
+        }
+        if !collab.connected {
+            collab.error = Some("Waiting for the collaboration session".into());
+            return Some(false);
+        }
+        if !collab.role.can_structural() {
+            collab.error = Some("This role cannot change pages".into());
+            return Some(false);
+        }
+        let document = self.session.get(doc)?;
+        let mut counter = collab.counter;
+        let op = {
+            let client_id = collab.client_id.clone();
+            build(document, collab.doc_key.clone(), &client_id, collab.version, collab.epoch, &mut counter)
+        };
+        collab.counter = counter;
+        let op = match op {
+            Ok(op) => op,
+            Err(e) => {
+                collab.error = Some(e.to_string());
+                return Some(false);
+            }
+        };
+        let inverse = self.session.get(doc).and_then(|document| collab.next_op_id().and_then(|id| inverse_for(document, &op, id).ok().flatten()));
+        if !collab.sink.enqueue(op.clone()) {
+            collab.error = Some("The collaboration session is closed".into());
+            return Some(false);
+        }
+        collab.history.push(HistoryGroup { label: label.to_string(), originals: vec![op], inverses: vec![inverse] });
+        collab.redo.clear();
+        Some(true)
+    }
+
     /// Undo/redo through inverse operations (ADR-0010). Returns false when no
     /// session owns this document, so the local history runs instead.
     pub(crate) fn collab_history_step(&mut self, undo: bool) -> bool {
@@ -910,9 +989,10 @@ fn color_of_hex(color: &str) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Duration, Instant, PRESENCE_TTL, RemoteSelectionKind, Seen, doc_key_from_token, rect_of_quads, role_from_name, role_name, visible_selection,
+        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, Instant, Op, PRESENCE_TTL, PageRef, PdfCraftApp, Presence, RemoteSelectionKind,
+        Role, Seen, Sink, doc_key_from_token, rect_of_quads, role_from_name, role_name, visible_selection,
     };
-    use pdfcraft_collab_proto::{ActorId, PageRef, Presence, Role, Selection, Viewport};
+    use pdfcraft_collab_proto::{Selection, Target, Viewport};
 
     fn presence(selection: Option<Selection>) -> Result<Presence, Box<dyn std::error::Error>> {
         Ok(Presence {
@@ -987,5 +1067,173 @@ mod tests {
             assert_eq!(role_from_name(role_name(role)), Some(role));
         }
         assert_eq!(role_from_name("chair"), None);
+    }
+
+    /// An `n`-page document; page `i` shows "Page i+1".
+    fn fixture(n: usize) -> Vec<u8> {
+        let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
+        objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+        for i in 0..n {
+            objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i).into_bytes());
+            let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+            objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// What the UI hands a session: the operations it would have sent, kept for
+    /// the assertions. No socket, no server.
+    struct RecordedSink {
+        ops: std::sync::Arc<std::sync::Mutex<Vec<Op>>>,
+    }
+
+    impl Sink for RecordedSink {
+        fn enqueue(&mut self, op: Op) -> bool {
+            self.ops.lock().map(|mut ops| ops.push(op)).is_ok()
+        }
+        fn presence(&mut self, _presence: Presence) -> bool {
+            true
+        }
+        fn commit(&mut self, _message: Option<String>) -> bool {
+            true
+        }
+        fn resync(&mut self) -> bool {
+            true
+        }
+        fn try_event(&mut self) -> Option<Event> {
+            None
+        }
+        fn close(&mut self) {}
+    }
+
+    /// Put an editor's session on `doc` and return the operations it sends.
+    fn session_on(app: &mut PdfCraftApp, doc: DocId) -> std::sync::Arc<std::sync::Mutex<Vec<Op>>> {
+        let ops = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let now = Instant::now();
+        app.collab = Some(CollabUi {
+            sink: Box::new(RecordedSink { ops: ops.clone() }),
+            doc,
+            doc_key: DocKey::new("file-1").expect("a document key"),
+            actor: Some(ActorId::new("ada").expect("an actor")),
+            client_id: "ada-1".into(),
+            role: Role::Editor,
+            connected: true,
+            version: 0,
+            epoch: 0,
+            participants: BTreeMap::new(),
+            color: "#3366cc".into(),
+            status: String::new(),
+            error: None,
+            history: Vec::new(),
+            redo: Vec::new(),
+            counter: 0,
+            last_presence: now,
+            sent_presence: None,
+            committed: None,
+            reported: None,
+            reported_presence: None,
+            reported_at: now,
+        });
+        ops
+    }
+
+    /// The Split dialog's action in a session is one `page.split`; the accepted
+    /// operation removes the range and the undo joins the part back. This is the
+    /// dialog's path (not the file export), and the history is what Undo uses.
+    #[test]
+    fn a_shared_split_sends_one_operation_and_undo_joins_the_part() {
+        use base64::Engine as _;
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(4)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        let ops = session_on(&mut app, id);
+
+        assert_eq!(app.collab_split_pages(id, 1, 3), Some(true), "a shared split is one operation");
+        let sent = ops.lock().expect("the queue").clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].payload["action"], "page.split");
+        assert_eq!(sent[0].payload["count"], 3);
+        assert_eq!(sent[0].target, Target::Page(PageRef { index: 1, epoch: 0 }), "the first page of the part, in the epoch it was in");
+        let inverses = &app.collab.as_ref().expect("a session").history[0].inverses;
+        assert!(inverses[0].is_none(), "the part is cut by the server, so the undo waits for the accepted operation");
+
+        // The room cuts the part from its own document and accepts the operation.
+        let part = fixture(3);
+        let mut accepted = sent[0].clone();
+        accepted.payload["from"] = serde_json::json!(1);
+        accepted.payload["to"] = serde_json::json!(4);
+        accepted.payload["kept"] = serde_json::json!(1);
+        accepted.payload["bytes"] = serde_json::json!(base64::engine::general_purpose::STANDARD.encode(&part));
+        let ctx = egui::Context::default();
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: ActorId::new("ada").expect("an actor"),
+            version: 1,
+            epoch: 1,
+            op: accepted,
+            result: serde_json::json!({"part": {"sha256": "0", "len": part.len()}}),
+        };
+        app.collab_event(Event::Applied { applied, own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 1, "the range left the replica");
+        let inverse = app.collab.as_ref().expect("a session").history[0].inverses[0].clone().expect("the accepted split carries its part");
+        assert_eq!(inverse.payload["action"], "page.combine", "the undo is the operation that joins the part back");
+        assert_eq!(inverse.payload["count"], 3);
+        assert_eq!(inverse.target, Target::Page(PageRef { index: 1, epoch: 1 }), "the part goes back where it left, in the epoch the split left");
+
+        // Undo sends that combine; the accepted join restores the page set.
+        ops.lock().expect("the queue").clear();
+        assert!(app.collab_history_step(true), "the session owns the undo");
+        let joined = ops.lock().expect("the queue").clone();
+        assert_eq!(joined.len(), 1);
+        assert_eq!(joined[0].payload["action"], "page.combine");
+        let mut accepted = joined[0].clone();
+        accepted.payload["at"] = serde_json::json!(1);
+        accepted.payload["count"] = serde_json::json!(3);
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: ActorId::new("ada").expect("an actor"),
+            version: 2,
+            epoch: 2,
+            op: accepted,
+            result: serde_json::json!({"at": 1, "count": 3, "pages": 4}),
+        };
+        app.collab_event(Event::Applied { applied, own: true }, &ctx);
+        assert_eq!(app.session.get(id).expect("the document").info.pages.len(), 4, "Undo brings the pages back");
+    }
+
+    /// A split with no second part is refused before it is sent, and a role
+    /// without page access is refused with a message rather than a file write.
+    #[test]
+    fn a_shared_split_stops_before_the_server() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(4)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        let ops = session_on(&mut app, id);
+
+        // The projection refuses a range the room would refuse, and nothing is queued.
+        assert_eq!(app.collab_split_pages(id, 0, 4), Some(false), "a split that takes everything is refused");
+        assert!(ops.lock().expect("the queue").is_empty());
+        assert!(app.collab.as_ref().expect("a session").error.is_some());
+
+        // Another document is not this session's: the caller keeps its file workflow.
+        let other = app.session.open_new("other.pdf", fixture(2).into()).expect("a second document");
+        assert_eq!(app.collab_split_pages(other, 0, 1), None);
+        assert!(ops.lock().expect("the queue").is_empty());
     }
 }

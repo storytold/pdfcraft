@@ -250,6 +250,13 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
             });
         }
+        // In a room the combined part joins the shared document in one
+        // operation instead of becoming a new unsaved file (RFC §3.1.5).
+        #[cfg(feature = "collab")]
+        if app.collab_document().is_some_and(|doc| app.session.get(doc).is_some()) {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(tl!("In a shared session the files join the open document in one operation.")).color(t.text_muted));
+        }
     });
 
     // A Pages field taking the keyboard remembers the list; its first change makes the undo step.

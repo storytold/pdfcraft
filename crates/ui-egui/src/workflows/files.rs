@@ -848,12 +848,21 @@ impl PdfCraftApp {
 
     /// Split the active document and write the parts: into a chosen folder (desktop, written on
     /// a later frame once the user has chosen it) or as downloads (web).
+    ///
+    /// Inside a collaboration session there are no parts to write: the pages
+    /// after the plan's first cut leave the shared document in one
+    /// `page.split`, and Undo (the inverse `page.combine`) brings them back
+    /// (RFC §3.1.5). The file workflow stays the single-user one.
     pub fn split_active(&mut self, plan: &SplitPlan) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
+        #[cfg(feature = "collab")]
+        if self.split_shared(id, plan) {
+            return;
+        }
         let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_else(|| "document".into());
         let (parts, titles) = match plan {
             SplitPlan::By(by) => (self.session.split(id, by), Vec::new()),
@@ -894,6 +903,53 @@ impl PdfCraftApp {
             })
             .collect();
         self.write_files(&named, "Choose a folder for the split files");
+    }
+
+    /// Where a split in a shared session cuts the document: the first page
+    /// (0-based) of the second part, so the pages from there on leave the
+    /// document as one part. `None` when the plan makes a single part (nothing
+    /// to split off) or cannot be measured without reading the parts.
+    pub(crate) fn split_cut(&self, id: DocId, plan: &SplitPlan) -> Option<usize> {
+        let n = self.session.get(id)?.info.pages.len();
+        let ranges = match plan {
+            SplitPlan::By(by) => pdfcraft_engine::split_ranges(n, by),
+            SplitPlan::Bookmarks => {
+                let cuts: Vec<usize> = self.session.bookmark_splits(id).iter().map(|m| m.0).collect();
+                pdfcraft_engine::split_ranges(n, &SplitBy::Before(cuts))
+            }
+            SplitPlan::Size(max) => {
+                let parts = self.session.split_by_size(id, *max).ok()?;
+                return parts.get(1).map(|part| part.0.saturating_sub(1));
+            }
+        };
+        ranges.get(1).map(|range| range.start)
+    }
+
+    /// Split inside a room: the pages after the plan's first cut leave the
+    /// shared document in one `page.split` (RFC §3.1.5). Returns false when no
+    /// session shares this document, so the file workflow runs instead; true
+    /// when the request was handled (sent, or refused with a message).
+    #[cfg(feature = "collab")]
+    fn split_shared(&mut self, id: DocId, plan: &SplitPlan) -> bool {
+        if !self.collab_shares(id) {
+            return false;
+        }
+        let Some(n) = self.session.get(id).map(|d| d.info.pages.len()) else { return false };
+        let Some(cut) = self.split_cut(id, plan) else {
+            self.notify_tr("A shared split takes one part out; this plan makes a single file");
+            return true;
+        };
+        let count = n.saturating_sub(cut);
+        if count == 0 {
+            self.notify_tr("There are no pages to split off");
+            return true;
+        }
+        if let Some(true) = self.collab_split_pages(id, cut, count) {
+            let pages = count.to_string();
+            let from = (cut + 1).to_string();
+            self.notify_fmt("Split off {n} pages from page {p}; Undo brings them back", &[("n", &pages), ("p", &from)]);
+        }
+        true
     }
 
     /// Summarize Comments: make the summary and open it as a new document.
@@ -1139,6 +1195,56 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_error(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_split_tests {
+    use super::{PdfCraftApp, SplitPlan};
+    use pdfcraft_engine::SplitBy;
+
+    /// An `n`-page document; page `i` shows "Page i+1".
+    fn fixture(n: usize) -> Vec<u8> {
+        let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
+        objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+        for i in 0..n {
+            objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R >>", 5 + 2 * i).into_bytes());
+            let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+            objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// A shared split is one part: the cut is the first page of the second
+    /// part, so the pages from there on leave the document. A plan that makes
+    /// a single file has no cut — the dialog says so instead of exporting.
+    #[test]
+    fn the_shared_cut_is_the_start_of_the_second_part() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(4)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        for (every, cut) in [(1, Some(1)), (2, Some(2)), (3, Some(3))] {
+            assert_eq!(app.split_cut(id, &SplitPlan::By(SplitBy::PageCount(every))), cut, "{every} pages per file cuts after {every}");
+        }
+        assert_eq!(app.split_cut(id, &SplitPlan::By(SplitBy::PageCount(4))), None, "one part is nothing to split off");
+        assert_eq!(app.split_cut(id, &SplitPlan::By(SplitBy::Before(vec![2]))), Some(2));
+        assert_eq!(app.split_cut(id, &SplitPlan::By(SplitBy::Before(vec![0]))), None, "a cut at the first page makes one part");
     }
 }
 

@@ -479,6 +479,10 @@ impl PdfCraftApp {
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
         match self.session.combine_grouped(&sources, &groups, &passwords) {
             Ok(bytes) => {
+                #[cfg(feature = "collab")]
+                if self.combine_shared(&bytes, count) {
+                    return;
+                }
                 self.close_combine_tab();
                 let message = crate::i18n::fmt(tl!("Combined {n} files"), &[("n", &count.to_string())]);
                 self.open_created("Combined.pdf", bytes, &message)
@@ -486,5 +490,26 @@ impl PdfCraftApp {
             // The list stays, so the user can fix it.
             Err(e) => self.notify_fmt("Couldn't combine files: {e}", &[("e", &e.to_string())]),
         }
+    }
+
+    /// Combine inside a room: the whole part joins the shared document at its
+    /// end in one `page.combine` (RFC §3.1.5), instead of a new unsaved
+    /// document. Returns false when no session shares a document, so the
+    /// single-user path runs; true when the request was handled (sent, or
+    /// refused with a message — the list then stays so it can be fixed).
+    #[cfg(feature = "collab")]
+    fn combine_shared(&mut self, part: &[u8], files: usize) -> bool {
+        let Some(doc) = self.collab_document() else { return false };
+        let Some(n) = self.session.get(doc).map(|d| d.info.pages.len()) else { return false };
+        if let Some(true) = self.collab_combine_pages(doc, n, part) {
+            if let Some(index) = self.views.iter().position(|view| view.id == doc) {
+                self.active = Some(index);
+            }
+            self.close_combine_tab();
+            let count = files.to_string();
+            self.notify_fmt("Combined {n} files into the shared document; Undo takes them out", &[("n", &count)]);
+            return true;
+        }
+        true
     }
 }
