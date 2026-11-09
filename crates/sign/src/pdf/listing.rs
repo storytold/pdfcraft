@@ -206,6 +206,20 @@ impl Field {
     }
 }
 
+/// The `/Ff` a field inherits through `/Parent` when it has none of its own. Bounded like the
+/// rest of the walk: a malformed parent chain simply ends the search.
+fn parent_flags(doc: &Document, d: &Dict) -> Option<i64> {
+    let mut cur = d.clone();
+    for _ in 0..64 {
+        let parent = cur.get(b"Parent").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned())?;
+        if let Some(f) = parent.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()) {
+            return Some(f);
+        }
+        cur = parent;
+    }
+    None
+}
+
 /// Every signature field, depth first in `/Fields` order.
 pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
     let mut out = Vec::new();
@@ -231,7 +245,9 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
         };
         let ft = d.name(b"FT").map(<[u8]>::to_vec).or(inherited_ft);
         // `/Ff` is inheritable: a field without its own takes its ancestor's, as a reader does.
-        let ff = d.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()).unwrap_or(inherited_ff);
+        // `/Parent` is followed as well: `/Fields` can list a field whose parent it does not list,
+        // and that parent's flags still govern it.
+        let ff = d.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()).or_else(|| parent_flags(doc, &d)).unwrap_or(inherited_ff);
         let kids: Vec<Object> = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
         // Kids with a /T are fields; others are this field's widgets.
         let (sub, widgets): (Vec<Object>, Vec<Object>) = kids.into_iter().partition(|k| doc.resolve(k).as_dict().is_some_and(|kd| kd.contains(b"T")));
