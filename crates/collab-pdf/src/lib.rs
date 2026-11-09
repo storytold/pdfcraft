@@ -24,6 +24,8 @@
 //! | `page.duplicate` | structural | page |
 //! | `page.replace` | structural | page |
 //! | `page.insert_blank` | structural | page (insert position) |
+//! | `page.split` | structural | page (first page of the part) |
+//! | `page.combine` | structural | page (insert position) |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
@@ -42,6 +44,15 @@
 //! [`MAX_RESTORE_PAGE_BYTES`], no copy is kept and an undo (`"copy": null`) is
 //! refused as `conflict` before the document changes. A blank insert names the
 //! size of the page it adds (points), so every replica builds the same page.
+//!
+//! A split takes a range of pages out of the document and carries the part in
+//! the accepted operation (`bytes`), so every replica and the journal can join
+//! it back; the pages that stay are numbered deterministically and a split that
+//! would leave no page behind is refused (`invalid`) before anything changes. A
+//! combine inserts the part it carries at a position in one operation, so a
+//! multi-page join is one version and one epoch step rather than one per page.
+//! Both are bounded by [`MAX_RESTORE_PAGE_BYTES`]: a part over the budget is
+//! refused with `limit` before the document changes.
 //!
 //! Structural operations bump the epoch; merge operations keep it. Annotations
 //! are addressed by `/NM` (ADR-0002), never by a client-side index. Commit
@@ -785,6 +796,108 @@ impl PdfAdapter {
         Ok(json!({ "page": at }))
     }
 
+    /// Take `count` pages starting at `from` out of the document (RFC §3.1.4).
+    ///
+    /// The boundary is the document's own: a range that starts outside it, runs
+    /// past the last page, is empty, or would leave no page behind is `invalid`
+    /// before anything changes. A part over [`MAX_RESTORE_PAGE_BYTES`] is
+    /// `limit`, because the accepted operation has to fit one frame.
+    ///
+    /// The accepted operation carries the part (`bytes`), so every replica and
+    /// the journal can join it back without a second channel; the pages that
+    /// stay keep their order and are renumbered deterministically, and the
+    /// result names both sides: `kept` pages in the document, `part` pages in
+    /// the part, with the part's sha256.
+    fn split_pages(&mut self, from: usize, payload: &mut Value) -> Result<Value, AdapterError> {
+        let count = payload
+            .get("count")
+            .and_then(Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the split names no page count", false))?;
+        let pages = self.document_or_error()?.info.pages.len();
+        if count == 0 {
+            return Err(AdapterError::new(ErrorCode::Invalid, "a split takes at least one page", false));
+        }
+        let to = from
+            .checked_add(count)
+            .filter(|to| *to <= pages)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the split runs past the last page", false))?;
+        if count == pages {
+            return Err(AdapterError::new(ErrorCode::Invalid, "a split must leave a page in the document", false));
+        }
+        // The part is cut from the authoritative document, never taken from the
+        // request: a client that named its own bytes could otherwise put content
+        // into the document through an undo.
+        let part = self.session.extract(self.id, &(from..to).collect::<Vec<_>>()).map_err(map_edit)?;
+        if part.len() > MAX_RESTORE_PAGE_BYTES {
+            return Err(AdapterError::new(
+                ErrorCode::Limit,
+                format!("the part is {} bytes; one operation can carry at most {MAX_RESTORE_PAGE_BYTES}", part.len()),
+                false,
+            ));
+        }
+        self.apply_edit(Edit::DeletePages { pages: (from..to).collect() })?;
+        self.epoch = self.epoch.saturating_add(1);
+        let kept = pages - count;
+        // The accepted operation describes the part it took out, so every
+        // replica and the journal can put it back (`page.combine`).
+        payload["from"] = json!(from);
+        payload["to"] = json!(to);
+        payload["count"] = json!(count);
+        payload["kept"] = json!(kept);
+        payload["bytes"] = json!(base64_encode(part.as_slice()));
+        Ok(json!({
+            "from": from,
+            "to": to,
+            "count": count,
+            "kept": kept,
+            "part": { "sha256": sha256_hex(part.as_slice()), "len": part.len() },
+        }))
+    }
+
+    /// Insert the part the operation carries at `at` in one step (RFC §3.1.4):
+    /// the join of a split, and the in-room form of Combine Files. The pages
+    /// travel whole, so every replica inserts the same document; the count the
+    /// operation names must be the part's own page count, or the request is
+    /// `invalid` before anything changes. `at` may be the page count (an
+    /// append) and is past the last page otherwise.
+    fn combine_pages(&mut self, at: usize, payload: &mut Value) -> Result<Value, AdapterError> {
+        let encoded = payload
+            .get("bytes")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the operation carries no part", false))?;
+        let bytes = decode_base64(encoded)?;
+        if bytes.len() > MAX_RESTORE_PAGE_BYTES {
+            return Err(AdapterError::new(
+                ErrorCode::Limit,
+                format!("the part is {} bytes; one operation can carry at most {MAX_RESTORE_PAGE_BYTES}", bytes.len()),
+                false,
+            ));
+        }
+        let count = payload
+            .get("count")
+            .and_then(Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .filter(|count| *count > 0)
+            .ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "the combine names no page count", false))?;
+        let carried = part_page_count(&bytes)?;
+        if carried != count {
+            return Err(AdapterError::new(ErrorCode::Invalid, format!("the part has {carried} pages but the operation names {count}"), false));
+        }
+        let before = self.document_or_error()?.info.pages.len();
+        self.apply_edit(Edit::InsertPagesFrom {
+            name: "combined-part.pdf".into(),
+            bytes: Arc::new(bytes),
+            pages: None,
+            at,
+            field_conflicts: FieldConflicts::Rename,
+        })?;
+        self.epoch = self.epoch.saturating_add(1);
+        payload["at"] = json!(at);
+        payload["count"] = json!(count);
+        Ok(json!({ "at": at, "count": count, "pages": before + count }))
+    }
+
     /// A replacement is exactly one page: a copy with two pages (or none) would
     /// put content into the document that nobody asked for. Checked in a scratch
     /// session, before the document changes.
@@ -971,6 +1084,15 @@ impl Adapter for PdfAdapter {
                 let at = self.insert_position(page)?;
                 self.insert_blank(at, &mut effective.payload)?
             }
+            ("page.split", ConflictClass::Structural) => {
+                let page = self.page_index(target_page(&effective)?)?;
+                self.split_pages(page, &mut effective.payload)?
+            }
+            ("page.combine", ConflictClass::Structural) => {
+                let page = target_page(&effective)?;
+                let at = self.insert_position(page)?;
+                self.combine_pages(at, &mut effective.payload)?
+            }
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -1082,6 +1204,21 @@ fn decode_base64(encoded: &str) -> Result<Vec<u8>, AdapterError> {
     base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("the page copy is not base64: {e}"), false))
+}
+
+/// How many pages a part carries. It is opened and closed before the document
+/// changes: a file that is not a readable PDF, or one with no page, is
+/// `invalid`, never a partial insert.
+fn part_page_count(bytes: &[u8]) -> Result<usize, AdapterError> {
+    let mut scratch = Session::new();
+    let id = scratch
+        .open("combined-part.pdf", None, Arc::new(bytes.to_vec()), None)
+        .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("the part is not a readable PDF: {e}"), false))?;
+    let count = scratch.get(id).map_or(0, |document| document.info.pages.len());
+    if count == 0 {
+        return Err(AdapterError::new(ErrorCode::Invalid, "the part has no pages", false));
+    }
+    Ok(count)
 }
 
 /// The author the adapter records when an operation names none.
@@ -2554,6 +2691,274 @@ mod tests {
         let rejected = room.apply(&editor, &late, 0).err().ok_or("a reply to a deleted comment was accepted")?;
         assert_eq!(rejected.code, ErrorCode::Conflict, "{}", rejected.message);
         assert!(room.adapter().document().ok_or("gone")?.info.annotations.is_empty(), "nothing was added");
+        Ok(())
+    }
+    fn decode(encoded: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        use base64::Engine as _;
+        Ok(base64::engine::general_purpose::STANDARD.decode(encoded)?)
+    }
+
+    /// A split is one structural operation: the range leaves the document, the
+    /// accepted operation carries the part, both sides are numbered
+    /// deterministically, and a combine of that part puts it back exactly.
+    #[test]
+    fn a_split_takes_a_range_out_and_carries_the_part() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let split = op(
+            "split-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.split", "count": 1}),
+        )?;
+        let applied = room.apply(&editor, &split, 0)?;
+        assert_eq!(applied.epoch, 1, "a split is structural");
+        assert_eq!(applied.result["from"], 1);
+        assert_eq!(applied.result["to"], 2);
+        assert_eq!(applied.result["count"], 1);
+        assert_eq!(applied.result["kept"], 2, "both sides are numbered");
+        assert!(applied.result["part"]["sha256"].is_string());
+        let carried = applied.op.payload["bytes"].as_str().ok_or("the accepted split carries no part")?;
+        let part = decode(carried)?;
+        assert!(part.starts_with(b"%PDF"), "the part is a PDF");
+
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 2, "the part left the document");
+        assert_eq!(page_text(&bytes, 0)?, "Page 1", "the page before the part did not move");
+        assert_eq!(page_text(&bytes, 1)?, "Page 3", "the pages after the part move down by its count");
+        let part = std::sync::Arc::new(part);
+        assert_eq!(page_text(&part, 0)?, "Page 2", "the part is the page that left, under its own numbering");
+
+        // The undo is the combine of the part the accepted operation carries, at
+        // the index the split took it from.
+        let join = op(
+            "join-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.combine", "count": 1, "bytes": carried}),
+        )?;
+        let joined = room.apply(&editor, &join, 0)?;
+        assert_eq!(joined.epoch, 2);
+        assert_eq!(joined.result["at"], 1);
+        assert_eq!(joined.result["count"], 1);
+        assert_eq!(joined.result["pages"], 3);
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 1");
+        assert_eq!(page_text(&bytes, 1)?, "Page 2", "the part is back where the split took it");
+        assert_eq!(page_text(&bytes, 2)?, "Page 3");
+        Ok(())
+    }
+
+    /// The document's own edges are the split's boundary: an empty range, a
+    /// range past the last page, one that names no count, and one that would
+    /// take the whole document are refused before anything changes. A part over
+    /// the frame budget is `limit`, not a truncated part.
+    #[test]
+    fn a_split_at_the_documents_edge_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        for (id, index, payload) in [
+            ("empty", 0, json!({"action": "page.split", "count": 0})),
+            ("whole", 0, json!({"action": "page.split", "count": 3})),
+            ("past", 1, json!({"action": "page.split", "count": 3})),
+            ("missing", 3, json!({"action": "page.split", "count": 1})),
+            ("no-count", 0, json!({"action": "page.split"})),
+        ] {
+            let bad = op(id, ConflictClass::Structural, Target::Page(PageRef { index, epoch: 0 }), 0, 0, payload)?;
+            let rejected = room.apply(&editor, &bad, 0).err().ok_or("a boundary split was accepted")?;
+            assert_eq!(rejected.code, ErrorCode::Invalid, "{id}");
+            assert!(!rejected.retryable, "{id}");
+        }
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "no boundary split changed the document");
+        assert_eq!(room.version(), 0, "a refusal accepts nothing");
+        assert_eq!(room.epoch(), 0);
+
+        // A part that cannot fit one operation is refused with `limit`.
+        let adapter = PdfAdapter::open("fixture.pdf", fixture_with_padding(2, Some((1, MAX_RESTORE_PAGE_BYTES))).into())?;
+        let mut big = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        big.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let split =
+            op("huge", ConflictClass::Structural, Target::Page(PageRef { index: 1, epoch: 0 }), 0, 0, json!({"action": "page.split", "count": 1}))?;
+        let rejected = big.apply(&editor, &split, 0).err().ok_or("an oversized part was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Limit);
+        assert!(!rejected.retryable);
+        assert_eq!(big.adapter().document().ok_or("gone")?.info.pages.len(), 2, "the oversized split changed nothing");
+        assert_eq!(big.version(), 0);
+        Ok(())
+    }
+
+    /// A split is addressed in the epoch, like every page operation: built on a
+    /// passed epoch it is retryable and changes nothing, and the same intent
+    /// re-addressed to the head is accepted.
+    #[test]
+    fn a_split_addressed_to_another_epoch_is_retryable() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let turn = op(
+            "rot-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.rotate", "degrees": 90}),
+        )?;
+        room.apply(&editor, &turn, 0)?;
+        let stale = op(
+            "split-stale",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            1,
+            1,
+            json!({"action": "page.split", "count": 1}),
+        )?;
+        let rejected = room.apply(&editor, &stale, 0).err().ok_or("a split on a passed epoch was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Stale);
+        assert!(rejected.retryable);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "the stale split changed nothing");
+        assert_eq!(room.version(), 1);
+
+        let retry = op(
+            "split-retry",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 1 }),
+            1,
+            1,
+            json!({"action": "page.split", "count": 1}),
+        )?;
+        let applied = room.apply(&editor, &retry, 0)?;
+        assert_eq!(applied.epoch, 2);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 2, "the retried split applied");
+        Ok(())
+    }
+
+    /// A combine is one operation for a whole part: the pages are inserted at
+    /// the position the target names, the page count the operation declares has
+    /// to be the part's, and a split of the same range undoes it.
+    #[test]
+    fn a_combine_inserts_the_part_it_carries_in_one_step() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let part = fixture(2);
+        let combine = op(
+            "combine-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.combine", "count": 2, "bytes": base64_encode(&part)}),
+        )?;
+        let applied = room.apply(&editor, &combine, 0)?;
+        assert_eq!(applied.epoch, 1, "a combine is structural");
+        assert_eq!(applied.result["at"], 1);
+        assert_eq!(applied.result["count"], 2);
+        assert_eq!(applied.result["pages"], 5, "the document grew by the whole part");
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 1");
+        assert_eq!(page_text(&bytes, 1)?, "Page 1", "the part's first page is where the target named it");
+        assert_eq!(page_text(&bytes, 2)?, "Page 2");
+        assert_eq!(page_text(&bytes, 3)?, "Page 2", "the document's own pages follow the part");
+        assert_eq!(page_text(&bytes, 4)?, "Page 3");
+
+        // Undo: the same range leaves again, as one operation.
+        let undo = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.split", "count": 2}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        assert_eq!(undone.result["kept"], 3, "the document is back to its own pages");
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn a_combine_refuses_a_part_it_cannot_carry() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let two_pages = fixture(2);
+        for (id, at, payload) in [
+            ("past", 4, json!({"action": "page.combine", "count": 2, "bytes": base64_encode(&two_pages)})),
+            ("mismatch", 0, json!({"action": "page.combine", "count": 1, "bytes": base64_encode(&two_pages)})),
+            ("bad-base64", 0, json!({"action": "page.combine", "count": 1, "bytes": "%%%"})),
+            ("not-a-pdf", 0, json!({"action": "page.combine", "count": 1, "bytes": base64_encode(b"not a pdf")})),
+            ("no-count", 0, json!({"action": "page.combine", "bytes": base64_encode(&two_pages)})),
+            ("no-bytes", 0, json!({"action": "page.combine", "count": 1})),
+        ] {
+            let bad = op(id, ConflictClass::Structural, Target::Page(PageRef { index: at, epoch: 0 }), 0, 0, payload)?;
+            let rejected = room.apply(&editor, &bad, 0).err().ok_or("a bad combine was accepted")?;
+            assert_eq!(rejected.code, ErrorCode::Invalid, "{id}");
+            assert!(!rejected.retryable, "{id}");
+        }
+        let huge = vec![0u8; MAX_RESTORE_PAGE_BYTES + 1];
+        let over = op(
+            "huge",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.combine", "count": 1, "bytes": base64_encode(&huge)}),
+        )?;
+        let rejected = room.apply(&editor, &over, 0).err().ok_or("an oversized part was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Limit);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "no bad combine changed the document");
+        assert_eq!(room.version(), 0, "a refusal accepts nothing");
+        assert_eq!(room.epoch(), 0);
+        Ok(())
+    }
+
+    /// The accepted operation carries everything a replay needs: a split is cut
+    /// from the replayed document and a combine inserts the part it carries, so
+    /// a restart lands on the same page set without any client file.
+    #[test]
+    fn a_split_and_a_combine_replay_from_their_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let split = op(
+            "split-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.split", "count": 1}),
+        )?;
+        let split = room.apply(&editor, &split, 0)?.op;
+        let part = split.payload["bytes"].clone();
+
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        fresh.replay(editor.clone(), split, 1, 0)?;
+        assert_eq!(fresh.epoch(), 1);
+        assert_eq!(fresh.adapter().document().ok_or("gone")?.info.pages.len(), 2);
+
+        let combine = op(
+            "combine-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 1 }),
+            1,
+            1,
+            json!({"action": "page.combine", "count": 1, "bytes": part}),
+        )?;
+        fresh.replay(editor.clone(), combine, 2, 0)?;
+        assert_eq!(fresh.epoch(), 2);
+        assert_eq!(fresh.adapter().document().ok_or("gone")?.info.pages.len(), 3);
+        let version = fresh.version();
+        commit(&mut fresh, &editor, version)?;
+        let bytes = fresh.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 1)?, "Page 2", "the journal put the part back");
         Ok(())
     }
 }

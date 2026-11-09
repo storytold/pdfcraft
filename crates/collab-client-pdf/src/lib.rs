@@ -260,6 +260,38 @@ pub fn blank_page_payload(width: f64, height: f64) -> Value {
     json!({"action": "page.insert_blank", "width": width, "height": height})
 }
 
+/// The body of a `page.split`: take `count` pages from the operation's target
+/// page on out of the document. The part is cut by the server from the
+/// document it has, so the intent names the range alone; the accepted
+/// operation carries the part (`bytes`) and both sides' numbering.
+pub fn split_pages_payload(count: usize) -> Value {
+    json!({"action": "page.split", "count": count})
+}
+
+/// A part inserted at the operation's target position, whole (`page.combine`).
+/// `count` is the part's page count: every replica inserts the same bytes, so a
+/// mismatch is refused rather than guessed (RFC §3.1.4).
+pub fn combine_pages_payload(part: &[u8], count: usize) -> Value {
+    json!({"action": "page.combine", "count": count, "bytes": encode_base64(part)})
+}
+
+/// The page count a split or a combine names, refusing zero: an operation that
+/// moves no page is a client mistake, not an empty part.
+fn page_count(op: &Op) -> Result<usize, ProjectionError> {
+    op.payload
+        .get("count")
+        .and_then(Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|count| *count > 0)
+        .ok_or(ProjectionError::Missing("count"))
+}
+
+/// Where a combine or a split adds its pages: a page address, or the page it
+/// names as the target when the accepted operation omits the normalised `at`.
+fn insert_at(op: &Op) -> Result<usize, ProjectionError> {
+    page_position(op).or_else(|| page_target(op).ok().map(|page| page.index as usize)).ok_or(ProjectionError::Missing("at"))
+}
+
 /// The engine edit for an accepted operation. Names are resolved against
 /// `document`; a comment that vanished is an error, never a silent skip.
 pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
@@ -430,6 +462,36 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let width = op.payload.get("width").and_then(Value::as_f64).ok_or(ProjectionError::Missing("width"))?;
             let height = op.payload.get("height").and_then(Value::as_f64).ok_or(ProjectionError::Missing("height"))?;
             Ok(Edit::InsertBlankPage { at, width, height })
+        }
+        ("page.split", ConflictClass::Structural) => {
+            // The target is the first page of the part and `count` says how many
+            // leave; the part itself stays on the server's side (the accepted
+            // operation carries it), so the replica only removes the range.
+            let page = page_target(op)?;
+            let from = page.index as usize;
+            let count = page_count(op)?;
+            let to = from.checked_add(count).ok_or(ProjectionError::Missing("count"))?;
+            Ok(Edit::DeletePages { pages: (from..to).collect() })
+        }
+        ("page.combine", ConflictClass::Structural) => {
+            // The part travels whole: every replica inserts the same pages. A
+            // part over the budget is refused here too, so this replica never
+            // applies what the server would not have accepted. The page count
+            // the operation names is the server's own (it checked it against the
+            // part before accepting), so it is not re-opened here.
+            let at = insert_at(op)?;
+            let encoded = op.payload.get("bytes").and_then(Value::as_str).ok_or(ProjectionError::Missing("bytes"))?;
+            let bytes = decode_base64(encoded)?;
+            if bytes.len() > pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES {
+                return Err(ProjectionError::TooLarge(bytes.len()));
+            }
+            Ok(Edit::InsertPagesFrom {
+                name: "combined-part.pdf".into(),
+                bytes: Arc::new(bytes),
+                pages: None,
+                at,
+                field_conflicts: FieldConflicts::Rename,
+            })
         }
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
@@ -791,6 +853,79 @@ pub fn ops_for_edit(
     }
 }
 
+/// The operation that takes `count` pages starting at `from` out of the
+/// document (RFC §3.1.4). The boundaries are checked against this replica's
+/// document first, so a request the room would refuse is not sent: an empty
+/// range, one that runs past the last page, and one that would take the whole
+/// document are errors here. The part is cut by the server from the document it
+/// has, so the intent carries the range alone and the accepted operation
+/// answers with the part.
+#[allow(clippy::too_many_arguments)]
+pub fn split_pages_op(
+    document: &Document,
+    from: usize,
+    count: usize,
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+) -> Result<Op, ProjectionError> {
+    let pages = document.info.pages.len();
+    if count == 0 {
+        return Err(ProjectionError::Invalid("a split takes at least one page".into()));
+    }
+    if from.checked_add(count).is_none_or(|to| to > pages) {
+        return Err(ProjectionError::Invalid("the split runs past the last page".into()));
+    }
+    if count == pages {
+        return Err(ProjectionError::Invalid("a split must leave a page in the document".into()));
+    }
+    Ok(structural_op(
+        doc,
+        next_id(client_id, counter)?,
+        base_version,
+        epoch,
+        Target::Page(PageRef { index: from as u32, epoch }),
+        split_pages_payload(count),
+    ))
+}
+
+/// The operation that joins `part` into the document at `at` (RFC §3.1.4): the
+/// in-room form of Combine Files, and the undo of a split. The part travels
+/// whole, so its page count is read here and has to be non-zero; a part over
+/// the budget is refused with its size, never truncated.
+#[allow(clippy::too_many_arguments)]
+pub fn combine_pages_op(
+    document: &Document,
+    at: usize,
+    part: &[u8],
+    doc: DocKey,
+    client_id: &str,
+    base_version: u64,
+    epoch: u64,
+    counter: &mut u64,
+) -> Result<Op, ProjectionError> {
+    if at > document.info.pages.len() {
+        return Err(ProjectionError::Invalid("the position is past the last page".into()));
+    }
+    if part.len() > pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES {
+        return Err(ProjectionError::TooLarge(part.len()));
+    }
+    let count = source_page_count(part)?;
+    if count == 0 {
+        return Err(ProjectionError::Invalid("the part has no pages".into()));
+    }
+    Ok(structural_op(
+        doc,
+        next_id(client_id, counter)?,
+        base_version,
+        epoch,
+        Target::Page(PageRef { index: at as u32, epoch }),
+        combine_pages_payload(part, count),
+    ))
+}
+
 /// One `annotation.update` for a style change on the comment at `(page, index)`,
 /// addressed by its `/NM`. The comment's own properties are checked first: a
 /// property it does not have is refused on this side too, so the step fails as
@@ -982,11 +1117,12 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             let to = op.payload.get("to").and_then(Value::as_u64).and_then(|to| usize::try_from(to).ok()).ok_or(ProjectionError::Missing("to"))?;
             structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: to as u32, epoch }), move_payload(page.index as usize))
         }
-        // A deletion and a replacement keep what they removed on the server, so
-        // their undo is built from the accepted operation's copy token
-        // (`inverse_after`), exactly alike: this replica no longer has what was
-        // deleted or replaced.
-        "page.delete" | "page.replace" => return Ok(None),
+        // A deletion, a replacement and a split keep what they removed on the
+        // server (the split's part is the accepted operation's `bytes`), so
+        // their undo is built from the accepted operation (`inverse_after`),
+        // exactly alike: this replica no longer has what was removed.
+        "page.delete" | "page.replace" | "page.split" => return Ok(None),
+        "page.combine" => combine_inverse(op, op_id, doc, base, epoch)?,
         "page.insert" | "page.duplicate" | "page.insert_blank" => {
             // The undo of an insert is a delete of the page it put there; the
             // page is addressed where the operation placed it.
@@ -996,6 +1132,15 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         other => return Err(ProjectionError::Unsupported(other.to_owned())),
     };
     Ok(Some(inverse))
+}
+
+/// The inverse of a combine: the same range of pages goes back out, addressed
+/// where the insert placed it. A split's inverse is not built here — its part
+/// is the server's, so `inverse_after` names it from the accepted operation.
+fn combine_inverse(op: &Op, op_id: OpId, doc: DocKey, base: u64, epoch: u64) -> Result<Op, ProjectionError> {
+    let at = insert_at(op)?;
+    let count = page_count(op)?;
+    Ok(structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: at as u32, epoch }), split_pages_payload(count)))
 }
 
 /// The inverse of a deletion, once the server has answered how to undo it: the
@@ -1048,6 +1193,34 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         let token = op.payload.get("copy").and_then(Value::as_str);
         let target = Target::Page(PageRef { index: page.index, epoch: applied.epoch });
         return Some(structural_op(doc, op_id, applied.version, applied.epoch, target, replace_page_from_copy_payload(token)));
+    }
+    // A split's part left the document, so only the accepted operation has it:
+    // the undo puts that part back where the split took it out, as one
+    // `page.combine`. A combine's undo takes the same range out again. Both
+    // are addressed in the epoch the accepted operation left.
+    if action == "page.split" {
+        let Target::Page(page) = &op.target else { return None };
+        let bytes = op.payload.get("bytes").and_then(Value::as_str)?;
+        let count = op.payload.get("count").and_then(Value::as_u64).and_then(|count| usize::try_from(count).ok())?;
+        let at = op.payload.get("from").and_then(Value::as_u64).and_then(|from| usize::try_from(from).ok()).unwrap_or(page.index as usize);
+        let target = Target::Page(PageRef { index: at as u32, epoch: applied.epoch });
+        return Some(structural_op(
+            doc,
+            op_id,
+            applied.version,
+            applied.epoch,
+            target,
+            json!({"action": "page.combine", "count": count, "bytes": bytes}),
+        ));
+    }
+    if action == "page.combine" {
+        let at = op.payload.get("at").and_then(Value::as_u64).and_then(|at| usize::try_from(at).ok()).or_else(|| match &op.target {
+            Target::Page(page) => usize::try_from(page.index).ok(),
+            _ => None,
+        })?;
+        let count = op.payload.get("count").and_then(Value::as_u64).and_then(|count| usize::try_from(count).ok())?;
+        let target = Target::Page(PageRef { index: at as u32, epoch: applied.epoch });
+        return Some(structural_op(doc, op_id, applied.version, applied.epoch, target, split_pages_payload(count)));
     }
     let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
     match action {
@@ -2116,6 +2289,117 @@ mod tests {
         assert_eq!(undo.payload["expect"]["color"], serde_json::json!([0.0, 0.0, 1.0]));
         assert_eq!(undo.base_version, 5);
         assert_eq!(undo.target, applied.op.target);
+        Ok(())
+    }
+
+    /// A split removes the range on every replica, and the accepted operation
+    /// carries the part, so its undo is one `page.combine` at the index the
+    /// part came from.
+    #[test]
+    fn a_split_removes_its_range_and_the_accepted_operation_joins_it_back() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let part = fixture(1);
+        let mut accepted =
+            super::structural_op(doc()?, OpId::new("s1")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::split_pages_payload(1));
+        accepted.payload["from"] = serde_json::json!(0);
+        accepted.payload["to"] = serde_json::json!(1);
+        accepted.payload["kept"] = serde_json::json!(1);
+        accepted.payload["bytes"] = serde_json::json!(super::encode_base64(&part));
+        let edit = super::edit_for(session.get(id).ok_or("gone")?, &accepted)?;
+        assert!(matches!(edit, pdfcraft_engine::Edit::DeletePages { pages } if pages == vec![0]), "a replica removes the range");
+
+        super::apply(&mut session, id, &accepted)?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 1);
+
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 1,
+            epoch: 1,
+            op: accepted,
+            result: serde_json::json!({"from": 0, "to": 1, "count": 1, "kept": 1}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("the accepted split carries its part")?;
+        assert_eq!(undo.payload["action"], "page.combine");
+        assert_eq!(undo.payload["count"], 1);
+        assert_eq!(undo.payload["bytes"], super::encode_base64(&part), "the undo carries the same part");
+        assert_eq!(undo.target, Target::Page(PageRef { index: 0, epoch: 1 }), "the part goes back at the index it left, in the new epoch");
+        assert_eq!((undo.base_version, undo.epoch), (1, 1), "the undo is built on the head the split left");
+
+        super::apply(&mut session, id, &undo)?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 2, "the part is back");
+        Ok(())
+    }
+
+    /// A combine is one operation for a whole part and its undo is one split of
+    /// the same range; both are built from the document's own page count.
+    #[test]
+    fn a_combine_inserts_its_part_and_splits_it_back() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let part = fixture(2);
+        let combine = super::structural_op(
+            doc()?,
+            OpId::new("c1")?,
+            0,
+            0,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            super::combine_pages_payload(&part, 2),
+        );
+        let edit = super::edit_for(session.get(id).ok_or("gone")?, &combine)?;
+        assert!(matches!(edit, pdfcraft_engine::Edit::InsertPagesFrom { at: 1, pages: None, .. }), "a replica inserts the whole part at the target");
+        super::apply(&mut session, id, &combine)?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 4);
+
+        let document = session.get(id).ok_or("gone")?;
+        let undo = super::inverse_for(document, &combine, OpId::new("u1")?)?.ok_or("a combine can be undone")?;
+        assert_eq!(undo.payload["action"], "page.split");
+        assert_eq!(undo.payload["count"], 2);
+        assert_eq!(undo.target, Target::Page(PageRef { index: 1, epoch: 0 }), "the undo takes the same range out");
+
+        let mut accepted = combine.clone();
+        accepted.payload["at"] = serde_json::json!(1);
+        accepted.payload["count"] = serde_json::json!(2);
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: accepted.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 1,
+            epoch: 1,
+            op: accepted,
+            result: serde_json::json!({"at": 1, "count": 2, "pages": 4}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("the accepted combine can be undone")?;
+        assert_eq!(undo.payload["action"], "page.split");
+        assert_eq!(undo.target, Target::Page(PageRef { index: 1, epoch: 1 }), "the range is addressed in the epoch the combine left");
+        Ok(())
+    }
+
+    /// The boundaries are checked here too: a range outside the document, a
+    /// split that would take everything, a part over the budget and a position
+    /// past the last page are errors before anything is sent.
+    #[test]
+    fn split_and_combine_boundaries_are_refused_before_sending() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("gone")?;
+        let mut counter = 0;
+        for (from, count) in [(0, 0), (0, 2), (1, 2), (2, 1)] {
+            assert!(
+                matches!(super::split_pages_op(document, from, count, doc()?, "c", 0, 0, &mut counter), Err(ProjectionError::Invalid(_))),
+                "split {from}+{count} is outside the document"
+            );
+        }
+        let ok = super::split_pages_op(document, 0, 1, doc()?, "c", 0, 0, &mut counter)?;
+        assert_eq!(ok.payload["action"], "page.split");
+        assert_eq!(ok.payload["count"], 1);
+        assert_eq!(ok.target, Target::Page(PageRef { index: 0, epoch: 0 }));
+
+        let part = fixture(1);
+        assert!(matches!(super::combine_pages_op(document, 3, &part, doc()?, "c", 0, 0, &mut counter), Err(ProjectionError::Invalid(_))));
+        let huge = vec![0u8; pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES + 1];
+        assert!(matches!(super::combine_pages_op(document, 0, &huge, doc()?, "c", 0, 0, &mut counter), Err(ProjectionError::TooLarge(_))));
+        let ok = super::combine_pages_op(document, 2, &part, doc()?, "c", 0, 0, &mut counter)?;
+        assert_eq!(ok.payload["action"], "page.combine");
+        assert_eq!(ok.payload["count"], 1);
+        assert_eq!(ok.target, Target::Page(PageRef { index: 2, epoch: 0 }), "the page count is an append");
         Ok(())
     }
 

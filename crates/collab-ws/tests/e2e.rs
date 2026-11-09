@@ -7,8 +7,8 @@
 //! catches up from a snapshot tail.
 
 use pdfcraft_collab_client_pdf::{
-    add_annotation_payload, add_note_payload, apply, blank_page_payload, duplicate_page_payload, insert_page_payload, merge_op, replace_page_payload,
-    reply_payload, rotate_payload, set_contents_payload, structural_op,
+    add_annotation_payload, add_note_payload, apply, blank_page_payload, combine_pages_payload, duplicate_page_payload, insert_page_payload,
+    merge_op, replace_page_payload, reply_payload, rotate_payload, set_contents_payload, split_pages_payload, structural_op,
 };
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
@@ -1172,6 +1172,89 @@ fn a_page_replacement_undoes_from_the_copy_and_redoes() -> Result<(), Box<dyn st
     assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Stale && r.retryable));
     for peer in [&ada, &bo] {
         assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the stale operation changed nothing");
+    }
+    Ok(())
+}
+
+/// A split is one server-ordered structural operation: the part travels in the
+/// accepted operation, both replicas lose the same range and number what stays
+/// the same, and the undo joins the part back where the split took it. A
+/// combine past the last page is refused without a change.
+#[test]
+fn two_clients_split_the_document_in_halves_and_join_it_back() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+
+    let split = structural_op(doc.clone(), OpId::new("op-split")?, ada.version, ada.epoch, page(0, ada.epoch), split_pages_payload(1));
+    ada.send(split)?;
+    let split = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(split.epoch, 1, "a split is structural");
+    assert_eq!(split.result["kept"], 1);
+    assert_eq!(split.result["count"], 1);
+    assert!(split.result["part"]["sha256"].is_string(), "the accepted operation names the part");
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 1, "both replicas lost the same range");
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the page that stayed keeps its text and moves down");
+    }
+
+    // The undo is built from the part the accepted operation carries.
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&split).ok_or("the split carries its part")?;
+    let undo = Op { op_id: OpId::new("op-split-undo")?, base_version: ada.version, epoch: ada.epoch, target: page(0, ada.epoch), ..undo };
+    ada.send(undo)?;
+    let joined = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(joined.epoch, 2);
+    assert_eq!(joined.op.payload["action"], "page.combine");
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "the part came back");
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 1");
+        assert_eq!(page_text(peer.saved()?, 1)?, "Page 2", "the part is back at the index the split took it from");
+    }
+
+    // A combine past the last page is the document's boundary: refused, and
+    // nothing changes.
+    let past =
+        structural_op(doc.clone(), OpId::new("op-combine-past")?, ada.version, ada.epoch, page(3, ada.epoch), combine_pages_payload(&fixture(1), 1));
+    ada.send(past)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Invalid && !r.retryable));
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "a refused combine changes nothing");
+    }
+    Ok(())
+}
+
+/// A structural operation is serialised by version and addressed by epoch: a
+/// split built on a passed epoch is `stale` (retryable) and changes nothing;
+/// re-addressed to the head, the same intent applies on both replicas.
+#[test]
+fn a_split_addressed_to_a_passed_epoch_is_stale_and_retried() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+
+    // A rotation moves the epoch to 1 before the split is retried.
+    let turn = structural_op(doc.clone(), OpId::new("op-rotate")?, ada.version, ada.epoch, page(0, ada.epoch), rotate_payload(90));
+    ada.send(turn)?;
+    applied_on_both(&mut ada, &mut bo)?;
+
+    let stale = structural_op(doc.clone(), OpId::new("op-split-stale")?, ada.version, 0, page(0, 0), split_pages_payload(1));
+    ada.send(stale)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Stale && r.retryable));
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "the stale split changed nothing");
+        assert_eq!(peer.rotation(), 90, "and did not move the epoch on");
+    }
+
+    let retry = structural_op(doc.clone(), OpId::new("op-split-retry")?, ada.version, ada.epoch, page(0, ada.epoch), split_pages_payload(1));
+    ada.send(retry)?;
+    let split = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(split.epoch, 2, "the retried split applied");
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 1);
     }
     Ok(())
 }
