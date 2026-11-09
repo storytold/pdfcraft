@@ -37,7 +37,7 @@ pub use core::{check_pages, inspect, pretty_date};
 use core::{inspect_structure, spend};
 pub use model::{
     Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    PageTransition, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
+    PageTransition, RemoteDestination, ReviewStates, TransitionStyle, Xfa, link_replies, thread_tops,
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
