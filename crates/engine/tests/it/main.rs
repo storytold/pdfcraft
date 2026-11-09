@@ -5,6 +5,7 @@ mod support {
 }
 
 mod clear_signature;
+mod dingbat_check_box;
 mod document_fonts;
 mod form_rotation;
 mod marked_content_isolation;

@@ -467,6 +467,7 @@ impl Automation {
                         "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
                         "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
                         "remove_crop" => ImageEdit::RemoveCrop,
+                        "ungroup" => ImageEdit::Ungroup,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = read_input(&path)?;
@@ -479,6 +480,10 @@ impl Automation {
                     };
                     self.apply(&a, Edit::EditPageImage { page, index, change })?
                 }
+            }
+            "text_prepare" => {
+                let page = self.page(&a)?;
+                self.prepare_text(&a, page)?
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
@@ -733,6 +738,8 @@ impl Automation {
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
             "object_move" => self.object_move(&a)?,
+            "object_copy" => self.object_copy(&a)?,
+            "object_paste" => self.object_paste(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
@@ -740,6 +747,7 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "content_copy" => self.content_copy(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "doc_fix_hairlines" => self.fix_hairlines(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;
@@ -814,6 +822,9 @@ impl Automation {
             "form_set_actions" => self.form_set_actions(&a)?,
             "ocr_status" => self.ocr_status()?,
             "ocr_recognize_files" => self.ocr_recognize_files(&a)?,
+            "ocr_words" => self.ocr_words(&a)?,
+            "ocr_review_apply" => self.ocr_review_apply(&a)?,
+            "ocr_dictionary" => self.ocr_dictionary(&a)?,
             "accessibility_report" => self.a11y_report(&a)?,
             "accessibility_review_record" => self.a11y_review_record(&a)?,
             "accessibility_review_save" => self.a11y_review_save(&a)?,
@@ -826,6 +837,7 @@ impl Automation {
             "accessibility_tag_content" => self.accessibility_tag_content(&a)?,
             "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
             "accessibility_mark_tag_artifact" => self.accessibility_mark_tag_artifact(&a)?,
+            "accessibility_layout_table_to_blocks" => self.accessibility_layout_table_to_blocks(&a)?,
             "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,
@@ -863,6 +875,7 @@ impl Automation {
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
+            "comment_popup" => self.comment_popup(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
             "layer_set" => self.layer_set(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,

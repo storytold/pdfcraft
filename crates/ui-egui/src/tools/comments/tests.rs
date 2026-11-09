@@ -1,4 +1,10 @@
+use super::geometry::reshaped;
 use super::*;
+
+/// [`reshaped`] without Shift, as `changing_points` takes it.
+fn straight(points: &[[f64; 2]], i: usize, to: [f64; 2]) -> Vec<[f64; 2]> {
+    reshaped(points, i, to, false)
+}
 
 #[test]
 fn freehand_highlight_and_draw_accept_widths_up_to_100() {
@@ -25,21 +31,35 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
     let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, straight), None, "another comment's move");
     let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
     let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
     let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, straight), None, "not changing");
     // Released with the rest of the selection: its own move in the batch.
     let together = Edit::Batch {
         label: "Move comments".into(),
         edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
     };
-    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, false), None, "not in the batch");
+    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, straight), None, "not in the batch");
+}
+
+/// Review on #4094: a callout's text box being resized, and the resize just released, draw its
+/// leader line too (to the box where it is going): its points are changing, though they stay.
+#[test]
+fn a_callout_being_resized_draws_its_leader_line() {
+    let lead = [[10.0, 10.0], [40.0, 30.0]];
+    let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
+    let resizing = Gesture::Resize { page: 0, index: 3, handle: (1, 1), from: pos2(80.0, 60.0), aspect_ratio: None };
+    let at = Some(pos2(95.0, 70.0));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 3), &lead, to_user, at, straight), Some(lead.to_vec()));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 4), &lead, to_user, at, straight), None, "another comment's resize");
+    let released = Edit::ResizeAnnotation { page: 0, index: 3, rect: [50.0, 20.0, 110.0, 70.0] };
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &lead, to_user, None, straight), Some(lead.to_vec()));
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -66,6 +86,8 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -111,6 +133,8 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     }
 }
 
@@ -176,7 +200,7 @@ fn line(chars: &str, x: f32, y: f32, w: f32, em: f32, direction: [f32; 2]) -> Pa
         })
         .collect::<Vec<_>>();
     let n = glyphs.len();
-    PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n] }
+    PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n], truncated: false }
 }
 
 fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotation {
@@ -200,6 +224,8 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        text_box: None,
+        popup: None,
     }
 }
 
@@ -404,6 +430,8 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             intent: None,
             fill_sign: false,
             points: Vec::new(),
+            text_box: None,
+            popup: None,
             no_rotate: false,
         }],
         ..Default::default()
@@ -524,6 +552,40 @@ fn text_boxes_fit_their_text() {
     let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
+}
+
+/// Review on #4358: a Replace Text group is selected by its caret, the group's primary (ISO
+/// 32000-2 §12.5.6.2), and Make Current Properties Default on it updates the Replace Text tool. A
+/// caret of its own (Insert Text) still updates the Insert Text tool.
+#[test]
+fn a_replace_text_group_makes_replace_text_defaults() {
+    let annot = |index: usize, subtype: &str, intent: Option<&str>, parent: Option<(usize, usize)>| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect: [10.0, 10.0, 20.0, 20.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: intent.map(Into::into),
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let all =
+        vec![annot(0, "Caret", Some("Replace"), None), annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0))), annot(2, "Caret", None, None)];
+    assert_eq!(tool_for_default(&all, &all[0], None), Some(CommentTool::ReplaceText));
+    assert_eq!(tool_for_default(&all, &all[2], None), Some(CommentTool::Caret));
 }
 
 /// The hover outline goes round the comment a press under the pointer would take (the top hit

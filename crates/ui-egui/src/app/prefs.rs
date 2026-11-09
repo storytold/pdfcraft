@@ -87,6 +87,7 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
+            "pinned_folders_collapsed": self.pinned.collapsed,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
@@ -127,6 +128,12 @@ impl PdfCraftApp {
                     "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
+            // Default font sizes of new text boxes and callouts (#5767).
+            "comment_font_sizes": self
+                .comment_prefs
+                .font_sizes()
+                .map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size }))
+                .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -144,6 +151,7 @@ impl PdfCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
+            "ocr": self.ocr_draft.to_pref(),
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
@@ -160,6 +168,7 @@ impl PdfCraftApp {
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -235,7 +244,11 @@ impl PdfCraftApp {
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
         }
+        if let Some(on) = v["text_links"].as_bool() {
+            self.text_links = on;
+        }
         self.pinned.restore(&v["pinned_folders"]);
+        self.pinned.restore_collapsed(&v["pinned_folders_collapsed"]);
         if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
             let mut tools = Vec::new();
             for item in items {
@@ -295,6 +308,9 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
+        // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
+        // flags); unknown or malformed values keep the defaults.
+        self.ocr_draft.apply_pref(&v["ocr"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
@@ -413,6 +429,16 @@ impl PdfCraftApp {
                 }
                 if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
                     self.comment_prefs.set_border_shape(tool, shape);
+                }
+            }
+        }
+        // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps
+        // the tool's own.
+        if let Some(sizes) = v["comment_font_sizes"].as_array() {
+            for e in sizes {
+                let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
+                if let Some(size) = e["font_size"].as_f64() {
+                    self.comment_prefs.set_font_size(tool, size);
                 }
             }
         }
