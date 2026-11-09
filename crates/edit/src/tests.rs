@@ -15740,6 +15740,32 @@ fn a_row_that_wraps_in_the_arabic_fallback_keeps_the_rows_above_it_in_place() {
     assert!(bottom(&lines, "second body") < bottom(&before, "second body") - 10.0, "{lines:?}");
 }
 
+/// The rows of a paragraph an edit in the Arabic fallback leaves as they were (the same text and
+/// look, not moved by a row above that wrapped) keep their own drawing: a heading over the edited
+/// row keeps its font, and the fallback's wider face can no longer make it wrap.
+#[test]
+fn rows_an_arabic_fallback_edit_leaves_alone_keep_their_own_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 18 Tf 300 700 Td (A heading row) Tj ET BT /F1 12 Tf 300 676 Td (SECA Heritage) Tj ET");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let draft = format!("{} تم", blocks[0].editor_text);
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let heading: Vec<_> = lines.iter().filter(|l| l.text.contains("heading")).collect();
+    assert_eq!(heading.len(), 1, "{lines:?}");
+    assert_eq!(heading[0].font, "F1", "the heading keeps its own drawing: {lines:?}");
+    assert_eq!(heading[0].rect, before[0].rect, "{lines:?}");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("(A heading row) Tj"), "the heading's own show is kept: {content}");
+    assert!(shown_faces(&doc, 0).contains("NotoSansArabic"), "the edited row takes the fallback");
+}
+
 /// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
 /// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
 /// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
