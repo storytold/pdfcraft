@@ -277,6 +277,9 @@ pub enum RenderWarning {
     /// lookup table at all (missing, not a string or a stream, or a stream that does not decode)
     /// it is not drawn. Reported once per page however many images it affects.
     MalformedIndexedImage,
+    /// A Type 3 font without the `/Widths` it requires (ISO 32000-2 Table 110) was used; its
+    /// glyphs were spaced by the widths their glyph procedures give.
+    Type3WidthsMissing,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -487,6 +490,7 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
                 InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
                 InterpreterWarning::MalformedIndexedImage => RenderWarning::MalformedIndexedImage,
+                InterpreterWarning::Type3WidthsMissing => RenderWarning::Type3WidthsMissing,
                 InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
             };
             let mut warnings = lock(&target);

@@ -427,6 +427,12 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
                     "warning: page {page}: an image with a malformed Indexed colour table may be drawn wrongly or not at all"
                 );
             }
+            pdfcraft_render::RenderWarning::Type3WidthsMissing => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give"
+                );
+            }
         }
     }
     Ok(())
