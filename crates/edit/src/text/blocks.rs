@@ -1,7 +1,7 @@
 use super::interp::{Carry, interpret};
-use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, joined, page_dict, reading_lines, rewritten_contents, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
+use super::{Document, EditError, HashMap, Object, Op, TextLine, group_blocks, regions};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
@@ -37,6 +37,19 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
+    /// The one size a rewrite and the editor set an OCR phrase in, in place of each word's own
+    /// (#3313): the block's size, which for invisible text is its words' median. `None` for
+    /// visible text, whose runs keep their sizes.
+    pub fn phrase_size(&self) -> Option<f64> {
+        (self.invisible && self.size.is_finite() && self.size > 0.0).then_some(self.size)
+    }
+
+    /// Whether `draft` says what the paragraph says, give or take space around it. Spacing inside
+    /// it has to match: a typed second space is a change.
+    pub fn same_words(&self, draft: &str) -> bool {
+        draft.trim() == self.editor_text.trim()
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -156,6 +169,23 @@ fn edit_script<T: PartialEq>(a: &[T], b: &[T], max: usize) -> Option<Vec<Step>> 
     None
 }
 
+/// For each of `old`'s words, the index in `new` of the word it stays as in the shortest edit from
+/// one to the other (`None` when it goes), or `None` overall past [`MAX_CHANGED_WORDS`] changes.
+pub(crate) fn kept_words<T: PartialEq>(old: &[T], new: &[T]) -> Option<Vec<Option<usize>>> {
+    let mut kept = vec![None; old.len()];
+    let (mut o, mut n) = (0usize, 0usize);
+    for step in edit_script(old, new, MAX_CHANGED_WORDS)? {
+        if step == Step::Keep
+            && let Some(slot) = kept.get_mut(o)
+        {
+            *slot = Some(n);
+        }
+        o = o.saturating_add(usize::from(step != Step::Insert));
+        n = n.saturating_add(usize::from(step != Step::Delete));
+    }
+    Some(kept)
+}
+
 /// Walk Myers' saved frontiers back from the end to the edit script.
 fn backtrack(trace: &[Vec<isize>], n: isize, m: isize, max: isize) -> Vec<Step> {
     let at = |v: &[isize], k: isize| usize::try_from(k + max + 1).ok().and_then(|i| v.get(i).copied()).unwrap_or(0);
@@ -270,7 +300,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
@@ -297,7 +327,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         patches.insert(s.op, replacement);
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
-    let contents = rewritten_contents(doc, &streams, data);
+    let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -335,6 +365,15 @@ pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBloc
 // Keep other whitespace normalization unchanged.
 pub(crate) fn paragraph_separator(c: char) -> bool {
     c.is_whitespace() && c != '\u{3000}'
+}
+
+/// Characters that end a row rather than draw a glyph: the Unicode mandatory breaks (UAX #14
+/// class BK: vertical tab, form feed, U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR), the
+/// next line (U+0085), the information separators (bidi class B) and CR/LF. Text pasted from a
+/// browser or Word carries these, so a rewrite moves to the next row instead of asking a font
+/// for an outline no face has (#6272).
+pub(crate) fn row_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{001C}'..='\u{001E}' | '\u{2028}' | '\u{2029}')
 }
 
 /// Greedy word wrapping to `width` with `advance` giving a string's width. Each `\n` starts a
@@ -400,7 +439,7 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 pub struct BlockStyle {
     /// Disjoint UTF-8 ranges in the replacement, each preserving unspecified source style.
     pub ranges: Vec<RangeStyle>,
-    /// Explicit page font resource (from register_text_font or the page font inventory).
+    /// Explicit page font resource or bundled document-font choice from the page font inventory.
     pub resource: Option<String>,
     /// A standard font family, bold, italic.
     pub family: Option<(crate::added::Family, bool, bool)>,
@@ -428,6 +467,13 @@ pub struct BlockStyle {
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
+    /// For an invisible paragraph whose formatting nobody asked to change: cover and redraw only
+    /// the words the draft changes, and leave the rest as the scan shows them (#3313). The session
+    /// sets this; a caller that sets it should also give `cover`.
+    pub changed_words_only: bool,
+    /// How far across [`BlockStyle::cover`] may reach, whatever its padding: the edges of the words
+    /// on either side that stay (user space).
+    pub cover_between: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

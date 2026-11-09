@@ -38,6 +38,7 @@ pub(crate) const MAX_XML_DEPTH: usize = 1_024;
 /// cannot under-count a real element; a stray `<` in text is invalid XML and only makes it
 /// over-count, which errs towards refusing the document.
 pub(crate) fn xml_nesting_depth(text: &str) -> usize {
+    /// Where `needle` next starts in `hay` at or after `from`.
     fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
     }
@@ -99,11 +100,12 @@ pub use data::{
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, parse};
-pub use pdf::{CLICK_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
+pub use pdf::{CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use picture::typed_date;
 pub use script::{
-    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, field_grows_with_text,
-    fields_by_som, form_tree, has_scripts, overrides, refresh_value, rerender, set_overrides, template_of,
+    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
+    field_grows_with_text, field_is_embedded, fields_by_som, form_tree, has_scripts, overrides, path_is_embedded, refresh_value, rerender,
+    set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]
