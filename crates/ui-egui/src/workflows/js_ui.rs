@@ -68,6 +68,7 @@ impl PdfCraftApp {
         for e in &out.errors {
             self.js_console.log.push(format!("Error: {e}"));
         }
+        let mut popup_items = Vec::new();
         for r in out.requests {
             match r {
                 Request::Print => self.open_print(),
@@ -93,12 +94,18 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                Request::PopUpMenu(items) => {
-                    let anchor = self.ctx.as_ref().and_then(|ctx| ctx.input(|i| i.pointer.interact_pos())).unwrap_or_default();
-                    self.popup_menu = Some(widgets::ComponentPopup { document: id, anchor, items });
-                }
+                Request::PopUpMenu(items) => popup_items.extend(items),
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
+        }
+        if !popup_items.is_empty() {
+            let anchor = self
+                .ctx
+                .as_ref()
+                .and_then(|ctx| ctx.input(|i| i.pointer.interact_pos()))
+                .or_else(|| view.and_then(|i| self.views.get(i)).map(|v| v.document_viewport()).filter(|r| r.is_positive()).map(|r| r.center()))
+                .unwrap_or_default();
+            self.popup_menu = Some(widgets::ComponentPopup { document: id, anchor, items: popup_items });
         }
         self.show_script_messages(out.alerts);
     }
@@ -143,8 +150,12 @@ impl PdfCraftApp {
 
     /// Run a link annotation's JavaScript action.
     pub fn run_link_script(&mut self, id: DocId, script: &str) {
+        // Links can read or overwrite the same fields as buttons (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let generation = self.session.get(id).map(|d| d.edit_generation());
-        match self.session.run_javascript(id, script, None) {
+        match self.session.run_link_javascript(id, script) {
             Ok(o) => {
                 if self.session.get(id).map(|d| d.edit_generation()) != generation
                     && let Some(i) = self.views.iter().position(|v| v.id == id)

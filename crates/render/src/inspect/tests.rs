@@ -1405,8 +1405,60 @@ fn javascript_links_share_the_annotation_text_budget() {
     Inspector::new(&doc).annotations(&mut info, &mut budget);
     assert_eq!(budget, 0);
     assert!(matches!(&info.links[0].target, LinkTarget::JavaScript(s) if s == "1234"));
-    assert!(matches!(&info.links[1].target, LinkTarget::Other(s) if s == "JavaScript"));
+    assert_eq!(info.links[1].target, LinkTarget::JavaScriptUnavailable("budget_exceeded"));
     assert!(info.has_javascript);
+}
+
+#[test]
+fn javascript_link_stream_success_and_unavailable_reasons() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+        << /Subtype /Link /Rect [0 0 10 10] /A << /S /JavaScript /JS 4 0 R >> >>\
+        << /Subtype /Link /Rect [0 0 10 10] /A << /S /JavaScript >> >>\
+        << /Subtype /Link /Rect [0 0 10 10] /A << /S /JavaScript /JS () >> >>\
+        << /Subtype /Link /Rect [0 0 10 10] /A << /S /JavaScript /JS 42 >> >>\
+        << /Subtype /Link /Rect [0 0 10 10] /A << /S /JavaScript /JS 5 0 R >> >>] >> endobj\n\
+        4 0 obj << /Length 4 >> stream\n5678\nendstream\nendobj\n\
+        5 0 obj << /Length 1 /Filter /Unsupported >> stream\nx\nendstream\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf).unwrap();
+    let mut info = DocInfo::default();
+    let mut budget = 8;
+    Inspector::new(&doc).annotations(&mut info, &mut budget);
+    assert_eq!(
+        info.links.iter().map(|l| l.target.clone()).collect::<Vec<_>>(),
+        [
+            LinkTarget::JavaScript("5678".into()),
+            LinkTarget::JavaScriptUnavailable("missing"),
+            LinkTarget::JavaScriptUnavailable("empty"),
+            LinkTarget::JavaScriptUnavailable("invalid"),
+            LinkTarget::JavaScriptUnavailable("decode_failed"),
+        ]
+    );
+    assert_eq!(budget, 4);
+    assert!(info.has_javascript);
+}
+
+#[test]
+fn javascript_link_failed_stream_decodes_are_cached_by_resolved_identity() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+        4 0 obj << /Length 4 /Filter /ASCIIHexDecode >> stream\n4142\nendstream\nendobj\n\
+        5 0 obj 4 0 R endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf).unwrap();
+    let inspector = Inspector::new(&doc);
+    let mut action = Dictionary::new();
+    action.set("JS", Object::Reference((4, 0)));
+    let mut failed = HashMap::new();
+    assert_eq!(inspector.javascript_target(&action, &mut 1, &mut failed), LinkTarget::JavaScriptUnavailable("budget_exceeded"));
+    assert_eq!(failed.get(&(4, 0)), Some(&"budget_exceeded"));
+    action.set("JS", Object::Reference((5, 0)));
+    // Even a larger test budget cannot retry a cached failure through an alias.
+    let mut budget = 8;
+    assert_eq!(inspector.javascript_target(&action, &mut budget, &mut failed), LinkTarget::JavaScriptUnavailable("budget_exceeded"));
+    assert_eq!(budget, 8);
+    assert_eq!(inspector.javascript_target(&action, &mut budget, &mut HashMap::new()), LinkTarget::JavaScript("AB".into()));
 }
 
 /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'

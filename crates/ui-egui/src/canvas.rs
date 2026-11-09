@@ -2841,6 +2841,7 @@ pub(crate) fn follow_link(
             app.run_link_script(id, &script);
         }
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
+        LinkTarget::JavaScriptUnavailable(_) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", "JavaScript")]),
     }
     None
 }

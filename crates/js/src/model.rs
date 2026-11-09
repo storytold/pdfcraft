@@ -103,6 +103,11 @@ impl Event {
     pub fn doc(name: &str) -> Event {
         Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
     }
+
+    /// A link annotation's Mouse Up action (JavaScript API event type/name table).
+    pub fn link() -> Event {
+        Event { kind: "Link".into(), ..Self::doc("Mouse Up") }
+    }
 }
 
 /// About the document, for `this.numPages`, `this.info` and the like.

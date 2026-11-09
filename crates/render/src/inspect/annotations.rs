@@ -18,13 +18,13 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text and `/QuadPoints` geometry the bookmark and link listings, and name,
+/// Web-address and link JavaScript text and `/QuadPoints` geometry the bookmark and link listings, and name,
 /// description and embedded-file key text the attachment listing, keep together. Many bookmarks,
 /// links or attachments can share one long string or array, which each would otherwise copy. Past
 /// it, a bookmark or link to a web address lists as a URI action without its address (or a link
 /// keeps a relative address unresolved against the document's base), a link is active over its
 /// whole `/Rect`, an attachment is listed under its generic name without a description, and an
-/// embedded file whose key does not fit is not listed.
+/// embedded file whose key does not fit is not listed. Omitted scripts report `budget_exceeded`.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
@@ -66,6 +66,12 @@ pub(super) fn retained(a: &Annotation) -> usize {
         .fold(0, usize::saturating_add)
 }
 
+#[derive(Default)]
+struct LinkCaches {
+    unfit_quads: HashSet<ObjectId>,
+    failed_scripts: HashMap<ObjectId, &'static str>,
+}
+
 impl<'a> Inspector<'a> {
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
     /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
@@ -90,9 +96,8 @@ impl<'a> Inspector<'a> {
 
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
     pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
-        // Indirect `/QuadPoints` arrays whose quadrilaterals did not fit what was left of the budget:
-        // the budget only shrinks, so they are not read again (review on #4474).
-        let mut unfit_quads: HashSet<ObjectId> = HashSet::new();
+        // Shared geometry and script streams that failed cannot fit a later, smaller budget.
+        let mut link_caches = LinkCaches::default();
         let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
         pages.sort_unstable_by_key(|&(_, page)| page);
         // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
@@ -144,10 +149,8 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads) {
-                    if matches!(&link.target, LinkTarget::JavaScript(_)) || matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
-                        info.has_javascript = true;
-                    }
+                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut link_caches) {
+                    info.has_javascript |= matches!(&link.target, LinkTarget::JavaScript(_) | LinkTarget::JavaScriptUnavailable(_));
                     info.links.push(link);
                 }
                 continue;
@@ -297,17 +300,10 @@ impl<'a> Inspector<'a> {
     /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
     /// goes, else what its action `/A` does ([`Self::action_target`]). `None` when it has no
     /// rectangle, or a destination or action that leads nowhere. `base` is the catalog's
-    /// `/URI /Base`, which a relative URI action is resolved against. `unfit_quads` holds the
-    /// indirect `/QuadPoints` arrays already found too large for the budget.
-    fn link(
-        &self,
-        page: usize,
-        index: usize,
-        d: &Dictionary,
-        base: Option<&str>,
-        text_budget: &mut usize,
-        unfit_quads: &mut HashSet<ObjectId>,
-    ) -> Option<Link> {
+    /// `/URI /Base`, which a relative URI action is resolved against. `caches` remembers
+    /// shared quadrilaterals and scripts already found unreadable within the budget.
+    fn link(&self, page: usize, index: usize, d: &Dictionary, base: Option<&str>, text_budget: &mut usize, caches: &mut LinkCaches) -> Option<Link> {
+        let LinkCaches { unfit_quads, failed_scripts } = caches;
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -315,15 +311,7 @@ impl<'a> Inspector<'a> {
         } else {
             let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
             let target = if self.name(a, b"S").as_deref() == Some("JavaScript") {
-                let js = a.get(b"JS").ok().and_then(|js| match self.resolve(js) {
-                    Object::String(bytes, _) => spend(bytes, text_budget, text_string),
-                    Object::Stream(s) if *text_budget > 0 => s.decompressed_content_with_limit(*text_budget).ok().and_then(|b| spend(&b, text_budget, text_string)),
-                    _ => None,
-                });
-                match js {
-                    Some(script) if !script.is_empty() => LinkTarget::JavaScript(script),
-                    _ => LinkTarget::Other("JavaScript".into()),
-                }
+                self.javascript_target(a, text_budget, failed_scripts)
             } else {
                 self.action_target(a, text_budget)?
             };
@@ -368,6 +356,38 @@ impl<'a> Inspector<'a> {
             _ => Vec::new(),
         };
         Some(Link { page, index, rect, quads, target })
+    }
+
+    pub(super) fn javascript_target(&self, action: &Dictionary, budget: &mut usize, failed: &mut HashMap<ObjectId, &'static str>) -> LinkTarget {
+        let Ok(js) = action.get(b"JS") else { return LinkTarget::JavaScriptUnavailable("missing") };
+        let id = self.resolved_id(js);
+        if let Some(reason) = id.and_then(|id| failed.get(&id)) {
+            return LinkTarget::JavaScriptUnavailable(reason);
+        }
+        let text = match self.resolve(js) {
+            Object::String(bytes, _) => spend(bytes, budget, text_string).ok_or("budget_exceeded"),
+            Object::Stream(stream) => {
+                let result = if *budget == 0 {
+                    Err("budget_exceeded")
+                } else {
+                    match stream.decompressed_content_with_limit(*budget) {
+                        Ok(bytes) => spend(&bytes, budget, text_string).ok_or("budget_exceeded"),
+                        Err(lopdf::Error::Decompress(lopdf::DecompressError::MemoryLimitExceeded { .. })) => Err("budget_exceeded"),
+                        Err(_) => Err("decode_failed"),
+                    }
+                };
+                if let (Some(id), Err(reason)) = (id, &result) {
+                    failed.insert(id, *reason);
+                }
+                result
+            }
+            _ => Err("invalid"),
+        };
+        match text {
+            Ok(script) if !script.is_empty() => LinkTarget::JavaScript(script),
+            Ok(_) => LinkTarget::JavaScriptUnavailable("empty"),
+            Err(reason) => LinkTarget::JavaScriptUnavailable(reason),
+        }
     }
 
     /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in

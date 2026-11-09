@@ -56,10 +56,10 @@ pub struct PageImage {
 }
 
 impl PageImage {
-    /// Whether these images originate from the same page-level `Do` placement. A bitmap
-    /// returned by `reading_images` shares its containing Form's placement from `page_images`.
-    pub fn same_draw_as(&self, other: &Self) -> bool {
-        self.stream == other.stream && self.op == other.op
+    /// The page-level `Do` placement (stream, operator). A bitmap returned by `reading_images`
+    /// shares its containing Form's source from `page_images`, even for reused resources.
+    pub fn draw_source(&self) -> (usize, usize) {
+        (self.stream, self.op)
     }
 
     /// Whether an active clip was written by PdfCraft's image crop tool.

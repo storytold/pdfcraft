@@ -37,7 +37,7 @@ impl PdfCraftApp {
             self.registry_shortcuts(ctx);
         }
         // (Esc closes a Combine file shown large first.)
-        if self.full_screen && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if self.full_screen && self.popup_menu.is_none() && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {

@@ -7,7 +7,9 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 
 `fill_sign_add` text accepts line breaks, including blank lines. Its typewriter box grows to hold all wrapped rows, and saving/reopening preserves the contents and appearance.
 
-`doc_info` exposes a JavaScript link's source as `links[].target.javascript`. Run it with `js_run` to read schematic component properties headlessly: `app.popUpMenu` and `app.popUpMenuEx` report a `popup_menu` request containing the display labels. They return `null` to the script; choosing menu actions and nested submenus are not supported.
+`doc_info` keeps the legacy `links[].target.other = "JavaScript"` marker and adds `javascript` (source or null) and `javascript_status`: `available`, `missing`, `empty`, `invalid`, `budget_exceeded` or `decode_failed`. Source is omitted whole rather than truncated. Existing clients can keep classifying the action through `other`; new clients should check `javascript_status` before reading the source. Scripts share the document-wide link/attachment text budget, and failed shared stream decodes are not retried during the same inspection.
+
+Run the source with `js_run` and `"event": "link"` to reproduce the viewer's `Link/Mouse Up` event headlessly. Omitting `event` preserves console behavior; `field` preserves button behavior and cannot be combined with `event`. `app.popUpMenu` and `app.popUpMenuEx` report `popup_menu` requests containing display labels; the viewer combines all such requests from one run into one informational popup. They return `null`; choosing menu actions and nested submenus are not supported.
 
 ## API
 

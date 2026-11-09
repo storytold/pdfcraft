@@ -8983,17 +8983,32 @@ fn schematic_component_properties_through_tools() {
     let pdf = pdf_of(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
         "<< /Type /Annot /Subtype /Link /Rect [20 20 50 50] /A << /S /JavaScript /JS (app.popUpMenu\\('Designator: R1', 'Value: 10k'\\)) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [60 20 80 50] /A << /S /JavaScript >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [90 20 110 50] /A << /S /JavaScript /JS () >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [120 20 140 50] /A << /S /JavaScript /JS 42 >> >>",
     ]);
     std::fs::write(dir.join("schematic.pdf"), pdf).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "schematic.pdf" }))["doc"].as_u64().unwrap();
     let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
     let script = info["links"][0]["target"]["javascript"].as_str().unwrap();
-    let out = ok(&mut a, "js_run", json!({ "doc": doc, "script": script }));
+    assert_eq!(info["links"][0]["target"]["other"], "JavaScript");
+    assert_eq!(info["links"][0]["target"]["javascript_status"], "available");
+    for (index, reason) in [(1, "missing"), (2, "empty"), (3, "invalid")] {
+        assert_eq!(info["links"][index]["target"]["other"], "JavaScript");
+        assert_eq!(info["links"][index]["target"]["javascript_status"], reason);
+        assert!(info["links"][index]["target"]["javascript"].is_null());
+    }
+    let out = ok(&mut a, "js_run", json!({ "doc": doc, "script": script, "event": "link" }));
     assert!(out["error"].is_null(), "{out}");
     assert_eq!(out["requests"], json!([{ "popup_menu": ["Designator: R1", "Value: 10k"] }]));
+    let out = ok(&mut a, "js_run", json!({ "doc": doc, "script": "console.println(event.type + '/' + event.name)", "event": "link" }));
+    assert_eq!(out["console"], json!(["Link/Mouse Up"]));
+    let out = ok(&mut a, "js_run", json!({ "doc": doc, "script": "console.println(event.type + '/' + event.name)" }));
+    assert_eq!(out["console"], json!(["Doc/Console"]), "default console behavior is unchanged");
+    assert!(a.call("js_run", &json!({ "doc": doc, "script": "", "field": "x", "event": "link" })).is_err());
 }
 
 #[test]

@@ -374,13 +374,27 @@ impl Session {
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
+        let event = match target {
+            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            None => pdfcraft_js::Event::doc("Console"),
+        };
+        self.run_javascript_event(id, script, event)
+    }
+
+    /// Run a link annotation's script with its Link/Mouse Up event, using the same sandbox,
+    /// preference gate and undoable edits as button and console scripts.
+    pub fn run_link_javascript(&mut self, id: DocId, script: &str) -> Result<Outcome, EditError> {
+        self.run_javascript_event(id, script, pdfcraft_js::Event::link())
+    }
+
+    fn run_javascript_event(&mut self, id: DocId, script: &str, event: pdfcraft_js::Event) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         // A button PdfCraft generated from an XFA template runs its XFA click script.
-        if let Some(t) = target
+        if let Some(t) = event.target.as_deref()
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
@@ -399,10 +413,6 @@ impl Session {
         let runner = JsRunner::new(&cos, &doc.name);
         let fields = pdfcraft_forms::fields(&cos);
         let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
-        let event = match target {
-            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
-            None => pdfcraft_js::Event::doc("Console"),
-        };
         let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
         let changes = changes(&states, &o.changed);
         let resets: Vec<Vec<String>> = o

@@ -25,13 +25,21 @@ fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
 }
 
 impl Automation {
-    /// `js_run`: run `script` in the document, or as button `field`'s script, and report its
+    /// `js_run`: run `script` with a console, link or button event, and report its
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
-        // Applying the script's field changes runs the field scripts again; their output is reported with the script's.
-        let (mut o, edit) = self.session.with_own_js_output(id, |s| s.run_javascript(id, script, field)).map_err(failed)?;
+        let link_event = match (a.opt_str("event")?, field) {
+            (None, _) | (Some("console"), None) => false,
+            (Some("link"), None) => true,
+            _ => return Err(ToolError::InvalidArgs("event must be console or link, and cannot be combined with field".into())),
+        };
+        // Include field-script output caused by applying this run's changes, preserving waiting output.
+        let (mut o, edit) = self
+            .session
+            .with_own_js_output(id, |s| if link_event { s.run_link_javascript(id, script) } else { s.run_javascript(id, script, field) })
+            .map_err(failed)?;
         o.alerts.extend(edit.alerts);
         o.console.extend(edit.console);
         o.requests.extend(edit.requests);

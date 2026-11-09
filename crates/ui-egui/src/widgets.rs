@@ -481,6 +481,10 @@ pub struct ComponentPopup {
 /// Component properties beside the click, constrained to the document viewport.
 pub fn popup_menu(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(popup) = app.popup_menu.as_ref() else { return };
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        app.popup_menu = None;
+        return;
+    }
     let Some(view) = app.active.and_then(|i| app.views.get(i)).filter(|v| v.id == popup.document) else {
         app.popup_menu = None;
         return;
@@ -490,7 +494,7 @@ pub fn popup_menu(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if !bounds.is_positive() {
         return;
     }
-    let mut open = !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    let mut open = true;
     egui::Area::new(egui::Id::unique("popup-menu"))
         .order(egui::Order::Foreground)
         .fixed_pos(popup.anchor + vec2(12.0, 12.0))
@@ -796,6 +800,30 @@ mod tests {
     use super::*;
     use egui::Pos2;
 
+    #[test]
+    fn component_popup_handles_non_positive_bounds_and_escape() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(200.0, 200.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        let id = app.views[0].id;
+        app.run_link_script(id, "app.popUpMenu('Value: 10k')");
+        let ctx = egui::Context::default();
+        // A new view has no laid-out document viewport yet.
+        ctx.run_ui(egui::RawInput::default(), |ui| popup_menu(&mut app, ui.ctx())).drop_without_applying_deltas();
+        assert!(ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).is_none());
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| popup_menu(&mut app, ui.ctx())).drop_without_applying_deltas();
+        assert!(app.popup_menu.is_none());
+    }
     #[test]
     fn search_placeholder_never_overlaps_the_shortcut() {
         if !crate::i18n::needs_catalogs() {

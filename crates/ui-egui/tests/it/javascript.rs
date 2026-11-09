@@ -108,6 +108,117 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+#[test]
+fn link_scripts_receive_link_events_and_keep_all_popup_requests() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    h.state_mut().run_link_script(id, "app.popUpMenu(event.type); app.popUpMenu(event.name);");
+    assert_eq!(h.state().popup_menu.as_ref().unwrap().items, ["Link", "Mouse Up"]);
+}
+
+#[test]
+fn escape_closes_component_popup_before_leaving_full_screen() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    h.state_mut().full_screen = true;
+    h.state_mut().run_link_script(id, "app.popUpMenu('Value: 10k')");
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().popup_menu.is_none());
+    assert!(h.state().full_screen);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().full_screen);
+}
+
+#[test]
+fn link_scripts_commit_pending_typing_before_reading_or_writing_fields() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let at = {
+        let app = h.state();
+        let doc = app.session.get(id).unwrap();
+        let field = doc.form.iter().find(|f| f.name == "greeting").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[0], &doc.info, field, 0).unwrap().center()
+    };
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(2);
+    h.state_mut().views[0].forms.focus.as_mut().expect("field is being edited").text = "pending".into();
+    h.state_mut().run_link_script(id, "app.popUpMenu('Value: ' + getField('greeting').value); getField('greeting').value = 'script';");
+    assert_eq!(h.state().popup_menu.as_ref().unwrap().items, ["Value: pending"]);
+    assert!(h.state().views[0].forms.focus.is_none());
+    h.run_steps(2);
+    assert_eq!(value(&h, "greeting"), ["script"]);
+}
+
+#[test]
+fn popup_wraps_long_values_in_a_narrow_viewport_and_clears_without_its_document() {
+    let mut h = Harness::builder().with_size(egui::vec2(480.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("schematic.pdf", None, schematic()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    h.state_mut().run_link_script(
+        id,
+        "app.popUpMenu('Value: a long multi word value that wraps across several lines in the narrow viewport', '-', 'plain label')",
+    );
+    h.state_mut().popup_menu.as_mut().unwrap().anchor = egui::pos2(470.0, 890.0);
+    h.run_steps(4);
+    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
+    assert!(h.ctx.content_rect().contains_rect(popup), "{popup:?}");
+    assert!(popup.width() <= 386.0, "{popup:?}");
+    h.get_by_label("plain label");
+    h.state_mut().active = None;
+    h.run_steps(2);
+    assert!(h.state().popup_menu.is_none());
+    h.state_mut().active = Some(0);
+    h.state_mut().run_link_script(id, "app.popUpMenu('Value: old document')");
+    h.state_mut().open_bytes("other.pdf", None, schematic()).unwrap();
+    h.run_steps(2);
+    assert!(h.state().popup_menu.is_none(), "switching documents clears the previous document's popup");
+}
+
+#[test]
+fn link_script_failures_report_errors_and_mutations_refresh_the_view() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    h.state_mut().session.set_javascript(false);
+    h.state_mut().run_link_script(id, "app.popUpMenu('blocked')");
+    assert!(h.state().toast.as_ref().unwrap().0.contains("JavaScript link action failed"));
+    assert!(h.state().popup_menu.is_none());
+    h.state_mut().session.set_javascript(true);
+    h.state_mut().run_link_script(id, "throw new Error('link failure')");
+    assert!(h.state().js_console.log.iter().any(|s| s.contains("link failure")));
+    let before = h.state().session.get(id).unwrap().edit_generation();
+    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.state_mut().run_link_script(id, "getField('greeting').value = 'changed'; app.popUpMenu('Value: changed')");
+    assert!(h.state().session.get(id).unwrap().edit_generation() > before);
+    assert_eq!(h.state().views[0].goto, None, "document_changed cleared the cached navigation");
+    assert_eq!(value(&h, "greeting"), ["changed"]);
+}
+
+#[test]
+fn popup_without_a_pointer_anchors_inside_the_document_viewport() {
+    let mut h = harness();
+    h.event(egui::Event::PointerGone);
+    h.run_steps(1);
+    let id = h.state().views[0].id;
+    h.state_mut().run_link_script(id, "app.popUpMenu('Value: 10k')");
+    let anchor = h.state().popup_menu.as_ref().unwrap().anchor;
+    assert!(anchor.x > 0.0 && anchor.y > 0.0 && h.ctx.content_rect().contains(anchor), "{anchor:?}");
+    h.run_steps(3);
+    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
+    assert!(popup.min.distance(anchor) < 32.0, "{popup:?}, {anchor:?}");
+}
+
 fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
     let app = h.state();
     let id = app.active_ids().unwrap().1;

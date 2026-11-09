@@ -416,7 +416,11 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             },
             "new_window": new_window,
         }),
-        pdfcraft_render::LinkTarget::JavaScript(script) => json!({ "javascript": script }),
+        // Keep the legacy action marker for clients written before source inspection existed.
+        pdfcraft_render::LinkTarget::JavaScript(script) => json!({ "other": "JavaScript", "javascript": script, "javascript_status": "available" }),
+        pdfcraft_render::LinkTarget::JavaScriptUnavailable(reason) => {
+            json!({ "other": "JavaScript", "javascript": null, "javascript_status": reason })
+        }
         pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
     }
 }

@@ -55,6 +55,22 @@ fn popup_requests_obey_the_script_output_budget() {
 }
 
 #[test]
+fn popup_argument_edges_and_parser_budget() {
+    for script in ["app.popUpMenu()", "app.popUpMenu('', {cName:''})"] {
+        let out = go(script, &Event::doc("Console"));
+        assert_eq!(out.error, None);
+        assert!(out.requests.is_empty());
+    }
+    let out = go("app.popUpMenu(42, null, true); app.popUpMenuEx({});", &Event::doc("Console"));
+    assert_eq!(out.error, None);
+    assert_eq!(out.requests, [Request::PopUpMenu(vec!["42".into(), "true".into()]), Request::PopUpMenu(vec!["[object Object]".into()])]);
+    // Many short labels pass the per-label limit but exceed this menu's aggregate budget.
+    let out = go("app.popUpMenu.apply(app, Array(34000).fill('x'.repeat(1024)))", &Event::doc("Console"));
+    assert!(out.error.as_deref().is_some_and(|s| s.contains("popup menu exceeds")), "{:?}", out.error);
+    assert!(out.requests.is_empty());
+}
+
+#[test]
 fn calculate_scripts_read_fields_and_set_the_value() {
     let o = go("event.value = this.getField('price').value * getField('qty').value;", &Event::field("Calculate", "total", ""));
     assert_eq!(o.error, None);

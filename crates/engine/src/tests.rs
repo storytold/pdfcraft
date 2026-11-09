@@ -9547,7 +9547,7 @@ fn copy_image_finds_the_image_under_a_point_and_decodes_it_at_full_size() {
 fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     let jpeg = jpeg_bytes();
     let content = b"q 100 0 0 100 50 50 cm /Fm1 Do Q BT /F1 12 Tf 60 100 Td (Caption over the picture) Tj ET /Fm2 Do".to_vec();
-    let form = b"/Im1 Do".to_vec();
+    let form = b"q 0.6 0 0 0.6 0 0 cm /Im1 Do Q q 0.1 0 0 0.1 0.8 0.8 cm /Tiny Do Q".to_vec();
     let stream = |dict: &str, data: &[u8]| {
         let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
         o.extend_from_slice(data);
@@ -9587,6 +9587,11 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     assert_eq!(d.page_image_at(0, [100.0, 100.0]), Some(0));
     assert_eq!(d.page_image_at(0, [10.0, 10.0]), None, "the full-page Form has no picture here");
     assert_eq!(d.page_image_at(0, [185.0, 285.0]), Some(1), "the logo itself is still a picture");
+    assert_eq!(d.page_image_at(0, [135.0, 135.0]), Some(0), "the smaller bitmap is also selectable");
+    let pictures = d.page_pictures_job(0).unwrap()();
+    assert_eq!(crate::picture_at(&pictures, [100.0, 100.0]).map(|p| p.0), Some(0));
+    assert!(crate::picture_at(&pictures, [10.0, 10.0]).is_none(), "the background cache must not select the whole page");
+    assert_eq!(crate::picture_at(&pictures, [185.0, 285.0]).map(|p| p.0), Some(1));
     // The largest picture in the group, as the JPEG stored in the PDF.
     assert_eq!(d.page_image_copy_file(0, 0).unwrap(), ("jpg", jpeg.clone()));
     assert_eq!(d.page_image_copy_file(0, 1).unwrap(), ("jpg", jpeg));

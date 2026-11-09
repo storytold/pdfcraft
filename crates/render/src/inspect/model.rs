@@ -248,6 +248,8 @@ pub enum LinkTarget {
     },
     /// A JavaScript action (`/S /JavaScript /JS …`). The source is the script to run.
     JavaScript(String),
+    /// A JavaScript link whose source is absent, invalid, or omitted by the text budget.
+    JavaScriptUnavailable(&'static str),
     Other(String),
 }
 
