@@ -133,7 +133,8 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
 
 /// `cargo xtask i18n-report`: the strings each interface language has no translation for, as
 /// counts and the first few keys, from the UI crate's `translation_gaps_report` test. It always
-/// passes: a missing string shows in English. `--workspace` runs the test from the workspace
+/// passes: a missing string shows in English. Under GitHub Actions the report is also appended to
+/// the job summary (`GITHUB_STEP_SUMMARY`). `--workspace` runs the test from the workspace
 /// test build, which `xtask ci` has just made; without it only the UI crate is built.
 pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     const TEST: &str = "i18n::tests::translation_gaps_report";
@@ -155,10 +156,43 @@ pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     if report.is_empty() {
         println!("i18n-report: no report (cargo test exited with {})", out.status);
     }
-    for line in report {
+    for line in &report {
         println!("{line}");
     }
+    // Under GitHub Actions, also show the report in the job summary. Best effort: never fails the build.
+    if let (Some(path), false) = (std::env::var_os("GITHUB_STEP_SUMMARY"), report.is_empty()) {
+        let _ = append_translation_summary(std::path::Path::new(&path), &report);
+    }
     Ok(())
+}
+
+fn append_translation_summary(path: &std::path::Path, report: &[&str]) -> std::io::Result<()> {
+    use std::io::Write;
+    let text = translation_summary(report);
+    std::fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(text.as_bytes()))
+}
+
+/// Fence contributor-supplied catalog text so it cannot escape into GitHub-flavored Markdown.
+fn translation_summary(report: &[&str]) -> String {
+    let longest = report
+        .iter()
+        .map(|line| {
+            let mut longest = 0usize;
+            let mut run = 0usize;
+            for ch in line.chars() {
+                if ch == '`' {
+                    run = run.saturating_add(1);
+                } else {
+                    longest = longest.max(run);
+                    run = 0;
+                }
+            }
+            longest.max(run)
+        })
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.saturating_add(1).max(3));
+    format!("### Translation gaps\n\n{fence}\n{}\n{fence}\n", report.join("\n"))
 }
 
 /// Dependency licences, bans, sources and advisories (`deny.toml`). Skipped with a hint when
@@ -551,7 +585,42 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{f1, order_score, root, word_sequence, words};
+    use super::{append_translation_summary, f1, order_score, root, translation_summary, word_sequence, words};
+
+    #[test]
+    fn translation_summary_fences_untrusted_markdown() {
+        let report = ["`<img src=x> [link](https://example.test)", "```\n<script>"];
+        let summary = translation_summary(&report);
+        assert!(summary.starts_with("### Translation gaps\n\n````\n"), "the fence is longer than catalog backtick runs");
+        assert!(summary.contains("<script>"), "catalog text stays inside the fenced block");
+        assert!(summary.ends_with("\n````\n"));
+    }
+
+    #[test]
+    fn translation_summary_grows_fence_past_four_backtick_runs() {
+        let summary = translation_summary(&["````"]);
+        assert!(summary.starts_with("### Translation gaps\n\n`````\n"));
+        assert!(summary.ends_with("\n`````\n"));
+    }
+
+    #[test]
+    fn translation_summary_file_appends_without_discarding_existing_content() {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "pdfcraft-i18n-summary-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let result = (|| {
+            append_translation_summary(&path, &["first report"])?;
+            append_translation_summary(&path, &["second report"])?;
+            std::fs::read_to_string(&path)
+        })();
+        let _ = std::fs::remove_file(&path);
+        let summary = result.expect("summary writes and read should succeed");
+        assert!(summary.contains("first report"));
+        assert!(summary.contains("second report"));
+    }
 
     /// The two scores answer different questions, and the point of adding the second one is the
     /// first row: F1 cannot tell a page from the same page read backwards.
