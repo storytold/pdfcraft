@@ -20,7 +20,7 @@ pub use save::{SaveTarget, write_atomically};
 #[cfg(test)]
 pub(crate) use save::{is_mail_temp_copy, save_dialog_folder};
 #[cfg(test)]
-use save::{write_atomically_syncing, write_atomically_with};
+use save::{unredacted_file_name, write_atomically_syncing, write_atomically_with};
 
 /// Text typed into a new text box that isn't added to the page yet.
 fn new_text_typed(v: &crate::DocView) -> bool {
@@ -173,6 +173,15 @@ impl PdfCraftApp {
             }
             _ => Vec::new(),
         };
+        // The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
+        // their places still name them (pages may move, come or go).
+        let popups_before: Vec<pdfcraft_render::Annotation> = match (self.views.get(i), self.session.get(id)) {
+            (Some(v), Some(d)) => {
+                let keys = v.comments.popup_keys();
+                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return Ok(()) };
@@ -215,8 +224,7 @@ impl PdfCraftApp {
                         view.forms.unbaked.extend(unbaked);
                     }
                 } else if let Some(page) = one_page {
-                    // Comment and content edits change one page: keep every other raster.
-                    view.page_changed(page);
+                    one_page_changed(view, &edit, page);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
@@ -227,6 +235,10 @@ impl PdfCraftApp {
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     view.comments.comment_added();
+                }
+                // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
+                if !matches!(edit, Edit::DeleteAnnotation { .. }) {
+                    view.comments.popups_after_edit(&popups_before, &info.annotations);
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
@@ -384,6 +396,17 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     view.comments.selected = None;
                     view.comments.history_stepped();
+                }
+                if label == (Edit::ApplyRedactions { pages: None }).label() {
+                    let view = &mut self.views[i];
+                    let (applied, undone) = (view.redactions_applied, view.redactions_undone_after_save);
+                    // Undo past the last save counts as undone; Redo first takes those back.
+                    match (undo, applied, undone) {
+                        (true, 0, _) => view.redactions_undone_after_save = undone.saturating_add(1),
+                        (true, _, _) => view.redactions_applied = applied.saturating_sub(1),
+                        (false, _, 0) => view.redactions_applied = applied.saturating_add(1),
+                        (false, _, _) => view.redactions_undone_after_save = undone.saturating_sub(1),
+                    }
                 }
                 let label = crate::i18n::edit_label(&label);
                 if undo {
@@ -807,7 +830,7 @@ impl PdfCraftApp {
             // as AddAnnotation selects a typed or drawn signature.
             let newest =
                 self.session.get(view.id).and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
-            view.comments.selected = newest.map(|index| (page, index));
+            view.comments.select(newest.map(|index| (page, index)));
             view.comments.reveal = true;
             self.quick_tool = crate::QuickTool::Select;
         }
@@ -1021,6 +1044,15 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
+/// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
+/// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+fn one_page_changed(view: &mut crate::DocView, edit: &Edit, page: usize) {
+    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+        view.page_changed(page);
+    }
+}
+
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
@@ -1030,6 +1062,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
+        | Edit::SetAnnotationPopup { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
@@ -1214,9 +1247,11 @@ mod revert_draft_tests {
     use crate::forms_ui::Focus;
     use pdfcraft_engine::FieldValue;
 
+    /// An open editor on the first widget of the field "name", holding `text` as typed.
     fn focus(text: &str) -> Focus {
         Focus {
             name: "name".into(),
+            obj: None,
             widget: 0,
             text: text.into(),
             picked: Vec::new(),
@@ -1226,6 +1261,7 @@ mod revert_draft_tests {
             calendar: None,
             calendar_rect: None,
             calendar_text: None,
+            list: Default::default(),
             had_focus: false,
         }
     }
@@ -1548,6 +1584,7 @@ mod rejected_value_tests {
         let view = &mut app.views[0];
         view.forms.committed = Some(Focus {
             name: "qty".into(),
+            obj: None,
             widget: 0,
             text: "4500".into(),
             picked: Vec::new(),
@@ -1557,6 +1594,7 @@ mod rejected_value_tests {
             calendar: None,
             calendar_rect: None,
             calendar_text: None,
+            list: Default::default(),
             had_focus: false,
         });
         view.pending_edit = Some(Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_engine::FieldValue::Text("4500".into()) });

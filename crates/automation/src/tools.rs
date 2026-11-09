@@ -175,7 +175,7 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
-        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers, page transitions and display times, the destination it opens at, attachments, fonts, security, repair notes and the objects that could not be read.")
+        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments, fonts, security, repair notes and the objects that could not be read.")
             .ro()
             .cmd("file.properties")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
@@ -508,13 +508,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "from", "to"],
         )),
-        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags. A calculated field includes calculate: {op, fields} or {notation} as form_set_props takes them, or {script} for a custom Calculate script (set with form_set_script). Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based). Radio groups include on_widgets, the 1-based numbers of the buttons that are on (buttons sharing an option tell apart only there).")
+        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags. A calculated field includes calculate: {op, fields} or {notation} as form_set_props takes them, or {script} for a custom Calculate script (set with form_set_script). Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based). Radio groups include on_widgets, the 1-based numbers of the buttons that are on (buttons sharing an option tell apart only there). A check box whose widgets have different on states also lists them as options, and which one is checked (null when none). Combo and list boxes include selected: the 1-based positions in options of the selected ones, which tells apart options that share an export value.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
             "form_fill",
             "Fill in form fields",
-            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes, an array of strings for multi-select lists; {\"widget\": n} turns on button n (1-based) of a check box or radio group and never turns it off (to clear, use null for a radio group that allows it, false for a check box); of radio buttons sharing an option only that one is on unless the group has RadiosInUnison. Appearances are regenerated so every viewer shows the values. Thai the field's font can't hold is drawn from PdfCraft's built-in Thai face (a build without one refuses it). Any other value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value.",
+            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes (or one of a check box's options, to check that widget and clear the others), an array of strings for multi-select lists; {\"widget\": n} turns on button n (1-based) of a check box or radio group and never turns it off (to clear, use null for a radio group that allows it, false for a check box); of radio buttons sharing an option only that one is on unless the group has RadiosInUnison. Appearances are regenerated so every viewer shows the values. Thai the field's font can't hold is drawn from PdfCraft's built-in Thai face (a build without one refuses it). Any other value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value.",
         )
         .with(schema(json!({ "doc": doc(), "values": { "type": "object", "description": "Field name → value." } }), &["doc", "values"])),
         t("form_reset", "Clear form", "Reset fields to their default values: all of them, or only those listed. Undoable.")
@@ -563,7 +563,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "page", "rect", "rows"],
         )),
-        t("stamp_custom", "Add a custom stamp", "Stamp a picture: a PDF page (file_page, default 1, kept as vector content in a form XObject) or an image file. Either centred at at [x, y] (points from the top-left of the displayed page) at its natural size, at most 200 pt, or fitted inside rect [x0, y0, x1, y1] (the same coordinates; each side 1–14400 pt), scaled to keep its shape and centred in the box. Like at, rect is not clipped to the page. Pass at or rect, not both. name labels it (default: the file name). Undoable.")
+        t("stamp_custom", "Add a custom stamp", "Stamp a picture: a PDF page (file_page, default 1, kept as vector content in a form XObject) or an image file. Either centred at at [x, y] (points from the top-left of the displayed page) at its natural size, at most 200 pt, or fitted inside rect [x0, y0, x1, y1] (the same coordinates; each side 1–14400 pt), scaled to keep its shape and centred in the box. Like at, rect is not clipped to the page. Pass at or rect, not both. name labels it (default: the file name). line adds a text line under the picture with {name} (the author), {date} and {time} filled in now, as a dynamic stamp. Undoable.")
             .cmd("comment.stamp")
             .with(schema(
                 json!({
@@ -575,6 +575,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "file_page": { "type": "integer", "minimum": 1 },
                     "name": { "type": "string" },
                     "author": { "type": "string" },
+                    "line": { "type": "string", "maxLength": 200 },
                 }),
                 &["doc", "page", "path"],
             )),
@@ -678,7 +679,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_apply",
             "Apply redactions",
-            "Apply the redaction marks (all, or those on pages): text, images, vectors, comments and form fields under them are removed for good and boxes are drawn in their place. A verification pass fails the operation if anything readable remains. Undoable until saved; the saved file no longer contains the content.",
+            "Apply the redaction marks (all, or those on pages): text, images, vectors, comments and form fields under them are removed for good and boxes are drawn in their place. A verification pass fails the operation if anything readable remains. Undoable until saved; the saved file no longer contains the content. The result's save_as is the document's name with _Redacted before the extension (contract.pdf gives contract_Redacted.pdf; a name that already ends in _Redacted is unchanged); pass it to doc_save as path to save under that name.",
         )
         .destructive()
         .with(schema(json!({ "doc": doc(), "pages": pages("whose marks to apply (default: all)") }), &["doc"])),
@@ -824,7 +825,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("content_delete", "Delete added content", "Delete an added item (page, index from content_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
-        t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url, or to_page with its zoom). With text_links: true, also the web and email addresses written as plain page text with no link over them, which the viewer opens on a click: page, rects (one per line), url, and blocked (why it won't open) when the link check refuses it. Only http, https and mailto addresses are found. At most 100 pages are read per call, from text_links_from (default 1); text_links_next_page then gives the page to continue from.")
+        t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url, or to_page with its zoom). A relative url also has resolved_url, the address resolved against the document's base URI (catalog /URI /Base); a link active only in its /QuadPoints has active_areas, one rect per quadrilateral. With text_links: true, also the web and email addresses written as plain page text with no link over them, which the viewer opens on a click: page, rects (one per line), url, and blocked (why it won't open) when the link check refuses it. Only http, https and mailto addresses are found. At most 100 pages are read per call, from text_links_from (default 1); text_links_next_page then gives the page to continue from.")
             .ro()
             .with(schema(json!({ "doc": doc(), "text_links": { "type": "boolean" }, "text_links_from": { "type": "integer", "minimum": 1 } }), &["doc"])),
         t("link_open", "Open a linked PDF", "Follow a local GoToR link in PdfCraft: open the referenced PDF as a new document, respecting --root. page and index use link_list numbering. Named destinations are reported but not applied. Absolute file specifications require allow_absolute: true after reviewing the target; relative links need no opt-in.")
@@ -880,7 +881,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
-        t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark and replies (each with its own status and checkmark).")
+        t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark and replies (each with its own status and checkmark); the points that shape a line, polygon or callout, and a callout's text box. Annotations grouped with a comment (/RT /Group) are listed once, as that comment with its attributes, and named in its `group`. comment_delete deletes just the member named, as Acrobat does (Replace Text's strikeout and caret go together).")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1, "description": "Only this page." } }), &["doc"])),
         t(
@@ -1051,7 +1052,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
@@ -1065,13 +1066,18 @@ pub fn tools() -> Vec<ToolDef> {
                 "font_size": { "type": "number", "minimum": 1, "maximum": 400, "description": "Font size in points of a text box, typewriter text or callout; the box grows to hold the text." },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
-                "points": { "type": "array", "items": point(), "minItems": 2, "description": "A line's two ends, or every corner of connected lines, a polygon or a cloud, in page coordinates." },
+                "points": { "type": "array", "items": point(), "minItems": 1, "description": "A line's two ends, every corner of connected lines, a polygon or a cloud, or a callout's arrow point and (optionally) knee, in page coordinates. A callout given its arrow point alone keeps the knee it has." },
             })),
             &["doc"],
         )),
         t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation, image_rotation (how far clockwise the image is shown turned) and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
             .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies, or one reply (its id, or page and index, from comment_list) with its pop-up and the replies to it; the comment and its other replies stay. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
+        t("comment_popup", "Open, close or move a comment's pop-up", "Open or close a comment's pop-up window (open), or move it (rect, in page view coordinates as comment_list reports). A comment without a pop-up gets one beside it. Text boxes, Fill & Sign marks and replies have none of their own. Undoable.")
+            .with(schema(comment_ref(json!({
+                "open": { "type": "boolean" },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+            })), &["doc"])),
         t(
             "comments_copy",
             "Copy comments",
