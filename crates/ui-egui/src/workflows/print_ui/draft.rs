@@ -1,4 +1,4 @@
-use super::{Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, print, spool};
+use super::{Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, print, spool};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -51,6 +51,10 @@ pub struct PrintDraft {
     pub size: SizeMode,
     pub custom_scale: f64,
     pub per_sheet: usize,
+    /// Pages per sheet: Custom, `cols` across by `rows` down instead of `per_sheet`.
+    pub custom_grid: bool,
+    pub cols: usize,
+    pub rows: usize,
     pub order: PageOrder,
     pub border: bool,
     pub auto_rotate: bool,
@@ -64,7 +68,16 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
+    /// Paper sizes added with Custom…, kept with the settings.
+    pub custom_papers: Vec<crate::print_paper::CustomPaper>,
+    /// The paper each printer is remembered with, kept with the settings.
+    pub remembered_paper: crate::print_paper::RememberedPaper,
+    /// "Remember this paper for …", applied at Print time.
+    pub remember_paper: bool,
+    /// The custom paper being added: name, width and height as typed (the preferences' unit).
+    pub custom_new: Option<(String, String, String)>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -112,6 +125,9 @@ impl Default for PrintDraft {
             size: SizeMode::Fit,
             custom_scale: 100.0,
             per_sheet: 2,
+            custom_grid: false,
+            cols: 2,
+            rows: 1,
             order: PageOrder::Horizontal,
             border: false,
             auto_rotate: true,
@@ -125,6 +141,10 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            custom_papers: Vec::new(),
+            remembered_paper: Default::default(),
+            remember_paper: false,
+            custom_new: None,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -186,19 +206,26 @@ impl PrintDraft {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
                 m => m,
             }),
-            Handling::Multiple => match Layout::multiple(self.per_sheet) {
-                Layout::Multiple { cols, rows, per_sheet, .. } => {
-                    Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
+            Handling::Multiple => {
+                let grid = if self.custom_grid {
+                    Layout::grid(self.cols, self.rows).ok_or_else(|| tl!("Columns and rows must each be 1 to 99.").to_string())?
+                } else {
+                    Layout::multiple(self.per_sheet)
+                };
+                match grid {
+                    Layout::Multiple { cols, rows, per_sheet, custom, .. } => {
+                        Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate, custom }
+                    }
+                    other => other,
                 }
-                other => other,
-            },
+            }
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper: self.paper_size(),
             orientation: self.orientation,
             layout,
             content: self.content,

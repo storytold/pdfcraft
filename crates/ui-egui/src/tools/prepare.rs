@@ -140,13 +140,16 @@ enum Grab {
     Draw(Pos2),
     /// Selecting fields inside a dragged rectangle.
     Select(Pos2),
-    Move,
+    /// Moving the selected field; with Shift held, the axis the move keeps to once [`lock_axis`] chose it.
+    Move(Option<Axis>),
     /// Resizing by a corner: (moves left edge, moves top edge) in screen terms.
     Corner(bool, bool),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PrepareView {
+    /// Show each fillable widget's position in the same order used by Tab and Shift+Tab.
+    pub show_tab_numbers: bool,
     /// The selected field and which of its widgets (the anchor of Align and Match Size).
     pub selected: Option<(String, usize)>,
     /// More fields selected with Shift- or ⌘-click.
@@ -229,17 +232,86 @@ fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
     [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
 }
 
-/// The rect while a move or resize is in progress. With `shift` held a corner keeps the field's
-/// proportions, as it does for comments and stamps.
+/// The direction a Shift-constrained move keeps to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+impl Axis {
+    /// The axis `delta` has gone further along; horizontal on a tie.
+    fn of(delta: egui::Vec2) -> Self {
+        if delta.x.abs() >= delta.y.abs() { Axis::Horizontal } else { Axis::Vertical }
+    }
+}
+
+/// How far, in screen pixels, a Shift-move goes before its axis is chosen, so the first pixel of
+/// hand jitter does not pick it.
+const AXIS_LOCK: f32 = 4.0;
+
+/// The axis a move keeps to with `shift` held: chosen once the drag has gone [`AXIS_LOCK`] pixels,
+/// from the direction it has gone furthest, and then kept while Shift stays down, so a drag that
+/// turns and crosses the diagonal does not flip it and make the field jump. Releasing Shift frees
+/// the move, and pressing it again chooses afresh.
+fn lock_axis(axis: Option<Axis>, delta: egui::Vec2, shift: bool) -> Option<Axis> {
+    if !shift {
+        return None;
+    }
+    axis.or_else(|| (delta.length() >= AXIS_LOCK).then(|| Axis::of(delta)))
+}
+
+/// The rect while a move or resize is in progress. With `shift` held a move keeps to one axis,
+/// horizontal or vertical, as Acrobat's Prepare Form does ("To constrain the vertical or horizontal
+/// movement as you drag, press and hold Shift"): the one [`lock_axis`] chose, or until it has
+/// chosen, the one the drag has gone furthest along. A corner keeps the field's proportions, as it
+/// does for comments and stamps.
 fn dragged(r: Rect, grab: Grab, delta: egui::Vec2, shift: bool) -> Rect {
     match grab {
-        Grab::Move => r.translate(delta),
+        Grab::Move(axis) if shift => r.translate(match axis.unwrap_or_else(|| Axis::of(delta)) {
+            Axis::Horizontal => vec2(delta.x, 0.0),
+            Axis::Vertical => vec2(0.0, delta.y),
+        }),
+        Grab::Move(_) => r.translate(delta),
         Grab::Corner(left, top) => {
             let handle = (if left { -1 } else { 1 }, if top { -1 } else { 1 });
             comments::resized(r, handle, delta, comments::corner_ratio(r, None, shift))
         }
         Grab::Draw(_) | Grab::Select(_) => r,
     }
+}
+
+fn tab_badge_rect(widget: Rect, page: Rect, size: egui::Vec2) -> Option<Rect> {
+    if !page.is_positive() || !size.is_finite() || size.x < 0.0 || size.y < 0.0 || size.x > page.width() || size.y > page.height() {
+        return None;
+    }
+    let max_x = page.right() - size.x;
+    let max_y = page.bottom() - size.y;
+    let min = egui::pos2((widget.left() + 3.0).clamp(page.left(), max_x), (widget.top() + 3.0).clamp(page.top(), max_y));
+    Some(Rect::from_min_size(min, size))
+}
+
+fn place_tab_badge(widget: Rect, page: Rect, size: egui::Vec2, placed: &[Rect]) -> Option<Rect> {
+    let preferred = tab_badge_rect(widget, page, size)?;
+    if placed.iter().all(|badge| !badge.intersects(preferred)) {
+        return Some(preferred);
+    }
+
+    let gap = 2.0;
+    let step = size + vec2(gap, gap);
+    let columns = (((page.width() - size.x) / step.x).floor().max(0.0) as usize).saturating_add(1);
+    let rows = (((page.height() - size.y) / step.y).floor().max(0.0) as usize).saturating_add(1);
+    let attempts = columns.saturating_mul(rows).min(placed.len().saturating_add(1));
+    for slot in 0..attempts {
+        let col = slot % columns;
+        let row = slot / columns;
+        let min = page.min + vec2(col as f32 * step.x, row as f32 * step.y);
+        let candidate = Rect::from_min_size(min, size);
+        if placed.iter().all(|badge| !badge.intersects(candidate)) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 pub(crate) struct Outcome {
@@ -315,10 +387,14 @@ pub(crate) fn page_input(
     }
 
     // A grab in progress on this page.
-    if let Some((gp, grab, start)) = prep.grab
+    if let Some((gp, mut grab, start)) = prep.grab
         && gp == page
     {
         out.consumed = true;
+        if let (Grab::Move(axis), Some(p)) = (grab, pointer) {
+            grab = Grab::Move(lock_axis(axis, p - start, ui.input(|i| i.modifiers.shift)));
+            prep.grab = Some((gp, grab, start));
+        }
         if resp.drag_stopped() || !ptr.primary_down {
             prep.grab = None;
             let end = pointer.unwrap_or(start);
@@ -361,7 +437,7 @@ pub(crate) fn page_input(
                     view.pending_edit = Some(Edit::AddField { page, rect, kind: tool.new_field(join), name: None });
                     out.placed = true;
                 }
-                Grab::Move | Grab::Corner(..) => {
+                Grab::Move(_) | Grab::Corner(..) => {
                     let Some((name, wi)) = prep.selected.clone() else { return out };
                     let Some(w) = form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return out };
                     let delta = end - start;
@@ -380,7 +456,8 @@ pub(crate) fn page_input(
 
     // The Select tool: what the press is on ([`hit`]), a corner handle or a field; a press nobody
     // holds draws a selection rectangle, or a field with a field tool. A press held by something
-    // drawn over the fields (a comment) is not Prepare's.
+    // drawn over the fields (a comment) is not Prepare's, though its drag is once that something
+    // lets it go (a highlight's, `PageRouter::drag_began`).
     let free = press == PagePress::Free;
     let held = matches!(press, PagePress::Mine(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }));
     let hit = match press {
@@ -390,7 +467,7 @@ pub(crate) fn page_input(
     // A drag starts from where its press began on this page: egui may see it only once the pointer
     // is past the page's edge.
     if allowed
-        && resp.drag_started()
+        && ptr.drag_started
         && (held || free)
         && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {
@@ -401,7 +478,7 @@ pub(crate) fn page_input(
             prep.grab = Some((page, Grab::Corner(left, top), origin));
         } else if let Some((f, wi)) = hit {
             prep.selected = Some((f.name.clone(), wi));
-            prep.grab = Some((page, Grab::Move, origin));
+            prep.grab = Some((page, Grab::Move(None), origin));
         } else {
             prep.marquee_before = Some(prep.selected.iter().chain(prep.also.iter()).cloned().collect());
             if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
@@ -578,7 +655,7 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 
 /// Fields with their light-blue fill and name tags, the selection with its handles, and the
 /// rectangle being drawn or dragged to the pages' `pointer`.
-pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &DocView) {
+pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order: &[(usize, usize)], view: &DocView) {
     let PageToolContext { ui, xf, page, info, ptr, .. } = cx;
     let painter = ui.painter();
     let pointer = ptr.pos;
@@ -588,16 +665,17 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
             let mut r = screen_rect(xf, info, page, w.rect);
-            let selected = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
+            let primary = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
             let also = prep.also.iter().any(|(n, i)| n == &f.name && *i == wi);
-            if selected && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
+            let selected = primary || also;
+            if primary && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
                 r = dragged(r, g, p - start, ui.input(|i| i.modifiers.shift));
             }
             painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
             painter.rect_stroke(
                 r,
                 CornerRadius::ZERO,
-                Stroke::new(if also { 2.0 } else { 1.0 }, if selected || also { SELECT_BLUE } else { Color32::from_gray(90) }),
+                Stroke::new(1.0, if selected { SELECT_BLUE } else { Color32::from_gray(90) }),
                 egui::StrokeKind::Inside,
             );
             // The name tag: white text on black, clipped to the field.
@@ -613,10 +691,35 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
             p2.galley(tag.min + vec2(3.0, 1.0), galley, Color32::WHITE);
             if selected {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(2.0, SELECT_BLUE), egui::StrokeKind::Outside);
+            }
+            if primary {
                 for (c, ..) in handles(r) {
                     painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
                 }
             }
+        }
+    }
+    if prep.show_tab_numbers {
+        let mut placed = Vec::new();
+        for (number, (fi, wi)) in tab_order.iter().copied().enumerate() {
+            let Some(field) = form.get(fi) else { continue };
+            let Some(widget) = field.widgets.get(wi) else { continue };
+            if widget.page != Some(page) {
+                continue;
+            }
+            let mut r = screen_rect(xf, info, page, widget.rect);
+            let selected = prep.selected.as_ref().is_some_and(|(name, index)| name == &field.name && *index == wi);
+            if selected && let (Some((_, grab, start)), Some(pointer)) = (grab, pointer) {
+                r = dragged(r, grab, pointer - start, ui.input(|i| i.modifiers.shift));
+            }
+            let label = number.saturating_add(1).to_string();
+            let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
+            let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
+            let Some(badge) = place_tab_badge(r, xf.rect, galley.size() + vec2(8.0, 5.0), &placed) else { continue };
+            placed.push(badge);
+            let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+            clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
+            clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
         }
     }
     if let (Some((_, Grab::Draw(from) | Grab::Select(from), _)), Some(p)) = (grab, pointer) {
@@ -777,6 +880,70 @@ mod tests {
             assert_eq!(if left { out.max.x } else { out.min.x }, if left { r.max.x } else { r.min.x });
             assert_eq!(if top { out.max.y } else { out.min.y }, if top { r.max.y } else { r.min.y });
         }
-        assert_eq!(dragged(r, Grab::Move, vec2(5.0, 6.0), true), r.translate(vec2(5.0, 6.0)));
+        assert_eq!(dragged(r, Grab::Move(None), vec2(5.0, 6.0), false), r.translate(vec2(5.0, 6.0)));
+    }
+
+    /// Shift keeps a move to one axis: whichever the drag has gone further along, so the field
+    /// follows the pointer's main direction and never drifts on the other.
+    #[test]
+    fn shift_keeps_a_move_horizontal_or_vertical() {
+        let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
+        assert_eq!(dragged(r, Grab::Move(None), vec2(40.0, 6.0), true), r.translate(vec2(40.0, 0.0)), "mostly right");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(-40.0, 6.0), true), r.translate(vec2(-40.0, 0.0)), "mostly left");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(5.0, -30.0), true), r.translate(vec2(0.0, -30.0)), "mostly up");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(-5.0, 30.0), true), r.translate(vec2(0.0, 30.0)), "mostly down");
+        // Releasing Shift moves freely again.
+        assert_eq!(dragged(r, Grab::Move(None), vec2(40.0, 6.0), false), r.translate(vec2(40.0, 6.0)));
+        // A chosen axis holds even where the drag has gone further along the other one.
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Horizontal)), vec2(40.0, 60.0), true), r.translate(vec2(40.0, 0.0)));
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Vertical)), vec2(60.0, 40.0), true), r.translate(vec2(0.0, 40.0)));
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Vertical)), vec2(60.0, 40.0), false), r.translate(vec2(60.0, 40.0)));
+    }
+
+    /// The axis is chosen once the drag has gone a few pixels with Shift held, kept while Shift
+    /// stays down whichever way the drag then turns, and freed when Shift is let go.
+    #[test]
+    fn a_shift_move_locks_its_axis_until_shift_is_let_go() {
+        assert_eq!(lock_axis(None, vec2(2.0, 1.0), true), None, "not yet past the jitter");
+        let axis = lock_axis(None, vec2(40.0, 0.0), true);
+        assert_eq!(axis, Some(Axis::Horizontal));
+        assert_eq!(lock_axis(axis, vec2(40.0, 42.0), true), axis, "crossing the diagonal keeps it");
+        assert_eq!(lock_axis(axis, vec2(0.0, 300.0), true), axis);
+        assert_eq!(lock_axis(axis, vec2(40.0, 42.0), false), None, "Shift let go frees it");
+        assert_eq!(lock_axis(None, vec2(40.0, 42.0), true), Some(Axis::Vertical), "and pressing it again chooses afresh");
+        assert_eq!(lock_axis(None, vec2(f32::NAN, 0.0), true), None, "a non-finite delta chooses nothing");
+    }
+
+    #[test]
+    fn tab_badge_rect_tracks_dragged_rect_and_clamps_to_page_edges() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
+        let widget = Rect::from_min_size(pos2(30.0, 40.0), vec2(20.0, 15.0));
+        let size = vec2(24.0, 14.0);
+        let original = tab_badge_rect(widget, page, size).unwrap();
+        let moved = dragged(widget, Grab::Move, vec2(12.0, 8.0), false);
+        assert_eq!(tab_badge_rect(moved, page, size).unwrap().min, original.min + vec2(12.0, 8.0));
+
+        let near_edge = Rect::from_min_size(pos2(100.0, 95.0), vec2(8.0, 8.0));
+        let badge = tab_badge_rect(near_edge, page, size).unwrap();
+        assert!(page.contains_rect(badge));
+    }
+
+    #[test]
+    fn tab_badge_is_omitted_when_it_cannot_fit_on_the_page() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(20.0, 12.0));
+        let widget = Rect::from_min_size(pos2(10.0, 20.0), vec2(4.0, 4.0));
+        assert_eq!(tab_badge_rect(widget, page, vec2(24.0, 14.0)), None);
+    }
+
+    #[test]
+    fn tab_badges_near_the_right_edge_do_not_overlap() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
+        let size = vec2(24.0, 14.0);
+        let first_widget = Rect::from_min_size(pos2(104.0, 45.0), vec2(8.0, 8.0));
+        let second_widget = Rect::from_min_size(pos2(106.0, 45.0), vec2(8.0, 8.0));
+        let first = place_tab_badge(first_widget, page, size, &[]).unwrap();
+        let second = place_tab_badge(second_widget, page, size, &[first]).unwrap();
+        assert!(!first.intersects(second), "{first:?} overlaps {second:?}");
+        assert!(page.contains_rect(first) && page.contains_rect(second));
     }
 }
