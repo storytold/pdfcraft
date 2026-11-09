@@ -246,4 +246,42 @@ mod tests {
         assert_eq!(num_text(-1e20), "-100000000000000000000");
         assert_eq!(num_text(f64::MAX).len(), 309);
     }
+
+    #[test]
+    fn decode_xml_and_html_entities() {
+        let eval = |script: &str| {
+            let root = XfaNode::default();
+            let out = run_formcalc(script, &XfaEvent::default(), &XfaDoc::default(), &root, Limits::default());
+            assert!(out.error.is_none(), "{:?}", out.error);
+            out.result.unwrap_or_default()
+        };
+
+        // `&apos;` in both xml and html
+        assert_eq!(eval(r#"Decode("It&apos;s &lt;ok&gt; &amp; &quot;fine&quot;", "xml")"#), "It's <ok> & \"fine\"");
+        assert_eq!(eval(r#"Decode("It&apos;s", "html")"#), "It's");
+
+        // Decimal and hex numeric character references (case-insensitive #x/#X and hex digits, leading zeros)
+        assert_eq!(eval(r#"Decode("&#65;&#x42;&#X43;&#00068;&#x00065;&#x20AC;&#x1F600;", "xml")"#), "ABCDe€😀");
+        assert_eq!(eval(r#"Decode("&#65;&#x42;&#X43;&#x00E9;", "html")"#), "ABCé");
+
+        // Invalid / surrogate / out-of-range / zero / malformed numeric references stay literal without panicking
+        assert_eq!(
+            eval(r#"Decode("&#0; &#xD800; &#xDFFF; &#x110000; &#99999999999999999999; &#; &#x; &#65 &#x4G; &;", "xml")"#),
+            "&#0; &#xD800; &#xDFFF; &#x110000; &#99999999999999999999; &#; &#x; &#65 &#x4G; &;"
+        );
+
+        // Single-pass decoding: `&amp;lt;` and `&#38;lt;` must decode to `&lt;`, never `<`
+        assert_eq!(eval(r#"Decode("&amp;lt; &amp;#65; &#38;lt; &#x26;apos;", "xml")"#), "&lt; &#65; &lt; &apos;");
+        assert_eq!(eval(r#"Decode("&amp;nbsp; &#38;eacute;", "html")"#), "&nbsp; &eacute;");
+
+        // HTML named entities decode in "html" mode but remain literal in "xml" mode
+        assert_eq!(eval(r#"Decode("caf&eacute;&nbsp;&copy;&euro;&mdash;&alpha;&Omega;&hearts;", "html")"#), "café\u{00A0}©€—αΩ♥");
+        assert_eq!(eval(r#"Decode("caf&eacute;&nbsp;&copy;&euro;", "xml")"#), "caf&eacute;&nbsp;&copy;&euro;");
+        // Case sensitivity of HTML named entities (`&Eacute;` vs `&eacute;`, `&Prime;` vs `&prime;`, `&Dagger;` vs `&dagger;`)
+        assert_eq!(eval(r#"Decode("&Eacute;&eacute;&Prime;&prime;&Dagger;&dagger;&bogus;", "html")"#), "Éé″′‡†&bogus;");
+        // Non-ASCII characters after `&` or `&#` and long runs of `&` without `;`
+        assert_eq!(eval(r#"Decode("&é; &#é; &#xé; &amp;é", "html")"#), "&é; &#é; &#xé; &é");
+        let amps = "&".repeat(5_000);
+        assert_eq!(eval(&format!(r#"Decode("{amps}&apos;", "xml")"#)), format!("{amps}'"));
+    }
 }

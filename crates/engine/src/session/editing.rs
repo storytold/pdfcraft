@@ -6,7 +6,7 @@ use super::{
     inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
     undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
-use crate::{EditNotice, MarkKind};
+use crate::{EditNotice, MarkKind, print_preview_layers};
 
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
@@ -20,6 +20,19 @@ fn deletes_pages(edit: &Edit) -> bool {
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
+        self.apply_reporting(id, edit).map(|_| ())
+    }
+
+    /// Edit a PDF ▸ Edit text: make the grouped text on `page` (0-based) editable, as one undoable
+    /// [`Edit::PrepareText`], and say what it prepared, which fonts' maps it repaired and which
+    /// groups it left as they were (and why). The counts are this edit's own, not a preview's.
+    pub fn prepare_text(&mut self, id: DocId, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, EditError> {
+        self.apply_reporting(id, Edit::PrepareText { page })?
+            .ok_or_else(|| EditError::Invalid("preparing grouped text gave no result; the document was not changed".into()))
+    }
+
+    /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
+    fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -63,7 +76,7 @@ impl Session {
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
-            return Ok(());
+            return Ok(None);
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
@@ -233,7 +246,7 @@ impl Session {
             doc.xfa_scripts_off = true;
             doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
-        Ok(())
+        Ok(cx.prepared)
     }
 
     /// Undo the last edit of document `id`: its earlier state comes back, and the label of the
@@ -432,7 +445,7 @@ impl Session {
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
                     | Edit::EditPageImage { .. }
-            ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
+            ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
             matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })
@@ -513,6 +526,8 @@ impl Session {
     }
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+        #[cfg(test)]
+        crate::record_full_refresh();
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {
@@ -543,6 +558,7 @@ impl Session {
             }
         }
         doc.info = info;
+        doc.config.print_layers = print_preview_layers(Some(&editor.cos), &doc.info.layers);
         doc.fonts_stale = false;
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);

@@ -3,6 +3,11 @@
 /// A point or direction, `[x, y, z]`.
 pub(crate) type Vec3 = [f64; 3];
 
+/// `a + b`.
+pub(crate) fn add([ax, ay, az]: Vec3, [bx, by, bz]: Vec3) -> Vec3 {
+    [ax + bx, ay + by, az + bz]
+}
+
 /// `a - b`.
 pub(crate) fn sub([ax, ay, az]: Vec3, [bx, by, bz]: Vec3) -> Vec3 {
     [ax - bx, ay - by, az - bz]
