@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+mod limits;
 mod xmp;
 mod xmp_extension;
 mod xmp_types;
@@ -164,6 +165,12 @@ pub const WORDINGS: &[&str] = &[
     "Metadata stream {object} writes the namespace {namespace} with the prefix {written}, not {prefix}",
     // The document as a whole.
     "The document is encrypted",
+    "An integer is outside the 32-bit range",
+    "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
+    "A CMap maps a character code to a CID above 65535",
+    "A string is longer than 32767 bytes",
+    "A name is longer than 127 bytes",
+    "Page {} has a boundary smaller than 3 or larger than 14400 units",
     "Device colour is used, but there is no PDF/A output intent",
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
@@ -714,6 +721,28 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
+    // 6.1.13: the implementation limits of ISO 32000-1 Annex C.
+    let over = limits::exceeded(doc, &objs, &referenced_content(doc, &objs));
+    if over.int {
+        issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
+    }
+    if over.real {
+        issue("6.1.13", "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸", None, None, false);
+    }
+    if over.string {
+        issue("6.1.13", "A string is longer than 32767 bytes", None, None, false);
+    }
+    if limits::cid_over_limit(doc, &objs) {
+        issue("6.1.13", "A CMap maps a character code to a CID above 65535", None, None, false);
+    }
+    if over.name {
+        issue("6.1.13", "A name is longer than 127 bytes", None, None, false);
+    }
+    for (i, p) in pages.iter().enumerate() {
+        if limits::page_box_out_of_range(doc, &p.dict) {
+            issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
+        }
+    }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
