@@ -1204,6 +1204,7 @@ mod revert_draft_tests {
     fn focus(text: &str) -> Focus {
         Focus {
             name: "name".into(),
+            obj: None,
             widget: 0,
             text: text.into(),
             picked: Vec::new(),

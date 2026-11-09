@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
+use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
@@ -26,6 +27,10 @@ const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focus {
     pub name: String,
+    /// The focused field's object. Same-name twins are one field (ISO 32000-2 §12.7.3.1) but come
+    /// as separate fields here, each with its own widgets and option order, and this says which
+    /// one has the focus. `None` goes by the name: the first field with it.
+    pub obj: Option<ObjRef>,
     /// Which of the field's widgets (a field can appear on several pages).
     pub widget: usize,
     /// Text being typed (text fields).
@@ -73,6 +78,10 @@ pub struct FormView {
     /// The widget holding egui's keyboard focus for the focused check box or radio button, and
     /// whether it takes the arrows (radio buttons). The page keys still work around it.
     pub(crate) keys: Option<(egui::Id, bool)>,
+    /// The list box row clicked last, without Shift: (its field name, the row). A Shift-click picks
+    /// the rows from it to the one clicked; the field's value can't say which row came last when
+    /// rows share an export value, and `/I` lists them in ascending order.
+    pub(crate) list_anchor: Option<(String, usize)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -145,9 +154,38 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+impl Focus {
+    /// Whether this is the focus of widget `widget` of `f` (of that twin, for same-name fields).
+    fn is_on(&self, f: &FormField, widget: usize) -> bool {
+        self.name == f.name && self.widget == widget && self.obj.is_none_or(|o| o == f.obj)
+    }
+}
+
+/// The field `focus` is on: the twin with its field object, or else the first field with its name.
+pub(crate) fn focused_field<'a>(focus: &Focus, form: &'a [FormField]) -> Option<&'a FormField> {
+    focus.obj.and_then(|o| form.iter().find(|f| f.obj == o && f.name == focus.name)).or_else(|| form.iter().find(|f| f.name == focus.name))
+}
+
+/// The edit picking the options at `picked` (positions in `f`'s options) in the list box `f`.
+/// The edit names the field, and positions are read in the first field of that name: a same-name
+/// twin listing its options in another order gives its picks as positions there. One option
+/// missing there goes by export value.
+fn list_pick_edit(form: &[FormField], f: &FormField, picked: Vec<usize>) -> Edit {
+    let first = form.iter().find(|x| x.name == f.name).filter(|x| x.obj != f.obj);
+    let value = match first {
+        None => FieldValue::ChoiceIndices(picked),
+        Some(first) => match f.positions_in(first, &picked) {
+            Some(there) => FieldValue::ChoiceIndices(there),
+            None => FieldValue::Choice(picked.iter().filter_map(|&i| f.options.get(i)).map(|(e, _)| e.clone()).collect()),
+        },
+    };
+    Edit::SetFieldValue { name: f.name.clone(), value }
+}
+
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
+        obj: Some(f.obj),
         widget,
         text: draft_text(f),
         picked: f.value.clone(),
@@ -258,7 +296,7 @@ pub(crate) fn page_input(
     if f.kind == FormFieldKind::Text
         && usable
         && let Some(at) = ptr.pressed()
-        && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi)
+        && view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi))
     {
         commit(view, form);
         view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
@@ -283,7 +321,7 @@ pub(crate) fn page_input(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay
             // toggles it, after the edit for any text this commits.
-            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+            if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
@@ -295,12 +333,12 @@ pub(crate) fn page_input(
         FormFieldKind::Text if ptr.pressed().is_none() => {
             // An editor opened by the press cannot be hit until a frame has laid it out: the
             // release lands on the page and would take its focus away.
-            if let Some(x) = view.forms.focus.as_mut().filter(|x| x.name == f.name && x.widget == wi) {
+            if let Some(x) = view.forms.focus.as_mut().filter(|x| x.is_on(f, wi)) {
                 x.request_focus = true;
             }
         }
         FormFieldKind::Text | FormFieldKind::Combo => {
-            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+            if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
@@ -314,31 +352,39 @@ pub(crate) fn page_input(
             let zoom = (r.height() as f64) / height_pt;
             let y_pt = (p.y - r.min.y) as f64 / zoom;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let top = form_appearance::ListRows::top_showing(rows.top, &f.selected, rows.visible(height_pt), f.options.len());
             if let Some(opt_idx) = rows.option_at(top, y_pt).filter(|&i| i < f.options.len()) {
-                let export = &f.options[opt_idx].0;
                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                 let shift = ui.input(|i| i.modifiers.shift);
                 let multi = f.has(field_flags::MULTI_SELECT);
-                let new_value = if multi && ctrl {
-                    let mut picked = f.value.clone();
-                    if let Some(pos) = picked.iter().position(|x| x == export) {
+                // Options by position: two options can share an export value (ISO 32000-2
+                // Table 234, `/I`), and the click picks the row, not the first option with its value.
+                let in_order = f.picked_in_order();
+                let picked: Vec<usize> = if multi && ctrl {
+                    let mut picked = in_order.clone();
+                    if let Some(pos) = picked.iter().position(|&x| x == opt_idx) {
                         picked.remove(pos);
                     } else {
-                        picked.push(export.clone());
+                        picked.push(opt_idx);
                     }
-                    FieldValue::Choice(picked)
-                } else if multi && shift && !f.value.is_empty() {
-                    let anchor = f.value.last().and_then(|last| f.options.iter().position(|(e, _)| e == last)).unwrap_or(opt_idx);
+                    picked
+                } else if multi
+                    && shift
+                    && let Some(anchor) =
+                        view.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map(|(_, row)| *row).or_else(|| in_order.last().copied())
+                {
                     let (min, max) = (anchor.min(opt_idx), anchor.max(opt_idx));
-                    let picked = f.options[min..=max].iter().map(|(e, _)| e.clone()).collect();
-                    FieldValue::Choice(picked)
+                    (min..=max).collect()
                 } else {
-                    FieldValue::Choice(vec![export.clone()])
+                    vec![opt_idx]
                 };
-                if new_value != FieldValue::Choice(f.value.clone()) {
-                    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: new_value });
+                if !(multi && shift) {
+                    view.forms.list_anchor = Some((f.name.clone(), opt_idx));
+                }
+                // A single-select list holding an array is written as one value even when its shown
+                // row is clicked again.
+                if picked != in_order || f.single_value_is_array {
+                    view.pending_edit = Some(list_pick_edit(form, f, picked));
                 }
             }
         }
@@ -348,7 +394,7 @@ pub(crate) fn page_input(
 
 /// The edit the focused field's draft makes, if it differs from the field's value.
 pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
-    let f = form.iter().find(|f| f.name == focus.name)?;
+    let f = focused_field(focus, form)?;
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
@@ -563,7 +609,7 @@ pub(crate) fn paint_page(
     for (fi, f) in form.iter().enumerate() {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
-            let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
+            let focused = view.forms.focus.as_ref().is_some_and(|x| x.is_on(f, wi));
             if focused {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
@@ -658,19 +704,19 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
             let zoom = (xf.rect.width() / unrotated_w.max(1.0)) as f64;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
             let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let top = form_appearance::ListRows::top_showing(rows.top, &f.selected, rows.visible(height_pt), f.options.len());
             let font_size = (rows.size * zoom).clamp(6.0, 64.0) as f32;
             let row_h = (rows.row * zoom) as f32;
             let inset = (rows.inset * zoom) as f32;
             let p = painter.with_clip_rect(r);
             let mut y = r.min.y + inset;
-            for (export, display) in f.options.iter().skip(top) {
+            for (i, (_, display)) in f.options.iter().enumerate().skip(top) {
                 if y + row_h > r.max.y {
                     break;
                 }
                 let row_rect = Rect::from_min_size(egui::pos2(r.min.x + 1.0, y), egui::vec2(r.width() - 2.0, row_h));
-                if f.value.contains(export) {
+                // By position: options can share an export value.
+                if f.selected.contains(&i) {
                     p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
                 }
                 p.text(
@@ -778,7 +824,7 @@ fn tab_to_next_field(
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
     let order = tab_order(form, info);
-    let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget));
+    let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.obj == f.obj && *wi == widget));
     let same_field = order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name));
     let next_after_removed = if exact.is_none() && same_field.is_none() {
         form.iter().position(|field| field.name == f.name).and_then(|fi| {
@@ -857,7 +903,7 @@ pub(crate) fn overlay(
     let toggle = std::mem::take(&mut view.forms.toggle);
     view.forms.keys = None;
     let focus = view.forms.focus.clone()?;
-    let Some(f) = form.iter().find(|f| f.name == focus.name) else {
+    let Some(f) = focused_field(&focus, form) else {
         view.forms.focus = None;
         return None;
     };
@@ -1014,11 +1060,12 @@ pub(crate) fn overlay(
             } else if tab {
                 next = Some(!shift);
             } else if (up || down) && !f.options.is_empty() {
-                let current_idx = f.value.last().and_then(|v| f.options.iter().position(|(e, _)| e == v)).unwrap_or(0);
-                let next_idx = if up { current_idx.saturating_sub(1) } else { (current_idx + 1).min(f.options.len().saturating_sub(1)) };
+                let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
+                let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
                 if next_idx != current_idx && next_idx < f.options.len() {
-                    let export = f.options[next_idx].0.clone();
-                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export]) });
+                    // By position, so the arrows step through options that share an export value,
+                    // in the focused twin's own order.
+                    edit = Some(list_pick_edit(form, f, vec![next_idx]));
                 }
             }
             if clicked_outside() {
