@@ -826,7 +826,10 @@ pub(crate) fn parse_complete(xml: &str) -> Result<(Template, Vec<String>, bool),
     let template = if is_template(&root) {
         root
     } else {
-        root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
+        root.children()
+            .find(is_template)
+            .or_else(|| root.children().filter(|n| n.is_element() && n.tag_name().name() == "xdp").flat_map(|n| n.children()).find(is_template))
+            .ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
     let mut warnings = Vec::new();
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
