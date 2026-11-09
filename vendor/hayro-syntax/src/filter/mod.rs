@@ -87,13 +87,16 @@ impl Filter {
         }
     }
 
-    /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`).
+    /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
+    /// `rows` the `/Height` of the image whose samples it produces, when it is an image's last
+    /// filter.
     pub(crate) fn apply(
         &self,
         data: &[u8],
         params: &Dict<'_>,
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
         limit: usize,
+        rows: Option<usize>,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
         let res = match self {
             Self::AsciiHexDecode => ascii_hex::decode(data)
@@ -108,7 +111,7 @@ impl Filter {
             Self::LzwDecode => lzw_flate::lzw::decode(data, params, limit)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => lzw_flate::flate::decode(data, params, limit)
+            Self::FlateDecode => lzw_flate::flate::decode(data, params, limit, rows)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
             #[cfg(feature = "images")]
