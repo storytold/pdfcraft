@@ -215,7 +215,12 @@ pub(crate) fn run_in_context(
         .remove_data::<Shared>()
         .map(|h| {
             let h = h.into_inner();
-            let icons = if h.doc.icon_epoch == doc.icon_epoch { h.icons } else { Vec::new() };
+            let mut icons = h.icons;
+            if h.doc.icon_epoch == doc.icon_epoch {
+                icons.retain(|(_, id)| h.doc.icon_versions.get(id) == doc.icon_versions.get(id));
+            } else {
+                icons.clear();
+            }
             (icons, h.objects)
         })
         .unwrap_or_default();

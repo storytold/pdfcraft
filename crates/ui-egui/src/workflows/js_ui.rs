@@ -124,7 +124,6 @@ impl PdfCraftApp {
             && let Some(f) = self.session.get(id).and_then(|d| {
                 d.form.iter().find(|f| object_id.map_or_else(|| f.name == name, |key| pdfcraft_engine::js::field_object_id(f.obj) == key))
             })
-            && !f.read_only()
             && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
         {
             let page = widget.page.unwrap_or(0);

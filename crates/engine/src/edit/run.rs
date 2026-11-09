@@ -221,6 +221,7 @@ fn skipped_text(s: &str) -> String {
 pub(crate) struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
     pub(crate) js: Option<js::JsRunner>,
+    defer_reset_callbacks: bool,
     /// A laid-out XFA form's template (`None`: not an XFA form, or JavaScript is off) and what
     /// its scripts produced.
     pub(crate) xfa: Option<Arc<pdfcraft_xfa::model::Template>>,
@@ -292,6 +293,7 @@ impl EditCtx {
         }
         Self {
             js: None,
+            defer_reset_callbacks: false,
             xfa: None,
             xfa_out: Default::default(),
             xfa_datasets: None,
@@ -794,7 +796,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::ResetForm { names } => {
-            pdfcraft_forms::reset(doc, names.as_deref())?;
+            if !cx.defer_reset_callbacks
+                && let Some(js) = cx.js.as_mut()
+            {
+                pdfcraft_forms::reset_with_scripts(doc, names.as_deref(), js)?;
+            } else {
+                pdfcraft_forms::reset(doc, names.as_deref())?;
+            }
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
@@ -1092,8 +1100,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
                 return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
             }
-            for e in edits {
-                run_edit(doc, e, cx)?;
+            // A later value write or reset recalculates from the final values. Run the
+            // intermediate built-in resets for ordering, but don't replay custom callbacks.
+            let last_calculation = edits.iter().rposition(|edit| match edit {
+                Edit::ResetForm { .. } | Edit::SetFieldValue { .. } => true,
+                Edit::ApplyScriptChanges { changes } => changes.iter().any(|change| change.value.is_some()),
+                _ => false,
+            });
+            let deferred = cx.defer_reset_callbacks;
+            for (index, e) in edits.iter().enumerate() {
+                cx.defer_reset_callbacks = deferred || last_calculation.is_some_and(|last| index < last);
+                let result = run_edit(doc, e, cx);
+                cx.defer_reset_callbacks = deferred;
+                result?;
                 if let Some(js) = cx.js.as_mut() {
                     js.refresh_after_batch_edit(doc, e);
                 }

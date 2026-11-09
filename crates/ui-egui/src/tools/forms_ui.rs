@@ -596,6 +596,9 @@ pub(crate) fn page_input(
 /// The edit the focused field's draft makes, if it differs from the field's value.
 pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
     let f = focused_field(focus, form)?;
+    if f.read_only() || f.widgets.get(focus.widget).is_some_and(|widget| widget.read_only) {
+        return None;
+    }
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
@@ -1164,8 +1167,9 @@ pub(crate) fn overlay(
     let mut edit = None;
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
+    let read_only = f.read_only() || w.read_only;
     match f.kind {
-        FormFieldKind::Text => {
+        FormFieldKind::Text if !read_only => {
             let multiline = f.has(field_flags::MULTILINE);
             // Shown at once, like the paragraph editor: a fade-in shows the field's value through it.
             // Over the page, so only where the document shows: a field scrolled under the mode bar
@@ -1253,7 +1257,7 @@ pub(crate) fn overlay(
                 return view.pending_edit.take();
             }
         }
-        FormFieldKind::Combo => {
+        FormFieldKind::Combo if !read_only => {
             // An editable combo box has a text box over the field as well as its list (ISO
             // 32000-2 Table 233, Edit); the keys are the text box's then, and the list takes
             // the pointer.
@@ -1285,7 +1289,7 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::List => {
+        FormFieldKind::List if !read_only => {
             let (up, down, esc, tab, shift) = ctx.input_mut(|i| {
                 (
                     // Consumed, so the arrows move the selection without also scrolling the page.
@@ -1313,8 +1317,8 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::CheckBox | FormFieldKind::Radio => {
-            // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
+        kind if read_only || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
+            // Nothing is drawn over the field, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
             let id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
             let mut has_focus = false;
@@ -1350,6 +1354,8 @@ pub(crate) fn overlay(
                 close = true;
             } else if tab {
                 next = Some(!shift);
+            } else if read_only {
+                close = !has_focus && !focus.request_focus;
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {

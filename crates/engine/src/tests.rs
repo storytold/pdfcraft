@@ -6698,8 +6698,13 @@ fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     assert_eq!(field("qty"), ["11"]);
     assert_eq!(field("total"), ["12"]);
 
-    s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
-        .unwrap();
+    let recursive =
+        Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) };
+    let refused = s.apply(id, recursive.clone()).unwrap_err();
+    assert!(refused.to_string().contains("calculateNow recursion limit exceeded"), "{refused:?}");
+    s.set_javascript(false);
+    s.apply(id, recursive).unwrap();
+    s.set_javascript(true);
     let error = s.run_javascript(id, "calculateNow();", None).unwrap_err();
     assert!(error.to_string().contains("calculateNow recursion limit exceeded"), "{error:?}");
     s.set_javascript(false);
@@ -13501,6 +13506,42 @@ fn an_unavailable_validation_runtime_rejects_the_field_edit() {
     let result = s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("101".into()) });
     assert!(matches!(result, Err(EditError::Invalid(reason)) if reason.contains("document scripts exceed")));
     assert!(s.get(id).unwrap().can_undo().is_none());
+}
+
+#[test]
+fn opening_reset_recalculates_custom_dependents() {
+    let (mut s, id) = reset_order_session("resetForm(['price']);");
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("2".into()) }).unwrap();
+    let bytes = s.save_bytes(id).unwrap();
+    let mut s = Session::new();
+    let id = s.open("opening-calculation.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "total").unwrap().value, ["14"]);
+}
+
+#[test]
+fn a_budget_refusal_discards_pdf_edits_and_callback_globals() {
+    let (mut s, id) = reset_order_session("");
+    for (event, script) in [("keystroke", "var fromRejectedEdit = 99;"), ("validate", "for (var i = 0; i < 65; i++) resetForm();")] {
+        s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: event.into(), script: Some(script.into()) }).unwrap();
+    }
+    s.set_javascript(true);
+    let before = s.save_bytes(id).unwrap();
+    let edit = Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) };
+    assert!(matches!(s.apply(id, edit), Err(EditError::Invalid(_))));
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "typeof fromRejectedEdit;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn timeout_after_undo_releases_the_stale_script_runtime() {
+    let (mut s, id) = reset_order_session("");
+    s.set_javascript(true);
+    let pending = s.start_javascript(id, "1+1", None).unwrap();
+    s.undo(id).unwrap();
+    s.timeout_javascript(pending);
+    assert_eq!(s.run_javascript(id, "2+2", None).unwrap().result.as_deref(), Some("4"));
 }
 
 #[test]

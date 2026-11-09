@@ -838,6 +838,11 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
 
 /// Restore defaults and report direct resets and dependent calculation writes separately.
 pub fn reset_with_counts(doc: &mut Document, names: Option<&[String]>) -> Result<(usize, usize), FormError> {
+    reset_with_scripts(doc, names, &mut NoScripts)
+}
+
+/// Restore defaults and then run the active calculation callbacks once.
+pub fn reset_with_scripts(doc: &mut Document, names: Option<&[String]>, scripts: &mut dyn Scripts) -> Result<(usize, usize), FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
@@ -872,7 +877,7 @@ pub fn reset_with_counts(doc: &mut Document, names: Option<&[String]>) -> Result
         write_value(doc, &tmp, &v, &mut NoScripts)?;
         changed += 1;
     }
-    let recalculated = recalculate(doc)?;
+    let recalculated = recalculate_with(doc, scripts)?;
     Ok((changed, recalculated))
 }
 

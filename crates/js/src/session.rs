@@ -52,6 +52,37 @@ impl ScriptSession {
     /// Invalidate icon handles after restoring an earlier PDF object graph.
     pub fn retire_icon_handles(&mut self) {
         self.icon_epoch = self.icon_epoch.wrapping_add(1);
+        self.icon_versions = Default::default();
+        self.icon_tracking_overflowed = false;
+    }
+
+    /// Invalidate only the recorded references that changed in a history step.
+    pub fn retire_changed_icons(&mut self, mut changed: impl FnMut(u64) -> bool) {
+        if self.icon_tracking_overflowed {
+            self.retire_icon_handles();
+            return;
+        }
+        for (id, version) in Arc::make_mut(&mut self.icon_versions) {
+            if changed(*id) {
+                *version = version.wrapping_add(1);
+            }
+        }
+    }
+
+    fn stamp_icons(&mut self, job: &mut Job) {
+        const MAX_TRACKED_ICONS: usize = 16_384;
+        for id in job.fields.iter().filter_map(|field| field.icon) {
+            if self.icon_versions.contains_key(&id) {
+                continue;
+            }
+            if self.icon_versions.len() == MAX_TRACKED_ICONS {
+                self.retire_icon_handles();
+                self.icon_tracking_overflowed = true;
+            }
+            Arc::make_mut(&mut self.icon_versions).insert(id, 0);
+        }
+        job.doc.icon_epoch = self.icon_epoch;
+        job.doc.icon_versions = self.icon_versions.clone();
     }
 }
 /// Boa context and initialization sources retained by exactly one open-document runtime.
@@ -225,6 +256,8 @@ pub struct ScriptSession {
     worker_lifetime: std::sync::Weak<()>,
     instances: FieldInstances,
     icon_epoch: u64,
+    icon_versions: Arc<std::collections::BTreeMap<u64, u64>>,
+    icon_tracking_overflowed: bool,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl ScriptSession {
@@ -268,7 +301,7 @@ impl ScriptSession {
             return Err("another script is active in this document".into());
         }
         self.instances.stamp(&mut job);
-        job.doc.icon_epoch = self.icon_epoch;
+        self.stamp_icons(&mut job);
         let (tx, rx) = mpsc::channel();
         let Some(sender) = self.sender.as_ref() else {
             self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -292,6 +325,13 @@ impl ScriptSession {
     pub fn retire_timed_out_worker(&mut self) {
         self.sender = None;
         self.acknowledge_completion();
+    }
+
+    /// Drop state from callbacks belonging to a rejected PDF edit.
+    pub fn reset_after_refusal(&mut self) {
+        if self.sender.is_some() || self.worker_lifetime.upgrade().is_none() {
+            *self = Self::default();
+        }
     }
 
     /// Run a job with one total deadline, discarding its entire realm when the host times out.
@@ -347,20 +387,33 @@ pub struct ScriptSession {
     realm: Realm,
     instances: FieldInstances,
     icon_epoch: u64,
+    icon_versions: Arc<std::collections::BTreeMap<u64, u64>>,
+    icon_tracking_overflowed: bool,
 }
 #[cfg(target_arch = "wasm32")]
 impl Default for ScriptSession {
     /// Create the web runtime without native worker threads or a native prompt host.
     fn default() -> Self {
-        Self { realm: Realm::new(), instances: FieldInstances::default(), icon_epoch: 0 }
+        Self {
+            realm: Realm::new(),
+            instances: FieldInstances::default(),
+            icon_epoch: 0,
+            icon_versions: Default::default(),
+            icon_tracking_overflowed: false,
+        }
     }
 }
 #[cfg(target_arch = "wasm32")]
 impl ScriptSession {
+    /// Drop state from callbacks belonging to a rejected PDF edit.
+    pub fn reset_after_refusal(&mut self) {
+        *self = Self::default();
+    }
+
     /// Run in the web-local realm; native prompt replies are unavailable on this host.
     pub fn run(&mut self, mut job: Job, _answers: &[Option<String>]) -> Outcome {
         self.instances.stamp(&mut job);
-        job.doc.icon_epoch = self.icon_epoch;
+        self.stamp_icons(&mut job);
         self.realm.run(job)
     }
 }
@@ -646,7 +699,9 @@ mod tests {
         assert_eq!(session.run(capture.clone(), &[]).error, None);
         capture.script = "getField('go').buttonSetIcon(oldIcon);".into();
         assert_eq!(session.run(capture.clone(), &[]).error, None);
-        session.retire_icon_handles();
+        session.retire_changed_icons(|id| id == 18);
+        assert_eq!(session.run(capture.clone(), &[]).error, None);
+        session.retire_changed_icons(|id| id == 17);
         assert!(session.run(capture.clone(), &[]).error.is_some());
         capture.script = "buffer;".into();
         assert_eq!(session.run(capture, &[]).result.as_deref(), Some("retained"));

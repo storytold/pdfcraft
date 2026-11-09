@@ -450,6 +450,7 @@ struct Runner<'a, 'b> {
     /// Field values to write, by name (the last wins).
     field_changes: std::collections::BTreeMap<String, Vec<String>>,
     by_som: Option<HashMap<String, String>>,
+    objects_by_som: HashMap<String, pdfcraft_cos::ObjRef>,
     /// Widget names by the data node they bind to (built with `by_som`).
     by_path: Option<HashMap<pdfcraft_xfa::DataPath, Vec<String>>>,
     fields: Option<HashMap<String, FieldInfo>>,
@@ -497,6 +498,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             pending: Vec::new(),
             field_changes: Default::default(),
             by_som: None,
+            objects_by_som: HashMap::new(),
             by_path: None,
             fields: None,
             cached: None,
@@ -558,7 +560,12 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     fn by_som(&mut self) -> &HashMap<String, String> {
         if self.by_som.is_none() {
-            let by_som = pdfcraft_xfa::fields_by_som(self.doc);
+            let mut by_som = HashMap::new();
+            self.objects_by_som.clear();
+            for (som, (name, object)) in pdfcraft_xfa::field_objects_by_som(self.doc) {
+                self.objects_by_som.insert(som.clone(), object);
+                by_som.insert(som, name);
+            }
             let mut by_path: HashMap<pdfcraft_xfa::DataPath, Vec<String>> = HashMap::new();
             for (som, name) in &by_som {
                 by_path.entry(pdfcraft_xfa::data_path(self.tpl, som)).or_default().push(name.clone());
@@ -913,7 +920,11 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
                     if let Some(name) = self.by_som().get(som).cloned() {
-                        self.run.out.requests.push(Request::Focus(name));
+                        let object = self.objects_by_som.get(som).copied();
+                        self.run.out.requests.push(match object {
+                            Some(object) => Request::FocusField { name, object_id: crate::js::field_object_id(object) },
+                            None => Request::Focus(name),
+                        });
                     }
                 }
                 XfaEffect::Beep => self.run.out.requests.push(Request::Beep),

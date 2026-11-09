@@ -165,6 +165,8 @@ impl Event {
 pub struct DocInfo {
     /// Changes when history can replace an icon object under the same PDF reference.
     pub icon_epoch: u64,
+    /// Revisions of referenced icons that can change independently across history.
+    pub icon_versions: std::sync::Arc<std::collections::BTreeMap<u64, u64>>,
     pub file_name: String,
     pub num_pages: usize,
     /// The current page, 0-based.

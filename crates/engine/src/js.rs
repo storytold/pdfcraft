@@ -467,6 +467,7 @@ impl JsRunner {
             zoom: 100.0,
             runtime_highlight: highlight,
             icon_epoch: 0,
+            icon_versions: Default::default(),
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
@@ -546,8 +547,8 @@ impl Scripts for JsRunner {
             Err(_) => Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() },
         };
         self.output.absorb(&o);
-        if o.execution_refused {
-            self.refused = o.error.clone();
+        if o.execution_refused || o.reset_limit_exceeded || o.calculation_limit_exceeded {
+            self.refused = Some(o.error.clone().unwrap_or_else(|| "form script exceeded its execution budget".into()));
         }
         if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
@@ -1302,6 +1303,8 @@ impl Session {
             && let Ok(mut runtime) = p.runtime.lock()
         {
             runtime.retire_timed_out_worker();
+        } else {
+            self.discard_javascript(&p);
         }
     }
 

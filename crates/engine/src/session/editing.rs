@@ -19,12 +19,29 @@ fn deletes_pages(edit: &Edit) -> bool {
 
 /// Keep edits to the working copy until both the operation and its script callbacks succeed.
 fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
-    guard(|| run_edit(next, edit, cx))
-        .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+    let result = guard(|| run_edit(next, edit, cx))
+        .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
     if let Some(reason) = cx.js.as_mut().and_then(|runner| runner.refused.take()) {
+        if let Some(runner) = cx.js.as_ref()
+            && let Ok(mut runtime) = runner.runtime.lock()
+        {
+            runtime.reset_after_refusal();
+        }
         return Err(EditError::Invalid(reason));
     }
-    Ok(())
+    result
+}
+
+fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Document) {
+    if let Ok(mut runtime) = doc.js_runtime.lock() {
+        runtime.retire_changed_icons(|id| {
+            let object = pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16);
+            let before = previous.get(object);
+            let after = restored.get(object);
+            !Arc::ptr_eq(&before, &after) && before != after
+        });
+        runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+    }
 }
 
 impl Session {
@@ -321,9 +338,10 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
-        if let Ok(mut runtime) = doc.js_runtime.lock() {
-            runtime.retire_icon_handles();
-            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        if let Some(editor) = doc.editor.as_ref()
+            && let Some((_, previous, _, _)) = editor.redo.last()
+        {
+            sync_script_history(doc, previous, &editor.cos);
         }
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
         doc.xfa_exited.clear();
@@ -357,9 +375,10 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
-        if let Ok(mut runtime) = doc.js_runtime.lock() {
-            runtime.retire_icon_handles();
-            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        if let Some(editor) = doc.editor.as_ref()
+            && let Some((_, previous, _, _)) = editor.undo.last()
+        {
+            sync_script_history(doc, previous, &editor.cos);
         }
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
         doc.xfa_exited.clear();
