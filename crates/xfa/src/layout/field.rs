@@ -55,7 +55,7 @@ impl Layouter<'_> {
         {
             let font = fctx.font.apply(&cap.font);
             let para = ctx.para.apply(&cap.para);
-            self.draw_value_text(&cap.value, cr, &font, &para)?;
+            self.draw_value_text(&cap.value, cr, &font, &para, &ctx.som)?;
         }
         let som_path = || {
             if fctx.som.is_empty() {
@@ -115,7 +115,7 @@ impl Layouter<'_> {
                 if !value.trim().is_empty() {
                     let mut para = fctx.para.clone();
                     para.h_align = HAlign::Center;
-                    self.draw_value_text(&Value::Text(value), ui.inset(&f.ui_margin), &fctx.font, &para)?;
+                    self.draw_value_text(&Value::Text(value), ui.inset(&f.ui_margin), &fctx.font, &para, &fctx.som)?;
                 }
                 return Ok(());
             }
@@ -123,7 +123,7 @@ impl Layouter<'_> {
         }
         if f.access == Access::NonInteractive && f.ui != Ui::Button {
             // Shown as text, not as a field.
-            return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para);
+            return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.

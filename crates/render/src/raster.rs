@@ -83,6 +83,14 @@ pub struct RenderConfig {
     /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
     /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
     pub system_fonts: bool,
+    /// Steps of JBIG2 decoding a render may take across the page's images, instead of the usual
+    /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
+    /// be decoded.
+    pub jbig2_work: Option<u64>,
+    /// Layer visibility overrides for print-preview rasters ([`PRINT_TAG`]), when the document
+    /// prints its layers differently from how they are shown (the Print event's auto state, ISO
+    /// 32000-2 §8.11.4.4): the preview shows the page as it prints. `None`: previews use `layers`.
+    pub print_layers: Option<Arc<Vec<(i32, i32, bool)>>>,
 }
 
 impl RenderConfig {
@@ -100,7 +108,8 @@ impl RenderConfig {
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
-        let standard = InterpreterSettings::default().font_resolver;
+        let defaults = InterpreterSettings::default();
+        let standard = defaults.font_resolver.clone();
         let system_fonts = self.system_fonts;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
@@ -108,7 +117,8 @@ impl RenderConfig {
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
-            ..InterpreterSettings::default()
+            jbig2_work: self.jbig2_work.unwrap_or(defaults.jbig2_work),
+            ..defaults
         }
     }
 }
@@ -349,16 +359,20 @@ fn render_page<'a>(
     config: &RenderConfig,
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
-    // Print previews share the viewer pool, but must use the output font policy. Keep the
-    // caller's cancellation/warning hooks, layers and annotation settings. A fresh cache is
-    // essential: hayro keys cached fonts by PDF dictionary, not by the font resolver, so the
-    // viewer cache could supply an installed face even after changing the resolver (and a
-    // cached missing font from print preview could blank the viewer on switching back).
+    // Print previews share the viewer pool, but must use the output font policy and the layers
+    // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
+    // settings. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
+    // font resolver, so the viewer cache could supply an installed face even after changing the
+    // resolver (and a cached missing font from print preview could blank the viewer on switching
+    // back); nothing drawn with the viewer's layers is reused either.
     let print_settings;
     let print_cache;
-    let (settings, cache) = if config.system_fonts && req.tag & PRINT_TAG != 0 {
+    let print = req.tag & PRINT_TAG != 0;
+    let print_layers = config.print_layers.as_ref().filter(|_| print);
+    let (settings, cache) = if (config.system_fonts && print) || print_layers.is_some() {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
+            ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
             ..settings.clone()
         };
         print_cache = RenderCache::new();
@@ -402,6 +416,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    ..Default::default()
                 }
             }
             None => {

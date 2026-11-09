@@ -32,7 +32,13 @@ that warning and keeps the existing layout and accepted widget values.
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers;
+  table in an area) alike; fields that compute the page number or count on layout show the numbers,
+  and so do those that compute the sheet number (`sheet(this)+1`) or count, a sheet being a page on
+  screen; an embedded (floating) field shows its value from the data, which is where a script's
+  value goes (a repeating row's own instance, a page area's field under the area, a multi-select
+  list's picks, a date in its display picture), and an event, reset (a hidden one without a
+  widget included), typed value or pick that changes one lays the form out again;
+  a field inside an exclusion group is not shown yet;
   a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
   of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
   field, a subform or a draw in a flow doesn't turn. A
@@ -115,7 +121,8 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   not locale-aware pictures beyond simple number and date ones, or `Get`/`Post`/`Put` (refused).
   The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
-  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
+  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page and sheet numbers,
+  `xfa.event`);
   not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties
   (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
   Validate failures show their message and keep the value, as Acrobat does for scripts.
