@@ -360,7 +360,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bo
 
 /// A finished text selection with the Redact tool becomes a mark.
 pub(crate) fn after_text(resp: &egui::Response, page: usize, info: &DocInfo, view: &mut DocView) {
-    if !(resp.drag_stopped() || resp.double_clicked()) || view.redact_drag.is_some() {
+    if !(resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked()) || view.redact_drag.is_some() {
         return;
     }
     if let Some((p, quads)) = view.selection_quads(info).filter(|(p, _)| *p == page) {
