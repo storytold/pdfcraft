@@ -1,4 +1,6 @@
 use super::{PdfCraftApp, StagingName, staging_suffixes};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 
 /// A save held back by [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged): the file
 /// on disk is another version than the document came from (#2166).
@@ -48,6 +50,21 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
+        // After Apply redactions, Save asks where and proposes the name with `_Redacted`.
+        // In the web build a delivered step stays counted, so only the steps applied since the
+        // last delivery make Save ask where.
+        let redacted = self.views.get(index).is_some_and(|v| v.redactions_applied > 0);
+        let not_delivered = self.views.get(index).is_some_and(|v| v.redactions_applied > v.redactions_downloaded);
+        let name = if redacted { pdfcraft_engine::redacted_file_name(&name) } else { name };
+        // Undo past a saved Apply redactions brings back content that the file on disk has
+        // redacted: ask where instead of writing it over that file. In the web build a delivered
+        // step stays counted in `redactions_applied`, so fewer steps than were delivered means one
+        // was undone.
+        let unredacted = self.views.get(index).is_some_and(restores_saved_redactions);
+        // The restored content is not a redacted copy: propose the name without `_Redacted`, so
+        // the dialog's default is not the redacted file.
+        let name = if unredacted && !redacted { unredacted_file_name(&name) } else { name };
+        let target = if not_delivered || unredacted { SaveTarget::As } else { target };
         #[cfg(not(target_arch = "wasm32"))]
         {
             let doc_path = path.clone();
@@ -55,13 +72,23 @@ impl PdfCraftApp {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
                 // document (`is_mail_temp_copy`).
-                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
+                // Neither is a path read back from a recovery sidecar until a save confirms it:
+                // anyone who can write the recovery folder can name any file there (#3923).
+                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) && !self.recovered_paths.contains(&id) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
-                    let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
+                    let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(name);
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
+                        // An Apply redactions or an Undo of one while the dialog was open makes the
+                        // name it proposed wrong: ask again with the name for the current content.
+                        let asked = (redacted, unredacted);
+                        let changed = |v: &crate::DocView| v.id == id && (v.redactions_applied > 0, restores_saved_redactions(v)) != asked;
+                        if let Some(index) = app.views.iter().position(changed) {
+                            app.save_then(index, SaveTarget::As, after);
+                            return;
+                        }
                         app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
                     });
                     return false;
@@ -96,6 +123,9 @@ impl PdfCraftApp {
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
+                        // `redactions_applied` stays set: the document keeps its name here, so
+                        // later downloads are named after the redacted copy too.
+                        view.redactions_downloaded = view.redactions_applied;
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
@@ -162,11 +192,12 @@ impl PdfCraftApp {
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
+        let recovered = self.recovered_paths.contains(&id);
         let Some((name, full)) = self.session.get(id).map(|d| {
-            // Save As to another file is a clean copy, without the earlier revisions that still
-            // hold deleted pages or replaced text (#2165). A signed document stays incremental so
-            // its signatures keep covering the file.
-            let full = target == SaveTarget::As
+            // Save As to another file and a recovered document are clean copies, without earlier
+            // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
+            // document stays incremental so its signatures keep covering the file.
+            let full = (target == SaveTarget::As || recovered)
                 && !d.path.as_deref().is_some_and(|p| crate::same_file(p, dest))
                 && d.read_only_reason.is_none()
                 && !d.is_signed();
@@ -192,12 +223,18 @@ impl PdfCraftApp {
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
+                // The tab in use: `sync_views` brings any other tab of the document up to date.
                 if let Some(doc) = self.session.get(id)
-                    && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+                    && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
                 {
                     view.document_changed(&doc.info);
-                    // Saving over a version that changed on disk keeps this one: nothing to ask.
+                }
+                // Saving over a version that changed on disk keeps this one: nothing to ask.
+                for view in self.views.iter_mut().filter(|v| v.id == id) {
                     view.disk_changed = false;
+                    view.redactions_applied = 0;
+                    view.redactions_undone_after_save = 0;
+                    view.saved_redactions_cut_off = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]
@@ -234,6 +271,27 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
         || in_outlook_cache("/temporary internet files/content.outlook/")
         || p.contains("/packages/microsoft.outlookforwindows_")
         || p.contains("/library/containers/com.apple.mail/data/library/mail downloads/")
+}
+
+/// Whether `view` holds content that a saved or delivered Apply redactions removed: a saved step
+/// is undone, cannot be redone, or (in the web build) fewer steps are in effect than were
+/// delivered.
+fn restores_saved_redactions(view: &crate::DocView) -> bool {
+    view.redactions_undone_after_save > 0 || view.saved_redactions_cut_off || view.redactions_applied < view.redactions_downloaded
+}
+
+/// `name` without the `_Redacted` that [`pdfcraft_engine::redacted_file_name`] adds before the
+/// extension ("contract_Redacted.pdf" gives "contract.pdf"). Any other name is returned as it is.
+pub(crate) fn unredacted_file_name(name: &str) -> String {
+    let cut = name.len().saturating_sub(4);
+    let (stem, ext) = match (name.get(..cut), name.get(cut..)) {
+        (Some(stem), Some(ext)) if ext.eq_ignore_ascii_case(".pdf") => (stem, ext),
+        _ => (name, ""),
+    };
+    match stem.strip_suffix("_Redacted") {
+        Some(base) if !base.is_empty() => format!("{base}{ext}"),
+        _ => name.to_string(),
+    }
 }
 
 /// The folder a Save As style dialog should open in for a document stored at `path`: the

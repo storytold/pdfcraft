@@ -14,7 +14,7 @@ use std::sync::Arc;
 use base64::Engine;
 
 use crate::XfaError;
-use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
+use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
     Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
@@ -44,6 +44,15 @@ const MAX_DEPTH: usize = 64;
 /// Most size measurements of one layout. Measurements of containers are memoized, so a real
 /// form stays far below this; it bounds the work a hostile template can cause.
 const MAX_MEASURES: usize = 2_000_000;
+/// Most characters the draw phase lays out in one layout, each pass counted. A draw re-measures
+/// overflowing text up to six times to shrink it, and a repeating subform draws its text once
+/// per instance, so large text drawn many times would otherwise cost seconds; a real form's
+/// draws stay far below this. Reduced under test so the guard is exercised without laying out
+/// hundreds of megabytes of text.
+#[cfg(not(test))]
+const MAX_DRAW_CHARS: usize = 256 << 20;
+#[cfg(test)]
+const MAX_DRAW_CHARS: usize = 1 << 20;
 /// Most initial instances of one repeating subform.
 const MAX_INSTANCES: usize = 50;
 /// Largest picture taken from the data (decoded bytes), as for template pictures.
@@ -120,6 +129,10 @@ struct Frame {
     /// the area's bottom (a table row taller than an area, an overflow leader and the row after it
     /// that don't fit together). The border is left out ([`Layouter::finish_frame`]).
     lost: bool,
+    /// A piece of a field being split sits in the part on this content area, whether or not it
+    /// drew anything there (a widget with no border or fill draws nothing below the break): the
+    /// part counts as holding something, as one that got items does.
+    held: bool,
 }
 
 impl Frame {
@@ -144,6 +157,15 @@ struct Cursor {
     placed: bool,
 }
 
+/// An empty field a page break is splitting ([`Layouter::splitting`]): its widget's SOM path, its
+/// box where it was drawn, and its pieces so far (page index, the page's first item of the piece,
+/// the piece's box).
+struct Splitting {
+    som: String,
+    rect: Rect,
+    pieces: Vec<(usize, usize, Rect)>,
+}
+
 struct Layouter<'t> {
     tpl: &'t Template,
     data: Option<&'t DataNode>,
@@ -158,7 +180,7 @@ struct Layouter<'t> {
     /// Only names touched on this page, including reservations that emitted no widget.
     page_names: HashMap<String, Option<usize>>,
     /// Field values by `id`, for embedded fields in rich text.
-    values: HashMap<String, String>,
+    values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
     warned: HashSet<String>,
     fields: usize,
@@ -170,9 +192,15 @@ struct Layouter<'t> {
     measured: RefCell<HashMap<MeasureKey, Measured>>,
     /// Measurements made so far (see [`MAX_MEASURES`]).
     measures: Cell<usize>,
+    /// Characters the draw phase has laid out, each pass counted (see [`MAX_DRAW_CHARS`]).
+    drawn_chars: Cell<usize>,
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// The empty field a page break is splitting (see `flow_block` and `split_block`).
+    splitting: Option<Splitting>,
+    /// The items `draw_field` drew for the border of the field drawn last: (first, one past the last).
+    field_border: Option<(usize, usize)>,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -207,10 +235,9 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             occur_min: 0,
         }],
     };
-    let mut values = HashMap::new();
+    let values = collect_values(tpl, data);
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
-    collect_values(std::slice::from_ref(&root_node), &mut values, 0);
     let mut l = Layouter {
         tpl,
         data,
@@ -229,7 +256,10 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         image_bytes: 0,
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
+        drawn_chars: Cell::new(0),
         leaves: Vec::new(),
+        splitting: None,
+        field_border: None,
         frames: Vec::new(),
         preferred_area: None,
         preferred_epoch: 0,
@@ -246,6 +276,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     for p in &mut l.pages {
         fill_page_count(&mut p.items, &count);
     }
+    #[cfg(test)]
+    LAID_OUT_ITEMS.with(|c| c.set(l.items));
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
 }
 
@@ -264,4 +296,10 @@ fn fill_page_count(items: &mut [Item], count: &str) {
 #[cfg(test)]
 thread_local! {
     pub(crate) static EMBED_COPIED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// The item count the last layout on this thread ended with, against `MAX_ITEMS`.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LAID_OUT_ITEMS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

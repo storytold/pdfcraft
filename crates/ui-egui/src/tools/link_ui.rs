@@ -3,15 +3,18 @@
 //! their outlines, a click selects one, a double-click edits it and Delete removes it.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
-use pdfcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle, LinkZoom};
+use pdfcraft_render::{DocInfo, LinkTarget};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner};
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, QuickTool, widgets};
 
 const LINK_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// How far around a link (screen points) the Link tool finds it, so a thin one can be picked.
+const LINK_TOOL_MARGIN: f32 = 2.0;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LinkView {
@@ -43,10 +46,53 @@ pub struct LinkDraft {
     pub url: String,
     /// 1-based target page.
     pub target: usize,
+    /// How the target page is shown.
+    pub zoom: LinkZoom,
+    /// The link's action when the dialog opened (`None` for a new link). OK rewrites the action
+    /// only when it changed, so an appearance edit keeps a destination's position and kind
+    /// (`/XYZ left top`, `/FitR`…) that the dialog doesn't show.
+    pub current: Option<LinkAction>,
     pub style: LinkStyle,
 }
 
-pub(crate) fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
+/// The zooms Link Properties offers for a page view.
+const ZOOMS: [LinkZoom; 12] = [
+    LinkZoom::FitPage,
+    LinkZoom::FitWidth,
+    LinkZoom::FitHeight,
+    LinkZoom::FitVisible,
+    LinkZoom::Percent(100.0),
+    LinkZoom::Inherit,
+    LinkZoom::Percent(50.0),
+    LinkZoom::Percent(75.0),
+    LinkZoom::Percent(125.0),
+    LinkZoom::Percent(150.0),
+    LinkZoom::Percent(200.0),
+    LinkZoom::Percent(400.0),
+];
+
+fn zoom_label(zoom: LinkZoom) -> String {
+    match zoom {
+        LinkZoom::FitPage => tl!("Fit Page").to_string(),
+        LinkZoom::FitWidth => tl!("Fit Width").to_string(),
+        LinkZoom::FitHeight => tl!("Fit Height").to_string(),
+        LinkZoom::FitVisible => tl!("Fit Visible").to_string(),
+        LinkZoom::Inherit => tl!("Inherit Zoom").to_string(),
+        LinkZoom::Percent(p) if (p - 100.0).abs() < 1e-9 => tl!("Actual Size").to_string(),
+        // Another writer's factor can be anything up to f64::MAX, or a tiny fraction: exponent
+        // form keeps it short.
+        LinkZoom::Percent(p) if !(0.01..1e6).contains(&p) => format!("{p:.1e}%"),
+        // A fractional one (another writer's 0.5% or 62.5%) shows up to two places, so it agrees
+        // with what link_list reports instead of rounding to 0%.
+        LinkZoom::Percent(p) if p.fract() != 0.0 => {
+            let places = format!("{p:.2}");
+            format!("{}%", places.trim_end_matches('0').trim_end_matches('.'))
+        }
+        LinkZoom::Percent(p) => format!("{p:.0}%"),
+    }
+}
+
+fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     xf.user_rect(info, page, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
 }
 
@@ -56,8 +102,45 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     [u[0] as f64, u[1] as f64]
 }
 
-/// Link tool input on one page. Returns `true` when the gesture belongs to the tool.
-pub(crate) fn page_input(cx: PageToolContext<'_>, links: &[LinkItem], view: &mut DocView) -> bool {
+/// The link under `p` on `page`: the one hit test of links, for the hand, the tip and the press.
+/// Of stacked links, the topmost (the last in `/Annots`, drawn on top). Only the Select tool
+/// follows links and the Link tool edits them (`Layer::reached_by`). The Link tool finds every link
+/// the document has (`links`, the engine's), with a margin around each so a thin one can be
+/// picked, and a drag from one draws a new link. The other tools find the links the renderer can
+/// follow, which have a target (`info.links`). The tip is the link's target.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem], tool: QuickTool, p: Pos2) -> Option<Hit> {
+    // A press off the page is no page's, so nothing there is a link's, the margin included.
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (index, link) = if tool == QuickTool::Link {
+        let index = links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index;
+        (index, info.links.iter().find(|l| l.page == page && l.index == index))
+    } else {
+        let link = info.links.iter().rfind(|l| l.page == page && xf.link_contains(info, page, l, p))?;
+        (link.index, Some(link))
+    };
+    let tip = link.map(|l| target_label(info, &l.target));
+    let declines_drag = tool == QuickTool::Link;
+    Some(Hit { tip, declines_drag, ..Hit::new(Owner::Link { index }, Layer::Link, egui::CursorIcon::PointingHand) })
+}
+
+/// What a link's tip says it goes to.
+fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
+    match target {
+        LinkTarget::Page(n, _) => crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))]),
+        LinkTarget::Uri(u) => u.clone(),
+        LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
+        LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+    }
+}
+
+/// Link tool input on one page: `free` when nobody holds the press and it began on this page,
+/// `owner` the link that holds it (by its `/Annots` index), and `context` the link a right-click is
+/// on. A drag nobody holds draws a new link: a link lets its drag go. Returns `true` when the
+/// gesture belongs to the tool.
+pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usize>, context: Option<usize>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     let lv = &mut view.links;
@@ -75,34 +158,37 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, links: &[LinkItem], view: &mut
         }
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
-    let hit = links.iter().filter(|l| l.page == page).find(|l| screen_rect(xf, info, page, l.rect).expand(2.0).contains(p));
-    match hit {
-        Some(_) => view.cursor.claim(Layer::Link, egui::CursorIcon::PointingHand),
-        None => view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair),
-    }
-    if resp.secondary_clicked()
-        && let Some(l) = hit
+    // A drag that nobody holds (a link's hit lets its drag go, `PageRouter::drag_began`) draws a
+    // new link from where its press began on this page. egui may see the drag only once the pointer
+    // is past the page's edge.
+    if ptr.drag_started
+        && free
+        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {
-        lv.selected = Some((page, l.index));
-        lv.context = Some((page, l.index));
+        lv.drag = Some((page, origin));
         return true;
     }
-    if resp.clicked() || resp.double_clicked() {
+    if !pointer.is_some_and(|p| xf.rect.contains(p)) {
+        return false;
+    }
+    // Over a link, its hit claims the hand.
+    view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+    if let Some(index) = context {
+        lv.selected = Some((page, index));
+        lv.context = Some((page, index));
+        return true;
+    }
+    // The tool's own click: on a link, or one nobody holds.
+    if (resp.clicked() || resp.double_clicked()) && (free || owner.is_some()) {
         let now = ui.input(|i| i.time);
         // A second click on the same link soon after the first is a double-click.
-        let double = resp.double_clicked() || hit.is_some_and(|l| lv.last_click.is_some_and(|(t, p, k)| p == page && k == l.index && now - t < 0.5));
-        lv.last_click = hit.map(|l| (now, page, l.index));
-        lv.selected = hit.map(|l| (page, l.index));
-        if double && let Some(l) = hit {
-            lv.open_existing = Some((page, l.index));
+        let double = resp.double_clicked() || owner.is_some_and(|k| lv.last_click.is_some_and(|(t, p, l)| p == page && l == k && now - t < 0.5));
+        lv.last_click = owner.map(|k| (now, page, k));
+        lv.selected = owner.map(|k| (page, k));
+        if double && let Some(k) = owner {
+            lv.open_existing = Some((page, k));
             lv.last_click = None;
         }
-        return true;
-    }
-    if resp.drag_started() {
-        let origin = ptr.origin.unwrap_or(p);
-        lv.drag = Some((page, origin));
         return true;
     }
     resp.is_pointer_button_down_on()
@@ -159,9 +245,14 @@ impl PdfCraftApp {
                     _ => "https://".into(),
                 },
                 target: match l.action {
-                    LinkAction::Page(p) => p + 1,
+                    LinkAction::Page { page, .. } => page + 1,
                     _ => 1,
                 },
+                zoom: match l.action {
+                    LinkAction::Page { zoom, .. } => zoom,
+                    _ => LinkZoom::FitPage,
+                },
+                current: Some(l.action.clone()),
                 style: l.style,
             },
             None => LinkDraft {
@@ -172,6 +263,8 @@ impl PdfCraftApp {
                 web: true,
                 url: "https://".into(),
                 target: 1,
+                zoom: LinkZoom::FitPage,
+                current: None,
                 style: LinkStyle::default(),
             },
         };
@@ -296,6 +389,19 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
                 ui.add(egui::DragValue::new(&mut d.target).range(1..=pages.max(1)));
                 ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &pages.to_string())]));
             });
+            ui.horizontal(|ui| {
+                ui.add_space(24.0);
+                let label = ui.label(tl!("Zoom"));
+                craft_ui::ComboBox::from_id_salt("link-zoom")
+                    .selected_text(zoom_label(d.zoom))
+                    .show_ui(ui, |ui| {
+                        for z in ZOOMS {
+                            ui.selectable_value(&mut d.zoom, z, zoom_label(z));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
         });
     }
     let ok = d.preserve_action || !d.web || (d.url.trim().len() > 3 && d.url.trim() != "https://");
@@ -315,21 +421,20 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
     (a, c)
 }
 
+/// The action a confirmed draft sets.
+fn action_for(d: &LinkDraft) -> LinkAction {
+    if d.web { LinkAction::Uri(d.url.trim().to_string()) } else { LinkAction::Page { page: d.target.saturating_sub(1), zoom: d.zoom } }
+}
+
 /// The edit for a confirmed draft.
 pub(crate) fn edit_for(d: &LinkDraft) -> Edit {
     match d.index {
-        None => Edit::AddLink {
-            page: d.page,
-            rect: d.rect,
-            action: if d.web { LinkAction::Uri(d.url.trim().to_string()) } else { LinkAction::Page(d.target.saturating_sub(1)) },
-            style: d.style,
-        },
+        None => Edit::AddLink { page: d.page, rect: d.rect, action: action_for(d), style: d.style },
         Some(index) => Edit::SetLink {
             page: d.page,
             index,
             rect: None,
-            action: (!d.preserve_action)
-                .then(|| if d.web { LinkAction::Uri(d.url.trim().to_string()) } else { LinkAction::Page(d.target.saturating_sub(1)) }),
+            action: (!d.preserve_action).then(|| action_for(d)).filter(|a| d.current.as_ref() != Some(a)),
             style: Some(d.style),
         },
     }
@@ -337,13 +442,54 @@ pub(crate) fn edit_for(d: &LinkDraft) -> Edit {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkDraft, edit_for};
-    use pdfcraft_engine::{Edit, LinkStyle};
+    use super::{LinkDraft, edit_for, zoom_label};
+    use pdfcraft_engine::{Edit, LinkAction, LinkStyle, LinkZoom};
+
+    fn draft(current: LinkAction) -> LinkDraft {
+        LinkDraft {
+            page: 0,
+            rect: [0.0; 4],
+            index: Some(3),
+            preserve_action: matches!(current, LinkAction::Other(_)),
+            web: false,
+            url: String::new(),
+            target: 1,
+            zoom: LinkZoom::FitPage,
+            current: Some(current),
+            style: LinkStyle::default(),
+        }
+    }
 
     #[test]
     fn appearance_edit_preserves_an_existing_unsupported_action() {
         let style = LinkStyle::default();
-        let draft = LinkDraft { page: 0, rect: [0.0; 4], index: Some(3), preserve_action: true, web: false, url: String::new(), target: 1, style };
+        let draft = draft(LinkAction::Other("named destination".into()));
         assert_eq!(edit_for(&draft), Edit::SetLink { page: 0, index: 3, rect: None, action: None, style: Some(style) });
+    }
+
+    #[test]
+    fn only_a_changed_destination_is_rewritten() {
+        // A page view the dialog shows as it is: OK leaves the destination (and its position) alone.
+        let mut d = draft(LinkAction::Page { page: 0, zoom: LinkZoom::Percent(200.0) });
+        d.zoom = LinkZoom::Percent(200.0);
+        assert!(matches!(edit_for(&d), Edit::SetLink { action: None, .. }));
+        d.zoom = LinkZoom::FitWidth;
+        assert!(matches!(edit_for(&d), Edit::SetLink { action: Some(LinkAction::Page { page: 0, zoom: LinkZoom::FitWidth }), .. }));
+        d.zoom = LinkZoom::Percent(200.0);
+        d.target = 2;
+        assert!(matches!(edit_for(&d), Edit::SetLink { action: Some(LinkAction::Page { page: 1, .. }), .. }));
+    }
+
+    #[test]
+    fn a_zoom_label_stays_short_for_any_factor() {
+        assert_eq!(zoom_label(LinkZoom::Percent(200.0)), "200%");
+        // The destination's own zoom, past what PdfCraft writes, is shown as it is.
+        assert_eq!(zoom_label(LinkZoom::Percent(10000.0)), "10000%");
+        assert_eq!(zoom_label(LinkZoom::Percent(f64::MAX)), "1.8e308%");
+        // A fractional zoom keeps its places instead of rounding to 0%.
+        assert_eq!(zoom_label(LinkZoom::Percent(0.5)), "0.5%");
+        assert_eq!(zoom_label(LinkZoom::Percent(62.5)), "62.5%");
+        assert_eq!(zoom_label(LinkZoom::Percent(33.333)), "33.33%");
+        assert_eq!(zoom_label(LinkZoom::Percent(0.001)), "1.0e-3%");
     }
 }
