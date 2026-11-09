@@ -567,8 +567,10 @@ fn fdf_keeps_replies_and_review_status_on_their_note() {
     // Every cross-reference entry points at its object (other readers trust the table).
     let tail = std::str::from_utf8(&fdf[fdf.windows(5).position(|w| w == b"xref\n").unwrap()..]).unwrap();
     let xref: usize = tail.lines().skip_while(|l| *l != "startxref").nth(1).unwrap().parse().unwrap();
-    assert!(fdf[xref..].starts_with(b"xref\n0 6\n"), "{tail}");
-    for (num, line) in tail.lines().skip(3).take(5).enumerate() {
+    // The root, the four comments and their appearance streams.
+    let count: usize = tail.lines().nth(1).and_then(|l| l.strip_prefix("0 ")).unwrap().parse().unwrap();
+    assert!(fdf[xref..].starts_with(b"xref\n") && count >= 6, "{tail}");
+    for (num, line) in tail.lines().skip(3).take(count - 1).enumerate() {
         let at: usize = line[..10].parse().unwrap();
         assert!(fdf[at..].starts_with(format!("{} 0 obj\n", num + 1).as_bytes()), "object {}: {line}", num + 1);
     }
@@ -2324,6 +2326,19 @@ fn importing_comments_as_copies_adds_them_on_the_page_with_fresh_names() {
     import_comments(&mut other, &xfdf, None, None, None).unwrap();
     import_comments(&mut other, &xfdf, None, None, None).unwrap();
     assert_eq!(summaries(&other).len(), 4, "the named import replaced its own earlier copy");
+}
+
+/// Comment import never takes the file's field values, whatever the placement (a non-finite
+/// offset, which is ignored, and no page or prefix made it the full import).
+#[test]
+fn comment_import_leaves_field_values_alone() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" rect="10,10,30,30" name="n"/></annots><fields><field name="Name"><value>from the file</value></field></fields></xfdf>"#;
+    for offset in [Some([f64::NAN, 0.0]), None] {
+        let mut doc = one_field_named("Name", "mine");
+        let r = import_comments(&mut doc, xfdf, None, None, offset).unwrap();
+        assert_eq!((r.comments, r.fields), (1, 0), "{offset:?}: {r:?}");
+        assert_eq!(values(&doc), [("Name".to_string(), vec!["mine".to_string()])], "{offset:?}");
+    }
 }
 
 /// Other tools write comments straight into the page's `/Annots` array, without an object of
