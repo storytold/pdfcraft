@@ -6,7 +6,10 @@
 //! information key maps to the XMP property PDF/A pairs it with (ISO 19005-1 §6.7.3, the same
 //! mapping `pdfcraft-preflight` writes): Title → `dc:title`, Author → `dc:creator`, Subject →
 //! `dc:description`, Keywords → `pdf:Keywords`, Creator → `xmp:CreatorTool`, Producer →
-//! `pdf:Producer`.
+//! `pdf:Producer`. A custom property (Document Properties ▸ Custom) is kept as `pdfx:<name>`, plain
+//! text in the `http://ns.adobe.com/pdfx/1.3/` schema where Acrobat keeps them, so tools that read
+//! XMP see it too; one whose name can't be an XML element name stays in `/Info` only, and a
+//! PDF/A packet gets no new one (see [`sync_info`]).
 //!
 //! The packet is edited as text, touching only the property that changed: everything else in it
 //! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
@@ -24,6 +27,8 @@ const MAX_XMP: usize = 16 << 20;
 const DC: &str = "http://purl.org/dc/elements/1.1/";
 const PDF: &str = "http://ns.adobe.com/pdf/1.3/";
 const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+/// Adobe's PDF extension schema: custom document properties, each under its own name.
+const PDFX: &str = "http://ns.adobe.com/pdfx/1.3/";
 
 /// How an XMP property holds its value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,26 +55,97 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 }
 
 /// After the information entry `key` became `value` (empty: removed), make the catalog's XMP
-/// packet say the same. Does nothing for keys XMP doesn't mirror, files without XMP, and packets
-/// that can't be edited safely.
+/// packet say the same: the standard keys' properties, and `pdfx:<key>` for a custom property.
+/// Does nothing for standard keys XMP doesn't mirror (the dates, Trapped), custom names that
+/// aren't XML names, files without XMP, and packets that can't be edited safely.
+///
+/// A custom property is left alone where `pdfx:` would not mean Adobe's schema (a packet binding
+/// the prefix to another namespace keeps its own property), and in a packet that declares PDF/A
+/// one is changed or removed where it stands but never added: PDF/A-1 to -3 allow a schema only
+/// when the packet describes it in an extension schema (ISO 19005-2 §6.6.2.3), so a new `pdfx:`
+/// property would end the file's conformance. `/Info` keeps it either way.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
-    let Some((name, ns, shape)) = property(key) else { return Ok(()) };
-    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
+    if let Some((name, ns, shape)) = property(key) {
+        return edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ());
+    }
+    if crate::STANDARD_INFO_KEYS.contains(&key) || !is_xml_name(key) {
+        return Ok(());
+    }
+    let name = format!("pdfx:{key}");
+    edit_packet(doc, |xmp| {
+        if binds_prefix_elsewhere(xmp, "pdfx", PDFX) {
+            return None;
+        }
+        // A declaration counts whatever its value says (CDATA, markup): it is the claim that matters.
+        if !has_property(xmp, &name) && has_property(xmp, "pdfaid:part") {
+            return None;
+        }
+        set_property(xmp, &name, PDFX, Shape::Text, value)
+    })
+    .map(|_| ())
+}
+
+/// Remove the `pdfx:` copies of the custom properties `keys` (see [`sync_info`]), unless the packet
+/// binds `pdfx` to another namespace, whose properties are its own; whether any was there.
+pub(crate) fn remove_custom_properties(doc: &mut Document, keys: &[&str]) -> Result<bool, OrganizeError> {
+    let names: Vec<String> = keys.iter().map(|k| format!("pdfx:{k}")).collect();
+    edit_packet(doc, |xmp| if binds_prefix_elsewhere(xmp, "pdfx", PDFX) { None } else { remove_all(xmp, &names) })
+}
+
+/// Whether `xmp` has the property `name`, as an element or an attribute, whatever its value.
+fn has_property(xmp: &str, name: &str) -> bool {
+    element_span(xmp, name).is_some() || attribute_span(xmp, name).is_some()
+}
+
+/// Whether `xmp` declares `prefix` for a namespace other than `ns` anywhere (`xmlns:pdfx="…"` on
+/// any element), so a property written with that prefix may belong to another schema. A
+/// declaration whose value never ends counts as another namespace.
+fn binds_prefix_elsewhere(xmp: &str, prefix: &str, ns: &str) -> bool {
+    let attr = format!("xmlns:{prefix}");
+    // Each declaration is read only up to its closing quote, and the first other value stops the
+    // search, so this is linear in the packet.
+    xmp.match_indices(&attr).any(|(i, _)| {
+        // `xmlns:pdfx` must end there (not `xmlns:pdfxid`), then `=` and a quoted value.
+        let Some(rest) = xmp.get(i + attr.len()..).and_then(|r| r.trim_start().strip_prefix('=')).map(str::trim_start) else {
+            return false;
+        };
+        let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { return false };
+        rest.get(1..).and_then(|v| v.get(..v.find(quote)?)).is_none_or(|value| value != ns)
+    })
+}
+
+/// Whether `name` can follow `pdfx:` in an element name: an XML name without a colon (XML 1.0
+/// §2.3 `NameStartChar` then `NameChar`s; Namespaces in XML `NCName`). Custom property names may
+/// hold characters XML names can't (`1st`, `Q&A`, `a:b`); those are not mirrored rather than
+/// written under an escaped name of our own.
+fn is_xml_name(name: &str) -> bool {
+    let start = |c: char| {
+        matches!(c,
+            'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}' | '\u{370}'..='\u{37D}'
+            | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}'
+            | '\u{3001}'..='\u{D7FF}' | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
+    };
+    let rest = |c: char| start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}');
+    let mut chars = name.chars();
+    chars.next().is_some_and(start) && chars.all(rest)
 }
 
 /// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
 /// was there.
 pub(crate) fn remove_properties(doc: &mut Document, names: &[&str]) -> Result<bool, OrganizeError> {
-    edit_packet(doc, |xmp| {
-        let mut out: Option<String> = None;
-        for name in names {
-            // Each removal shortens the packet, so this ends.
-            while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name, "", Shape::Text, "") {
-                out = Some(next);
-            }
+    edit_packet(doc, |xmp| remove_all(xmp, names))
+}
+
+/// `xmp` without any occurrence of the properties `names`; `None` when none was there.
+fn remove_all(xmp: &str, names: &[impl AsRef<str>]) -> Option<String> {
+    let mut out: Option<String> = None;
+    for name in names {
+        // Each removal shortens the packet, so this ends.
+        while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name.as_ref(), "", Shape::Text, "") {
+            out = Some(next);
         }
-        out
-    })
+    }
+    out
 }
 
 /// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files
@@ -430,6 +506,30 @@ mod tests {
         let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
         assert!(out.contains("<dc:titles>keep</dc:titles>") && out.contains("say dc:title=\"no\""), "{out}");
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title></rdf:Description>"), "{out}");
+    }
+
+    #[test]
+    fn only_names_an_element_can_have_are_mirrored() {
+        for name in ["Project", "_draft", "Größe", "a.b-c_1", "日本語", "x·y", "Ω"] {
+            assert!(is_xml_name(name), "{name}");
+        }
+        for name in ["", "1st", "-x", ".x", "·x", "a:b", "Q&A", "it's", "a\"b", "×x", "a b", "a=b", "x\u{FFFE}"] {
+            assert!(!is_xml_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_bound_to_another_namespace_is_found() {
+        for (xmp, other) in [
+            ("<d xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"/>", false),
+            ("<d xmlns:pdfx = 'http://ns.adobe.com/pdfx/1.3/'/><e xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\"/>", false),
+            ("<d xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"/><e xmlns:pdfx=\"http://www.npes.org/pdfx/ns/id/\"/>", true),
+            ("<d xmlns:pdfx='http://ns.adobe.com/pdfx/1.3", true),
+            ("<d xmlns:pdfx>", false),
+            ("", false),
+        ] {
+            assert_eq!(binds_prefix_elsewhere(xmp, "pdfx", PDFX), other, "{xmp}");
+        }
     }
 
     #[test]
