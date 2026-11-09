@@ -334,6 +334,7 @@ impl PdfCraftApp {
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
             printer_marks_draft: Default::default(),
+            convert_colours_draft: Default::default(),
             hairlines_draft: Default::default(),
         }
     }

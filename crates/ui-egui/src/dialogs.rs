@@ -10,6 +10,7 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
+pub(super) mod convert_colours_ui;
 pub(super) mod credits;
 pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
@@ -46,6 +47,7 @@ struct Pending {
     protect_now: bool,
     boxes_now: bool,
     printer_marks_now: bool,
+    colours_now: bool,
     fix_hairlines_now: bool,
     marks_now: bool,
     export_now: bool,
@@ -453,6 +455,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         Dialog::PrinterMarks => {
             let (go, cancel) = crate::printer_marks_ui::body(ui, app, &t);
             req.printer_marks_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::ConvertColours => {
+            let (go, cancel) = crate::convert_colours_ui::body(ui, app, &t);
+            req.colours_now = go;
             req.close = go || cancel;
             return false;
         }
@@ -1995,6 +2003,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     }
     if req.printer_marks_now {
         app.add_printer_marks();
+    }
+    if req.colours_now {
+        app.convert_colours();
     }
     if req.fix_hairlines_now {
         app.fix_hairlines();

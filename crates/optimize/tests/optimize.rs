@@ -4684,6 +4684,32 @@ fn dictionary_destinations_broken_named_destinations_and_both_dest_tables() {
     assert!(left_old.contains(b"old_ok") && !left_old.contains(b"broken_old"), "{left_old:?}");
 }
 
+/// Recolouring keeps a picture's soft mask, but not a picture whose mask has a `/Matte`: that is
+/// a colour in the picture's own space.
+#[test]
+fn recolouring_keeps_soft_masks_and_leaves_matted_pictures() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    use pdfcraft_optimize::{ImageTarget, recolour_image};
+    let mut doc = Document::new_empty();
+    let picture = |mask| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(1));
+        d.set(b"Height".to_vec(), Object::Int(1));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::flate(d, &[255, 0, 0])
+    };
+    let plain = doc.add(Object::Stream(Stream::flate(Dict::new(), &[128])));
+    let new = recolour_image(&doc, &picture(plain), ImageTarget::Gray).unwrap();
+    assert_eq!(new.dict.get(b"SMask"), Some(&Object::Ref(plain)));
+    let mut matted = Dict::new();
+    matted.set(b"Matte".to_vec(), Object::Array(vec![Object::Int(0); 3]));
+    let matted = doc.add(Object::Stream(Stream::flate(matted, &[128])));
+    assert!(recolour_image(&doc, &picture(matted), ImageTarget::Gray).is_none());
+}
+
 /// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.
 fn stencil(doc: &mut Document, w: u32, h: u32) -> ObjRef {
     let row = (w as usize).div_ceil(8);

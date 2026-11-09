@@ -66,8 +66,11 @@ pub use text::{
 };
 pub mod printer_marks;
 pub use printer_marks::{PrinterMarks, add_printer_marks};
+mod colour;
+pub mod convert_colours;
 pub mod hairlines;
 mod page_streams;
+pub use convert_colours::{ColourTarget, ConvertColours, Converted as ColoursConverted, ImageRecolour, convert_colours};
 pub use hairlines::{Fixed as HairlinesFixed, Hairlines, fix_hairlines};
 pub mod added;
 pub use added::{
