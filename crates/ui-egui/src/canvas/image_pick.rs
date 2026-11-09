@@ -204,9 +204,6 @@ impl PdfCraftApp {
         let copied = file.and_then(|(ext, bytes)| {
             let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
             self.put_file_on_clipboard(&name, &bytes)?;
-            if self.system_clipboard {
-                self.own_clipboard_text = None;
-            }
             self.last_copied_image = None;
             self.last_copied_file = Some((name, bytes));
             Ok(ext)
@@ -220,17 +217,19 @@ impl PdfCraftApp {
     /// Writes `bytes` to PdfCraft's private clipboard folder ([`clipboard_dir`]), replacing the
     /// previous copy, and puts that file on the system clipboard.
     #[cfg(not(target_arch = "wasm32"))]
-    fn put_file_on_clipboard(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+    fn put_file_on_clipboard(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         if !self.system_clipboard {
             return Ok(());
         }
-        let dir = clipboard_dir().ok_or("there is no folder for the copied file")?;
-        let path = write_clipboard_file(&dir, name, bytes)?;
-        crate::os_clipboard::with(|c| c.set().file_list(&[path])).map_err(|e| e.to_string())
+        self.put_on_system_clipboard(|| {
+            let dir = clipboard_dir().ok_or("there is no folder for the copied file")?;
+            let path = write_clipboard_file(&dir, name, bytes)?;
+            crate::os_clipboard::with(|c| c.set().file_list(&[path])).map_err(|e| e.to_string())
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn put_file_on_clipboard(&self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
+    fn put_file_on_clipboard(&mut self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
         if self.system_clipboard {
             return Err("the web version can't put files on the clipboard yet; use Save Image As".to_string());
         }

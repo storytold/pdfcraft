@@ -13,6 +13,23 @@ static LOCK: Mutex<()> = Mutex::new(());
 thread_local! {
     /// Test hook: how many times this thread has opened the system clipboard.
     static OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test hook: this thread's writes ([`PdfCraftApp::put_on_system_clipboard`]) succeed
+    /// without touching the system clipboard.
+    ///
+    /// [`PdfCraftApp::put_on_system_clipboard`]: crate::PdfCraftApp::put_on_system_clipboard
+    static FAKE_WRITES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes this thread's clipboard writes succeed without touching the system clipboard.
+#[cfg(test)]
+pub(crate) fn fake_writes() {
+    FAKE_WRITES.with(|fake| fake.set(true));
+}
+
+/// Whether this thread's clipboard writes are faked ([`fake_writes`]).
+#[cfg(test)]
+pub(crate) fn writes_faked() -> bool {
+    FAKE_WRITES.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has opened the system clipboard ([`with`]).

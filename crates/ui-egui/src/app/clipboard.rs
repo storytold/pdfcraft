@@ -216,6 +216,18 @@ impl PdfCraftApp {
         true
     }
 
+    /// Puts an image or a file on the system clipboard through arboard (`put`). It replaces the
+    /// text this window copied, so [`Self::own_clipboard_text`] is forgotten once `put` has
+    /// succeeded; a failed write leaves that text there.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn put_on_system_clipboard(&mut self, put: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        #[cfg(test)]
+        let put = || if crate::os_clipboard::writes_faked() { Ok(()) } else { put() };
+        put()?;
+        self.own_clipboard_text = None;
+        Ok(())
+    }
+
     /// Keeps [`Self::own_clipboard_text`] up to date at the end of a frame: the text this frame
     /// copied through egui (the last copy wins), while the window has focus. A copy made without
     /// focus may not take (Wayland refuses the claim) and is not remembered. A focus loss forgets
@@ -485,7 +497,8 @@ mod review_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod own_clipboard_tests {
     use super::*;
 
@@ -571,5 +584,67 @@ mod own_clipboard_tests {
         assert_eq!(app.own_clipboard_text, None);
         frame(&mut app, &ctx, true, None);
         assert_eq!(app.own_clipboard_text, None, "nor once the window is back");
+    }
+
+    /// A focused blank document with one picture on page 1 that remembers copied text, whose
+    /// clipboard writes on this thread succeed without touching the system clipboard.
+    fn app_with_picture_and_copied_text() -> PdfCraftApp {
+        crate::os_clipboard::fake_writes();
+        let mut app = PdfCraftApp::new();
+        app.system_clipboard = true;
+        app.create_blank();
+        let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
+        app.add_image("picture.png".into(), png);
+        app.own_clipboard_text = Some("copied words".into());
+        app
+    }
+
+    /// Copy Image puts the picture on the clipboard in place of the copied text.
+    #[test]
+    fn copy_image_forgets_the_copied_text() {
+        let mut app = app_with_picture_and_copied_text();
+        assert!(app.copy_page_image(0, 0));
+        assert_eq!(app.own_clipboard_text, None);
+    }
+
+    /// Copy Image in Original Format puts a file on the clipboard in place of the copied text.
+    #[test]
+    fn copy_image_as_a_file_forgets_the_copied_text() {
+        let mut app = app_with_picture_and_copied_text();
+        app.copy_page_image_file(0, 0);
+        assert!(app.last_copied_file.is_some(), "copied");
+        assert_eq!(app.own_clipboard_text, None);
+    }
+
+    /// A snapshot puts its picture on the clipboard in place of the copied text.
+    #[test]
+    fn a_snapshot_forgets_the_copied_text() {
+        let mut app = app_with_picture_and_copied_text();
+        assert!(app.snapshot(0, 0, [0.0, 0.0, 20.0, 20.0]).is_ok());
+        assert_eq!(app.own_clipboard_text, None);
+    }
+
+    /// A snapshot is on the clipboard at once, while egui puts the frame's copied text there
+    /// after the frame: whichever comes first in the frame, the text is there last and is what
+    /// the window remembers.
+    #[test]
+    fn text_copied_in_a_snapshots_frame_is_on_the_clipboard_last() {
+        let mut app = app_with_picture_and_copied_text();
+        let ctx = egui::Context::default();
+        for snapshot_first in [true, false] {
+            app.own_clipboard_text = None;
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                if snapshot_first {
+                    assert!(app.snapshot(0, 0, [0.0, 0.0, 20.0, 20.0]).is_ok());
+                }
+                ui.ctx().copy_text("newer words".into());
+                if !snapshot_first {
+                    assert!(app.snapshot(0, 0, [0.0, 0.0, 20.0, 20.0]).is_ok());
+                }
+                app.finish_render_frame(ui.ctx());
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(app.own_clipboard_text.as_deref(), Some("newer words"), "snapshot first: {snapshot_first}");
+        }
     }
 }

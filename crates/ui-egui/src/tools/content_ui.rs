@@ -961,8 +961,7 @@ impl crate::PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
-                self.own_clipboard_text = None;
+                self.put_on_system_clipboard(|| crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string()))?;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
