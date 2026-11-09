@@ -251,6 +251,15 @@ fn props_xml(props: &Props) -> String {
     out
 }
 
+/// Whether the change kept under `key` ([`prop_key`]) can change how the object is laid out or
+/// what its field is: not one to a screen-reader text (`assist.speak`), the object's metadata
+/// (`desc`) or its named values (`extras`), which only scripts read. Changes that can't are put
+/// in the property tree without reading the object again.
+pub fn draws(key: &str) -> bool {
+    let key = key.trim_start_matches('=');
+    !(key.starts_with("assist#0/speak#") || key.starts_with("desc#") || key.starts_with("extras#"))
+}
+
 /// Apply the changes `sets` to `node`: its property tree, and what the properties they fall
 /// under give its layout, fields and instances (see [`crate::parse::restyle_from`]). `true`
 /// when not all of it reaches the object: a change past the object's budget is left out (see
@@ -264,7 +273,7 @@ pub(crate) fn restyle(node: &mut Node, sets: &BTreeMap<String, String>) -> bool 
     let (props, mut cut) = apply_props(&node.common().props, sets);
     if node.common().props.cut {
         cut = true;
-    } else {
+    } else if sets.keys().any(|k| draws(k)) {
         let mut roots: BTreeSet<&str> = sets.keys().filter_map(|k| k.trim_start_matches('=').split('#').next()).collect();
         // A change to a caption's label, not only to how it is drawn.
         if sets.keys().any(|k| k.trim_start_matches('=').starts_with("caption#0/value#0")) {

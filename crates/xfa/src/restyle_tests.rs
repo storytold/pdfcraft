@@ -820,3 +820,23 @@ fn checks_after_an_entry_restyle_only_the_field() {
     assert!(crate::value_overridden(&t, &ov, "form[0].plain[0]"), "a script's value@override counts");
     assert!(!crate::value_overridden(&t, &Overrides::default(), "form[0].plain[0]"));
 }
+
+/// Review: changes the pages don't show (a screen-reader text, metadata, named values) are kept
+/// in the property tree without reading the object again or laying the form out; the others
+/// are read again.
+#[test]
+fn changes_the_pages_dont_show_need_no_restyle() {
+    for key in ["assist#0/speak#0", "assist#0/speak#0@disable", "desc#0/text#1", "extras#0@x", "=desc#0/text#0"] {
+        assert!(!draws(key), "{key}");
+    }
+    for key in ["assist#0/toolTip#0", "border#0/fill#0/color#0@value", "caption#0/font#0@weight", "=border#0/edge#1@thickness"] {
+        assert!(draws(key), "{key}");
+    }
+    // The tree still takes the change.
+    let t = template();
+    let ov = overrides("form[0].plain[0]", &[("assist#0/speak#0", None, "Say this")]);
+    let live = crate::form_tree(&t, None, &ov);
+    let plain = live.root.children.iter().find(|n| n.name == "plain").unwrap();
+    let speak = plain.props.elements.iter().find(|e| e.tag == "assist").and_then(|a| a.children.iter().find(|c| c.tag == "speak"));
+    assert_eq!(speak.and_then(|s| s.text.as_deref()), Some("Say this"));
+}

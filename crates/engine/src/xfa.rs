@@ -856,7 +856,9 @@ impl<'a, 'b> Runner<'a, 'b> {
             Err(pdfcraft_xfa::PropRefused::Invalid(_)) if copied => {}
             Ok(true) => {
                 self.ov_dirty = true;
-                self.restyle_pending = true;
+                // Metadata, named values and screen-reader text are kept for scripts; the
+                // pages don't show them, so they need no layout.
+                self.restyle_pending |= pdfcraft_xfa::restyle::draws(path);
                 if !copied {
                     self.changes.properties += 1;
                 }
