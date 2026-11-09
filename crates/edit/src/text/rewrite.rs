@@ -129,8 +129,21 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             }
         }
     }
-    // Rebuild: the line's first operator becomes the replacement, its others go.
-    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    // Rebuild: the line's first operator becomes the replacement, its others go. Each other
+    // dropped `'` or `"` (a later run, or a copy on the same baseline) leaves its line move and
+    // spacing behind, as the first one does inside the replacement, and a dropped copy its advance
+    // where text after it is placed by that (the line's own runs give way to the replacement's).
+    let mut advances = dropped_advances(doc, &ops, &res, &drops);
+    advances.retain(|i, _| !target.ops.contains(i));
+    let new_data = splice(&pieces, &ops, |i| {
+        if i == first {
+            return (std::mem::take(&mut replacement), false);
+        }
+        let keep = !drops.contains(&i);
+        let mut insert = dropped_side_effects(&ops, i, keep, None);
+        insert.extend(advances.remove(&i));
+        (insert, keep)
+    });
     let contents = rewritten_contents(doc, &streams, new_data)?;
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -995,7 +1008,7 @@ pub(crate) fn rewrite_block_from(
         block_ops.insert(0, Op::new("ET", vec![]));
         block_ops.extend(reopen_text_object(emit.tlm, emit.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
     }
-    let mut advances = dropped_advances(doc, &ops, &res, &dropped)?;
+    let mut advances = dropped_advances(doc, &ops, &res, &dropped);
     let new_data = splice(&pieces, &ops, |i| {
         let mut insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
         let keep = !dropped.contains(&i);

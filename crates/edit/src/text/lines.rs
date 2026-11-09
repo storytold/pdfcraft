@@ -172,16 +172,31 @@ pub(crate) fn reopen_text_object(tlm: [f64; 6], tm: [f64; 6], size: Option<f64>,
 /// was. Only an advance such a run relies on is kept: none when the text object ends, or its next
 /// kept run starts a line of its own (`Td`, `TD`, `Tm`, `T*`, `'`, `"`), first. An advance a `TJ`
 /// can't express (spacing at a zero font size) is left out. `resources` is the page's resource
-/// dictionary; a page whose text can't be interpreted is an error, as for [`super::clear_block`].
-pub(crate) fn dropped_advances(
+/// dictionary. This reads the glyphs without `/ActualText`, which can come to more text than the
+/// reading the edit was laid out from; a page whose text that way exceeds the page's text budget
+/// keeps no advances rather than refusing an edit the reading allowed.
+pub(crate) fn dropped_advances(doc: &Document, ops: &[Op], resources: &Dict, drop: &std::collections::HashSet<usize>) -> HashMap<usize, Op> {
+    dropped_advances_within(doc, ops, resources, drop, None)
+}
+
+/// [`dropped_advances`] with `text_left` in place of the page's text budget (tests make it small).
+pub(crate) fn dropped_advances_within(
     doc: &Document,
     ops: &[Op],
     resources: &Dict,
     drop: &std::collections::HashSet<usize>,
-) -> Result<HashMap<usize, Op>, EditError> {
+    text_left: Option<usize>,
+) -> HashMap<usize, Op> {
     let mut out = HashMap::new();
+    let mut carry = Carry::new();
+    if let Some(left) = text_left {
+        carry.text_left = left;
+    }
     let follows = kept_run_follows(ops, drop);
-    for s in interpret(doc, ops, resources, &mut HashMap::new(), &mut Carry::new(), None, None)? {
+    let Ok(shown) = interpret(doc, ops, resources, &mut HashMap::new(), &mut carry, None, None) else {
+        return out;
+    };
+    for s in shown {
         if !drop.contains(&s.op) || s.advance == 0.0 || !follows.get(s.op).copied().unwrap_or(false) {
             continue;
         }
@@ -191,20 +206,29 @@ pub(crate) fn dropped_advances(
             out.entry(s.op).or_insert_with(|| Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         }
     }
-    Ok(out)
+    out
 }
 
 /// For each operator: whether a run shown after it in its text object, and not in `drop`, is
 /// placed by the pen it left rather than by a line move of its own (see [`dropped_advances`]).
-/// One pass from the end, so a page of many dropped runs stays linear.
+/// A `Q` puts back the text matrices its `q` saved (as [`interpret`] reads it), so a line move
+/// between them doesn't count for the text after the `Q`. Leaving an advance in is harmless where
+/// nothing turns out to use it. One pass from the end, so a page of many dropped runs stays linear.
 fn kept_run_follows(ops: &[Op], drop: &std::collections::HashSet<usize>) -> Vec<bool> {
     let mut out = vec![false; ops.len()];
     let mut follows = false;
+    // What followed each `Q` still open (read backwards), restored at its `q`.
+    let mut after_restore: Vec<bool> = Vec::new();
     for (i, op) in ops.iter().enumerate().rev() {
         if let Some(slot) = out.get_mut(i) {
             *slot = follows;
         }
         match op.op.as_slice() {
+            b"Q" => {
+                after_restore.push(follows);
+                follows = false;
+            }
+            b"q" => follows = follows || after_restore.pop().unwrap_or(false),
             b"ET" | b"BT" | b"Td" | b"TD" | b"Tm" | b"T*" | b"'" | b"\"" => follows = false,
             b"Tj" | b"TJ" if !drop.contains(&i) => follows = true,
             _ => {}

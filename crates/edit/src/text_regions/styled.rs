@@ -1893,7 +1893,7 @@ pub(crate) fn rewrite_styled_block(
     // when the rewrite splits one, and a kept row's operators come later in the stream.
     let marker = if marked { None } else { paragraph_marker(block, lines, &ops) };
     // A dropped `'` or `"` leaves its line move and spacing, and a dropped show its advance.
-    let mut advances = crate::text::dropped_advances(doc, &ops, &res, &drop)?;
+    let mut advances = crate::text::dropped_advances(doc, &ops, &res, &drop);
     let split_at = split.then_some(start);
     let left_behind = |i: usize, keep: bool| {
         let mut out = crate::text::dropped_side_effects(&ops, i, keep, split_at);
