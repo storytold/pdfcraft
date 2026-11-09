@@ -128,6 +128,9 @@ impl Geo<'_> {
         !gs.holes.iter().any(|h| contains(*h, reach, 0.01))
     }
 
+    /// Sweep one content stream (`data`, with resources `res`, drawn at `ctm` through a clip with
+    /// `holes`) and the forms it draws, reporting what it paints over each region. Past
+    /// [`MAX_DEPTH`] nested forms every region is unverifiable.
     fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, depth: usize) {
         if depth > MAX_DEPTH {
             for i in 0..self.regions.len() {

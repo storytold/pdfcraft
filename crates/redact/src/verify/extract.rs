@@ -142,6 +142,9 @@ impl Font {
         Font { dec: Decoder::latin1(), widths: HashMap::new(), default_width: FLAT_WIDTH, vertical: false }
     }
 
+    /// Read `font`'s decoder, widths and writing direction: a Type0 font's from its descendant
+    /// (`/DW`, `/W`, a `-V` encoding), a simple font's from `/Widths` in its own glyph space.
+    /// `Err` when its data can't be read in full.
     fn new(doc: &Document, font: &Dict, ctx: &Ctx) -> Result<Self, ()> {
         let dec = Decoder::new(doc, font, ctx)?;
         let mut f = Font { dec, widths: HashMap::new(), default_width: FLAT_WIDTH, vertical: false };
@@ -603,6 +606,9 @@ impl Extractor<'_> {
         }
     }
 
+    /// Extract the text one content stream (`data`, with resources `res`, drawn at `ctm`) shows,
+    /// entering the forms it draws. `placed` is false where the text can't be put on the page.
+    /// `Err` past [`MAX_DEPTH`] nested forms or when the stream can't be read in full.
     fn scope(&mut self, data: &[u8], res: &Dict, ctm: Matrix, depth: usize, placed: bool) -> Result<(), ()> {
         if depth > MAX_DEPTH {
             return Err(());
