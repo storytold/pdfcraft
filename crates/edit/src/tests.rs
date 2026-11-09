@@ -8691,6 +8691,8 @@ fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
         "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
         // The copy's `"` sets the spacing the footer inherits in the next text object.
         "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+        // Two copies, a `'` one and a `"` one: the footer takes the second's line and spacing.
+        "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td (Target line here) ' ET BT 72.6 700 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
     ];
     for content in cases {
         let footer = |doc: &Document| {
@@ -8702,7 +8704,7 @@ fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
         let before = footer(&original);
         let targets: Vec<usize> =
             text::text_lines(&original, 0).unwrap().iter().enumerate().filter(|(_, l)| l.text == "Target line here").map(|(i, _)| i).collect();
-        assert_eq!(targets.len(), 2, "{content}");
+        assert!(targets.len() >= 2, "{content}");
         for target in targets {
             let mut doc = original.clone();
             text::replace_line(&mut doc, 0, target, "NEW TEXT").unwrap();
