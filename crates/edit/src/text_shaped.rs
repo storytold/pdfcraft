@@ -147,8 +147,9 @@ pub(super) fn rewrite(
         crate::added::Align::Right => 2,
         _ => 0,
     };
-    let layout = row_positions(block, lines, draft, &laid, style, size);
-    let kept = layout.as_ref().map_or_else(|| vec![false; block.rows.len()], |layout| kept_rows(block, draft, style, layout));
+    let unchanged = unchanged_rows(block, draft, style);
+    let layout = row_positions(block, lines, draft, &laid, style, size, &unchanged);
+    let kept = layout.as_ref().map_or_else(|| vec![false; block.rows.len()], |layout| layout.kept.clone());
     let drawn = match layout {
         // Each edited row stays on its source row's baseline and against the edge it was set
         // against, so a heading and its subtitle keep their spacing. Rows the edit leaves alone
@@ -368,7 +369,9 @@ fn row_sources(block: &TextBlock, draft: &str, spans: Vec<(std::ops::Range<usize
 /// and the edge the source rows share: the right one (the paragraph reads right to left, or only
 /// the right edges line up), the left one, or their centre. A row that wraps (bold made it wider,
 /// or words were added) goes on below its first line, an ink-safe line apart, and moves the rows
-/// after it down by as much: the rows above it, a title or a heading, stay where they are.
+/// after it down by as much: the rows above it, a title or a heading, stay where they are. An
+/// `unchanged` row that nothing above moved is kept as the source drew it, however it would lay
+/// out here.
 fn row_positions(
     block: &TextBlock,
     lines: &[TextLine],
@@ -376,6 +379,7 @@ fn row_positions(
     laid: &[appearance_text::Line],
     style: &BlockStyle,
     size: f64,
+    unchanged: &[bool],
 ) -> Option<RowLayout> {
     let rows: Vec<&str> = draft.split('\n').collect();
     if style.width.is_some() || style.align.is_some() || style.offset.is_some() || rows.len() != block.rows.len() {
@@ -416,12 +420,14 @@ fn row_positions(
     let centre = (block.rect[0] + block.rect[2]) / 2.0;
     let centred = rects.iter().all(|r| near((r[0] + r[2]) / 2.0, centre));
     let mut out = Vec::with_capacity(laid.len());
-    let mut moved = vec![false; rows.len()];
+    let mut kept = vec![false; rows.len()];
     let mut shift = 0.0;
     let mut previous: Option<(usize, f64, &appearance_text::Line)> = None;
     for (line, &index) in laid.iter().zip(&owner) {
         let rect = rects.get(index)?;
         let y = match previous {
+            // A kept row is not drawn here: how it would wrap moves nothing.
+            Some((row, y, _)) if row == index && kept.get(index).copied().unwrap_or(false) => y,
             // A wrapped row's next line, one ink-safe line below the last.
             Some((row, y, above)) if row == index => {
                 let step = size * (above.descent + line.ascent);
@@ -429,8 +435,8 @@ fn row_positions(
                 y - step
             }
             _ => {
-                if let Some(row) = moved.get_mut(index) {
-                    *row = shift > 1e-9;
+                if let Some(row) = kept.get_mut(index) {
+                    *row = unchanged.get(index).copied().unwrap_or(false) && shift <= 1e-9;
                 }
                 baselines.get(index)? - shift
             }
@@ -452,21 +458,20 @@ fn row_positions(
         out.push([x, y]);
         previous = Some((index, y, line));
     }
-    Some(RowLayout { positions: out, owner, moved })
+    Some(RowLayout { positions: out, owner, kept })
 }
 
 /// Where [`row_positions`] puts the laid lines: each line's position and the draft row it is in,
-/// and the rows a wrapped row above moved down.
+/// and the rows kept as the source drew them (not drawn again).
 struct RowLayout {
     positions: Vec<[f64; 2]>,
     owner: Vec<usize>,
-    moved: Vec<bool>,
+    kept: Vec<bool>,
 }
 
-/// The rows of the paragraph an edit leaves as they were, which keep their own drawing: the same
-/// text in the draft as in the source, on one line, not moved down by a row above that wrapped,
-/// and no size, colour or weight asked for. All `false` when every row would be kept.
-fn kept_rows(block: &TextBlock, draft: &str, style: &BlockStyle, layout: &RowLayout) -> Vec<bool> {
+/// The rows of the paragraph an edit leaves as they were: the same text in the draft as in the
+/// source, and no size, colour or weight asked for. All `false` when no row changes.
+fn unchanged_rows(block: &TextBlock, draft: &str, style: &BlockStyle) -> Vec<bool> {
     let source: Vec<&str> = block.editor_text.split('\n').collect();
     let rows: Vec<&str> = draft.split('\n').collect();
     let restyled = style.size.is_some() || style.color.is_some() || style.bold.is_some();
@@ -480,8 +485,6 @@ fn kept_rows(block: &TextBlock, draft: &str, style: &BlockStyle, layout: &RowLay
                 _ => false,
             };
             same(source.get(k), rows.get(k))
-                && !layout.moved.get(k).copied().unwrap_or(true)
-                && layout.owner.iter().filter(|&&row| row == k).count() == 1
         })
         .collect();
     if kept.iter().all(|k| *k) { vec![false; kept.len()] } else { kept }
