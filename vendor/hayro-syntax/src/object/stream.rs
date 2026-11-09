@@ -317,6 +317,11 @@ impl<'a> Readable<'a> for Stream<'a> {
         let offset = r.offset();
         parse_proper(r, &dict)
             .or_else(|| {
+                // PdfCraft patch (36): before searching on, which could reach a later object.
+                r.jump(offset);
+                parse_declared(r, &dict, true)
+            })
+            .or_else(|| {
                 warn!("failed to parse stream, trying to parse it manually");
 
                 r.jump(offset);
@@ -324,7 +329,7 @@ impl<'a> Readable<'a> for Stream<'a> {
             })
             .or_else(|| {
                 r.jump(offset);
-                parse_declared(r, &dict)
+                parse_declared(r, &dict, false)
             })
             .error_none("was unable to manually parse the stream")
     }
@@ -438,16 +443,28 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
 /// PdfCraft patch (36): a stream with no `endstream` after it, as a producer that writes
 /// `endstrea` leaves every stream, is the bytes its `/Length` gives, "how many bytes of the PDF
 /// file are used for the stream's data" (ISO 32000-2 7.3.8.2), as other readers take it. Neither
-/// parse above found it, so every font and page content of such a file was lost and its pages
-/// drew blank. Called only after [`parse_fallback`] found no `endstream` in the rest of the data,
-/// so it doesn't search again, and only a `/Length` the data holds is read.
-fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
+/// [`parse_proper`] nor [`parse_fallback`] found it, so every font and page content of such a file
+/// was lost and its pages drew blank. Only a `/Length` the data holds is read.
+///
+/// With `at_an_end`, tried before [`parse_fallback`], the `/Length` must also end where the
+/// stream would: before a misspelt `endstream` (`endstrea`), before `endobj`, or at the end of
+/// the data. Otherwise the search for `endstream` would run on into a later object and take its
+/// header and data as this stream's. Without it, tried last, after the search found no
+/// `endstream` in the rest of the data, so it doesn't search again.
+fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> Option<Stream<'a>> {
     let length = dict.get::<u32>(LENGTH)?;
 
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
     forward_stream_eol(r)?;
-    let data = r.read_bytes(length as usize)?;
+    let data = r.read_bytes(usize::try_from(length).ok()?)?;
+    if at_an_end {
+        r.skip_white_spaces_and_comments();
+        let rest = r.tail().unwrap_or_default();
+        if !(rest.is_empty() || rest.starts_with(b"endstrea") || rest.starts_with(b"endobj")) {
+            return None;
+        }
+    }
 
     Some(Stream::new(data, dict.clone()))
 }

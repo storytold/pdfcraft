@@ -9716,19 +9716,27 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
 /// A stream with no `endstream` after it, as a producer that writes `endstrea` after every stream
 /// leaves it, is the bytes its `/Length` gives: "how many bytes of the PDF file are used for the
 /// stream's data" (ISO 32000-2 7.3.8.2). Nothing found its end, so the page's content was lost and
-/// the page drew blank, while other readers draw it. Vendored hayro-syntax patch 36.
+/// the page drew blank, while other readers draw it. The objects after it are still read: a second
+/// content stream paints the right half. A `/Length` past the end of the file, or none, leaves the
+/// stream unreadable and its half blank, without a panic. Vendored hayro-syntax patch 36.
 #[test]
 fn a_content_stream_without_endstream_is_drawn_to_its_length() {
     use super::*;
-    let content = "1 0 0 rg 0 0 200 200 re f";
-    let centre = |end: &str| -> [u8; 4] {
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    let left = "1 0 0 rg 0 0 100 200 re f";
+    let right = "0 0 1 rg 100 0 100 200 re f";
+    // The left and right pixels of a page whose content is objects 4 and 5, with `stream_4` the
+    // whole of object 4 and `rest` written after the trailer.
+    let pixels = |stream_4: &str, rest: &str| -> [[u8; 4]; 2] {
         let page = format!(
             "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
              2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
-             4 0 obj << /Length {} >> stream\n{content}\n{end}\nendobj\n\
-             trailer << /Root 1 0 R >>\n%%EOF",
-            content.len()
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents [4 0 R 5 0 R] >> endobj\n\
+             5 0 obj << /Length {} >> stream\n{right}\nendstream\nendobj\n\
+             {stream_4}trailer << /Root 1 0 R >>\n{rest}",
+            right.len()
         );
         let page = PageRenderer::new(Arc::new(page.into_bytes()), RenderConfig::default()).render(RenderRequest {
             page: 0,
@@ -9738,13 +9746,57 @@ fn a_content_stream_without_endstream_is_drawn_to_its_length() {
             tag: 0,
             preview: false,
         });
-        let start = (100 * page.width as usize + 100) * 4;
-        let mut pixel = [0; 4];
-        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
-        pixel
+        [50, 150].map(|x| {
+            let start = (100 * page.width as usize + x) * 4;
+            let mut pixel = [0; 4];
+            pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("pixel"));
+            pixel
+        })
     };
-    assert_eq!(centre("endstream"), [255, 0, 0, 255]);
+    let object_4 = |length: &str, end: &str| format!("4 0 obj << {length} >> stream\n{left}\n{end}\nendobj\n");
+    let length = format!("/Length {}", left.len());
+    assert_eq!(pixels(&object_4(&length, "endstream"), "%%EOF"), [RED, BLUE]);
     for end in ["endstrea", "", "end"] {
-        assert_eq!(centre(end), [255, 0, 0, 255], "{end:?}");
+        assert_eq!(pixels(&object_4(&length, end), "%%EOF"), [RED, BLUE], "{end:?}");
     }
+    // The last object in the file, which ends with its data.
+    let last = format!("4 0 obj << {length} >> stream\n{left}");
+    assert_eq!(pixels("", &last), [RED, BLUE], "at the end of the file");
+    // A /Length past the end of the file, and none: object 4 can't be read and its half stays
+    // blank (as does the rest of the page: a `/Contents` array with an unreadable member isn't
+    // drawn, as before this change).
+    let past = format!("4 0 obj << /Length {} >> stream\n{left}", left.len() + 1);
+    assert_eq!(pixels("", &past)[0], WHITE, "past the end of the file");
+    assert_eq!(pixels(&object_4("", "endstrea"), "%%EOF")[0], WHITE, "no /Length");
+}
+
+/// A stream ending in `endstrea` is its `/Length` even when a later object has an `endstream`:
+/// the search for one ran on into that object. Here the content is ASCIIHex-encoded without its
+/// `>` end marker, so reading on took the next object's header as hex data, which it isn't, and
+/// the page drew blank instead of red.
+#[test]
+fn a_content_stream_without_endstream_is_not_read_into_a_later_stream() {
+    use super::*;
+    let content: String = "1 0 0 rg 0 0 200 200 re f".bytes().map(|b| format!("{b:02X}")).collect();
+    let unused = "0 1 0 rg 0 0 200 200 re f";
+    let page = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} /Filter /ASCIIHexDecode >> stream\n{content}\nendstrea\nendobj\n\
+         5 0 obj << /Length {} >> stream\n{unused}\nendstream\nendobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        unused.len()
+    );
+    let page = PageRenderer::new(Arc::new(page.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        preview: false,
+    });
+    let start = (100 * page.width as usize + 100) * 4;
+    assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]));
 }
