@@ -1,5 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{
+    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies, state_or_default,
+};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -215,7 +217,7 @@ impl<'a> Inspector<'a> {
                 rect,
                 color,
                 index,
-                state: self.text(d, b"State"),
+                state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
                 quads,
                 locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                 intent: self.name(d, b"IT"),
@@ -411,22 +413,44 @@ impl<'a> Inspector<'a> {
         let ft = self.name(d, b"FT").or(parent_ft);
         let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
-        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
-            Ok(Object::Array(k)) => k.as_slice(),
-            _ => &[],
+        let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k.clone(),
+            _ => Vec::new(),
         };
-        let (field_kids, widget_kids): (Vec<&Object>, Vec<&Object>) = kids.iter().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
-        let field_kids: Vec<_> = field_kids.into_iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
+        let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
+            kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
         if !field_kids.is_empty() {
-            let id = if let Object::Reference(id) = o { Some(*id) } else { None };
-            walk.path.extend(id);
+            let here = match o {
+                Object::Reference(id) => Some(*id),
+                _ => None,
+            };
+            walk.path.extend(here);
             for k in field_kids {
-                self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+                // §12.7.4.2): a kid that doesn't name this field as its `/Parent` is named from its
+                // own chain, as the form reader names it.
+                let parent = match self.dict(k).map(|kd| kd.get(b"Parent")) {
+                    Some(Ok(Object::Reference(p))) => Some(*p),
+                    _ => None,
+                };
+                if parent == here {
+                    self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+                } else {
+                    let own = parent.map(|p| self.qualified_name(p)).unwrap_or_default();
+                    self.field(k, Some((&own, ft.clone(), ff)), out, walk, depth + 1);
+                }
             }
-            if id.is_some() {
+            if here.is_some() {
                 walk.path.pop();
             }
-            return;
+            // "A field's children in the hierarchy may also include widget annotations" (ISO
+            // 32000-2 §12.7.4): widget annotations listed beside named kids are still this
+            // field's widgets, listed as a field of this name, as the form reader reads them.
+            kids.retain(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_err() && self.name(kd, b"Subtype").as_deref() == Some("Widget")));
+            if kids.is_empty() {
+                return;
+            }
         }
         let flags = ff.unwrap_or(0);
         let kind = match ft.as_deref() {
@@ -454,20 +478,23 @@ impl<'a> Inspector<'a> {
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
-        // The widget is either this dict (merged field/widget) or its first kid. With no widget
-        // among its kids, it is the first page widget naming this field as its `/Parent`: a child
-        // names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and PDFium read it.
+        // The widget is this dict (merged field/widget) or its first kid. A merged dict that also
+        // lists widget kids has them as its widgets (ISO 32000-2 §12.7.4), as the form reader has
+        // it. With no widget among its kids, it is the first page widget naming this field as its
+        // `/Parent`: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226), as MuPDF and
+        // PDFium read it.
         let merged = d.get(b"Rect").is_ok();
         let named = if merged || !widget_kids.is_empty() { None } else { self.widget_naming(o) };
-        let widget = if merged {
-            Some(d)
-        } else {
-            widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok()))
+        let widget_kid = widget_kids.iter().filter_map(|k| self.dict(k)).find(|kd| self.name(kd, b"Subtype").as_deref() == Some("Widget"));
+        let widget = match widget_kid {
+            Some(w) => Some(w),
+            None if merged => Some(d),
+            None => widget_kids.first().and_then(|k| self.dict(k)).or_else(|| named.and_then(|id| self.doc.get_dictionary(id).ok())),
         };
         let page = widget
             .and_then(|w| w.get(b"P").ok())
             .and_then(|p| self.page_of(p))
-            .or_else(|| self.find_widget_page(o, kids))
+            .or_else(|| self.find_widget_page(o, &kids))
             .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
@@ -534,6 +561,29 @@ impl<'a> Inspector<'a> {
             }
         }
         pages
+    }
+
+    /// The fully qualified name of the field `id`: the partial names (`/T`) up its `/Parent`
+    /// chain, joined with periods; empty when none has one or the chain reaches an object that
+    /// isn't a dictionary, as the form reader has it. A `/Parent` loop ends the walk.
+    fn qualified_name(&self, id: ObjectId) -> String {
+        let mut parts = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if visited.len() > 64 || !visited.insert(c) {
+                break;
+            }
+            let o = Object::Reference(c);
+            let Some(d) = self.dict(&o) else { return String::new() };
+            parts.extend(self.text(d, b"T"));
+            cur = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) => Some(*p),
+                _ => None,
+            };
+        }
+        parts.reverse();
+        parts.join(".")
     }
 
     /// The topmost field above widget `id` (itself without a `/Parent` that is a field), or `None` when it or an
