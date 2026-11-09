@@ -109,7 +109,7 @@ type R<T> = Result<T, String>;
 /// Run a FormCalc `script` for `event` on the form `root`, as [`crate::xfa::run_xfa`] runs a
 /// JavaScript one.
 pub fn run_formcalc(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
-    run_formcalc_at(script, event, doc, root.clone(), limits, None)
+    run_formcalc_at(script, event, doc, std::sync::Arc::new(root.clone()), false, limits, None)
 }
 
 /// [`run_formcalc`] on an owned form, giving up at `deadline` (the clock is read every
@@ -118,7 +118,8 @@ pub(crate) fn run_formcalc_at(
     script: &str,
     event: &XfaEvent,
     doc: &XfaDoc,
-    root: XfaNode,
+    root: std::sync::Arc<XfaNode>,
+    reuse: bool,
     limits: Limits,
     deadline: Option<std::time::Duration>,
 ) -> XfaOutcome {
@@ -133,7 +134,7 @@ pub(crate) fn run_formcalc_at(
         Ok(b) => b,
         Err(e) => return XfaOutcome { error: Some(e), ..Default::default() },
     };
-    let mut host = XHost::new(root, &event.target, doc);
+    let mut host = XHost::new(root, reuse, &event.target, doc);
     #[cfg(target_arch = "wasm32")]
     let _ = deadline;
     let mut interp = Interp {
@@ -177,7 +178,7 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
     // FormCalc has no engine to start: its time (and its own deadline) begins at once.
     run_within("pdfcraft-formcalc", timeout, move |started| {
         started();
-        run_formcalc_at(&script, &event, &doc, root, limits, Some(timeout))
+        run_formcalc_at(&script, &event, &doc, std::sync::Arc::new(root), false, limits, Some(timeout))
     })
 }
 
