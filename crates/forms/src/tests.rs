@@ -5706,3 +5706,35 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`
+/// colours are read (PDFBOX-2699), not RGB from the three numbers left; three numbers stay RGB.
+#[test]
+fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
+    let widget = |name: &str, mk: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({name}) /Rect [50 700 70 720] /P 3 0 R /MK << {mk} >> /BS << /W 1 /S /S >> >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] >>".into(),
+        widget("cmyk", "/BG [0 0 1 null] /BC [1 0 0 null]"),
+        widget("rgb", "/BG [0 0 1] /BC [1 0 0]"),
+    ];
+    let mut doc = document(&objs);
+    let off = |doc: &mut Document, name: &str| {
+        redraw_field(doc, name).unwrap();
+        let all = fields(doc);
+        let w = field(&all, name).widgets[0].obj;
+        let wd = doc.get(w).as_dict().cloned().unwrap();
+        let n = doc.resolve(wd.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+        let r = n.as_dict().unwrap().reference(b"Off").expect("an Off appearance");
+        let Object::Stream(s) = &*doc.get(r) else { panic!("Off is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let cmyk = off(&mut doc, "cmyk");
+    assert!(cmyk.contains("0 0 1 0 k") && cmyk.contains("1 0 0 0 K"), "CMYK background and border: {cmyk}");
+    let rgb = off(&mut doc, "rgb");
+    assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
+}

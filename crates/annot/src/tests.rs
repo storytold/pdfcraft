@@ -2786,6 +2786,71 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&reopen(&doc));
 }
 
+/// PDFBOX-2699: a `/C` written `[1 0 0 null]` (Table 166 asks for numbers) is still a four-entry
+/// colour, CMYK with the null as 0 as PDFium, MuPDF and Poppler read it, so a shape without an
+/// appearance is drawn instead of dropped. `/IC` is read the same way, and three numbers stay RGB.
+/// The properties and the comment list report the colours as drawn.
+#[test]
+fn a_four_entry_colour_with_a_null_is_cmyk_with_zero() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C [1 0 0 null] /IC [0 0 1 null] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("both squares get a fallback appearance");
+    let squares = list(&display, 0);
+    let cmyk = ap_content(&display, &squares[0]);
+    assert!(cmyk.contains("0 1 1 RG") && cmyk.contains("1 1 0 rg"), "CMYK (1,0,0,0) stroke and (0,0,1,0) fill: {cmyk}");
+    let rgb = ap_content(&display, &squares[1]);
+    assert!(rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
+    // The properties read the stroke and the fill as they are drawn.
+    let p = props(&doc, 0, 0).expect("the square has properties");
+    assert_eq!((p.color, p.fill), (Some([0.0, 1.0, 1.0]), Some([1.0, 1.0, 0.0])));
+    assert_eq!(props(&doc, 0, 1).and_then(|p| p.color), Some([1.0, 0.0, 0.0]));
+    // The comment list reports the same colours.
+    let colors: Vec<Option<[f32; 3]>> = summaries(&doc).iter().map(|s| s.color).collect();
+    assert_eq!(colors, [Some([0.0, 1.0, 1.0]), Some([1.0, 0.0, 0.0])]);
+}
+
+/// A `/C` given by reference is followed for the comment list, as three numbers were, and read
+/// like a direct one: `[0 0 1 null]` is CMYK yellow, and a referenced grey level is grey.
+#[test]
+fn a_referenced_colour_is_listed_like_a_direct_one() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C 6 0 R >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [55 5 95 35] /C 7 0 R >>",
+        b"[0 0 1 null]",
+        b"[0.5]",
+    ]);
+    let colors: Vec<Option<[f32; 3]>> = summaries(&doc).iter().map(|s| s.color).collect();
+    assert_eq!(colors, [Some([1.0, 1.0, 0.0]), Some([0.5, 0.5, 0.5])]);
+}
+
+/// A reference among the four entries is not a non-number read as 0: `/C [1 0 0 6 0 R]` with
+/// object 6 the number 1 is CMYK black (§7.3.10), so drawing it cyan would be wrong. The builder
+/// doesn't follow it and draws no appearance, as for any colour it can't read.
+#[test]
+fn a_four_entry_colour_with_a_reference_is_not_read_as_zero() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 40] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [5 5 45 35] /C [1 0 0 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [55 5 95 35] /C [1 0 0] >>",
+        b"1",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the RGB square gets a fallback appearance");
+    let squares = list(&display, 0);
+    assert!(!squares[0].contains(b"AP"), "no cyan stand-in for CMYK black");
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.color), None);
+    assert_eq!(summaries(&doc)[0].color, None, "nor in the comment list");
+}
+
 /// The `y` of every `1 0 0 1 x y Tm` in `content`: where each piece of text sits.
 fn baselines(content: &str) -> Vec<f64> {
     content.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect()
