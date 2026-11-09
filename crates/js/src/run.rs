@@ -398,7 +398,7 @@ fn run_here(
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
-        let ev = event_object(&mut ctx, event);
+        let (ev, value_store) = event_object(&mut ctx, event)?;
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
@@ -416,6 +416,7 @@ fn run_here(
         out.rc = rc.to_boolean();
         let v = ev.get(js_string!("value"), &mut ctx)?;
         out.value = text(&v, &mut ctx)?;
+        out.value_set = value_store.get(js_string!("set"), &mut ctx)?.to_boolean();
         let c = ev.get(js_string!("change"), &mut ctx)?;
         out.change = text(&c, &mut ctx)?;
         Ok(())
