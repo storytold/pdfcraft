@@ -43,7 +43,7 @@ pub(crate) struct Type0Font {
     /// a `ToUnicode` `CMap` (code-indexed).
     to_unicode_is_cid_indexed: bool,
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
-    /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
+    /// CNS1, Korea1, KR), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
     /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
@@ -82,23 +82,29 @@ impl Type0Font {
         let (font_type, fallback, _is_standard_fallback) = match FontType::new(&font_descriptor) {
             Some(ft) => (ft, false, false),
             None => {
-                let (query, is_standard) =
-                    if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
-                        (FontQuery::Standard(standard), true)
-                    } else {
-                        // PdfCraft patch: the style comes from the descendant's descriptor.
-                        let mut query =
-                            FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
-                        query.character_collection = character_collection.clone();
-
+                // PdfCraft patch: the style comes from the descendant's descriptor.
+                let mut fallback_query =
+                    FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
+                fallback_query.character_collection = character_collection.clone();
+                let (query, is_standard) = match select_standard_font(dict, &font_descriptor) {
+                    // CJK names that only hint at a standard family still use the collection's stand-in.
+                    Some((standard, false))
+                        if is_adobe_cjk(character_collection.as_ref())
+                            && !names_standard_family(&fallback_query) =>
+                    {
+                        fallback_query.standard_hint = Some(standard);
+                        (FontQuery::Fallback(fallback_query.clone()), false)
+                    }
+                    Some((standard, _)) => (FontQuery::Standard(standard), true),
+                    None => {
                         warn!(
                             "unable to load CID font {} ({:?}), attempting fallback",
-                            query.post_script_name.as_deref().unwrap_or("(no name)"),
+                            fallback_query.post_script_name.as_deref().unwrap_or("(no name)"),
                             dict.obj_id()
                         );
-
-                        (FontQuery::Fallback(query), false)
-                    };
+                        (FontQuery::Fallback(fallback_query.clone()), false)
+                    }
+                };
 
                 let (data, index) = font_resolver(&query)?;
                 let blob = OpenTypeFontBlob::new(data.clone(), index)
@@ -145,9 +151,8 @@ impl Type0Font {
             }
         }
 
-        let adobe_collection = character_collection
-            .as_ref()
-            .is_some_and(|cc| cc.family.ucs2_cmap().is_some());
+        // Adobe-KR has no predefined UCS2 CMap, so it counts by registry and ordering.
+        let adobe_collection = is_adobe_cjk(character_collection.as_ref());
 
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)
@@ -576,6 +581,26 @@ impl CidToGIdMap {
         }
     }
 }
+
+/// PdfCraft patch (72): whether `collection` is one of Adobe's CJK character collections
+/// (Japan1, GB1, CNS1, Korea1, KR).
+fn is_adobe_cjk(collection: Option<&CharacterCollection>) -> bool {
+    collection.is_some_and(|c| {
+        c.family.ucs2_cmap().is_some()
+            || matches!(&c.family, CidFamily::Custom { registry, ordering }
+                if registry.as_slice() == b"Adobe" && ordering.as_slice() == b"KR")
+    })
+}
+
+/// PdfCraft patch (72): whether the font's name names a standard family outright although
+/// `select_standard_font` calls the match inexact.
+fn names_standard_family(query: &FallbackFontQuery) -> bool {
+    query.post_script_name.as_deref().is_some_and(|name| {
+        let name = name.to_ascii_lowercase();
+        ["arial", "zapf", "dingbat"].iter().any(|family| name.contains(family))
+    })
+}
+
 
 /// PdfCraft patch: Variation Selectors (U+FE00–U+FE0F) and their supplement (U+E0100–U+E01EF).
 fn is_variation_selector(c: char) -> bool {
