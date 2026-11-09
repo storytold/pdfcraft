@@ -275,8 +275,11 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     // interface can say both in its own language.
     if permissions_unknown {
         // The revision's fields could not all be read, so which permission it carried is unknown:
-        // the changes are reported as unverified rather than permitted or refused.
-        info.status = Status::Unknown;
+        // the changes are reported as unverified rather than permitted or refused. A verified
+        // revocation is final, so it stays invalid.
+        if !revoked {
+            info.status = Status::Unknown;
+        }
         info.details.push(Detail::plain(
             "The document has been modified since this signature was applied, and the fields of the revision it covers could not all be read, so the changes it permits are unknown.",
         ));
