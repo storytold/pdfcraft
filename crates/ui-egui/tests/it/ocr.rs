@@ -497,6 +497,8 @@ fn recognize_text_keeps_its_buttons_in_a_short_window() {
         let last = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Output folder")).rect();
         assert!(last.min.y >= title.max.y && last.max.y <= run.min.y, "{height}: Output folder {last:?} between {title:?} and {run:?}");
         assert_eq!(h.get_by_role_and_label(Role::Button, "Recognize text").rect(), run, "{height}: the buttons stay put");
+        let title_after = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Recognize Text")).rect();
+        assert_eq!(title_after, title, "{height}: the title stays put");
         // On screen is not enough: a click reaches Cancel and closes the dialog.
         h.get_by_role_and_label(Role::Button, "Cancel").click();
         h.run_steps(3);
