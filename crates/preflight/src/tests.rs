@@ -496,7 +496,8 @@ const XMP_NS: &str = concat!(
     r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
     r#"xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/" "#,
     r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" "#,
-    r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/""#
+    r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" "#,
+    r#"xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/""#
 );
 
 /// The mistyped predefined properties of a packet whose one description holds `body` (its
@@ -720,6 +721,82 @@ fn xmp_value_types_are_reported_by_verify() {
     assert_eq!(found.iter().map(|i| i.object).collect::<Vec<_>>(), [Some(ObjRef::new(5, 0))]);
 }
 
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas of the September 2005 XMP
+/// Specification (pages 58–70), with the EXIF value types of pages 83–87.
+#[test]
+fn xmp_exif_schemas_have_their_value_types() {
+    // TIFF: integers, closed choices of integer, rationals, sequences, language alternatives.
+    assert!(element("tiff:ImageWidth", "256").is_empty());
+    assert_eq!(element("tiff:ImageWidth", "256 mm"), ["tiff:ImageWidth"]);
+    assert_eq!(element("tiff:Orientation", "4/1"), ["tiff:Orientation"]);
+    assert!(element("tiff:XResolution", "72/1").is_empty());
+    assert_eq!(element("tiff:XResolution", "<rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq>"), ["tiff:XResolution"]);
+    assert!(element("tiff:BitsPerSample", "<rdf:Seq><rdf:li>8</rdf:li><rdf:li>8</rdf:li></rdf:Seq>").is_empty());
+    assert_eq!(element("tiff:BitsPerSample", "<rdf:Seq><rdf:li>8</rdf:li><rdf:li>8.0</rdf:li></rdf:Seq>"), ["tiff:BitsPerSample"]);
+    assert_eq!(element("tiff:TransferFunction", "<rdf:Bag><rdf:li>0</rdf:li></rdf:Bag>"), ["tiff:TransferFunction"]);
+    assert_eq!(element("tiff:ImageDescription", "A picture"), ["tiff:ImageDescription"]);
+    // EXIF: GPS coordinates (page 85).
+    for good in ["51,30,26N", "0,5.25W", "120,5,0E", "8,0.000001S"] {
+        assert!(element("exif:GPSLatitude", good).is_empty(), "{good}");
+    }
+    for bad in ["51.5N", "51,30,26", "51,30.N", "51,30,26X", "N", "51,30,2.6N", "a,30,26N", "51,30N", "51.5,30,26N"] {
+        assert_eq!(element("exif:GPSLatitude", bad), ["exif:GPSLatitude"], "{bad}");
+    }
+    assert!(element("exif:GPSTimeStamp", "2016-02-01T13:19:21").is_empty());
+    assert_eq!(element("exif:ISOSpeedRatings", "100"), ["exif:ISOSpeedRatings"]);
+    // EXIF structures: Flash, OECF/SFR, CFAPattern, DeviceSettings (pages 85–87).
+    assert!(mistyped(r#"><exif:Flash rdf:parseType="Resource"><exif:Fired>True</exif:Fired><exif:Mode>3</exif:Mode></exif:Flash>"#).is_empty());
+    assert_eq!(mistyped(r#"><exif:Flash rdf:parseType="Resource"><exif:Fired>yes</exif:Fired></exif:Flash>"#), ["exif:Flash"]);
+    assert_eq!(mistyped(r#"><exif:Flash exif:Return="2.0"/>"#), ["exif:Flash"]);
+    assert_eq!(element("exif:Flash", "fired"), ["exif:Flash"]);
+    assert!(
+        mistyped(r#"><exif:OECF rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq></exif:Values></exif:OECF>"#).is_empty()
+    );
+    assert_eq!(
+        mistyped(r#"><exif:OECF rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>0.5</rdf:li></rdf:Seq></exif:Values></exif:OECF>"#),
+        ["exif:OECF"]
+    );
+    assert_eq!(
+        mistyped(
+            r#"><exif:CFAPattern rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq></exif:Values></exif:CFAPattern>"#
+        ),
+        ["exif:CFAPattern"]
+    );
+    assert_eq!(
+        mistyped(r#"><exif:DeviceSettingDescription rdf:parseType="Resource"><exif:Columns>2.0</exif:Columns></exif:DeviceSettingDescription>"#),
+        ["exif:DeviceSettingDescription"]
+    );
+    assert_eq!(
+        mistyped(r#"><exif:DeviceSettingDescription rdf:parseType="Resource"><exif:Settings>a</exif:Settings></exif:DeviceSettingDescription>"#),
+        ["exif:DeviceSettingDescription"]
+    );
+    // Additional EXIF properties (page 69).
+    assert!(element("aux:Lens", "50mm").is_empty());
+    assert_eq!(element("aux:Lens", "<rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq>"), ["aux:Lens"]);
+    assert_eq!(element("aux:SerialNumber", "<rdf:Bag><rdf:li>1</rdf:li></rdf:Bag>"), ["aux:SerialNumber"]);
+}
+
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas: a property is known by its
+/// namespace URI, whatever prefix the packet binds to it, and is named by the namespace's
+/// preferred prefix.
+#[test]
+fn xmp_exif_properties_are_known_by_namespace_uri() {
+    let tiff = r#"xmlns:foo="http://ns.adobe.com/tiff/1.0/""#;
+    assert_eq!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256 mm</foo:ImageWidth>"#)), ["tiff:ImageWidth"]);
+    assert!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256</foo:ImageWidth>"#)).is_empty());
+    assert_eq!(mistyped(r#"xmlns:bar="http://ns.adobe.com/exif/1.0/" bar:GPSLatitude="51.5N">"#), ["exif:GPSLatitude"]);
+    assert_eq!(
+        mistyped(r#"><baz:Lens xmlns:baz="http://ns.adobe.com/exif/1.0/aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></baz:Lens>"#),
+        ["aux:Lens"]
+    );
+    // The same local names in another namespace, even under the preferred prefixes, are not these
+    // properties.
+    let other = r#"xmlns:tiff="http://example.com/not-tiff/""#;
+    assert!(mistyped(&format!(r#"><tiff:ImageWidth {other}>256 mm</tiff:ImageWidth>"#)).is_empty());
+    assert!(mistyped(r#"xmlns:exif="http://example.com/not-exif/" exif:GPSLatitude="51.5N">"#).is_empty());
+    assert!(mistyped(r#"><aux:Lens xmlns:aux="http://example.com/not-aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></aux:Lens>"#).is_empty());
+}
+
 /// Holes are filled in one pass: the first `{}` from `value`, named holes from `values`, and what
 /// has nothing for it, a value's own braces and a brace left open stay as they are.
 #[test]
@@ -755,6 +832,12 @@ fn xmp_mistyped_properties_name_their_type() {
         [t("xmpMM:History", "seq ResourceEvent"), t("xmpTPg:MaxPageSize", "Dimensions")]
     );
     assert_eq!(types("><xmpMM:Pantry>p</xmpMM:Pantry>"), [t("xmpMM:Pantry", "bag struct")]);
+    // The TIFF and EXIF types, as the 2005 edition writes them.
+    assert_eq!(types(r#"tiff:XResolution="0.5" exif:GPSLatitude="N">"#), [t("exif:GPSLatitude", "GPSCoordinate"), t("tiff:XResolution", "Rational")]);
+    assert_eq!(
+        types("><tiff:BitsPerSample>8</tiff:BitsPerSample><exif:Flash>fired</exif:Flash><exif:OECF>o</exif:OECF>"),
+        [t("exif:Flash", "Flash"), t("exif:OECF", "OECF/SFR"), t("tiff:BitsPerSample", "seq Integer")]
+    );
 }
 
 /// PDF/A-2 6.6.2.3.1: a property is known by its namespace URI, whatever prefix the packet binds
