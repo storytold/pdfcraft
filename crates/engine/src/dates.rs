@@ -682,11 +682,17 @@ fn runs(fmt: &str) -> Vec<(char, usize, bool)> {
     runs
 }
 
+/// Languages whose `months_with_day` form only reads after the day: Hebrew `7 במרץ`, but
+/// `מרץ 7`. Elsewhere the form follows any day in the pattern (Lithuanian `kovo 7 d.`).
+const DAY_FIRST_MONTH_FORMS: &[&str] = &["he"];
+
 /// The day `(year, month, day)` written in `fmt` with `lang`'s names. Anything but the date
 /// letters is copied as is; a month or day out of range shows as its number.
 pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) -> String {
     let runs = runs(fmt);
-    let with_day = runs.iter().any(|&(c, n, escaped)| !escaped && c == 'd' && n <= 2);
+    let any_day = runs.iter().any(|&(c, n, escaped)| !escaped && c == 'd' && n <= 2);
+    let day_first = DAY_FIRST_MONTH_FORMS.contains(&lang.code);
+    let mut day_seen = false;
     let month = (m as usize).checked_sub(1);
     let weekday = weekday(y, m, d);
     let mut out = String::new();
@@ -696,6 +702,7 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
             ('y', 4..) => out.push_str(&format!("{:04}", y.clamp(0, 9999))),
             ('y', _) => out.push_str(&format!("{:02}", y.rem_euclid(100))),
             ('m', 3..) => {
+                let with_day = if day_first { day_seen } else { any_day };
                 let names = if n >= 4 { lang.months_with_day.filter(|_| with_day).unwrap_or(lang.months) } else { lang.months_short };
                 match month.and_then(|i| names.get(i)) {
                     Some(name) => out.push_str(name),
@@ -711,8 +718,14 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
                     None => out.push_str(&d.to_string()),
                 }
             }
-            ('d', 2) => out.push_str(&format!("{d:02}")),
-            ('d', _) => out.push_str(&d.to_string()),
+            ('d', 2) => {
+                day_seen = true;
+                out.push_str(&format!("{d:02}"))
+            }
+            ('d', _) => {
+                day_seen = true;
+                out.push_str(&d.to_string())
+            }
             _ => out.extend(std::iter::repeat_n(c, n)),
         }
     }
@@ -933,6 +946,9 @@ mod tests {
         assert_eq!(in_lang("mmmm yyyy", "cs"), "březen 2026");
         assert_eq!(in_lang("d mmmm yyyy", "ru"), "7 марта 2026");
         assert_eq!(in_lang("mmmm yyyy", "ru"), "март 2026");
+        assert_eq!(in_lang("dddd, d mmmm yyyy", "he"), "שבת, 7 במרץ 2026");
+        assert_eq!(in_lang("mmmm d, yyyy", "he"), "מרץ 7, 2026", "ב only after the day");
+        assert_eq!(in_lang("mmmm yyyy", "he"), "מרץ 2026");
         // A weekday (dddd) is not a day number.
         assert_eq!(in_lang("dddd, mmmm", "cs"), "sobota, březen");
     }
