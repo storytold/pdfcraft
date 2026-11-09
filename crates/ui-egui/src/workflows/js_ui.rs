@@ -110,11 +110,7 @@ impl PdfCraftApp {
                         self.views[i].fit = crate::canvas::Fit::None;
                     }
                 }
-                Request::Highlight(h) => {
-                    if let Some(i) = view {
-                        self.views[i].highlight_fields = h;
-                    }
-                }
+                Request::Highlight(on) => self.script_highlight(id, on),
                 Request::Focus(name) => {
                     if let Some(i) = view
                         && let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name))
@@ -146,6 +142,16 @@ impl PdfCraftApp {
         if self.toast.is_none() {
             self.next_script_message();
         }
+    }
+
+    /// A form's script turned field highlighting on or off (`app.runtimeHighlight`): as the
+    /// Highlight fields button does, for document `id` and the next ones.
+    pub(crate) fn script_highlight(&mut self, id: DocId, on: bool) {
+        if let Some(v) = self.views.iter_mut().find(|v| v.id == id) {
+            v.highlight_fields = on;
+        }
+        self.view_defaults.highlight_fields = on;
+        self.session.set_field_highlight(on);
     }
 
     /// Put the next waiting script message in the toast, or, once none waits, a notice of how many

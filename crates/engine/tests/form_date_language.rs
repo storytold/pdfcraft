@@ -241,7 +241,7 @@ fn fill(doc: &mut Document, name: &str) {
 
 /// Fills `form`'s field `name` with `value` through the JavaScript runner.
 fn fill_with(doc: &mut Document, name: &str, value: &str) {
-    let mut js = JsRunner::new(doc, "form.pdf");
+    let mut js = JsRunner::new(doc, "form.pdf", false);
     pdfcraft_forms::set_value_with(doc, name, &FieldValue::Text(value.into()), &mut js).expect("fills");
 }
 

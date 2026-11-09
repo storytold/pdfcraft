@@ -62,6 +62,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::LockAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
@@ -220,12 +221,16 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     pub(crate) xfa_ran_away: bool,
+    /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
+    pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
+    /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
+    pub(crate) highlight: bool,
     pub(crate) date: Option<String>,
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
@@ -245,6 +250,23 @@ pub(crate) struct EditCtx {
 }
 
 impl EditCtx {
+    /// The field highlight (`app.runtimeHighlight`) the edit's next script reads: the field
+    /// scripts' runner holds it while there is one (its scripts change it there), else the edit.
+    pub(crate) fn highlight(&self) -> bool {
+        self.js.as_ref().map_or(self.highlight, |js| js.doc.runtime_highlight)
+    }
+
+    /// A script changed the field highlight: both script runtimes of the edit read the new one,
+    /// so a later edit of a batch sees it whichever kind of script it runs.
+    pub(crate) fn set_highlight(&mut self, on: bool) {
+        self.highlight = on;
+        if let Some(js) = self.js.as_mut() {
+            js.doc.runtime_highlight = on;
+        }
+    }
+
+    /// The context for one edit: `now` (the session's clock) dates it, and with `salt` seeds the
+    /// ids it makes.
     pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -261,9 +283,11 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_unchanged: false,
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
+            highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
@@ -559,9 +583,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             note_skipped(doc, &report);
         }
-        Edit::AddCustomStamp { page, rect, name, file, author } => {
+        Edit::AddCustomStamp { page, rect, name, file, author, line } => {
             let src = mark_source(doc, file)?;
-            let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
+            let line = line.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(crate::MAX_STAMP_LINE).collect::<String>());
+            let picture = (src.size.0.max(1.0), src.size.1.max(1.0));
+            // A text line adds its band under the picture, and widens the stamp to fit (#1741).
+            let (sw, sh) = pdfcraft_annot::custom_stamp_size(picture, line.as_deref());
             let natural = rect[2] == rect[0] && rect[3] == rect[1];
             let rotation = pdfcraft_organize::page_rotation(doc, *page)?;
             // The picture as displayed: a quarter turn swaps its sides in user space.
@@ -573,7 +600,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             } else {
                 fit_picture(*rect, dw, dh)
             };
-            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
+            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: picture, line };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
@@ -611,7 +638,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
-            // One `/NM` each: the strikeout is grouped under the caret, and XFDF names that link by
+            // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
             // the caret's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
             pdfcraft_annot::add_text_replacement(
@@ -634,6 +661,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
+        Edit::SetAnnotationPopup { page, index, rect, open } => pdfcraft_annot::set_popup(doc, *page, *index, *rect, *open, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
             pdfcraft_annot::set_style(
@@ -670,12 +698,26 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
-            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            let highlight = cx.highlight();
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                highlight,
+                time_scale: cx.xfa_time_scale,
+            };
+            let ran = if matches!(activity.as_str(), "enter" | "exit") {
+                xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
+            } else {
+                xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
+            };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
-            ran.map_err(EditError::Invalid)?;
+            // The next edit of a batch reads the highlight this one's scripts set.
+            let on = run.highlight;
+            cx.set_highlight(on);
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } | Edit::SetFieldImageTarget { name, image, .. } => {
             let object = match edit {
@@ -1007,6 +1049,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => {
+            // A form-script event runs on its own: in a batch, its scripts and those the batch's
+            // value edits run afterwards (change, exit) would interleave, an exit running twice.
+            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+            }
             for e in edits {
                 run_edit(doc, e, cx)?;
                 if let Some(js) = cx.js.as_mut() {

@@ -81,6 +81,15 @@ fn reset_name_matches(name: &str, selectors: &[String]) -> bool {
     selectors.iter().any(|selector| name == selector || name.strip_prefix(selector).is_some_and(|rest| rest.starts_with('.')))
 }
 
+/// A field gaining or losing focus ([`Session::field_focus`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldFocus {
+    /// The field gained focus: its `enter` scripts run.
+    Enter,
+    /// The field lost focus: its `exit` scripts run.
+    Exit,
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -427,9 +436,8 @@ impl JsRunner {
         if matches!(edit, Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::ApplyScriptChanges { .. } | Edit::Batch { .. }) {
             return;
         }
-        let mut current = Self::new(cos, &self.doc.file_name);
+        let mut current = Self::new(cos, &self.doc.file_name, self.doc.runtime_highlight);
         current.doc.zoom = self.doc.zoom;
-        current.doc.runtime_highlight = self.doc.runtime_highlight;
         current.doc.page = self.doc.page;
         self.doc = current.doc;
         self.doc_scripts = current.doc_scripts;
@@ -437,8 +445,9 @@ impl JsRunner {
     }
 
     /// A runner for `cos`: what scripts read about the document (pages, info, whether it is
-    /// an XFA form) and its document-level scripts, read once.
-    pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
+    /// an XFA form) and its document-level scripts, read once. `highlight`: whether the viewer
+    /// highlights form fields (`app.runtimeHighlight`).
+    pub fn new(cos: &pdfcraft_cos::Document, file_name: &str, highlight: bool) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
         #[cfg(test)]
         SNAPSHOT_WORK.with(|c| {
@@ -455,7 +464,7 @@ impl JsRunner {
             page_rotations: pages.iter().map(|page| page.rotation(cos)).collect(),
             xfa,
             zoom: 100.0,
-            runtime_highlight: true,
+            runtime_highlight: highlight,
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
@@ -490,6 +499,14 @@ fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(u
             Some((*index, script))
         })
         .collect()
+}
+
+/// The field highlight the last of `requests` that sets it asks for (`app.runtimeHighlight`).
+fn last_highlight(requests: &[Request]) -> Option<bool> {
+    requests.iter().rev().find_map(|r| match r {
+        Request::Highlight(on) => Some(*on),
+        _ => None,
+    })
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
@@ -530,6 +547,10 @@ impl Scripts for JsRunner {
         if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
             return ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None };
+        }
+        // The edit's later scripts read the field highlight this one set.
+        if let Some(on) = last_highlight(&o.requests) {
+            self.doc.runtime_highlight = on;
         }
         ScriptResult {
             rc: o.rc,
@@ -586,6 +607,25 @@ impl crate::Document {
     }
 }
 
+/// When a signature field's XFA signing scripts run ([`Session::run_sign_event`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignEvent {
+    /// Just before the field is signed (`preSign`): what it changes is signed too.
+    Before,
+    /// Once the field is signed (`postSign`).
+    After,
+}
+
+impl SignEvent {
+    /// The template's name for the event.
+    pub fn activity(self) -> &'static str {
+        match self {
+            SignEvent::Before => "preSign",
+            SignEvent::After => "postSign",
+        }
+    }
+}
+
 impl Session {
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
     pub fn set_javascript(&mut self, on: bool) {
@@ -597,13 +637,97 @@ impl Session {
         }
     }
 
+    /// Whether JavaScript is on (Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript).
     pub fn javascript(&self) -> bool {
         !self.js_off
+    }
+
+    /// Whether the viewer highlights form fields (Highlight fields), which forms' scripts read as
+    /// `app.runtimeHighlight`. A script that changes it asks for [`Request::Highlight`]; the
+    /// viewer then calls this with the new setting.
+    pub fn set_field_highlight(&mut self, on: bool) {
+        self.field_highlight = on;
     }
 
     /// What scripts printed or asked for since the last call (alerts, console, print, …).
     pub fn take_js_output(&mut self, id: DocId) -> JsOutput {
         self.docs.iter_mut().find(|d| d.id == id).map(|d| std::mem::take(&mut d.js_output)).unwrap_or_default()
+    }
+
+    /// The last field-highlight change (`app.runtimeHighlight`) scripts asked for in document
+    /// `id`, taken out of its waiting output; the rest stays for [`Session::take_js_output`].
+    pub fn take_js_highlight(&mut self, id: DocId) -> Option<bool> {
+        let doc = self.docs.iter_mut().find(|d| d.id == id)?;
+        let mut last = None;
+        doc.js_output.requests.retain(|r| match r {
+            Request::Highlight(on) => {
+                last = Some(*on);
+                false
+            }
+            _ => true,
+        });
+        last
+    }
+
+    /// Widget `widget` of field `name` in document `id` gained or lost focus: on a laid-out XFA form,
+    /// run the field's `enter` or `exit` scripts, as one undoable edit when they change something
+    /// (and none when they don't). An exit that the field's new value already ran (the value's
+    /// change runs it) isn't run a second time. Returns whether the document changed; what the
+    /// scripts showed or asked for is in [`Session::take_js_output`].
+    pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let activity = match focus {
+            FieldFocus::Enter => "enter",
+            FieldFocus::Exit => "exit",
+        };
+        if !crate::xfa::has_event(cos, &tpl, &som, activity) {
+            doc.xfa_exited.remove(&som);
+            return Ok(false);
+        }
+        // Gaining focus starts afresh; losing it runs the exit unless the change just did.
+        if doc.xfa_exited.remove(&som) && focus == FieldFocus::Exit {
+            return Ok(false);
+        }
+        let before = doc.generation;
+        self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
+        Ok(self.get(id).is_some_and(|d| d.generation != before))
+    }
+
+    /// Run signature field `field`'s XFA signing scripts for `event` in document `id`: `preSign`
+    /// before it is signed, `postSign` after, as one undoable step, as a form's signing events run
+    /// (DA 31's dates the signature and locks the date). `Ok(false)`, with nothing changed, when
+    /// there are none: not a laid-out XFA form, JavaScript off, no such field, or no such script.
+    /// What the scripts said or asked for is in [`Session::take_js_output`].
+    pub fn run_sign_event(&mut self, id: DocId, field: &str, event: SignEvent) -> Result<bool, EditError> {
+        if self.get(id).is_none() {
+            return Err(EditError::NoDocument);
+        }
+        let Some(som) = self.sign_event_som(id, field, event) else { return Ok(false) };
+        self.apply(id, Edit::XfaEvent { som, activity: event.activity().into() })?;
+        Ok(true)
+    }
+
+    /// Whether signature field `field` of document `id` has XFA signing scripts for `event` that
+    /// [`Session::run_sign_event`] would run, without running them.
+    pub fn sign_event_scripted(&self, id: DocId, field: &str, event: SignEvent) -> bool {
+        self.sign_event_som(id, field, event).is_some()
+    }
+
+    /// The SOM path of signature field `field` when it has scripts for `event` to run.
+    fn sign_event_som(&self, id: DocId, field: &str, event: SignEvent) -> Option<String> {
+        if self.js_off {
+            return None;
+        }
+        let doc = self.get(id)?;
+        let (tpl, editor) = (doc.xfa_template.as_ref()?, doc.editor.as_ref()?);
+        let f = doc.form.iter().find(|f| f.name == field)?;
+        crate::xfa::scripted_som(&editor.cos, tpl, f, event.activity())
     }
 
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
@@ -659,9 +783,8 @@ impl Session {
                 ..Default::default()
             });
         }
-        let mut runner = JsRunner::new(&cos, &doc.name);
+        let mut runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
-        runner.doc.runtime_highlight = doc.js_highlight;
         runner.doc.page = doc.js_page;
         let fields = pdfcraft_forms::fields(&cos);
         let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
@@ -720,6 +843,10 @@ impl Session {
             let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
             Some(editor.cos.clone())
         };
+        // The calculations the script's changes set off read the field highlight it asked for.
+        if let Some(on) = last_highlight(&o.requests) {
+            self.field_highlight = on;
+        }
         let mut edits = Vec::new();
         for names in resets {
             let names = (!names.is_empty())
@@ -1118,9 +1245,8 @@ impl Session {
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = &doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?.cos;
-        let mut runner = JsRunner::new(cos, &doc.name);
+        let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
-        runner.doc.runtime_highlight = doc.js_highlight;
         runner.doc.page = doc.js_page;
         let fields = pdfcraft_forms::fields(cos);
         validate_script_target(target, target_id, &fields)?;
@@ -1166,9 +1292,10 @@ pub use pdfcraft_js::interaction::{InteractiveEvent, MenuItem, Prompt};
 impl Session {
     /// Supply current viewer state for script getters, clamping invalid zoom to the supported range.
     pub fn set_javascript_view(&mut self, id: DocId, zoom: f64, highlight: bool, page: usize) {
+        self.set_field_highlight(highlight);
         if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
             doc.js_zoom = if zoom.is_finite() { zoom.clamp(1.0, 6400.0) } else { 100.0 };
-            doc.js_highlight = highlight;
+
             doc.js_page = page;
         }
     }
@@ -1307,7 +1434,7 @@ mod snapshot_review_tests {
         let mut fields = pdfcraft_forms::fields(cos);
         fields[1].actions.scripts.calculate = Some("event.value=Number(getField('f0').value)+1;".into());
         SNAPSHOT_WORK.with(|c| c.set((0, 0)));
-        let mut runner = JsRunner::new(cos, "synthetic.pdf");
+        let mut runner = JsRunner::new(cos, "synthetic.pdf", false);
         for i in 0..8 {
             fields[0].value = vec![i.to_string()];
             let out = runner.run(FieldEvent::Calculate, "calculateNow();event.value=getField('f1').value;", &fields[1], "", &fields, cos);
