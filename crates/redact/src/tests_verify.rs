@@ -1050,7 +1050,16 @@ fn images_hidden_in_patterns_soft_masks_and_type3_glyphs_are_not_skipped() {
             "type3",
             Spec {
                 resources: "/Font << /F3 << /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 7 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >> >>",
-                extra: vec![proc],
+                extra: vec![proc.clone()],
+                ..Spec::default()
+            },
+        ),
+        // `/Subtype 8 0 R` naming `/Type3` is still a Type3 font (#6770).
+        (
+            "type3 by reference",
+            Spec {
+                resources: "/Font << /F3 << /Type /Font /Subtype 8 0 R /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 7 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >> >>",
+                extra: vec![proc, b"/Type3".to_vec()],
                 ..Spec::default()
             },
         ),
@@ -1466,4 +1475,70 @@ fn page_content(doc: &Document) -> String {
     let p = &pdfcraft_model::pages(doc)[0];
     let (_, data) = page_streams(doc, &p.dict, 0).unwrap();
     data.iter().map(|d| String::from_utf8_lossy(d).into_owned()).collect::<Vec<_>>().join("\n")
+}
+
+/// `/Subtype 8 0 R` naming `/Image` is still an image, and the renderer draws it: the proof read
+/// only a direct name, so it never looked at an image named that way under a region (#6770).
+/// The direct `/Subtype /Image` is the control.
+#[test]
+fn an_image_whose_subtype_is_a_reference_is_checked() {
+    for subtype in ["/Image", "8 0 R"] {
+        let image =
+            stream(&format!("/Type /XObject /Subtype {subtype} /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8"), &[0xFFu8; 400]);
+        let spec = Spec { resources: "/XObject << /Im1 7 0 R >>", extra: vec![image, b"/Image".to_vec()], ..Spec::default() };
+        let proof = prove_unapplied(&mut marked_region(b"q 100 0 0 100 100 100 cm /Im1 Do Q", spec));
+        let e = &proof.entries[0];
+        assert_eq!(e.status, Status::Failed, "{subtype}: {}", proof.to_text());
+        assert!(e.detail.contains("image"), "{subtype}: {}", e.detail);
+    }
+}
+
+/// A form whose `/Subtype` is a reference is still drawn: the proof enters it, for its text and
+/// for what it paints under a region (#6770).
+#[test]
+fn a_form_whose_subtype_is_a_reference_is_entered() {
+    for subtype in ["/Form", "8 0 R"] {
+        let form = stream(
+            &format!("/Type /XObject /Subtype {subtype} /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>"),
+            b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET 0 0 1 rg 10 95 60 15 re f",
+        );
+        let spec = Spec { resources: "/XObject << /Fm1 7 0 R >>", extra: vec![form, b"/Form".to_vec()], ..Spec::default() };
+        let proof = prove_unapplied(&mut marked_content(b"/Fm1 Do", spec));
+        let e = &proof.entries[0];
+        assert_eq!(e.status, Status::Failed, "{subtype}: {}", proof.to_text());
+        assert!(e.detail.contains("path"), "{subtype}: {}", e.detail);
+    }
+}
+
+/// A Type0 font whose `/Subtype` is a reference is still composite: its two-byte codes without a
+/// `/ToUnicode` can't be read, so the region is unverifiable, not clean text read one byte at a
+/// time (#6770).
+#[test]
+fn a_type0_font_whose_subtype_is_a_reference_is_read_as_composite() {
+    for subtype in ["/Type0", "8 0 R"] {
+        let font = OPAQUE_FONT.replacen("/Subtype /Type0", &format!("/Subtype {subtype}"), 1);
+        let spec = Spec { resources: "/Font << /F1 5 0 R /F2 7 0 R >>", extra: vec![font.into_bytes(), b"/Type0".to_vec()], ..Spec::default() };
+        let mut doc = open(build_with(b"BT /F2 10 Tf 10 200 Td <00410042> Tj ET", spec));
+        mark(&mut doc, &[[150.0, 20.0, 200.0, 40.0]]);
+        let proof = prove_unapplied(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "{subtype}: {}", proof.to_text());
+        assert!(!proof.passed());
+    }
+}
+
+/// An XObject the proof can't classify (no `/Subtype`, or one it does not know) may still draw
+/// something: placed under a region it makes the region unverifiable; placed elsewhere it doesn't
+/// matter (#6770).
+#[test]
+fn an_xobject_of_unknown_subtype_under_a_region_is_unverifiable() {
+    for subtype in ["", "/Subtype /PS", "/Subtype 42"] {
+        let x = stream(&format!("/Type /XObject {subtype} /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), &[0]);
+        let under = Spec { resources: "/XObject << /X1 7 0 R >>", extra: vec![x.clone()], ..Spec::default() };
+        let proof = prove_unapplied(&mut marked_region(b"q 10 0 0 10 110 110 cm /X1 Do Q", under));
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "{subtype:?}: {}", proof.to_text());
+        assert!(!proof.passed());
+        let away = Spec { resources: "/XObject << /X1 7 0 R >>", extra: vec![x], ..Spec::default() };
+        let proof = prove_unapplied(&mut marked_region(b"q 10 0 0 10 250 250 cm /X1 Do Q", away));
+        assert_eq!(proof.entries[0].status, Status::VerifiedNoTextInRegion, "{subtype:?}: {}", proof.to_text());
+    }
 }
