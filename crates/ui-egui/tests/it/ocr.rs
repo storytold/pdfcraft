@@ -472,8 +472,10 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
 fn recognize_text_keeps_its_buttons_in_a_short_window() {
     use egui::accesskit::Role;
     // 173 is the smallest window (520 pt) at the largest interface size (300%), 208 is 250%.
+    // 640 pt across is a 1280-pixel-wide screen at 200%.
+    let width = 640.0;
     for height in [173.0, 208.0, 260.0, 400.0, 480.0, 560.0, 700.0] {
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, height)).build_eframe(|_cc| {
+        let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.open_bytes("scan.pdf", None, scan()).unwrap();
@@ -482,7 +484,7 @@ fn recognize_text_keeps_its_buttons_in_a_short_window() {
         h.run_steps(4);
         assert!(h.state_mut().execute("ocr.recognize"));
         h.run_steps(6);
-        let on_screen = |r: egui::Rect| r.min.y >= 0.0 && r.max.y <= height;
+        let on_screen = |r: egui::Rect| r.min.x >= 0.0 && r.max.x <= width && r.min.y >= 0.0 && r.max.y <= height;
         let title = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Recognize Text")).rect();
         let run = h.get_by_role_and_label(Role::Button, "Recognize text").rect();
         let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
@@ -495,5 +497,9 @@ fn recognize_text_keeps_its_buttons_in_a_short_window() {
         let last = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Output folder")).rect();
         assert!(last.min.y >= title.max.y && last.max.y <= run.min.y, "{height}: Output folder {last:?} between {title:?} and {run:?}");
         assert_eq!(h.get_by_role_and_label(Role::Button, "Recognize text").rect(), run, "{height}: the buttons stay put");
+        // On screen is not enough: a click reaches Cancel and closes the dialog.
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none(), "{height}: Cancel closes the dialog");
     }
 }
