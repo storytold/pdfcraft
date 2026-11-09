@@ -399,9 +399,17 @@ fn helvetica() -> Object {
     Object::Dict(f)
 }
 
+/// An `/MK /BC` or `/BG` colour (ISO 32000-2 Table 192) as a fill operator. A four-entry array
+/// with a non-number in it, such as `[1 0 0 null]`, is CMYK with that entry 0, as annotation `/C`
+/// colours are read.
 fn color_array(doc: &Document, mk: Option<&Dict>, key: &[u8]) -> Option<String> {
     let a = doc.resolve(mk?.get(key)?);
-    let v: Vec<f64> = a.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+    let a = a.as_array()?;
+    let v: Vec<f64> = if a.len() == 4 {
+        a.iter().map(|x| doc.resolve(x).as_f64().unwrap_or(0.0)).collect()
+    } else {
+        a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()
+    };
     match v.as_slice() {
         [g] => Some(format!("{} g", n(*g))),
         [r, g, b] => Some(format!("{} {} {} rg", n(*r), n(*g), n(*b))),

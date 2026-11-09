@@ -877,6 +877,40 @@ fn an_annotation_reached_through_a_reference_chain_is_listed_once() {
     }
 }
 
+/// Comments list their `/C` as pdfcraft-annot draws and lists it: four entries with a null are
+/// CMYK with the null as 0, one entry is grey, a reference among four entries is unreadable,
+/// three numbers (some by reference) are RGB, and a text box keeps its three-number `/C`.
+#[test]
+fn comment_colours_are_listed_as_drawn() {
+    let pdf = "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+             4 0 obj << /Type /Annot /Subtype /Square /Rect [0 0 10 10] /C [1 0 0 null] >> endobj
+             5 0 obj << /Type /Annot /Subtype /Square /Rect [0 20 10 30] /C 10 0 R >> endobj
+             6 0 obj << /Type /Annot /Subtype /Square /Rect [0 40 10 50] /C [1 0 0 11 0 R] >> endobj
+             7 0 obj << /Type /Annot /Subtype /Square /Rect [0 60 10 70] /C [11 0 R 0 0] >> endobj
+             8 0 obj << /Type /Annot /Subtype /Circle /Rect [0 80 10 90] /C [0 0 0 1] >> endobj
+             9 0 obj << /Type /Annot /Subtype /FreeText /Rect [0 100 10 110] /C [0 1 0] >> endobj
+             10 0 obj [0.5] endobj
+             11 0 obj 1 endobj
+             trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let mut saved = Vec::new();
+    doc.save_to(&mut saved).expect("saves");
+    let lazy = LazyStructure::new(Arc::new(saved), None).expect("opens");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    for reader in [&doc as &dyn Structure, &lazy] {
+        let mut info = DocInfo { pages: vec![page.clone()], ..Default::default() };
+        Inspector::new(reader).fill(&mut info);
+        let mut listed: Vec<(f32, Option<[f32; 3]>)> = info.annotations.iter().map(|a| (a.rect[1], a.color)).collect();
+        listed.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let colors: Vec<Option<[f32; 3]>> = listed.into_iter().map(|(_, c)| c).collect();
+        assert_eq!(colors, [Some([0.0, 1.0, 1.0]), Some([0.5, 0.5, 0.5]), None, Some([1.0, 0.0, 0.0]), Some([0.0, 0.0, 0.0]), Some([0.0, 1.0, 0.0])]);
+    }
+}
+
 /// A reply finds its comment where the listing keeps it: on the first page of a page-shared
 /// `/Annots` array, whether its `/IRT` names the comment or an object holding a reference to it.
 #[test]

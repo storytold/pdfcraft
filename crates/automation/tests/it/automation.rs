@@ -2969,6 +2969,15 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
         {"input":"a.pdf","output":"a-numbered.pdf"}
     ]);
     let mut a = auto(&dir);
+    for invalid_start in [json!(0), json!(-1), json!(1.5), json!("17")] {
+        let error = err(&mut a, "doc_bates_multi", json!({"files":files,"start_number":invalid_start}));
+        assert!(matches!(error, ToolError::InvalidArgs(_)));
+    }
+    let unicode = ok(&mut a, "doc_bates_multi", json!({"files":files,"prefix":"é".repeat(65),"dry_run":true}));
+    assert_eq!(unicode["files"].as_array().unwrap().len(), 2);
+    assert!(matches!(err(&mut a, "doc_bates_multi", json!({"files":files,"prefix":"CASE>>"})), ToolError::InvalidArgs(_)));
+    assert!(matches!(err(&mut a, "doc_bates_multi", json!({"files":files,"suffix":"A>>B"})), ToolError::InvalidArgs(_)));
+
     let allocation = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":50,"dry_run":true}));
     assert_eq!(allocation["files"][0]["first"], 50);
     assert_eq!(allocation["files"][0]["last"], 51);
@@ -2987,15 +2996,24 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
     let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
     assert!(overflow.to_string().contains("overflows"));
     assert!(!dir.join("overflow.pdf").exists());
-    // A range may end at u64::MAX itself.
-    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
-    assert_eq!(at_max["files"][0]["last"], u64::MAX);
-    for bad in
-        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
+    let max_number =
+        ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"one.pdf","output":"one-numbered.pdf"}],"start_number":u64::MAX,"dry_run":true}));
+    assert_eq!(max_number["files"][0]["first"], u64::MAX);
+    assert_eq!(max_number["files"][0]["last"], u64::MAX);
+
+    #[cfg(windows)]
     {
-        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
-        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
-        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+        let collision = err(
+            &mut a,
+            "doc_bates_multi",
+            json!({"files":[
+                {"input":"b.pdf","output":"Case.pdf"},
+                {"input":"a.pdf","output":"CASE.pdf"}
+            ]}),
+        );
+        assert!(collision.to_string().contains("same output path"));
+        assert!(!dir.join("Case.pdf").exists());
     }
 
     use pdfcraft_engine::{Changes, Edit, Protection, Session};
@@ -6783,11 +6801,26 @@ fn drawing_comments_through_tools() {
         a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "polygon", "points": [[1, 1]] })),
         Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
     ));
-    // Replace Text: a strikeout over the found text and a grouped caret.
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page" }));
+    // Replace Text: a strikeout over the found text, grouped under a caret holding the
+    // replacement (the group's primary, ISO 32000-2 §12.5.6.2).
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page", "color": "green" }));
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 2 }));
-    let strike = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "StrikeOut").unwrap().clone();
-    assert_eq!(strike["replies"][0]["contents"], "second page", "the caret threads under the strikeout");
+    let caret = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
+    assert_eq!(caret["contents"], "second page", "the replacement is on the caret");
+    assert_eq!(caret["replies"][0]["type"], "StrikeOut", "the strikeout is grouped under the caret");
+    // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it.
+    assert_eq!(caret["replies"][0]["color"], caret["color"], "one colour for the pair: {caret}");
+    assert_eq!(caret["color"], json!("#2E9E5C"), "the requested green, not the caret's default blue: {caret}");
+    // Restyling the caret restyles the proposal, its strikeout too, as one undo step.
+    let pair = |a: &mut Automation| {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 2 }));
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
+        (c["color"].clone(), c["replies"][0]["color"].clone())
+    };
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 2, "index": caret["index"], "color": "purple" }));
+    assert_eq!(pair(&mut a), (json!("#8A3FD1"), json!("#8A3FD1")), "the strikeout follows its caret");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(pair(&mut a), (json!("#2E9E5C"), json!("#2E9E5C")), "one undo puts both back");
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2" })), Err(ToolError::InvalidArgs(_))));
     // A file attached as a comment.
     std::fs::write(dir.join("notes.txt"), b"remember").unwrap();
@@ -8519,6 +8552,119 @@ BT /F1 12 Tf 72 640 Td (A paragraph further down.) Tj ET";
     assert_eq!(sentence.iter().map(|(t, _)| t.as_str()).collect::<String>(), "Before Chevron after.", "{xml}");
     assert_eq!(sentence.iter().map(|(_, i)| *i).collect::<Vec<_>>(), [false, true, false], "{xml}");
     assert_eq!(paragraphs.len(), 2, "{xml}");
+}
+
+/// A one-page PDF (612 x 792 pt) drawing `content`, with the standard fonts `fonts` as /F1, /F2
+/// and so on, each in its built-in encoding. A font given `bfchar` pairs ("<B7> <F0B7>") reads
+/// its codes through that ToUnicode map, as a symbol font Word embeds does.
+fn standard_fonts_pdf(content: &str, fonts: &[(&str, Option<&str>)]) -> Vec<u8> {
+    let names: String = (1..=fonts.len()).map(|i| format!("/F{i} {} 0 R ", i + 4)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << {names}>> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut maps = Vec::new();
+    for (font, map) in fonts {
+        let to_unicode = map.map_or(String::new(), |map| {
+            let cmap = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange \
+1 beginbfchar {map} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+            );
+            maps.push(format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()));
+            format!(" /ToUnicode {} 0 R", fonts.len() + 4 + maps.len())
+        });
+        objs.push(format!("<< /Type /Font /Subtype /Type1 /BaseFont /{font}{to_unicode} >>"));
+    }
+    objs.extend(maps);
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// The text of each paragraph that holds any in `word/document.xml` of the .docx at `path`.
+fn word_paragraph_texts(path: &Path) -> Vec<String> {
+    let zip = std::fs::read(path).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    xml.split("<w:p>")
+        .skip(1)
+        .map(|p| {
+            let p = p.split_once("</w:p>").map_or(p, |(inside, _)| inside);
+            p.split("<w:t xml:space=\"preserve\">").skip(1).filter_map(|t| t.split_once("</w:t>").map(|(t, _)| t)).collect::<String>()
+        })
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+/// #4158: a sentence that wraps onto the next lines after a bold name and a slanted one reaches
+/// Word as one paragraph, though reading splits each of its lines where the style changes.
+#[test]
+fn exporting_to_word_keeps_a_wrapped_sentence_in_one_paragraph() {
+    let dir = workdir("wrapped-sentence-word");
+    let content = "BT /F1 10 Tf 72 700 Td (The parties to this lease are the owner, ) Tj /F2 10 Tf (Harbour Lane Properties) Tj \
+/F1 10 Tf (, of 4 Quay Street, and the) Tj ET \
+BT /F1 10 Tf 72 686 Td (tenant named in the schedule, ) Tj /F3 10 Tf (Blue Finch Studio) Tj \
+/F1 10 Tf (, who agree as follows to rent the upper) Tj ET \
+BT /F1 10 Tf 72 672 Td (rooms for the whole of the term.) Tj ET \
+BT /F1 10 Tf 72 640 Td (Rent is paid monthly in advance.) Tj ET";
+    let fonts = [("Helvetica", None), ("Helvetica-Bold", None), ("Helvetica-Oblique", None)];
+    std::fs::write(dir.join("lease.pdf"), standard_fonts_pdf(content, &fonts)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "lease.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "lease.docx" }));
+    let sentence = "The parties to this lease are the owner, Harbour Lane Properties, of 4 Quay Street, and the tenant named in the \
+schedule, Blue Finch Studio, who agree as follows to rent the upper rooms for the whole of the term.";
+    assert_eq!(word_paragraph_texts(&dir.join("lease.docx")), [sentence, "Rent is paid monthly in advance."]);
+}
+
+/// A bulleted list drawn as Word draws one, each bullet in the Symbol font (read as U+F0B7, as
+/// Word maps it) a tab stop before its item's text, reaches Word as one paragraph per item and
+/// not as a two-column table.
+#[test]
+fn exporting_to_word_keeps_a_bulleted_list_as_paragraphs() {
+    let dir = workdir("bulleted-list-word");
+    let mut content = String::from("BT /F1 10 Tf 72 700 Td (The tenant looks after:) Tj ET\n");
+    for (n, item) in ["the stairs and the landing;", "the shared yard and its gate;", "the bins, every week."].iter().enumerate() {
+        let y = 686 - 14 * n;
+        content.push_str(&format!("BT /F2 10 Tf 90 {y} Td (\\267) Tj ET BT /F1 10 Tf 108 {y} Td ({item}) Tj ET\n"));
+    }
+    content.push_str("BT /F1 10 Tf 72 630 Td (Rent is paid monthly in advance.) Tj ET");
+    std::fs::write(dir.join("list.pdf"), standard_fonts_pdf(&content, &[("Helvetica", None), ("Symbol", Some("<B7> <F0B7>"))])).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "list.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "list.docx" }));
+    assert_eq!(
+        word_paragraph_texts(&dir.join("list.docx")),
+        [
+            "The tenant looks after:",
+            "\u{F0B7} the stairs and the landing;",
+            "\u{F0B7} the shared yard and its gate;",
+            "\u{F0B7} the bins, every week.",
+            "Rent is paid monthly in advance."
+        ]
+    );
 }
 
 /// Hundreds of calculations run on opening and again after a change through the tools. The
