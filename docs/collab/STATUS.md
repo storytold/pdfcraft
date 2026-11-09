@@ -387,7 +387,7 @@ refuses an ambiguous configuration instead of guessing.
   `error{code:"auth"}` for one signed with another secret; `main.rs` tests the
   configuration matrix and the secret file's trailing newline.
 
-Gates on `agents` (`../scripts/remote-build.sh`), all green at this commit:
+Gates on `agents` (`../scripts/remote-build.sh`), all green at `157f4d239`:
 
 ```text
 $ cargo clippy -p pdfcraft-collab-ws -p pdfcraft-collab-server -p pdfcraft-collab-daemon --all-targets -- -D warnings
