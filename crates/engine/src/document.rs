@@ -8,7 +8,8 @@ use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 use crate::history::Editor;
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
-    SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
+    SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password,
+    signatures_of, unrestricted,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
@@ -19,8 +20,9 @@ pub struct Document {
     pub path: Option<String>,
     /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
-    /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
-    /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
+    /// What is displayed (the page view, `page_render`, page images): `bytes`, plus what is drawn
+    /// for display only ([`display_bytes`]): appearances for comments that have none, and the
+    /// states of named-layer signatures. Never saved.
     pub display: Arc<Vec<u8>>,
     pub info: DocInfo,
     pub renderer: RenderPool,
@@ -30,7 +32,8 @@ pub struct Document {
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     pub(crate) generation: u64,
-    /// The generation last handed out by `autosave_snapshots`.
+    /// The generation last handed out by `autosave_snapshots`, or another one when storing that
+    /// snapshot failed (`autosave_failed`), so it is due again.
     pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
@@ -41,6 +44,9 @@ pub struct Document {
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
     pub(crate) trust: Arc<TrustStore>,
+    /// The words signature status layers are drawn with (the session's, see
+    /// [`Session::set_signature_captions`](crate::Session::set_signature_captions)).
+    pub(crate) captions: Arc<StatusCaptions>,
     pub(crate) sig_cache: Arc<pdfcraft_sign::DigestCache>,
     pub(crate) editor: Option<Editor>,
     pub(crate) config: RenderConfig,
@@ -253,6 +259,15 @@ impl Document {
             return Err("grouped Form artwork is not a bitmap; Save Image As is only available for raster images".into());
         }
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
+    }
+
+    /// Edit text: whether grouped artwork `index` on `page` (0-based, as [`Self::page_images`]
+    /// lists them) shows text that [`Edit::PrepareText`](crate::Edit::PrepareText) would make
+    /// editable. Reads the page without changing it; `false` for a logo, a group that can't be
+    /// opened or a page that can't be read.
+    pub fn grouped_text_at(&self, page: usize, index: usize) -> bool {
+        let Some(editor) = self.editor.as_ref() else { return false };
+        crate::guard(|| pdfcraft_edit::text::forms::grouped_text_at(&editor.cos, page, index)).is_ok_and(|r| r.is_ok_and(|yes| yes))
     }
 
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
@@ -539,7 +554,7 @@ impl Document {
             _ => "Attachments only",
         };
         let pending = editor.cos.encryption_changed();
-        let permissions = if pending { pdfcraft_cos::Permissions { bits: h.permissions().bits, owner: false } } else { h.permissions() };
+        let permissions = if pending { pdfcraft_cos::Permissions { owner: false, ..h.permissions() } } else { h.permissions() };
         Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
     }
 
@@ -637,6 +652,12 @@ impl Document {
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
     }
+
+    /// Objects of the file that could not be read and read as null, one line each (see
+    /// [`pdfcraft_cos::Document::unreadable_objects`]): only those read so far.
+    pub fn unreadable_objects(&self) -> Vec<String> {
+        self.editor.as_ref().map(|e| e.cos.unreadable_objects()).unwrap_or_default()
+    }
 }
 
 /// A title that names no document: what a web browser writes when it saves a blank page or a
@@ -649,23 +670,90 @@ pub(crate) fn is_placeholder_title(title: &str) -> bool {
     address || t == "untitled"
 }
 
-/// The working file plus appearances for comments that have none, and for form fields the file
-/// leaves to the viewer (#3470). Signature artwork is preserved; validation badges belong to the
-/// viewer and never enter these bytes, which image/text exports and Print as Image also consume.
-pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
+/// What is displayed: the working file plus, in memory only and never saved, the appearances
+/// PdfCraft draws for comments that have none ([`pdfcraft_annot::with_missing_appearances`]) and
+/// for form fields the file leaves to the viewer (#3470), and the signature states drawn into
+/// named-layer signature appearances ([`pdfcraft_sign::show_status_layers`]). The working file is
+/// unchanged, and so is everything that reads it (saving, signatures, …). Image and text exports
+/// and Print as Image read these bytes, so they show the page as displayed; validation badges
+/// belong to the viewer and never enter them.
+///
+/// `signatures` is input and output: each one whose state gets drawn comes back marked
+/// (`verdict_shown`). A mark describes the bytes returned, so every mark is cleared first and a
+/// copy that cannot be written takes its marks with it.
+pub(crate) fn display_bytes(
+    editor: Option<&mut Editor>,
+    bytes: &Arc<Vec<u8>>,
+    signatures: &mut [SignatureInfo],
+    captions: &StatusCaptions,
+) -> Arc<Vec<u8>> {
+    for sig in signatures.iter_mut() {
+        sig.verdict_shown = false;
+    }
     let Some(e) = editor else { return bytes.clone() };
     let comments = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances);
     let fields = pdfcraft_forms::with_field_appearances_cached(comments.as_ref().unwrap_or(&e.cos), &mut e.field_appearances);
-    let Some(display) = fields.or(comments) else {
+    if let Some(mut display) = fields.or(comments) {
+        // Written whether or not a signature changed: the copy exists for the comments and fields.
+        let _ = pdfcraft_sign::show_status_layers(&mut display, signatures, captions);
+        return write_display_copy(e, bytes, &display, signatures);
+    }
+    // No comment or field needed an appearance, so there is no copy yet: build one only when a
+    // signature's state would change it.
+    if !pdfcraft_sign::has_status_layers(&e.cos, signatures) {
         return bytes.clone();
-    };
-    match write_incremental(&display, &SaveOptions::default()) {
+    }
+    let mut display = e.cos.clone();
+    if !pdfcraft_sign::show_status_layers(&mut display, signatures, captions) {
+        return bytes.clone();
+    }
+    write_display_copy(e, bytes, &display, signatures)
+}
+
+/// Write the display copy, or keep the working file when it cannot be written. The page then
+/// shows the file's own artwork, so the marks are cleared. Losing the copy is a repair, so it is
+/// logged, once however many refreshes lose it again.
+pub(crate) fn write_display_copy(
+    e: &mut Editor,
+    bytes: &Arc<Vec<u8>>,
+    display: &pdfcraft_cos::Document,
+    signatures: &mut [SignatureInfo],
+) -> Arc<Vec<u8>> {
+    match write_incremental(display, &SaveOptions::default()) {
         Ok(written) => Arc::new(written),
         Err(err) => {
-            e.cos.note_repair(format!("missing comment or field appearances could not be drawn ({err})"));
+            for sig in signatures.iter_mut() {
+                sig.verdict_shown = false;
+            }
+            let line = format!("the display copy could not be written, so pages show the file as stored ({err})");
+            if !e.cos.repair_log().contains(&line) {
+                e.cos.note_repair(line);
+            }
             bytes.clone()
         }
     }
+}
+
+/// `doc` as the reader shows it: comments without an appearance stream drawn
+/// (`pdfcraft_annot::with_missing_appearances`) and form fields drawn from their values where the
+/// file leaves that to the viewer. `None` when `doc` needs neither. The vector print draws from
+/// this copy too, so what prints is what the page shows (#371, #3475 draw them for display only).
+pub(crate) fn as_displayed(doc: &pdfcraft_cos::Document) -> Option<pdfcraft_cos::Document> {
+    with_field_appearances(pdfcraft_annot::with_missing_appearances(doc), doc)
+}
+
+/// Carry the marks across a revalidation that leaves the display copy alone, when it may: only
+/// when every verdict is the one the copy was drawn with. Returns whether it did; otherwise the
+/// copy has to be drawn again.
+pub(crate) fn carry_verdict_marks(previous: &[SignatureInfo], next: &mut [SignatureInfo]) -> bool {
+    let unchanged = previous.len() == next.len()
+        && previous.iter().zip(next.iter()).all(|(p, n)| p.field == n.field && p.revision == n.revision && p.status == n.status);
+    if unchanged {
+        for (p, n) in previous.iter().zip(next.iter_mut()) {
+            n.verdict_shown = p.verdict_shown;
+        }
+    }
+    unchanged
 }
 
 /// `comments` (the display copy with comment appearances, if it needed any; else the document
@@ -681,8 +769,9 @@ pub(crate) fn same_pages(a: &[pdfcraft_render::PageInfo], b: &[pdfcraft_render::
 }
 
 /// Each document-information field of `info` with its value in `cos` (`/Info`, else XMP), read
-/// the way the full inspection reads them: NULs and spaces trimmed, empty is none.
-pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Document) -> [(&'a mut Option<String>, Option<String>); 6] {
+/// the way the full inspection reads them: NULs and spaces trimmed, empty is none, dates shown as
+/// [`pdfcraft_render::pretty_date`] shows them.
+pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Document) -> [(&'a mut Option<String>, Option<String>); 8] {
     let read = |key| pdfcraft_organize::info(cos, key).map(|v| v.trim_matches('\0').trim().to_string()).filter(|v| !v.is_empty());
     [
         (&mut info.title, read("Title")),
@@ -691,20 +780,33 @@ pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Documen
         (&mut info.keywords, read("Keywords")),
         (&mut info.creator, read("Creator")),
         (&mut info.producer, read("Producer")),
+        (&mut info.created, read("CreationDate").map(|d| pdfcraft_render::pretty_date(&d))),
+        (&mut info.modified, read("ModDate").map(|d| pdfcraft_render::pretty_date(&d))),
     ]
 }
 
-/// The copy PDFCraft displays when opening `bytes`: with appearances drawn, in memory only, for
-/// comments that have none and form fields the file leaves to the viewer. Render paths outside the app, such as the CLI, use this so their page
-/// images agree with the app and independent viewers. It never changes the source document, and an
-/// unparseable file, a write failure or a parser panic falls back to the original bytes.
+/// The copy PDFCraft displays when opening `bytes` with no trusted certificates and English
+/// captions ([`display_bytes`]): appearances drawn, in memory only, for comments that have none
+/// and form fields the file leaves to the viewer, and the state of each named-layer signature.
+/// Render paths outside the app, such as the CLI, use this so their page images agree with the app
+/// and independent viewers. It never changes the source document: a file with nothing to draw, an
+/// unparseable file, a write failure or a parser panic gives back the original bytes.
 pub fn display_bytes_for(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Arc<Vec<u8>> {
     guard(|| {
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), password)
-            .ok()
-            .and_then(|cos| with_field_appearances(pdfcraft_annot::with_missing_appearances(&cos), &cos))
-            .and_then(|display| write_incremental(&display, &SaveOptions::default()).ok())
-            .map(Arc::new)
+        let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok()?;
+        let mut signatures = signatures_of(&cos, &bytes, &TrustStore::default(), &pdfcraft_sign::DigestCache::default());
+        let layered = pdfcraft_sign::has_status_layers(&cos, &signatures);
+        let (mut display, added) = match as_displayed(&cos) {
+            Some(display) => (display, true),
+            None if layered => (cos, false),
+            None => return None,
+        };
+        // As in the app, a layer recognised but not drawn after all makes no copy.
+        let drawn = layered && pdfcraft_sign::show_status_layers(&mut display, &mut signatures, &StatusCaptions::default());
+        if !(added || drawn) {
+            return None;
+        }
+        write_incremental(&display, &SaveOptions::default()).ok().map(Arc::new)
     })
     .ok()
     .flatten()
