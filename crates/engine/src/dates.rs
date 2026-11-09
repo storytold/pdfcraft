@@ -683,7 +683,8 @@ fn runs(fmt: &str) -> Vec<(char, usize, bool)> {
 }
 
 /// Languages whose `months_with_day` form only reads after the day: Hebrew `7 במרץ`, but
-/// `מרץ 7`. Elsewhere the form follows any day in the pattern (Lithuanian `kovo 7 d.`).
+/// `מרץ 7`; the short name then takes the prefix ב too (`8 באוק׳`). Elsewhere the form follows
+/// any day in the pattern (Lithuanian `kovo 7 d.`).
 const DAY_FIRST_MONTH_FORMS: &[&str] = &["he"];
 
 /// The day `(year, month, day)` written in `fmt` with `lang`'s names. Anything but the date
@@ -704,6 +705,10 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
             ('m', 3..) => {
                 let with_day = if day_first { day_seen } else { any_day };
                 let names = if n >= 4 { lang.months_with_day.filter(|_| with_day).unwrap_or(lang.months) } else { lang.months_short };
+                // Hebrew's short month takes the same ב after a day (`7 במרץ`, `8 באוק׳`).
+                if n == 3 && day_first && day_seen && month.is_some_and(|i| i < 12) {
+                    out.push('ב');
+                }
                 match month.and_then(|i| names.get(i)) {
                     Some(name) => out.push_str(name),
                     None => out.push_str(&m.to_string()),
@@ -949,6 +954,9 @@ mod tests {
         assert_eq!(in_lang("dddd, d mmmm yyyy", "he"), "שבת, 7 במרץ 2026");
         assert_eq!(in_lang("mmmm d, yyyy", "he"), "מרץ 7, 2026", "ב only after the day");
         assert_eq!(in_lang("mmmm yyyy", "he"), "מרץ 2026");
+        assert_eq!(in_lang("d mmm yyyy", "he"), "7 במרץ 2026");
+        assert_eq!(format_day("d mmm yyyy", (2026, 10, 8), date_language("he").unwrap()), "8 באוק׳ 2026");
+        assert_eq!(in_lang("mmm d, yyyy", "he"), "מרץ 7, 2026");
         // A weekday (dddd) is not a day number.
         assert_eq!(in_lang("dddd, mmmm", "cs"), "sobota, březen");
     }
