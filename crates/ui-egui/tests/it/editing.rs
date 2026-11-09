@@ -2727,6 +2727,153 @@ fn canceling_launch_display_override_does_not_affect_later_documents() {
     std::fs::remove_file(path).unwrap();
 }
 
+/// `pdfcraft locked.pdf other.pdf`: the files open before the first frame, and opening the
+/// second one inline used to clear the first one's password prompt, so `locked.pdf` was never
+/// opened or asked for. The later file now waits behind the prompt.
+#[test]
+fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
+    for unlock in [true, false] {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let locked = temp_path(&format!("startup-locked-{unlock}-{nonce}.pdf"));
+        let other = temp_path(&format!("startup-other-{unlock}-{nonce}.pdf"));
+        std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+        std::fs::write(&other, fixture(2)).unwrap();
+        let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
+        let (first, second) = (locked_path.clone(), other_path.clone());
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_path(&first);
+            app.open_path(&second);
+            app
+        });
+        h.run_steps(4);
+        let prompt = h.state().password_prompt.as_ref().map(|p| p.path.clone());
+        assert_eq!(prompt, Some(Some(locked_path.clone())), "the protected file is asked for");
+        assert!(h.state().views.is_empty(), "the later file waits behind the prompt");
+        if unlock {
+            h.state_mut().submit_password(Some("reader".into()));
+            support::wait_until(&mut h, "both files", |app| app.views.len() == 2);
+            // The other file opened while the password was being typed; the unlocked one comes
+            // after it and is the one in view.
+            assert_eq!(open_paths(h.state()), vec![other_path, locked_path]);
+            assert_eq!(h.state().active_ids().map(|(i, _)| i), Some(1));
+        } else {
+            h.state_mut().submit_password(None);
+            support::wait_until(&mut h, "the other file", |app| app.views.len() == 1);
+            assert_eq!(open_paths(h.state()), vec![other_path]);
+        }
+        std::fs::remove_file(locked).unwrap();
+        std::fs::remove_file(other).unwrap();
+    }
+}
+
+/// `pdfcraft locked.pdf locked.pdf other.pdf`: the repeated file joins its open password
+/// prompt. It used to be queued again behind the prompt, so the unlocked file asked for its
+/// password a second time.
+#[test]
+fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let locked = temp_path(&format!("startup-twice-locked-{nonce}.pdf"));
+    let other = temp_path(&format!("startup-twice-other-{nonce}.pdf"));
+    std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+    std::fs::write(&other, fixture(2)).unwrap();
+    let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
+    let (first, second) = (locked_path.clone(), other_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        app.open_path(&first);
+        app.open_path(&second);
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "both files, or a second prompt", |app| app.views.len() == 2 || app.password_prompt.is_some());
+    assert!(h.state().password_prompt.is_none(), "the password is asked for once");
+    let mut paths = open_paths(h.state());
+    paths.sort();
+    let mut expected = vec![locked_path, other_path];
+    expected.sort();
+    assert_eq!(paths, expected);
+    std::fs::remove_file(locked).unwrap();
+    std::fs::remove_file(other).unwrap();
+}
+
+/// `pdfcraft locked-a.pdf locked-b.pdf`: B's reply is ready while A's password is asked for.
+/// Once A's password is given, A's retry comes first: A opens (or asks again) before B's prompt
+/// can take the dialog. B's prompt used to replace A's retry, so A waited for B's answer.
+#[test]
+fn a_password_retry_finishes_before_the_next_protected_files_prompt() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let a = temp_path(&format!("startup-retry-a-{nonce}.pdf"));
+    let b = temp_path(&format!("startup-retry-b-{nonce}.pdf"));
+    std::fs::write(&a, protected("reader", "owner", -4)).unwrap();
+    std::fs::write(&b, protected("reader", "owner", -4)).unwrap();
+    let (a_path, b_path) = (a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string());
+    let (first, second) = (a_path.clone(), b_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        app.open_path(&second);
+        app
+    });
+    h.run_steps(4);
+    // B is prepared in the background meanwhile; its reply waits behind A's prompt.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    h.run_steps(2);
+    assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(a_path.clone()));
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "the next prompt", |app| app.password_prompt.is_some());
+    assert_eq!(open_paths(h.state()), vec![a_path], "A's retry finished first");
+    assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(b_path));
+    std::fs::remove_file(a).unwrap();
+    std::fs::remove_file(b).unwrap();
+}
+
+/// `pdfcraft locked.pdf` followed by more files than the open worker queues at once: the files
+/// past its bound wait in order and open as it drains, instead of failing to open.
+#[test]
+fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
+    const OTHERS: usize = 24;
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let locked = temp_path(&format!("startup-long-locked-{nonce}.pdf"));
+    std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+    let others: Vec<std::path::PathBuf> = (0..OTHERS).map(|i| temp_path(&format!("startup-long-{i:02}-{nonce}.pdf"))).collect();
+    for path in &others {
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    let locked_path = locked.to_str().unwrap().to_string();
+    let other_paths: Vec<String> = others.iter().map(|p| p.to_str().unwrap().to_string()).collect();
+    let (first, rest) = (locked_path.clone(), other_paths.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        for path in &rest {
+            app.open_path(path);
+        }
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "every file", |app| app.views.len() == OTHERS + 1);
+    let mut paths = open_paths(h.state());
+    paths.sort();
+    let mut expected = other_paths;
+    expected.push(locked_path);
+    expected.sort();
+    assert_eq!(paths, expected);
+    std::fs::remove_file(locked).unwrap();
+    for path in others {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 #[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -9008,6 +9155,129 @@ fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selectio
     assert!(h.query_by_label("Rotate view clockwise").is_some());
 }
 
+/// A turned picture is its shape, not its bounds: a click in a corner of its bounds, off the
+/// picture and its crop box, is a click away that applies the crop (#6422 review).
+#[test]
+fn a_click_beside_a_turned_picture_in_its_bounds_applies_its_crop() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 80, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    let edit = |change| pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change };
+    h.state_mut().apply_edit(edit(pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh])));
+    h.run_steps(4);
+    h.state_mut().apply_edit(edit(pdfcraft_engine::ImageEdit::RotateBy(45.0)));
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let c = h.state().views[0].page_screen_rect(0).expect("on screen").center();
+    click_at(&mut h, c);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new([mx - 5.0, my - 5.0, mx + 5.0, my + 5.0]));
+    h.run_steps(2);
+
+    let img = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let b = pdfcraft_ui_egui::canvas::image_screen_rect(&img, &xf, &h.state().session.get(id).unwrap().info, 0);
+    // The bounds' top-left corner lies outside the 45° diamond.
+    click_at(&mut h, b.left_top() + egui::vec2(2.0, 2.0));
+    assert!(h.state().views[0].image_selection.is_none(), "a click off the turned picture lets it go");
+    assert_ne!(h.state().session.get(id).unwrap().page_images(0)[0].visible_rect, img.visible_rect, "the crop is applied");
+}
+
+/// A picture alone in the middle of a page, empty page around it (#6422).
+fn picture_with_room_around() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let mut image = Dict::new();
+    image.set(b"Type".to_vec(), Object::name("XObject"));
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let image = doc.add(Object::Stream(Stream::flate(image, &[60, 110, 200])));
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 100 0 0 80 50 150 cm /Im0 Do Q")));
+    let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let mut xo = Dict::new();
+    xo.set(b"Im0".to_vec(), Object::Ref(image));
+    resources.set(b"XObject".to_vec(), Object::Dict(xo));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+    })
+    .unwrap();
+    write_incremental(&doc, &Default::default()).unwrap()
+}
+
+/// In crop mode a click on the empty page applies the crop and lets the picture go; a click on the
+/// part being cropped away keeps crop mode (#6422).
+#[test]
+fn a_click_away_from_the_picture_applies_its_crop() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("room.pdf", None, picture_with_room_around()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.run_steps(3);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    let doc_id = h.state().views[0].id;
+    let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+
+    click_at(&mut h, at(100.0, 190.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.index == 0), "the picture is selected");
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+    h.run_steps(2);
+    let keep = [full[0], full[1], full[0] + 60.0, full[3]];
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = keep;
+    h.run_steps(2);
+
+    // On the dimmed part of the picture: still cropping, nothing applied.
+    click_at(&mut h, at(135.0, 190.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a click on the picture keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
+    // On a handle, where it reaches past the picture's frame: still cropping.
+    let handle = at(50.0, 190.0) - egui::vec2(6.0, 0.0);
+    click_at(&mut h, handle);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a click on a handle keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
+    // A click pressed on the picture and let go just past its frame: still cropping.
+    let edge = at(150.0, 190.0);
+    h.hover_at(edge - egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.drag_at(edge - egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.hover_at(edge + egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.drop_at(edge + egui::vec2(2.0, 0.0));
+    h.run_steps(4);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a press on the picture keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
+    // On the empty page: applied, and the picture is let go.
+    click_at(&mut h, at(100.0, 60.0));
+    assert!(h.state().views[0].image_selection.is_none(), "a click away lets the picture go");
+    let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
+    assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "the crop is applied: {visible:?}");
+}
+
 #[test]
 fn crop_action_pills_interactive_and_apply_cancel_reset() {
     let mut png = Vec::new();
@@ -10968,5 +11238,44 @@ fn a_click_through_a_pictures_transparent_margin_selects_the_picture_below() {
         h.drop_at(p);
         h.run_steps(3);
         assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(want), "click at {x}, {y}");
+    }
+}
+
+#[test]
+fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
+    // Shift-, Ctrl- or Command-clicking away is still a click away: it applies the crop and lets
+    // the picture go, rather than taking the picture into a group and dropping its crop (#6422
+    // review).
+    for mods in [egui::Modifiers::SHIFT, egui::Modifiers::COMMAND] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("room.pdf", None, picture_with_room_around()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+        h.run_steps(3);
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+        let doc_id = h.state().views[0].id;
+        let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+        click_at(&mut h, at(100.0, 190.0));
+        h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+        h.run_steps(2);
+        let keep = [full[0], full[1], full[0] + 60.0, full[3]];
+        h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = keep;
+        h.run_steps(2);
+        let p = at(100.0, 60.0);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: mods });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: mods });
+        h.run_steps(4);
+        assert!(h.state().views[0].image_selection.is_none(), "{mods:?}: the picture is let go");
+        let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
+        assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
     }
 }

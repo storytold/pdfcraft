@@ -320,6 +320,9 @@ impl PdfCraftApp {
                 RecoveryMeta { key, name: snap.name, path: snap.path, saved_at: now_secs(), encrypted: snap.encrypted, instance: store.instance() };
             if let Err(e) = store.write(&meta, &snap.bytes) {
                 log::warn!("autosave failed: {e}");
+                // Still due: the next autosave writes it. After `renew_recovery` there is no
+                // older snapshot to fall back on.
+                self.session.autosave_failed(snap.doc);
             }
         }
     }
@@ -329,6 +332,14 @@ impl PdfCraftApp {
         if let (Some(store), Some(key)) = (&self.recovery, self.recovery_keys.remove(&doc)) {
             store.remove(&key);
         }
+    }
+
+    /// Replace a document's recovery snapshot with its current state now. After an edit that takes
+    /// content out (Apply Redactions, Sanitize, Remove Hidden Information), the last snapshot still
+    /// holds what went, until the next autosave, and for good if the app is killed before then.
+    pub(crate) fn renew_recovery(&mut self, doc: pdfcraft_engine::DocId) {
+        self.forget_recovery(doc);
+        self.autosave_now();
     }
 
     /// Autosave when the interval has passed (called by `logic`, which also runs while hidden).
