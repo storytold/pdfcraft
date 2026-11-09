@@ -760,6 +760,99 @@ fn changing_continuous_layout_resets_wheel_acceleration() {
     assert!((moved - base).abs() < 1.0, "a layout jump clears the old burst: moved {moved}, base {base}");
 }
 
+/// A steady wheel burst must not alternate a large accelerated jump with nearly still frames.
+#[test]
+fn scroll_regression_regular_notches_have_regular_frame_motion() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let mut settled = Vec::new();
+    for frame in 0..66 {
+        if frame % 3 == 0 {
+            h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        }
+        let moved = scroll_over(&mut h, 1);
+        if frame >= 48 {
+            settled.push(moved);
+        }
+    }
+    let low = settled.iter().copied().fold(f32::INFINITY, f32::min);
+    let high = settled.iter().copied().fold(0.0, f32::max);
+    assert!(low > 0.0 && high < low * 3.0, "regular input has bounded frame variation: {settled:?}");
+}
+
+/// Windows and X11 can report continuous device movement as fractions of a line.
+#[test]
+fn scroll_regression_fractional_lines_preserve_distance_without_an_idle_tail() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let line = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    let mut distance = 0.0;
+    for _ in 0..24 {
+        h.event(wheel(MouseWheelUnit::Line, -0.25, TouchPhase::Move));
+        distance += scroll_over(&mut h, 1);
+    }
+    // Page rectangles report the previous pass's scroll request on the following draw.
+    distance += scroll_over(&mut h, 1);
+    assert!((distance - line * 6.0).abs() < 1.0, "continuous motion retains its input distance: {distance}");
+    let tail = scroll_over(&mut h, 40);
+    assert!(tail.abs() < 1.0, "continuous motion stops with the input: {tail}");
+}
+
+/// Input ownership changes discard an old queue even when the view is hidden very briefly.
+#[test]
+fn scroll_regression_returning_to_a_tab_does_not_resume_old_motion() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        scroll_over(&mut h, 1);
+    }
+    h.state_mut().open_bytes("second.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(2);
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert!(scroll_over(&mut h, 12).abs() < 0.5, "returning to a tab must not continue its old wheel burst");
+}
+
+/// Direct input ends an old coarse burst, so a later isolated notch has its base distance.
+#[test]
+fn scroll_regression_precise_input_resets_coarse_acceleration() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        scroll_over(&mut h, 1);
+    }
+    h.event(wheel(MouseWheelUnit::Point, -10.0, TouchPhase::Move));
+    scroll_over(&mut h, 2);
+    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+    let distance = scroll_over(&mut h, 2);
+    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    assert!((distance - base).abs() < 0.5, "a new coarse burst begins at the base distance: {distance}");
+}
+
+/// A key cancels earlier movement without consuming a new wheel event in the same frame.
+#[test]
+fn scroll_regression_key_interrupt_retains_current_wheel_input() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+    let distance = scroll_over(&mut h, 2);
+    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    assert!((distance - base).abs() < 0.5, "new wheel input survives a simultaneous key: {distance}");
+}
+
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the
 /// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
 /// Used by wheel and non-macOS glide tests below.
@@ -919,6 +1012,51 @@ fn the_wheel_zooms_a_whole_step_at_once_with_animation_effects_off() {
         assert!(
             (zooms[39] / step - 1.0).abs() < 0.01,
             "{effects}, system reduced {system_reduced}: easing changes how long a zoom step takes, not how far it goes: {zooms:?}"
+        );
+    }
+}
+
+/// A touch gesture begun with ⌘/Ctrl zooms to its end after the keys are let go, as egui reads
+/// it: its later motion neither scrolls the page as well nor turns the rest of it into scrolling.
+#[test]
+fn a_zoom_gesture_zooms_to_its_end_after_its_keys_are_let_go() {
+    /// The view's zoom and page 1 on screen, settled, after a gesture of six 5-point motions,
+    /// the keys let go after the second one or held throughout.
+    fn zoom_gesture(effects: &'static str, let_go: bool) -> (f32, f32, egui::Rect) {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+        h.state_mut().set_option("animation_effects", effects).unwrap();
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        let before = h.state().views[0].zoom;
+        let touch = |phase, dy, modifiers| egui::Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        h.event(touch(TouchPhase::Start, 0.0, Modifiers::COMMAND));
+        h.step();
+        for k in 0..6 {
+            let modifiers = if let_go && k >= 2 { Modifiers::NONE } else { Modifiers::COMMAND };
+            h.event(touch(TouchPhase::Move, 5.0, modifiers));
+            h.step();
+        }
+        h.event(touch(TouchPhase::End, 0.0, Modifiers::NONE));
+        h.run_steps(40);
+        (before, h.state().views[0].zoom, rect(&h, 0).expect("page 1 on screen"))
+    }
+    for effects in ["off", "on"] {
+        let (before, held, held_page) = zoom_gesture(effects, false);
+        assert!(held > before, "{effects}: the gesture zoomed in: {before} to {held}");
+        let (_, let_go, let_go_page) = zoom_gesture(effects, true);
+        assert!((let_go / held - 1.0).abs() < 1e-4, "{effects}: the whole gesture zooms: {let_go}, held throughout {held}");
+        assert!(
+            (let_go_page.min - held_page.min).length() < 0.5,
+            "{effects}: and nothing scrolls: page 1 at {:?}, held throughout {:?}",
+            let_go_page.min,
+            held_page.min
         );
     }
 }
@@ -1250,6 +1388,68 @@ fn single_page_fit_page_fits_the_shown_page() {
     let r2 = rect(&h, 1).expect("page 2");
     assert!(r2.width() <= vp.width() && r2.height() <= vp.height(), "page 2 fits: {r2:?} in {vp:?}");
     assert_ne!(h.state().views[0].zoom, z1, "the wider page refits instead of keeping page 1's zoom");
+}
+
+#[test]
+fn pages_shorter_than_the_window_sit_in_its_middle() {
+    let centred = |h: &Harness<'static, PdfCraftApp>, r: egui::Rect| {
+        let vp = h.state().views[0].viewport_rect();
+        assert!(r.height() < vp.height(), "{r:?} is shorter than {vp:?}");
+        assert!((r.center().y - vp.center().y).abs() < 1.0, "{r:?} is in the middle of {vp:?}");
+    };
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "50")]);
+    h.run_steps(4);
+    centred(&h, rect(&h, 0).expect("page 1"));
+    assert_eq!(h.state().views[0].current, 0);
+
+    // The page drawn there is the page a click finds: its link still goes to page 3.
+    let r = rect(&h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * 0.5, r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    assert_eq!(h.state().views[0].current, 2, "the link is where the page is drawn");
+
+    // Scrolling continuously, the column of pages as a whole.
+    let mut h = harness(&[("layout", "single"), ("continuous", "on"), ("zoom", "25")]);
+    h.run_steps(4);
+    let column = rect(&h, 0).expect("page 1").union(rect(&h, 2).expect("page 3"));
+    centred(&h, column);
+
+    // A page taller than the view starts at its top, as before.
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "250")]);
+    h.run_steps(4);
+    let (r, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    assert!(r.height() > vp.height() && (r.min.y - vp.min.y).abs() < 40.0, "{r:?} in {vp:?}");
+}
+
+/// A page too tall for its margins still fits the window: it shows whole, in the middle.
+#[test]
+fn a_page_that_fits_without_its_margins_shows_whole() {
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "50")]);
+    h.run_steps(4);
+    let (half, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    let spare = 20.0;
+    let zoom = (50.0 * (vp.height() - spare) / half.height()).floor();
+    h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+    h.run_steps(4);
+    let r = rect(&h, 0).expect("page 1");
+    assert!(r.height() < vp.height() && r.height() + 2.0 * 28.0 > vp.height(), "{r:?} fits {vp:?} only without its margins");
+    assert!(r.min.y >= vp.min.y && r.max.y <= vp.max.y, "{r:?} shows whole in {vp:?}");
+    assert!((r.center().y - vp.center().y).abs() < 1.0, "{r:?} is in the middle of {vp:?}");
+}
+
+/// Two pages side by side are placed as the row they make: the taller decides, not the first.
+#[test]
+fn a_row_too_tall_for_the_window_starts_at_its_top_whichever_page_is_shorter() {
+    let h = mixed_harness(&[("layout", "two-page"), ("zoom", "180")]);
+    let vp = h.state().views[0].viewport_rect();
+    let (first, second) = (rect(&h, 0).expect("page 1"), rect(&h, 1).expect("page 2"));
+    assert!(first.height() > vp.height() && second.height() < vp.height(), "{first:?}, {second:?} in {vp:?}");
+    let row = first.union(second);
+    assert!((row.min.y - vp.min.y).abs() < 40.0, "{row:?} starts in {vp:?}");
 }
 
 #[test]
@@ -2050,8 +2250,9 @@ fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui
     let at = h.state().views[0].viewport_rect().center();
     h.hover_at(at);
     h.run_steps(2);
-    for _ in 0..4 {
-        h.event(wheel(MouseWheelUnit::Line, -1000.0, TouchPhase::Move));
+    // Reach the end through admitted wheel steps; the assertion concerns spread geometry.
+    for _ in 0..8 {
+        h.event(wheel(MouseWheelUnit::Line, -10.0, TouchPhase::Move));
         h.run_steps(45);
     }
     let view = &h.state().views[0];

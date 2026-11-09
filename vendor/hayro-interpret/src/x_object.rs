@@ -122,6 +122,24 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    // PdfCraft patch (89): a form already being drawn is not drawn inside itself. A name its
+    // content uses can reach it again (through its own resources, or the page's, which a form
+    // with resources of its own still falls back on), and every such level used to run until
+    // the page's nested-paint budget was spent.
+    let id = x_object.dict.obj_id();
+    if !context.enter_form(id) {
+        return;
+    }
+    draw_form_xobject_once(resources, x_object, context, device);
+    context.leave_form(id);
+}
+
+fn draw_form_xobject_once<'a, 'b>(
+    resources: &Resources<'a>,
+    x_object: &'b FormXObject<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
     if !context.ocg_state.is_visible() {
         return;
     }

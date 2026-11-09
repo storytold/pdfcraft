@@ -207,6 +207,43 @@ fn scrolling_a_500_page_document_stays_within_the_frame_budget() {
     assert!(avg < budget, "average frame {avg:?}, budget {budget:?}");
 }
 
+/// Measures real wheel events and their idle frames, separately from page-jump scheduling.
+#[test]
+fn regular_wheel_input_on_500_pages_stays_within_the_frame_budget() {
+    if overloaded() {
+        return;
+    }
+    let _turn = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bytes = big(500);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("wheel-budget.pdf", None, bytes).expect("opens");
+        for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "200"), ("animation_effects", "on")] {
+            app.set_option(key, value).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    h.hover_at(h.state().views[0].viewport_rect().center());
+    h.run_steps(2);
+    let start = h.state().views[0].current;
+    let (average, budget) = best_average("wheel input", 200, |frame| {
+        if frame % 3 == 0 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            });
+        }
+        h.step();
+    });
+    assert!(h.state().views[0].current > start, "wheel events must actually move through the document");
+    assert!(average < budget, "wheel input: average frame {average:?}, budget {budget:?}");
+}
+
 #[test]
 fn panels_with_hundreds_of_items_stay_within_the_frame_budget() {
     if overloaded() {

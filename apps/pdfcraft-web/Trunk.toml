@@ -9,3 +9,10 @@ filehash = true
 [serve]
 addresses = ["127.0.0.1"]
 port = 8766
+
+# Trunk leaves the OCR worker's files unhashed and unnamed in index.html: hash them and name the
+# worker for the page (xtask/src/web.rs).
+[[hooks]]
+stage = "post_build"
+command = "cargo"
+command_arguments = ["xtask", "web-worker-link"]
