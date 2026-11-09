@@ -722,16 +722,19 @@ pub fn numbers_pages(script: &str, formcalc: bool) -> bool {
 /// count when what it assigns calls `pageCount()`, else the page number.
 fn own_page_role(script: &str, formcalc: bool) -> Option<PageRole> {
     let code = code_of(script, formcalc);
-    let own = own_assignments(&code, formcalc);
+    // FormCalc names methods case-insensitively; JavaScript does not.
+    let own: Vec<String> =
+        own_assignments(&code, formcalc).into_iter().map(|rhs| if formcalc { rhs.to_ascii_lowercase() } else { rhs.to_string() }).collect();
+    let name = |n: &str| if formcalc { n.to_ascii_lowercase() } else { n.to_string() };
     // On screen every page is a sheet of its own, so the sheet count is the page count, and the
     // sheet number a form shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
     let sheet_number = |rhs: &str| {
         let compact: String = rhs.chars().filter(|c| !c.is_whitespace()).collect();
         compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
     };
-    if own.iter().any(|rhs| calls_layout(rhs, "pageCount") || calls_layout(rhs, "sheetCount")) {
+    if own.iter().any(|rhs| calls_layout(rhs, &name("pageCount")) || calls_layout(rhs, &name("sheetCount"))) {
         Some(PageRole::Count)
-    } else if own.iter().any(|rhs| calls_layout(rhs, "page") || calls_layout(rhs, "absPage") || sheet_number(rhs)) {
+    } else if own.iter().any(|rhs| calls_layout(rhs, &name("page")) || calls_layout(rhs, &name("absPage")) || sheet_number(rhs)) {
         Some(PageRole::Number)
     } else {
         None
