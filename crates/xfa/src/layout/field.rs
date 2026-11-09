@@ -267,6 +267,7 @@ impl Layouter<'_> {
             no_scroll: f.no_scroll,
             // `push` sets where it shows.
             views: Views::ALL,
+            required: f.required,
         })))
     }
 }

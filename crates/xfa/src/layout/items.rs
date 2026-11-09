@@ -152,6 +152,8 @@ pub struct Widget {
     pub no_scroll: bool,
     /// Where the field is shown: on screen, in print, or both (its annotation flags).
     pub views: Views,
+    /// The field must be filled in (`Required`); a radio button, when its group must be.
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
