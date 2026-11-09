@@ -3,7 +3,7 @@ use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
     Block, Border, Common, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc,
-    Rect, SomIndices, Views, XfaError, text,
+    Rect, SomIndices, Views, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -27,12 +27,30 @@ impl Layouter<'_> {
     }
 
     /// The text an embedded field `id` shows, at most `max` bytes of a field value (the page
-    /// number and count are a few bytes; the text layout cuts them).
+    /// number and count are a few bytes; the text layout cuts them): its first instance's.
     pub(super) fn embed(&self, id: &str, max: usize) -> String {
+        self.embed_in(id, max, "")
+    }
+
+    /// [`Self::embed`] in text laid out at `scope` (the SOM of what holds it): a field in a
+    /// repeating subform shows the value of the instance the text is in, the one whose data path
+    /// takes the instance numbers `scope` gives the same names.
+    pub(super) fn embed_in(&self, id: &str, max: usize, scope: &str) -> String {
         let v = match self.tpl.page_roles.iter().find(|(i, _)| i == id).map(|(_, r)| *r) {
             Some(PageRole::Number) => self.page_no().to_string(),
             Some(PageRole::Count) => PAGE_COUNT_MARK.to_string(),
-            None => self.values.get(id).map(|v| text::prefix(v, max).to_string()).unwrap_or_default(),
+            None => match self.values.get(id) {
+                None => String::new(),
+                Some(src) => {
+                    let at = super::common::instance_path(&src.path, &data_path(self.tpl, scope));
+                    let shown = if at == src.path {
+                        std::borrow::Cow::Borrowed(src.value.as_str())
+                    } else {
+                        std::borrow::Cow::Owned(src.shown(super::common::data_value(self.data, &at)))
+                    };
+                    text::prefix(&shown, max).to_string()
+                }
+            },
         };
         #[cfg(test)]
         EMBED_COPIED.with(|c| c.set(c.get().saturating_add(v.len() as u64)));

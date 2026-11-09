@@ -802,6 +802,472 @@ fn indexed_palettes_over_lab_keep_their_colours() {
     }
     assert!(indexed[0] > 180, "the palette red must not render near black: {indexed:?}");
 }
+
+/// A Pattern space's underlying space is any other, named or by reference as well as a direct array
+/// (ISO 32000-2 §8.7.3.3). It was skipped when it was a name or a reference, so an uncoloured tiling
+/// pattern took its components as RGB: a CMYK cyan drew red, and a grey of 0.5 dark red. Each is
+/// compared with the same colour painted without the pattern.
+#[test]
+fn an_uncoloured_pattern_uses_its_underlying_space_in_every_form() {
+    use super::*;
+    let render = |space: &str, content: &str| -> [u8; 4] {
+        let pattern = "0 0 10 10 re f";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> /Pattern << /P 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream\n{pattern}\nendstream endobj\n\
+                 6 0 obj /DeviceCMYK endobj\n\
+                 7 0 obj /DeviceGray endobj\n\
+                 8 0 obj [/Indexed /DeviceRGB 1 <00FF00FF0000>] endobj\n\
+                 9 0 obj [/Pattern /DeviceCMYK] endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            pattern.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{space}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let fill = "0 0 200 200 re f";
+    let cyan = render("/DeviceCMYK", &format!("/DeviceCMYK cs 1 0 0 0 sc {fill}"));
+    let grey = render("/DeviceGray", &format!("/DeviceGray cs 0.5 sc {fill}"));
+    let green = render("8 0 R", &format!("/C cs 0 sc {fill}"));
+    assert_ne!(cyan[0], 255, "cyan has no red");
+    for (space, colour, want) in [
+        ("[/Pattern /DeviceCMYK]", "1 0 0 0", cyan),
+        ("[/Pattern 6 0 R]", "1 0 0 0", cyan),
+        ("9 0 R", "1 0 0 0", cyan),
+        ("[/Pattern /DeviceGray]", ".5", grey),
+        ("[/Pattern 7 0 R]", ".5", grey),
+        ("[/Pattern 8 0 R]", "0", green),
+        ("[/Pattern [/Indexed /DeviceRGB 1 <00FF00FF0000>]]", "0", green),
+    ] {
+        assert_eq!(render(space, &format!("/C cs {colour} /P scn {fill}")), want, "{space}");
+    }
+}
+
+/// A colour space's parts can refer back to the space, now that a Pattern's underlying space is
+/// followed as an Indexed space's base always was. A file made so ends as a space that can't be
+/// read, and the page draws what it can.
+#[test]
+fn a_colour_space_that_refers_to_itself_ends() {
+    use super::*;
+    let content = "1 0 0 rg 0 0 100 100 re f /C cs 0 sc 100 100 100 100 re f";
+    for (space, objects) in [
+        ("5 0 R", "5 0 obj [/Pattern 5 0 R] endobj"),
+        ("5 0 R", "5 0 obj [/Pattern 6 0 R] endobj 6 0 obj [/Pattern 5 0 R] endobj"),
+        ("5 0 R", "5 0 obj [/Pattern 6 0 R] endobj 6 0 obj [/Indexed 5 0 R 1 <0011>] endobj"),
+        ("5 0 R", "5 0 obj [/Indexed 5 0 R 1 <0011>] endobj"),
+    ] {
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 {objects}\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{objects}: {:?}", page.error);
+        let start = ((150 * page.width as usize) + 50) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]), "{objects}: what comes before it drew");
+    }
+}
+
+/// A chain of colour spaces repeats no object, so what ends a cycle lets it through. Each way one
+/// space names another ends, at a depth that leaves room on the stack, and the page draws what it
+/// can.
+#[test]
+fn a_chain_of_colour_spaces_ends() {
+    use super::*;
+    const LINKS: u32 = 20_000;
+    let content = "1 0 0 rg 0 0 100 100 re f /C cs 0 sc 100 100 100 100 re f";
+    let link: [(&str, &dyn Fn(u32) -> String); 5] = [
+        ("[/Pattern 10 0 R]", &|next| format!("[/Pattern {next} 0 R]")),
+        ("10 0 R", &|next| format!("[/Indexed {next} 0 R 1 <0011>]")),
+        ("10 0 R", &|next| format!("[/Separation /A {next} 0 R 5 0 R]")),
+        ("10 0 R", &|next| format!("[/DeviceN [/A] {next} 0 R 5 0 R]")),
+        ("[/ICCBased 10 0 R]", &|next| format!("<< /N 1 /Alternate [/ICCBased {next} 0 R] /Length 1 >> stream\nx\nendstream")),
+    ];
+    for (space, link) in link {
+        let objects: String = (0..LINKS).map(|i| format!("{} 0 obj {} endobj\n", 10 + i, link(11 + i))).collect();
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [0] /C1 [1] >> endobj\n\
+                 {objects}{} 0 obj /DeviceGray endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            10 + LINKS
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{}: {:?}", link(11), page.error);
+        let start = ((150 * page.width as usize) + 50) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]), "{}: what comes before it drew", link(11));
+    }
+}
+
+/// A file nests colour spaces five levels at most, and the limit is well past that: 31 spaces over
+/// a device space are read and draw their colour, and with one more the space isn't read.
+#[test]
+fn colour_spaces_are_read_to_the_limit_of_their_nesting() {
+    use super::*;
+    let content = "/C cs 1 scn 0 0 200 200 re f";
+    let green = |levels: u32| {
+        let objects: String = (0..levels - 1).map(|i| format!("{} 0 obj [/Separation /A {} 0 R 5 0 R] endobj\n", 10 + i, 11 + i)).collect();
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C 10 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [0] /C1 [1] >> endobj\n\
+                 6 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [1 1 1] /C1 [0 1 0] >> endobj\n\
+                 {objects}{} 0 obj [/Separation /A /DeviceRGB 6 0 R] endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            10 + levels - 1
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{levels}: {:?}", page.error);
+        page.rgba.get(..4) == Some(&[0, 255, 0, 255][..])
+    };
+    assert!(green(1), "a space on its own");
+    assert!(green(5), "as deep as a legal file goes");
+    assert!(green(31), "the deepest that is read");
+    assert!(!green(32), "one past it");
+}
+
+/// A page with the colour space resources `spaces` and the other objects `objects`, drawn with
+/// `content`. Objects 5 and 6 are tint transforms: the tint itself, and paper to green.
+fn page_with_colour_spaces(spaces: &str, objects: &str, content: &str) -> super::RenderedPage {
+    use super::*;
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << {spaces} >> >> /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [0] /C1 [1] >> endobj\n\
+             6 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [1 1 1] /C1 [0 1 0] >> endobj\n\
+             {objects}\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        preview: false,
+    })
+}
+
+/// What an ICC profile reads as is kept. If what it falls back to were kept with it, a page
+/// selecting the last of a chain first would build each space on the one before, and no read
+/// would be deep: 20,000 levels past the limit, for whatever walks the space to paint with it.
+#[test]
+fn a_chain_built_on_spaces_already_read_ends() {
+    const LINKS: u32 = 20_000;
+    let selected: String = (0..LINKS).rev().map(|i| format!("/C{i} cs\n")).collect();
+    let content = format!("1 0 0 rg 0 0 100 100 re f\n{selected}0 sc 100 100 100 100 re f");
+    let spaces: String = (0..LINKS).map(|i| format!("/C{i} [/ICCBased {} 0 R] ", 10 + i)).collect();
+    let around: [&dyn Fn(&str) -> String; 4] = [
+        &|next| format!("[/Pattern {next}]"),
+        &|next| format!("[/Indexed {next} 1 <0011>]"),
+        &|next| format!("[/Separation /A {next} 5 0 R]"),
+        &|next| format!("[/DeviceN [/A] {next} 5 0 R]"),
+    ];
+    for around in around {
+        let mut objects: String = (0..LINKS)
+            .map(|i| {
+                let alternate = around(&format!("[/ICCBased {} 0 R]", 11 + i));
+                format!("{} 0 obj << /N 1 /Alternate {alternate} /Length 1 >> stream\nx\nendstream endobj\n", 10 + i)
+            })
+            .collect();
+        objects.push_str(&format!("{} 0 obj << /N 1 /Length 1 >> stream\nx\nendstream endobj\n", 10 + LINKS));
+        let page = page_with_colour_spaces(&spaces, &objects, &content);
+        assert!(page.error.is_none(), "{}: {:?}", around("next"), page.error);
+        let start = ((150 * page.width as usize) + 50) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]), "{}: what comes before it drew", around("next"));
+    }
+}
+
+/// A profile met at the limit can't read its alternate there, which says nothing of a read nearer
+/// the top: the space kept from the first read isn't what the second gets.
+#[test]
+fn a_profile_read_at_the_limit_keeps_its_alternate_for_a_read_nearer_the_top() {
+    let chain: String = (0..31).map(|i| format!("{} 0 obj [/Separation /A {} 0 R 5 0 R] endobj\n", 10 + i, 11 + i)).collect();
+    let objects = format!(
+        "{chain}41 0 obj [/ICCBased 7 0 R] endobj\n\
+         7 0 obj << /N 1 /Alternate [/Separation /A /DeviceRGB 6 0 R] /Length 1 >> stream\nx\nendstream endobj\n"
+    );
+    let page = page_with_colour_spaces("/Deep 10 0 R /Near 41 0 R", &objects, "/Deep cs /Near cs 1 scn 0 0 200 200 re f");
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(page.rgba.get(..4), Some(&[0, 255, 0, 255][..]));
+}
+
+/// An image's `/Decode` pairs can have a reference at the start of a pair. Its read took that for
+/// the whole pair, found no pair there, and ended the array, so the image didn't draw at all.
+#[test]
+fn a_decode_array_with_references_in_it_is_read() {
+    use super::*;
+    let render = |width_of: &str, decode: &str, space: &str, data: &str| -> [u8; 4] {
+        let content = "1 0 0 rg 0 0 200 200 re f q 200 0 0 200 0 0 cm /Im Do Q";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width {width_of} /Height 1 /BitsPerComponent 8 /ColorSpace {space} /Decode {decode} /Filter /ASCIIHexDecode /Length {} >> stream\n{data}\nendstream endobj\n\
+                 6 0 obj 1 endobj\n\
+                 7 0 obj 0 endobj\n\
+                 8 0 obj 8 0 R endobj\n\
+                 9 0 obj 10 0 R endobj\n\
+                 10 0 obj 9 0 R endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            data.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{decode}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let grey = render("1", "[1 0]", "/DeviceGray", "40>");
+    assert_eq!(grey, [191, 191, 191, 255], "the direct form inverts the sample");
+    for decode in ["[6 0 R 0]", "[1 7 0 R]", "[6 0 R 7 0 R]"] {
+        assert_eq!(render("1", decode, "/DeviceGray", "40>"), grey, "{decode}");
+    }
+    let rgb = render("1", "[1 0 1 0 1 0]", "/DeviceRGB", "204060>");
+    for decode in ["[6 0 R 0 1 0 1 0]", "[1 0 6 0 R 0 1 0]", "[1 0 1 0 6 0 R 0]", "[6 0 R 7 0 R 6 0 R 7 0 R 6 0 R 7 0 R]"] {
+        assert_eq!(render("1", decode, "/DeviceRGB", "204060>"), rgb, "{decode}");
+    }
+    // A reference that only leads back to itself holds no number, and reads as one that names
+    // nothing does.
+    let missing = render("1", "[99 0 R 0]", "/DeviceGray", "40>");
+    for decode in ["[8 0 R 0]", "[1 8 0 R]", "[9 0 R 0]", "[1 9 0 R]", "[8 0 R 9 0 R]"] {
+        assert_eq!(render("1", decode, "/DeviceGray", "40>"), missing, "{decode}");
+    }
+}
+
+/// An object that holds only a reference stands for what that names, stored on its own or in an
+/// object stream. Read as a number it was the reference's own object number: here 8 names 7, 7
+/// names 6 and 6 holds 1, and that read as 7, which drew white. A chain past the limit, and so a
+/// cycle, reads as a missing object does.
+#[test]
+fn a_reference_to_a_reference_is_what_it_names() {
+    use super::*;
+    let file = |decode: &str, objects: &str| -> Vec<u8> {
+        let content = "1 0 0 rg 0 0 200 200 re f q 200 0 0 200 0 0 cm /Im Do Q";
+        format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Decode {decode} /Filter /ASCIIHexDecode /Length 3 >> stream\n40>\nendstream endobj\n\
+                 {objects}\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes()
+    };
+    let draw = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let grey = draw(file("[1 0]", ""));
+    assert_eq!(grey, [191, 191, 191, 255]);
+
+    let chain = "6 0 obj 1 endobj 7 0 obj 6 0 R endobj 8 0 obj 7 0 R endobj";
+    assert_eq!(draw(file("[8 0 R 0]", chain)), grey, "stored on their own");
+    let doc = pdfcraft_cos::Document::open(Arc::new(file("[8 0 R 0]", chain))).unwrap();
+    let packed = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    assert!(packed.windows(7).any(|w| w == b"/ObjStm"), "the save packs them");
+    assert_eq!(draw(packed), grey, "stored in an object stream");
+    assert_eq!(draw(file("9 0 R", "9 0 obj 10 0 R endobj 10 0 obj [1 0] endobj")), grey, "not only numbers");
+    let commented = "6 0 obj 1 endobj 7 0 obj 6 %c\n0 R endobj 8 0 obj 7 0 %c\nR endobj";
+    assert_eq!(draw(file("[8 %c\n0 R 0]", commented)), grey, "a comment counts as white space");
+
+    let links = |n: usize| -> String {
+        let links: String = (0..n).map(|i| format!("{} 0 obj {} 0 R endobj\n", 10 + i, 11 + i)).collect();
+        format!("{links}{} 0 obj 1 endobj", 10 + n)
+    };
+    let missing = draw(file("[99 0 R 0]", ""));
+    assert_ne!(missing, grey);
+    assert_eq!(draw(file("[10 0 R 0]", &links(32))), grey, "32 references are followed");
+    assert_eq!(draw(file("[10 0 R 0]", &links(33))), missing, "33 aren't");
+    assert_eq!(draw(file("[6 0 R 0]", "6 0 obj 6 0 R endobj")), missing, "nor is a cycle");
+}
+
+/// A function's `/Encode`, `/Decode`, `/Domain` and `/Range` are read a pair at a time too, so they
+/// lost a reference at the start of a pair the same way, and the array with it. Each form is compared
+/// with the direct one, which differs from the identity so the array is shown to count.
+#[test]
+fn a_functions_arrays_can_start_with_a_reference() {
+    use super::*;
+    let render = |function: String| -> [u8; 4] {
+        let content = "/C cs 0.25 sc 0 0 200 200 re f";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C [/Separation /X /DeviceRGB 9 0 R] >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj 1 endobj\n6 0 obj 0 endobj\n\
+                 7 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 0 0] /N 1 >> endobj\n\
+                 8 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0 1 0] /C1 [0 0 1] /N 1 >> endobj\n\
+                 9 0 obj {function} endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{function}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let sampled = |encode: &str| {
+        format!(
+            "<< /FunctionType 0 /Size [2] /BitsPerSample 8 /Domain [0 1] /Range [0 1 0 1 0 1] /Encode {encode} /Filter /ASCIIHexDecode /Length 13 >> stream\n000000FF8040>\nendstream"
+        )
+    };
+    let stitched = |encode: &str| format!("<< /FunctionType 3 /Domain [0 1] /Functions [7 0 R 8 0 R] /Bounds [.5] /Encode {encode} >>");
+    assert_ne!(render(sampled("[1 0]")), render(sampled("[0 1]")), "/Encode counts");
+    assert_eq!(render(sampled("[5 0 R 0]")), render(sampled("[1 0]")), "a sampled function");
+    assert_ne!(render(stitched("[1 0 0 1]")), render(stitched("[0 1 0 1]")), "/Encode counts");
+    assert_eq!(render(stitched("[5 0 R 0 0 1]")), render(stitched("[1 0 0 1]")), "a stitching function");
+}
+
+/// The lookup table of an `/Indexed` space is a string or a stream, and any part of the space can
+/// be indirect (ISO 32000-2 §8.6.6.3, §7.3.10). A table in an indirect string was lost: reading it
+/// as a stream used up the reference, so the space couldn't be read and drew in grey.
+#[test]
+fn an_indexed_lookup_table_is_read_in_every_legal_form() {
+    use super::*;
+    let render = |space: &str, content: &str, extra: &str| -> [u8; 4] {
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /I {space} >> /XObject << /Im 9 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj <000000FF0000> endobj\n\
+                 6 0 obj << /Filter /ASCIIHexDecode /Length 13 >> stream\n000000FF0000>\nendstream endobj\n\
+                 7 0 obj /DeviceRGB endobj\n\
+                 8 0 obj 1 endobj\n\
+                 {extra}\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{space}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let paint = "/I cs 1 sc 0 0 200 200 re f";
+    // One byte of index 1, as an image in the same space: the image path reads it too.
+    let image = "9 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 1 5 0 R] /Filter /ASCIIHexDecode /Length 3 >> stream\n01>\nendstream endobj";
+    for space in [
+        "[/Indexed /DeviceRGB 1 <000000FF0000>]",
+        "[/Indexed /DeviceRGB 1 5 0 R]",
+        "[/Indexed /DeviceRGB 1 6 0 R]",
+        "[/Indexed 7 0 R 8 0 R 5 0 R]",
+        "[/I /DeviceRGB 1 5 0 R]",
+    ] {
+        assert_eq!(render(space, paint, ""), [255, 0, 0, 255], "{space}");
+    }
+    let indirect = "10 0 obj [/Indexed /DeviceRGB 1 5 0 R] endobj";
+    assert_eq!(render("10 0 R", paint, indirect), [255, 0, 0, 255], "the whole space by reference");
+    assert_eq!(render("/DeviceRGB", "q 200 0 0 200 0 0 cm /Im Do Q", image), [255, 0, 0, 255], "an image's table by reference");
+    // What's neither table form leaves the space unreadable, as a missing table does.
+    for space in ["[/Indexed /DeviceRGB 1 8 0 R]", "[/Indexed /DeviceRGB 1 99 0 R]", "[/Indexed /DeviceRGB 1]"] {
+        let _ = render(space, paint, "");
+    }
+    // So does a table that only leads back to itself, and the read of it ends.
+    let cycle = "11 0 obj 11 0 R endobj 12 0 obj 13 0 R endobj 13 0 obj 12 0 R endobj";
+    for space in ["[/Indexed /DeviceRGB 1 11 0 R]", "[/Indexed /DeviceRGB 1 12 0 R]"] {
+        let _ = render(space, paint, cycle);
+    }
+}
 #[test]
 fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
     use super::*;
@@ -3527,6 +3993,1086 @@ fn jbig2_regions_of_billions_of_pixels_are_refused() {
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
 }
 
+/// One embedded JBIG2 segment (ISO 14492 §7.2) of page 1. More than four references take the long
+/// form, whose retention flags are left clear.
+fn jbig2_segment(out: &mut Vec<u8>, number: u32, kind: u8, refs: &[u8], data: &[u8]) {
+    out.extend_from_slice(&number.to_be_bytes());
+    out.push(kind);
+    if refs.len() <= 4 {
+        out.push(u8::try_from(refs.len()).unwrap() << 5);
+    } else {
+        out.extend_from_slice(&(0xE000_0000u32 | u32::try_from(refs.len()).unwrap()).to_be_bytes());
+        out.extend(std::iter::repeat_n(0u8, (refs.len() + 1).div_ceil(8)));
+    }
+    out.extend_from_slice(refs);
+    out.push(1);
+    out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+    out.extend_from_slice(data);
+}
+
+/// The page information of a 16 × 2 JBIG2 page whose default pixel is black, so that the image, if
+/// it decodes, draws black whatever its other segments hold.
+fn black_jbig2_page() -> Vec<u8> {
+    let mut page = Vec::new();
+    page.extend_from_slice(&16u32.to_be_bytes());
+    page.extend_from_slice(&2u32.to_be_bytes());
+    page.extend_from_slice(&[0; 8]); // resolution
+    page.extend_from_slice(&[4, 0, 0]); // flags (default pixel black), striping
+    let mut stream = Vec::new();
+    jbig2_segment(&mut stream, 0, 48, &[], &page);
+    stream
+}
+
+/// A region's information field, at the page's corner.
+fn jbig2_region_info(width: u32, height: u32) -> Vec<u8> {
+    let mut region = Vec::new();
+    region.extend_from_slice(&width.to_be_bytes());
+    region.extend_from_slice(&height.to_be_bytes());
+    region.extend_from_slice(&[0; 9]); // x, y, combination operator
+    region
+}
+
+/// Whether a 16 × 2 JBIG2 image decodes: drawn at 5..25 both ways, it draws black, and refused it
+/// leaves the page white. The red square beside it shows the rest of the page drew either way.
+fn jbig2_image_draws(stream: &[u8]) -> bool {
+    jbig2_image_draws_in(stream, "/DeviceGray")
+}
+
+/// [`jbig2_image_draws`], for an image in colour space `space`.
+fn jbig2_image_draws_in(stream: &[u8], space: &str) -> bool {
+    jbig2_image_draws_with(stream, space, "", b"")
+}
+
+/// [`jbig2_image_draws_in`], with entries for the image's dictionary and more objects, from 6 up.
+fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[u8]) -> bool {
+    let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(
+        format!("5 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace {space} {entries} /Filter /JBIG2Decode /Length {} >> stream\n", stream.len())
+            .as_bytes(),
+    );
+    pdf.extend_from_slice(stream);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(objects);
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    // What one image may take, which the page's allowance, tested on its own, would otherwise reach
+    // first: it is the same size, and the page itself comes out of it.
+    let config = RenderConfig { jbig2_work: Some(u64::MAX), ..RenderConfig::default() };
+    let mut r = PageRenderer::new(Arc::new(pdf), config);
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    // Inside the image: top-down rows 15..35.
+    match &page.rgba[((25 * 40 + 15) * 4)..][..4] {
+        [0, 0, 0, 255] => true,
+        [255, 255, 255, 255] => false,
+        other => panic!("neither the image nor the page: {other:?}"),
+    }
+}
+
+/// The JBIG2 images of a page share one allowance, down to the step, and the next page starts with
+/// its own. The images differ by an extension segment: one image decoded again isn't decoded twice.
+#[test]
+fn the_jbig2_images_of_a_page_share_one_allowance() {
+    let image = |number: u8, id: u8| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 62, &[], &[0, 0, 0, 0, id]);
+        let mut object = format!(
+            "{number} 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+            stream.len()
+        )
+        .into_bytes();
+        object.extend_from_slice(&stream);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let page = |number: u8, content: u8, xobjects: &str| {
+        format!("{number} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents {content} 0 R /Resources << /XObject << {xobjects} >> >> >> endobj\n").into_bytes()
+    };
+    let content = |number: u8, text: &str| format!("{number} 0 obj << /Length {} >> stream\n{text}\nendstream endobj\n", text.len()).into_bytes();
+    let mut pdf =
+        b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n".to_vec();
+    pdf.extend(page(3, 5, "/A 7 0 R /B 8 0 R"));
+    pdf.extend(page(4, 6, "/C 9 0 R"));
+    pdf.extend(content(5, "q 20 0 0 40 0 0 cm /A Do Q q 20 0 0 40 20 0 cm /B Do Q"));
+    pdf.extend(content(6, "q 20 0 0 40 0 0 cm /C Do Q"));
+    pdf.extend(image(7, 1));
+    pdf.extend(image(8, 2));
+    pdf.extend(image(9, 3));
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    let pdf = Arc::new(pdf);
+    let black = |page: &RenderedPage, x: usize| match &page.rgba[((20 * 40 + x) * 4)..][..4] {
+        [0, 0, 0, 255] => true,
+        [255, 255, 255, 255] => false,
+        other => panic!("neither an image nor the page: {other:?}"),
+    };
+    let pages = |work: u64| {
+        let mut renderer = PageRenderer::new(pdf.clone(), RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() });
+        [0, 1].map(|page| renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }))
+    };
+    let drawn = |work: u64| {
+        let [first, _] = pages(work);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        (black(&first, 10), black(&first, 30))
+    };
+    let one = (1..1_000).find(|work| drawn(*work).0).expect("a small image is cheap");
+    assert_eq!(drawn(one - 1), (false, false), "a step short of the first");
+    assert_eq!(drawn(one), (true, false), "enough for one");
+    assert_eq!(drawn(2 * one - 1), (true, false), "a step short of both");
+    assert_eq!(drawn(2 * one), (true, true), "enough for both");
+    let [first, second] = pages(one);
+    assert!(first.warnings.contains(&RenderWarning::ContentTruncated), "the page says it left something out: {:?}", first.warnings);
+    assert!(pages(2 * one)[0].warnings.is_empty(), "and only then");
+    assert!(black(&second, 10), "the next page has its own allowance, though this one spent all of it");
+    let usual = PageRenderer::new(pdf.clone(), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        ..Default::default()
+    });
+    assert!(black(&usual, 10) && black(&usual, 30), "the usual allowance is far above a page like this");
+}
+
+/// Without its mask a picture would show what the mask hides, so a JBIG2 mask past the page's
+/// allowance takes the picture with it, and the page says so. A mask that can't be read for any
+/// other reason leaves the picture, as it did.
+#[test]
+fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
+    let draw = |entry: &str, filter: &str, mask: &[u8], work: u64| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray {entry} 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n").as_bytes(),
+        );
+        let kind = if entry == "/Mask" { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
+        pdf.extend_from_slice(
+            format!(
+                "6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter {filter} /Length {} >> stream\n",
+                mask.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(mask);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(Arc::new(pdf), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let shown = match &page.rgba[((25 * 40 + 15) * 4)..][..4] {
+            [0, 0, 0, 255] => true,
+            [255, 255, 255, 255] => false,
+            other => panic!("neither the picture nor the page: {other:?}"),
+        };
+        (shown, page.warnings.contains(&RenderWarning::ContentTruncated))
+    };
+    let mask = black_jbig2_page();
+    let jbig2 = "/JBIG2Decode";
+    assert_eq!(draw("/SMask", jbig2, &mask, u64::MAX), (false, false), "the mask hides all of it");
+    assert_eq!(draw("/SMask", jbig2, &mask, 0), (false, true), "past the allowance a soft mask hides it too");
+    assert_eq!(draw("/Mask", jbig2, &mask, 0), (false, true), "and so does a stencil mask");
+    assert_eq!(draw("/SMask", jbig2, b"no JBIG2 here", 1 << 20), (true, false), "any other bad mask is no mask");
+    let other = draw("/SMask", "/DCTDecode", b"no JPEG here", 0);
+    assert_eq!(other, (true, false), "and a page with nothing left says nothing of a mask that isn't JBIG2");
+}
+
+/// A page's allowance ends with it, so what decodes on its thread afterwards has no page to run out
+/// on, and a `Context` used again starts afresh.
+#[test]
+fn a_pages_jbig2_allowance_ends_with_the_page() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, interpret_page,
+    };
+    use hayro_syntax::page_jbig2_work_spent;
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Notes at each path whether the page has run out.
+    struct Spent(Vec<bool>);
+    impl<'a> Device<'a> for Spent {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {
+            self.0.push(page_jbig2_work_spent());
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let content = "0 0 4 4 re f";
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let pdf = Pdf::new(Arc::new(bytes.into_bytes())).expect("parses");
+    let page = &pdf.pages()[0];
+    let cache = InterpreterCache::new();
+    let settings = InterpreterSettings { jbig2_work: 0, ..InterpreterSettings::default() };
+    let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
+    let mut device = Spent(Vec::new());
+    for _ in 0..2 {
+        interpret_page(page, &mut ctx, &mut device);
+        assert!(!page_jbig2_work_spent(), "no page is being drawn");
+    }
+    assert_eq!(device.0, [true, true], "each time, the page has what its settings give it");
+}
+
+/// An image that can't be decoded has still cost its reading, which a page repeats for each time
+/// it draws one, since such an image isn't kept. So what it reads comes out of the page's allowance,
+/// and an image after it has less. Allowed exactly what the good one takes, it isn't drawn behind
+/// the bad one, and is drawn alone.
+#[test]
+fn an_image_that_fails_spends_the_pages_allowance_too() {
+    let image = |number: u8, stream: &[u8]| {
+        let mut object = format!(
+            "{number} 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+            stream.len()
+        )
+        .into_bytes();
+        object.extend_from_slice(stream);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let pdf = |content: &str| {
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Bad 5 0 R /Good 6 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+            content.len()
+        )
+        .into_bytes();
+        pdf.extend(image(5, &[0xFF; 64]));
+        pdf.extend(image(6, &black_jbig2_page()));
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        Arc::new(pdf)
+    };
+    let good = "q 40 0 0 40 0 0 cm /Good Do Q";
+    let drawn = |content: &str, work: u64| {
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(pdf(content), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba[((20 * 40 + 20) * 4)..][..4] == [0, 0, 0, 255]
+    };
+    let cost = (1..2_000).find(|work| drawn(good, *work)).expect("a small image is cheap");
+    assert!(!drawn(&format!("q 1 0 0 1 0 0 cm /Bad Do Q {good}"), cost), "the bad one spent some of it");
+    assert!(drawn(&format!("q 1 0 0 1 0 0 cm /Bad Do Q {good}"), cost + 4 * 64), "and what it spent is its reading");
+}
+
+/// Bits written from the top of each byte, as JBIG2's Huffman-coded data is.
+#[derive(Default)]
+struct Bits {
+    bytes: Vec<u8>,
+    used: u32,
+}
+
+impl Bits {
+    fn put(&mut self, value: u32, count: u32) {
+        for i in (0..count).rev() {
+            if self.used.is_multiple_of(8) {
+                self.bytes.push(0);
+            }
+            if (value >> i) & 1 != 0 {
+                *self.bytes.last_mut().unwrap() |= 0x80 >> (self.used % 8);
+            }
+            self.used += 1;
+        }
+    }
+
+    fn align(&mut self) {
+        self.used = self.used.div_ceil(8) * 8;
+    }
+
+    /// `value` in table B.1 (ISO 14492 Annex B).
+    fn table_b1(&mut self, value: u32) {
+        match value {
+            0..=15 => {
+                self.put(0, 1);
+                self.put(value, 4);
+            }
+            16..=271 => {
+                self.put(0b10, 2);
+                self.put(value - 16, 8);
+            }
+            272..=65807 => {
+                self.put(0b110, 3);
+                self.put(value - 272, 16);
+            }
+            _ => {
+                self.put(0b111, 3);
+                self.put(value - 65808, 32);
+            }
+        }
+    }
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` symbols of width 0 and height 1, exported or not:
+/// each holds no pixels, and costs a bitmap's header all the same.
+fn zero_width_jbig2_dictionary(symbols: u32, exported: bool) -> Vec<u8> {
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&(if exported { symbols } else { 0 }).to_be_bytes());
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    let mut bits = Bits::default();
+    bits.put(0, 1); // height class delta 1 (B.4)
+    for _ in 0..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    if exported {
+        bits.table_b1(0); // the first export run isn't exported
+    }
+    bits.table_b1(symbols);
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` symbols of width 1 and no rows, none exported.
+/// Only table B.5 has a negative height class delta, so it gets to no rows from one.
+fn no_row_jbig2_dictionary(symbols: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0, 1); // height class delta 1 (B.5), a class of no symbols
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.put(0b1111110, 7); // height class delta -1 (B.5): -255 and 254
+    bits.put(254, 8);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    for _ in 1..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x05]; // Huffman, tables B.5, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary that climbs to `height`, stays about there for `classes`
+/// classes of no symbols, each with a byte of MMR bitmap, and drops to one row for its one symbol,
+/// not exported.
+fn empty_class_jbig2_dictionary(classes: u32, height: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b111110, 6); // height class delta, the upper line of table B.5
+    bits.put(height - 76, 32);
+    let mut at = height;
+    for class in 0..classes {
+        // Table B.5 has no delta of 0, so it goes down one and up one.
+        if class % 2 == 1 {
+            bits.put(0b1111110, 7); // height class delta -1 (B.5): -255 and 254
+            bits.put(254, 8);
+            at -= 1;
+        } else if class > 0 {
+            bits.put(0, 1); // height class delta 1 (B.5)
+            at += 1;
+        }
+        bits.put(0b111111, 6); // end of the class (B.2)
+        bits.put(1, 5); // BMSIZE 1 (B.1)
+        bits.align();
+        bits.put(0xFF, 8);
+    }
+    bits.put(0b1111111, 7); // height class delta, the lower line of table B.5
+    bits.put(at - 1 - 256, 32);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.put(0, 8); // its row
+    bits.table_b1(1); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x05]; // Huffman, tables B.5, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
+/// exported, for `height` from 76 up.
+fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+    bits.put(height - 76, 32);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    for _ in 1..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    let rows = height.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+    bits.table_b1(rows); // BMSIZE (B.1)
+    bits.align();
+    for _ in 0..rows {
+        bits.put(0xFF, 8);
+    }
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// An intermediate generic region, white, every row typical: it decodes in a few bytes however
+/// large it is.
+fn jbig2_white_region(width: u32, height: u32) -> Vec<u8> {
+    let mut region = jbig2_region_info(width, height);
+    region.push(0x08); // arithmetic coding, template 0, typical prediction
+    region.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+    // Every row typical, the first white: pdfcraft-filters' coding of a white 16,384 square.
+    region.extend_from_slice(&[0xb6, 0xc2, 0x1f, 0xff, 0x7f, 0xff, 0xac]);
+    region
+}
+
+/// A pattern dictionary of `patterns` patterns of width 1 and `height` rows, with nothing coded.
+fn jbig2_pattern_dictionary(height: u8, patterns: u32) -> Vec<u8> {
+    let mut dictionary = vec![0, 1, height];
+    dictionary.extend_from_slice(&(patterns - 1).to_be_bytes());
+    dictionary
+}
+
+/// A 1 × 1 halftone region over a grid of `width` × `height` cells, all at the region's corner,
+/// coded by MMR or arithmetically.
+fn jbig2_halftone(width: u32, height: u32, mmr: bool) -> Vec<u8> {
+    jbig2_halftone_of(1, width, height, mmr)
+}
+
+/// [`jbig2_halftone`] for a square region of `side` pixels.
+fn jbig2_halftone_of(side: u32, width: u32, height: u32, mmr: bool) -> Vec<u8> {
+    let mut halftone = jbig2_region_info(side, side);
+    halftone.push(u8::from(mmr)); // template 0
+    halftone.extend_from_slice(&width.to_be_bytes());
+    halftone.extend_from_slice(&height.to_be_bytes());
+    halftone.extend_from_slice(&[0; 12]); // grid offset and vector
+    halftone
+}
+
+/// Each JBIG2 segment's bitmaps are bounded, but nothing bounded what a page's segments hold for
+/// later ones: a stream of a few dozen bytes an intermediate region (16,384 samples a side, every
+/// row typical) held 33 MB each, so a few kilobytes could exhaust memory. Vendored hayro-jbig2
+/// patch: what regions, dictionaries and tables hold is at most 64 MiB (`MAX_RETAINED_WORDS`), two
+/// such squares, which are exactly the bound.
+#[test]
+fn jbig2_regions_held_past_a_pages_bound_are_refused() {
+    let stream = |regions: u32| {
+        let mut stream = black_jbig2_page();
+        for number in 1..=regions {
+            jbig2_segment(&mut stream, number, 36, &[], &jbig2_white_region(16384, 16384));
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(2)), "two such squares fit");
+    assert!(!jbig2_image_draws(&stream(3)), "a third doesn't");
+}
+
+/// A symbol of width 0 holds no pixels, and still costs a bitmap's header: 5 KB of dictionaries of
+/// them held 781 MB, with the bound counting pixels only.
+#[test]
+fn jbig2_symbols_without_pixels_count_towards_a_pages_bound() {
+    let stream = |dictionaries: u32| {
+        let mut stream = black_jbig2_page();
+        let dictionary = zero_width_jbig2_dictionary(32767, true);
+        for number in 1..=dictionaries {
+            jbig2_segment(&mut stream, number, 0, &[], &dictionary);
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1)), "one dictionary fits");
+    assert!(!jbig2_image_draws(&stream(44)), "44 × 32,767 headers are past the bound");
+}
+
+/// A symbol dictionary may retain its coding contexts for a later one, 73,728 bytes each time, and
+/// 1.1 MB of dictionaries with no symbols, 103 KB behind Flate, held 2.89 GB.
+#[test]
+fn jbig2_retained_contexts_count_towards_a_pages_bound() {
+    let stream = |dictionaries: u32| {
+        let mut dictionary = vec![0x02, 0x00]; // arithmetic coding, contexts retained
+        dictionary.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+        dictionary.extend_from_slice(&[0; 8]); // exported, new
+        let mut stream = black_jbig2_page();
+        for number in 1..=dictionaries {
+            jbig2_segment(&mut stream, number, 0, &[], &dictionary);
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1)), "one dictionary fits");
+    assert!(!jbig2_image_draws(&stream(1000)), "a thousand don't");
+}
+
+/// Huffman tables are held for later segments too, each taking some 586 bytes however small it
+/// is, so 200,000 of them are past the bound, and they were held to it at 4 times that.
+#[test]
+fn jbig2_huffman_tables_count_towards_a_pages_bound() {
+    let stream = |tables: u32| {
+        // One-bit prefix and range lengths, values 0 to 1: a table line, then the lower range.
+        let mut table = vec![0];
+        table.extend_from_slice(&0i32.to_be_bytes());
+        table.extend_from_slice(&1i32.to_be_bytes());
+        table.push(0b1010_0000);
+        let mut stream = black_jbig2_page();
+        for number in 1..=tables {
+            jbig2_segment(&mut stream, number, 53, &[], &table);
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1)), "one table fits");
+    assert!(!jbig2_image_draws(&stream(200_000)), "200,000 don't");
+}
+
+/// New symbols count as they are decoded, whatever the dictionary exports: rows take a word at
+/// least, so symbols of one column held 270 MiB within the bound on a dictionary's pixels, and
+/// exporting none of them they were never counted at all.
+#[test]
+fn jbig2_new_symbols_count_towards_a_pages_bound() {
+    let stream = |height: u32| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &narrow_jbig2_dictionary(65534, height));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(100)), "65,534 symbols of 100 rows fit");
+    assert!(!jbig2_image_draws(&stream(300)), "of 300 rows they don't");
+}
+
+/// New symbols are held to what the page has left, headers included, not to the whole bound. These
+/// two regions leave it 512 words, and the dictionary after them exports nothing, so only that
+/// check can refuse it.
+#[test]
+fn jbig2_new_symbols_are_held_to_what_a_page_has_left() {
+    let stream = |dictionary: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 36, &[], &jbig2_white_region(16384, 16384));
+        jbig2_segment(&mut stream, 2, 36, &[], &jbig2_white_region(16384, 16383));
+        jbig2_segment(&mut stream, 3, 0, &[], dictionary);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 100))), "100 rows fit");
+    assert!(!jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 1000))), "1,000 rows don't");
+    assert!(jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(10, false))), "10 headers fit");
+    assert!(!jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(100, false))), "100 headers don't");
+}
+
+/// Pattern dictionaries count towards the bound, with no shifted copies to do it for them: at 44
+/// words a pattern, 6 of these are past it.
+#[test]
+fn jbig2_pattern_dictionaries_count_towards_a_pages_bound() {
+    let stream = |dictionaries: u32| {
+        let mut stream = black_jbig2_page();
+        for number in 1..=dictionaries {
+            jbig2_segment(&mut stream, number, 16, &[], &jbig2_pattern_dictionary(32, 65535));
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(5)), "5 fit");
+    assert!(!jbig2_image_draws(&stream(6)), "6 don't");
+}
+
+/// Shifted copies are only a speed-up, so they are never what gets an image refused: each of these
+/// tables is within its own limit, and the fourth won't fit what the page has left, so it is left
+/// out, where counting it refused the image.
+#[test]
+fn jbig2_shifted_patterns_never_refuse_an_image() {
+    let mut stream = black_jbig2_page();
+    for number in 1..=4 {
+        jbig2_segment(&mut stream, number, 16, &[], &jbig2_pattern_dictionary(32, 2048));
+    }
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// Ordinary globals still reach the decoder, with a filter on them or without: here they hold the
+/// page information, so the image draws only if they are read.
+#[test]
+fn jbig2_globals_are_read() {
+    let globals = black_jbig2_page();
+    let hex: String = globals.iter().map(|b| format!("{b:02x}")).collect();
+    let mut stream = Vec::new();
+    jbig2_segment(&mut stream, 1, 62, &[], &[]); // an extension, which decoders skip
+    for (filter, data) in [("", globals.clone()), ("/Filter /ASCIIHexDecode", hex.into_bytes())] {
+        let mut objects = format!("6 0 obj << {filter} /Length {} >> stream\n", data.len()).into_bytes();
+        objects.extend_from_slice(&data);
+        objects.extend_from_slice(b"\nendstream endobj\n");
+        assert!(jbig2_image_draws_with(&stream, "/DeviceGray", "/DecodeParms << /JBIG2Globals 6 0 R >>", &objects), "{filter}");
+    }
+}
+
+/// Globals are raw segments, but a `/JBIG2Globals` stream could itself be JBIG2, naming the next
+/// such stream, and each read decoded the next: 4,000 of them, here on a test thread's 2 MiB stack,
+/// overflowed it, which aborts the process. Vendored hayro-syntax patch: such a stream reads as
+/// globals that can't be decoded, so the image decodes without them.
+#[test]
+fn jbig2_globals_that_are_jbig2_themselves_are_not_decoded() {
+    let links = 4000;
+    let mut objects = Vec::new();
+    for number in 0..links {
+        let link = 6 + number;
+        let next = link + 1;
+        let parms = if number + 1 < links { format!("/DecodeParms << /JBIG2Globals {next} 0 R >>") } else { String::new() };
+        objects.extend_from_slice(format!("{link} 0 obj << /Filter /JBIG2Decode {parms} /Length 0 >> stream\n\nendstream endobj\n").as_bytes());
+    }
+    assert!(jbig2_image_draws_with(&black_jbig2_page(), "/DeviceGray", "/DecodeParms << /JBIG2Globals 6 0 R >>", &objects));
+}
+
+/// A Huffman-coded symbol dictionary of one white symbol, `side` from 76 up, exported or not.
+fn square_jbig2_dictionary(side: u32, exported: bool) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+    bits.put(side - 76, 32);
+    bits.put(0b111110, 6); // width delta, the upper line of table B.2
+    bits.put(side - 75, 32);
+    bits.put(0b111111, 6); // end of the class (B.2)
+    let bytes = side.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+    bits.table_b1(bytes); // BMSIZE (B.1)
+    bits.align();
+    for _ in 0..bytes {
+        bits.put(0xFF, 8);
+    }
+    if exported {
+        bits.table_b1(0);
+    }
+    bits.table_b1(1);
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&u32::from(exported).to_be_bytes());
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` of 0 or 1.
+fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
+    let mut text = jbig2_region_info(width, height);
+    text.extend_from_slice(&[0x00, 0x11, 0, 0]); // Huffman, top left; tables B.6, B.8, B.11
+    text.extend_from_slice(&instances.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    if instances > 0 {
+        bits.put(0, 1); // delta T 1 (B.11)
+        bits.put(0, 9); // first S 0 (B.6)
+        bits.put(0, 1); // symbol 0
+        bits.put(0b01, 2); // end of the strip (B.8)
+    }
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
+/// A 1 × 1 text region placing one instance of symbol 0 of one, refined, Huffman-coded.
+fn jbig2_refined_text_region() -> Vec<u8> {
+    let mut text = jbig2_region_info(1, 1);
+    text.extend_from_slice(&[0x80, 0x13, 0, 0]); // Huffman, refined by template 1, top left
+    text.extend_from_slice(&1u32.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    bits.put(0, 1); // delta T 1 (B.11)
+    bits.put(0, 9); // first S 0 (B.6)
+    bits.put(0, 1); // symbol 0
+    bits.put(1, 1); // refined
+    bits.put(0, 4); // no change of width, height or offset (B.14)
+    bits.table_b1(0); // no refinement data (B.1)
+    bits.align();
+    bits.put(0b01, 2); // end of the strip (B.8)
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
+/// A generic refinement region of 1 × 1, with whatever its data decodes to.
+fn jbig2_refinement_region() -> Vec<u8> {
+    let mut region = jbig2_region_info(1, 1);
+    region.push(1); // template 1, no typical prediction
+    region.extend_from_slice(&[0; 4]);
+    region
+}
+
+/// A class of no symbols has nothing to cut from its bitmap, and rows are charged by the symbol, so
+/// decoding one would be rows for nothing: a thousand classes of 65,000 rows take a second, from a
+/// dictionary of 4 KB. It isn't decoded, however many there are, and the symbol after them shows that
+/// its bytes are stepped over.
+#[test]
+fn jbig2_classes_of_no_symbols_decode_no_bitmap() {
+    let mut stream = black_jbig2_page();
+    for number in 0..1_000 {
+        jbig2_segment(&mut stream, number + 1, 0, &[], &empty_class_jbig2_dictionary(1024, 65_000));
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(jbig2_image_draws(&stream));
+    });
+    // This takes milliseconds now and took a quarter of an hour, so a margin this wide can't fail on
+    // a busy machine.
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true));
+}
+
+/// Each item a JBIG2 stream decodes costs its work, and the stream may ask for 2^30: four of the
+/// largest pages, some 6 s to 17 s. Each bitmap is bounded on its own, but nothing bounded how many
+/// there were, so 1,140 bytes of generic regions took over 40 s, and a 795-byte PDF's one halftone
+/// 265 s. Vendored hayro-jbig2 patch: `MAX_WORK`. A row costs 4 pixels, even in a bitmap of no
+/// width, and a copy goes by the word and the row, so a tall thin one costs its rows. Here regions
+/// of typical rows, cheap to decode though charged like any, spend all but exactly what the item
+/// costs, so it draws with that left and is refused with one less, for each item at its own cost.
+#[test]
+fn jbig2_decoding_work_is_counted_item_by_item() {
+    struct Item {
+        what: &'static str,
+        /// What comes first, and what it costs.
+        before: Vec<(u8, Vec<u8>)>,
+        spent: u64,
+        kind: u8,
+        refs: &'static [u8],
+        data: Vec<u8>,
+        cost: u64,
+    }
+    let stream = |item: &Item, left: u64| {
+        let mut stream = black_jbig2_page();
+        let mut number = 0;
+        for (kind, data) in &item.before {
+            number += 1;
+            jbig2_segment(&mut stream, number, *kind, &[], data);
+        }
+        // A square costs 16,384 rows of 16,388, and a single row what it has and 4 more.
+        let work = (1u64 << 30) - item.spent - left;
+        let (row, square) = (16388u64, 16384 * 16388u64);
+        let mut squares = work / square;
+        let mut rest = work % square;
+        if rest > 0 && rest < 5 {
+            squares -= 1;
+            rest += square;
+        }
+        let mut rows = rest / row;
+        let mut last = rest % row;
+        if last > 0 && last < 5 {
+            rows -= 1;
+            last += row;
+        }
+        let regions = std::iter::repeat_n((16384, 16384), usize::try_from(squares).unwrap())
+            .chain((rows > 0).then_some((16384, rows)))
+            .chain((last > 0).then_some((last - 4, 1)));
+        for (width, height) in regions {
+            number += 1;
+            let region = jbig2_white_region(u32::try_from(width).unwrap(), u32::try_from(height).unwrap());
+            jbig2_segment(&mut stream, number, 38, &[], &region); // immediate generic region
+        }
+        jbig2_segment(&mut stream, number + 1, item.kind, item.refs, &item.data);
+        stream
+    };
+    let symbol = || vec![(0, zero_width_jbig2_dictionary(1, true))];
+    let patterns = || vec![(16, jbig2_pattern_dictionary(1, 2))];
+    let exporting_none = {
+        let mut dictionary = vec![0x00, 0x01];
+        dictionary.extend_from_slice(&[0; 8]); // exported, new
+        let mut bits = Bits::default();
+        bits.table_b1(1); // the first export run, not exported, is the one it refers to
+        dictionary.extend_from_slice(&bits.bytes);
+        dictionary
+    };
+    let zero = |height: u32| {
+        let mut bits = Bits::default();
+        bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+        bits.put(height - 76, 32);
+        bits.put(0, 1); // width delta 0 (B.2)
+        bits.put(0b111111, 6); // end of the class (B.2)
+        bits.table_b1(0); // BMSIZE 0, stored (B.1)
+        bits.align();
+        bits.table_b1(1); // the first export run, not exported, is the symbol
+        let mut dictionary = vec![0x00, 0x01];
+        dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+        dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+        dictionary.extend_from_slice(&bits.bytes);
+        dictionary
+    };
+    // The cost of a pattern dictionary of two patterns: rows of them side by side, then each taken out.
+    let two_patterns = |width: u64, height: u64| height * (2 * width + 4) + 2 * height * (width.div_ceil(32) + 1);
+    let thin_region = |side: u32| {
+        let mut region = jbig2_white_region(1, 1);
+        region.splice(0..8, [0u32.to_be_bytes(), side.to_be_bytes()].concat());
+        region
+    };
+    let items = vec![
+        Item { what: "immediate generic", before: vec![], spent: 0, kind: 38, refs: &[], data: jbig2_white_region(1, 1), cost: 5 },
+        Item { what: "intermediate generic", before: vec![], spent: 0, kind: 36, refs: &[], data: jbig2_white_region(1, 1), cost: 5 },
+        Item { what: "a region of no width", before: vec![], spent: 0, kind: 38, refs: &[], data: thin_region(1000), cost: 4000 },
+        Item { what: "immediate refinement", before: vec![], spent: 0, kind: 42, refs: &[], data: jbig2_refinement_region(), cost: 5 },
+        Item { what: "intermediate refinement", before: vec![], spent: 0, kind: 40, refs: &[], data: jbig2_refinement_region(), cost: 5 },
+        Item {
+            what: "pattern dictionary",
+            before: vec![],
+            spent: 0,
+            kind: 16,
+            refs: &[],
+            data: jbig2_pattern_dictionary(1, 2),
+            cost: two_patterns(1, 1),
+        },
+        Item {
+            what: "tall patterns",
+            before: vec![],
+            spent: 0,
+            kind: 16,
+            refs: &[],
+            data: jbig2_pattern_dictionary(32, 2),
+            cost: two_patterns(1, 32),
+        },
+        // What an item reads counts, at 38 an integer: two classes, five widths and an export run.
+        Item { what: "symbols of no rows", before: vec![], spent: 0, kind: 0, refs: &[], data: no_row_jbig2_dictionary(5), cost: 304 },
+        // Rows cost in a symbol of no pixels too, on top of a class, three widths and an export run.
+        Item { what: "symbols without pixels", before: vec![], spent: 0, kind: 0, refs: &[], data: zero_width_jbig2_dictionary(3, false), cost: 202 },
+        Item { what: "a tall symbol of no width", before: vec![], spent: 0, kind: 0, refs: &[], data: zero(1000), cost: 4114 },
+        Item { what: "new symbols", before: vec![], spent: 0, kind: 0, refs: &[], data: square_jbig2_dictionary(80, false), cost: 6834 },
+        Item { what: "referred symbols", before: symbol(), spent: 156, kind: 0, refs: &[1], data: exporting_none, cost: 39 },
+        // Its symbol, and its one row and word; Huffman-coded, a table line for the symbol.
+        Item { what: "immediate text", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "intermediate text", before: symbol(), spent: 156, kind: 4, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "a text region's pixels", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(32, 32, 0), cost: 75 },
+        Item {
+            what: "an intermediate text region's pixels",
+            before: symbol(),
+            spent: 156,
+            kind: 4,
+            refs: &[1],
+            data: jbig2_text_region(32, 32, 0),
+            cost: 75,
+        },
+        // The region's 13, a copy of the symbol's row, and the instance's 4 integers.
+        Item { what: "an instance", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 1), cost: 166 },
+        // The region's 13, 80 rows of 4 words copied, and the instance's 4 integers.
+        Item {
+            what: "an instance of a large symbol",
+            before: vec![(0, square_jbig2_dictionary(80, true))],
+            spent: 6872,
+            kind: 6,
+            refs: &[1],
+            data: jbig2_text_region(1, 1, 1),
+            cost: 485,
+        },
+        // And decoded as well as copied, with the 4 integers that gave its size.
+        Item {
+            what: "a refined instance",
+            before: vec![(0, square_jbig2_dictionary(80, true))],
+            spent: 6872,
+            kind: 6,
+            refs: &[1],
+            data: jbig2_refined_text_region(),
+            cost: 7357,
+        },
+        // A bit plane, a cell's copy and the region's.
+        Item {
+            what: "immediate halftone",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone(1, 1, false),
+            cost: 9,
+        },
+        Item {
+            what: "intermediate halftone",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 20,
+            refs: &[1],
+            data: jbig2_halftone(1, 1, false),
+            cost: 9,
+        },
+        // A plane of 2 cells, each a copy of 32 rows of 2 words' cost, and the region's.
+        Item {
+            what: "a halftone's cells",
+            before: vec![(16, jbig2_pattern_dictionary(32, 2))],
+            spent: two_patterns(1, 32),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone(2, 1, false),
+            cost: 136,
+        },
+        Item {
+            what: "a grid of no width",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone(0, 1000, false),
+            cost: 4002,
+        },
+        Item {
+            what: "a halftone's pixels",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone_of(32, 1, 1, false),
+            cost: 71,
+        },
+    ];
+    for item in &items {
+        assert!(jbig2_image_draws(&stream(item, item.cost)), "{}: with its cost left it draws", item.what);
+        assert!(!jbig2_image_draws(&stream(item, item.cost - 1)), "{}: with one less it's refused", item.what);
+    }
+}
+
+/// An image's page header can claim any size, and the Indexed path reserves its output from it
+/// before the page bitmap is sized: a 743-byte PDF asked for 137 GB, which aborts the process.
+/// Vendored hayro-jbig2 patch: a page past the bounds is refused when the stream is opened.
+#[test]
+fn jbig2_pages_past_the_bounds_are_refused_before_anything_is_sized_from_them() {
+    let indexed = "[/Indexed /DeviceGray 1 <00FF>]";
+    assert!(jbig2_image_draws_in(&black_jbig2_page(), indexed), "a page within the bounds");
+    let mut page = Vec::new();
+    page.extend_from_slice(&(1u32 << 20).to_be_bytes());
+    page.extend_from_slice(&(1u32 << 20).to_be_bytes());
+    page.extend_from_slice(&[0; 11]); // resolution, flags, striping
+    let mut stream = Vec::new();
+    jbig2_segment(&mut stream, 0, 48, &[], &page);
+    assert!(!jbig2_image_draws_in(&stream, indexed), "the page draws without it");
+}
+
+/// One custom Huffman table could grow without bound as it was read, before anything counted it:
+/// a line takes 2 bits of input and 8 bytes here, so 250 MiB behind nested Flate, in a 1,297-byte
+/// PDF, was killed at 8 GiB. Vendored hayro-jbig2 patch: at most 2^16 lines.
+#[test]
+fn jbig2_huffman_tables_of_too_many_lines_are_refused() {
+    let stream = |lines: i32| {
+        // One-bit prefix and range lengths, all zero: a line per value.
+        let mut table = vec![0];
+        table.extend_from_slice(&0i32.to_be_bytes());
+        table.extend_from_slice(&lines.to_be_bytes());
+        table.resize(table.len() + usize::try_from(lines).unwrap().div_ceil(4) + 1, 0);
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 53, &[], &table);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1 << 16)), "2^16 lines are allowed");
+    assert!(!jbig2_image_draws(&stream((1 << 16) + 1)), "one more isn't");
+}
+
+/// A stream's segments are all parsed and sorted before the first is decoded: 11 bytes of input took
+/// 64 here, so behind nested Flate a 4,765-byte PDF reached 5 GB, and failed only afterwards.
+/// Vendored hayro-jbig2 patch: at most 2^20 segments.
+#[test]
+fn jbig2_streams_of_too_many_segments_are_refused() {
+    let stream = |segments: u32| {
+        let mut stream = black_jbig2_page();
+        for number in 1..segments {
+            jbig2_segment(&mut stream, number, 62, &[], &[]); // an extension, which decoders skip
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1 << 20)), "2^20 segments are allowed");
+    assert!(!jbig2_image_draws(&stream((1 << 20) + 1)), "one more isn't");
+}
+
+/// References take 4 bytes each for 1 of input, a stream's total as much as a segment's.
+/// Vendored hayro-jbig2 patch: at most 2^22 in a stream, which is 64 × 65,535 + 64.
+#[test]
+fn jbig2_streams_of_too_many_references_are_refused() {
+    let stream = |last: usize| {
+        let mut stream = black_jbig2_page();
+        for number in 1..=64 {
+            jbig2_segment(&mut stream, number, 62, &vec![0u8; 65535], &[]);
+        }
+        jbig2_segment(&mut stream, 65, 62, &vec![0u8; last], &[]);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(64)), "2^22 references are allowed");
+    assert!(!jbig2_image_draws(&stream(65)), "one more isn't");
+}
+
+/// One segment may refer to the same dictionary again and again, and collecting its symbols took a
+/// pointer each: 65,535 references to a dictionary of 32,767 symbols, in a 78 KB stream, asked for
+/// 17 GB. Vendored hayro-jbig2 patch: at most 2^20 symbols per segment, and 32 × 32,767 + 32 is
+/// exactly that. All three segment kinds that take symbols are held to it: the text regions, whether
+/// immediate or intermediate, and a dictionary that refers to others.
+#[test]
+fn jbig2_segments_referring_to_too_many_symbols_are_refused() {
+    let mut text = jbig2_region_info(1, 1);
+    text.extend_from_slice(&[0, 0]); // arithmetic coding, no refinement
+    text.extend_from_slice(&[0; 4]); // no instances
+    // A dictionary of no symbols of its own, exporting none of those it refers to.
+    let dictionary = |symbols: u32| {
+        let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+        dictionary.extend_from_slice(&[0; 8]); // exported, new
+        let mut bits = Bits::default();
+        bits.table_b1(symbols); // the first export run, not exported, is all of them
+        dictionary.extend_from_slice(&bits.bytes);
+        dictionary
+    };
+    let stream = |kind: u8, small: usize, data: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(32767, true));
+        jbig2_segment(&mut stream, 2, 0, &[], &zero_width_jbig2_dictionary(32, true));
+        let mut refs = vec![1u8; 32];
+        refs.extend(std::iter::repeat_n(2u8, small));
+        jbig2_segment(&mut stream, 3, kind, &refs, data);
+        stream
+    };
+    let limit = 1 << 20;
+    for (what, kind, allowed, past) in [
+        ("immediate text region", 6, text.clone(), text.clone()),
+        ("intermediate text region", 4, text.clone(), text.clone()),
+        ("symbol dictionary", 0, dictionary(limit), dictionary(limit + 32)),
+    ] {
+        assert!(jbig2_image_draws(&stream(kind, 1, &allowed)), "{what}: 2^20 symbols are allowed");
+        assert!(!jbig2_image_draws(&stream(kind, 2, &past)), "{what}: 32 more aren't");
+    }
+}
+
+/// A halftone grid takes a 4-byte value per cell while it decodes, so the bound of 2^28 cells let a
+/// 98-byte segment take 1 GiB. Vendored hayro-jbig2 patch: at most 2^25 cells, however it's coded.
+#[test]
+fn jbig2_halftone_grids_past_their_bound_are_refused() {
+    let stream = |width: u32, height: u32, mmr: bool| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 16, &[], &jbig2_pattern_dictionary(1, 2));
+        jbig2_segment(&mut stream, 2, 22, &[1], &jbig2_halftone(width, height, mmr));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(8192, 4096, false)), "2^25 cells are allowed");
+    assert!(!jbig2_image_draws(&stream(8193, 4096, false)), "one more column isn't");
+    assert!(!jbig2_image_draws(&stream(8193, 4096, true)), "nor when it is MMR-coded");
+}
+
+/// A pattern dictionary's shifted copies only speed up drawing, and 48 bytes could ask for 539 MB
+/// of them, past what a page may hold. Vendored hayro-jbig2 patch: past 16 MiB they are left out,
+/// so such a dictionary is drawn the slow way rather than refused.
+#[test]
+fn jbig2_pattern_dictionaries_too_large_to_shift_still_draw() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 16, &[], &jbig2_pattern_dictionary(32, 65535));
+    jbig2_segment(&mut stream, 2, 22, &[1], &jbig2_halftone(1, 1, false));
+    assert!(jbig2_image_draws(&stream));
+}
+
 /// From `cargo xtask fuzz`: one changed byte in a symbol dictionary's arithmetic-coded data
 /// hung the renderer. Two of its loops can stop advancing: an export run of length 0, and a
 /// height class whose first width is already the end-of-class marker. Past the end of its
@@ -4250,6 +5796,92 @@ fn page_contents_and_nested_forms_share_one_budget() {
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
 }
 
+/// A form XObject that draws itself (PDFBOX-5782, a fuzzed file whose form names a `/Pages`
+/// dictionary as `/X0`, found the form again in the page's resources and spent 38 s drawing
+/// itself until the page's nested-paint budget ran out) is drawn once: the drawing inside
+/// itself is skipped and reported, as other readers draw it. Vendored patch: hayro-interpret
+/// `Context::enter_form` (89).
+#[test]
+fn a_form_that_draws_itself_is_drawn_once() {
+    // Each form paints a 10 x 10 square and draws `/X0` 20 units to its right.
+    let draw = "0 0 1 rg 0 0 10 10 re f q 1 0 0 1 20 0 cm /X0 Do Q";
+    // Two forms that draw each other: blue, then red, then blue again would follow.
+    let other = "1 0 0 rg 0 0 10 10 re f q 1 0 0 1 20 0 cm /X0 Do Q";
+    let other = format!(
+        "6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] /Resources << /XObject << /X0 5 0 R >> >> /Length {} >> stream\n{other}\nendstream endobj\n",
+        other.len()
+    );
+    let cases = [
+        ("its own resources name it", "/Resources << /XObject << /X0 5 0 R >> >>", ""),
+        ("it names a /Pages dictionary and the page's resources name it", "/Resources << /XObject << /X0 2 0 R >> >>", ""),
+        ("it has no resources and the page's name it", "", ""),
+        ("two forms draw each other", "/Resources << /XObject << /X0 6 0 R >> >>", other.as_str()),
+    ];
+    for (what, resources, extra) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n4 0 obj << /Length 7 >> stream\n/X0 Do\nendstream endobj\n".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] {resources} /Length {} >> stream\n{draw}\nendstream endobj\n",
+                draw.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(extra.as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(page.width, 200, "{what}");
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
+        let second = if extra.is_empty() { [255, 255, 255] } else { [255, 0, 0] };
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), second, "{what}: the form one level in");
+        assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
+    }
+}
+
+/// A form that reaches itself through a tiling pattern it fills with, or a Type 3 glyph it
+/// shows, is not drawn inside itself either: the pattern cell or the glyph procedure is
+/// interpreted in a context of its own, which still knows the form is being drawn. The form
+/// paints a blue square, then fills a square 20 units to its right with the pattern, or shows
+/// the glyph there, whose content draws the form. Vendored patch: hayro-interpret
+/// `Context::enter_form` (89).
+#[test]
+fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
+    let cell = "q 1 0 0 1 20 0 cm /X0 Do Q";
+    let pattern = format!(
+        "7 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 200 40] /XStep 200 /YStep 40 /Resources << /XObject << /X0 5 0 R >> >> /Length {} >> stream\n{cell}\nendstream endobj\n",
+        cell.len()
+    );
+    let glyph = "0 0 d0 /X0 Do";
+    let glyph = format!(
+        "7 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 200 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n8 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n",
+        glyph.len()
+    );
+    let cases = [
+        ("a tiling pattern", "/Resources << /Pattern << /P0 7 0 R >> >>", "0 0 1 rg 0 0 10 10 re f /Pattern cs /P0 scn 20 0 10 10 re f", pattern),
+        ("a Type 3 glyph", "/Resources << /Font << /T3 7 0 R >> >>", "0 0 1 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (a) Tj ET", glyph),
+    ];
+    for (what, resources, draw, extra) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj\n4 0 obj << /Length 7 >> stream\n/X0 Do\nendstream endobj\n".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 40] {resources} /Length {} >> stream\n{draw}\nendstream endobj\n",
+                draw.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(extra.as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
+    }
+}
+
 /// The page content budget counts what is held at once, not everything decoded: a form
 /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
 #[test]
@@ -4890,8 +6522,8 @@ fn draw_minified_image(
 /// making scans, screenshots and rasterized text look soft.
 #[test]
 fn non_interpolated_images_are_not_smoothed_when_minified() {
-    // Top band K W R G, bottom band B Y M C. Nearest 8×4 → 4×2 sampling picks each block's
-    // pixel, so every device pixel is one palette colour; Catmull-Rom blends across blocks.
+    // Top band K W R G, bottom band B Y M C. Shrinking 8×4 → 4×2 averages each 2×2 block,
+    // so every device pixel is one palette colour; Catmull-Rom blends across blocks.
     let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
     let rgb: Vec<u8> = block_source(palette).concat();
     let exact: Vec<[u8; 4]> = palette.iter().map(|c| [c[0], c[1], c[2], 255]).collect();
@@ -4909,38 +6541,147 @@ fn non_interpolated_images_are_not_smoothed_when_minified() {
     assert!(pixels(&enabled).iter().any(|px| px[..3].iter().any(|&c| (32..=223).contains(&c))), "/Interpolate true made no mid-tone");
 }
 
-/// A shrunk, interpolated image whose edges fall between device pixels is snapped to whole
-/// pixels (shrunk once to that size, drawn 1:1). Before, the shrunk raster was sampled a second
-/// time at the fractional offset, so every edge of a scan was a blended, soft pixel.
+/// A shrunk image whose edges fall between device pixels is snapped to whole pixels (shrunk
+/// once to that size, drawn 1:1), interpolated or not. Before, the shrunk raster was sampled a
+/// second time at the fractional offset, so every edge of a scan was a blended, soft pixel.
 #[test]
-fn interpolated_minified_image_edges_snap_to_whole_pixels() {
+fn minified_image_edges_snap_to_whole_pixels() {
+    for interpolate in ["/Interpolate true ", ""] {
+        let black = vec![0u8; 40 * 40];
+        let content = "q 10 0 0 10 0.4 0.4 cm /Im0 Do Q";
+        let image = hex(&black);
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 11 11] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 {interpolate}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (11, 11));
+        let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
+        // Device box 0.4..10.4 × 0.6..10.6 snaps to columns 0..10 and rows 1..11.
+        for y in 1..11 {
+            for x in 0..10 {
+                assert_eq!(gray(x, y), 0, "{interpolate:?}: pixel ({x}, {y}) inside the snapped image");
+            }
+            assert_eq!(gray(10, y), 255, "{interpolate:?}: column 10 is outside the snapped image (row {y})");
+        }
+        for x in 0..11 {
+            assert_eq!(gray(x, 0), 255, "{interpolate:?}: row 0 is outside the snapped image (column {x})");
+        }
+    }
+}
+
+/// A tile draws exactly the pixels of the whole page under it, also where a shrunk image's
+/// edge falls on a half pixel. The edges were snapped by rounding halves away from zero, so
+/// the tile at x = 5, which moves the left edge from 2.5 to -2.5, snapped it one pixel left of
+/// where the whole page did and shifted every column of the image.
+#[test]
+fn a_tile_snaps_half_pixel_image_edges_as_the_whole_page_does() {
+    for interpolate in ["/Interpolate true ", ""] {
+        let ramp: Vec<u8> = (0..40 * 40).map(|i| (i % 40 * 6) as u8).collect();
+        let content = "q 10 0 0 10 2.5 2.5 cm /Im0 Do Q";
+        let image = hex(&ramp);
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 {interpolate}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() };
+        let full = renderer.render(req);
+        let tile = Tile { x: 5, y: 5, w: 10, h: 10 };
+        let part = renderer.render(RenderRequest { tile: Some(tile), ..req });
+        assert!(full.error.is_none() && part.error.is_none(), "{:?} {:?}", full.error, part.error);
+        assert_eq!((full.width, part.width, part.height), (20, 10, 10));
+        for y in 0..10usize {
+            for x in 0..10usize {
+                let whole = full.rgba[((y + 5) * 20 + x + 5) * 4];
+                assert_eq!(part.rgba[(y * 10 + x) * 4], whole, "{interpolate:?}: pixel ({x}, {y}) of the tile");
+            }
+        }
+    }
+}
+
+/// #5530: an image placed turned or mirrored (by its own matrix or the page's `/Rotate`) snaps to
+/// whole pixels just as an upright one does. Before, only upright images were snapped, so a turned
+/// scan was resampled twice and every edge was a blended, soft pixel. This checks the edges, and
+/// which way a mirrored image faces; `rotated_image_snap` in the integration tests checks which
+/// way a turned page's image faces (`/Rotate` only turns, it never mirrors).
+#[test]
+fn a_turned_or_mirrored_minified_image_snaps_to_whole_pixels() {
     let black = vec![0u8; 40 * 40];
-    let content = "q 10 0 0 10 0.4 0.4 cm /Im0 Do Q";
     let image = hex(&black);
+    // Each matrix maps the image onto the user box 0.6..10.6 × 0.4..10.4, a different way round.
+    for matrix in [
+        "0 10 -10 0 10.6 0.4",   // a quarter turn
+        "-10 0 0 -10 10.6 10.4", // a half turn
+        "0 -10 10 0 0.6 10.4",   // three quarters
+        "-10 0 0 10 10.6 0.4",   // mirrored left to right
+    ] {
+        let content = format!("q {matrix} cm /Im0 Do Q");
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 11 11] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{matrix}: {:?}", page.error);
+        assert_eq!((page.width, page.height), (11, 11));
+        let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
+        // Device box 0.6..10.6 × 0.6..10.6 snaps to columns 1..11 and rows 1..11: no soft edge.
+        for y in 0..11 {
+            for x in 0..11 {
+                let inside = (1..11).contains(&x) && (1..11).contains(&y);
+                assert_eq!(gray(x, y), if inside { 0 } else { 255 }, "{matrix}: pixel ({x}, {y})");
+            }
+        }
+    }
+
+    // A uniform image looks the same mirrored, so mirror one whose left half (source columns
+    // 0..20) is black: drawn left to right reversed, the black half is on the right.
+    let halves: Vec<u8> = (0..40).flat_map(|_| (0..40).map(|x| if x < 20 { 0 } else { 255 })).collect();
+    let halves = hex(&halves);
+    let content = "q -10 0 0 10 10.6 0.4 cm /Im0 Do Q";
     let pdf = format!(
         "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
              2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
              3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 11 11] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
              4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{halves}>\nendstream endobj\n\
              trailer << /Root 1 0 R >>\n%%EOF\n",
         content.len(),
-        image.len() + 1
+        halves.len() + 1
     );
     let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
     let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
     assert!(page.error.is_none(), "{:?}", page.error);
-    assert_eq!((page.width, page.height), (11, 11));
     let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
-    // Device box 0.4..10.4 × 0.6..10.6 snaps to columns 0..10 and rows 1..11.
-    for y in 1..11 {
-        for x in 0..10 {
-            assert_eq!(gray(x, y), 0, "pixel ({x}, {y}) inside the snapped image");
+    // The snapped box is columns 1..11; columns 1..3 and 8..11 are well clear of the change at 6.
+    for y in 2..10 {
+        for x in 1..4 {
+            assert_eq!(gray(x, y), 255, "mirrored: the left of the box shows the image's right (white) half, pixel ({x}, {y})");
         }
-        assert_eq!(gray(10, y), 255, "column 10 is outside the snapped image (row {y})");
-    }
-    for x in 0..11 {
-        assert_eq!(gray(x, 0), 255, "row 0 is outside the snapped image (column {x})");
+        for x in 8..11 {
+            assert_eq!(gray(x, y), 0, "mirrored: the right of the box shows the image's left (black) half, pixel ({x}, {y})");
+        }
     }
 }
 
@@ -4953,26 +6694,159 @@ fn non_interpolated_gray_images_are_not_smoothed_when_minified() {
 }
 
 #[test]
-fn non_integer_minification_samples_the_same_columns() {
-    // Ten columns drawn six pixels wide: centre sampling reads columns 0, 2, 4, 5, 7 and 9.
+fn non_integer_minification_averages_the_columns_each_pixel_covers() {
+    // Ten columns drawn six pixels wide: each pixel covers 10/6 columns. Pixel 0 is 60% of
+    // column 0 and 40% of column 1 (0.6 × 10 + 0.4 × 20 = 14), pixel 1 is 20% of column 1,
+    // all of column 2's 60% and 20% of column 3 (30), and so on. Nearest-neighbour read whole
+    // columns 0, 2, 4, 5, 7 and 9 instead, dropping the four others.
     let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
     let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, None, (6, 1));
     let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
-    assert_eq!(grays, [10, 30, 50, 60, 80, 100]);
+    assert_eq!(grays, [14, 30, 46, 64, 80, 96]);
 }
 
 #[test]
-fn non_integer_minification_samples_colour_and_mask_from_the_same_columns() {
-    // Ten gray columns with a soft mask, drawn six pixels wide: columns 0, 2, 4, 5, 7 and 9 are
-    // sampled, so the mask must pick the same columns as the colours.
+fn non_integer_minification_averages_colour_and_mask_together() {
+    // Ten gray columns with a soft mask, drawn six pixels wide. Colours are averaged
+    // premultiplied, over the same columns as the mask, and composited over the white page.
+    // Pixel 0: 60% of column 0 (gray 10, opaque) and 40% of column 1 (transparent) is
+    // premultiplied gray 6 at alpha 153, so 6 + 255 × (1 − 153/255) = 108. Pixels 1 and 4
+    // cover only transparent columns and show the page.
     let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
     let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
     let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, Some(&mask), (6, 1));
-    // Opaque columns keep their gray; transparent columns show the white page.
     assert_eq!(
         page.rgba.as_chunks::<4>().0.to_vec(),
-        vec![[10, 10, 10, 255], [255, 255, 255, 255], [50, 50, 50, 255], [60, 60, 60, 255], [255, 255, 255, 255], [100, 100, 100, 255]]
+        vec![[108, 108, 108, 255], [255, 255, 255, 255], [132, 132, 132, 255], [138, 138, 138, 255], [255, 255, 255, 255], [162, 162, 162, 255]]
     );
+}
+
+/// A scan shown at screen size: a stroke one sample wide in an image drawn at a third of its
+/// resolution. Nearest-neighbour read columns 1, 4 and 7 and lost the stroke in column 3, which
+/// is how the text of 300 dpi scans broke up at 100% zoom. Area averaging keeps it as the
+/// third of pixel 1 it covers.
+#[test]
+fn non_interpolated_minification_keeps_thin_strokes() {
+    let mut stroke = [255u8; 9];
+    stroke[3] = 0;
+    let page = draw_minified_image("DeviceGray", (9, 1), None, &stroke, None, (3, 1));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert_eq!(grays, [255, 170, 255]);
+}
+
+/// A zoomed scan: an image of page-scan size drawn three times its resolution without
+/// `/Interpolate`. Nearest-neighbour turned each sample into a 3 × 3 block, so the edges of
+/// scanned text were staircases; it is smoothed (bilinearly) instead, as browsers draw it.
+#[test]
+fn large_non_interpolated_images_are_smoothed_when_enlarged() {
+    let side = 512usize;
+    let half: Vec<u8> = (0..side * side).map(|i| if i % side < side / 2 { 0 } else { 255 }).collect();
+    let page = draw_minified_image("DeviceGray", (512, 512), None, &half, None, (1536, 1536));
+    let row = 768 * 1536;
+    let edge: Vec<u8> = (760..776).map(|x| page.rgba[(row + x) * 4]).collect();
+    assert!(edge.iter().any(|v| (32..=223).contains(v)), "a hard edge, not a smoothed one: {edge:?}");
+    assert_eq!((page.rgba[(row + 700) * 4], page.rgba[(row + 836) * 4]), (0, 255), "away from the edge");
+}
+
+/// Small images (icons, QR codes, pixel art) keep their hard pixels when enlarged.
+#[test]
+fn small_non_interpolated_images_keep_hard_pixels_when_enlarged() {
+    let checker: Vec<u8> = (0..64).map(|i| if (i / 8 + i % 8) % 2 == 0 { 0 } else { 255 }).collect();
+    let page = draw_minified_image("DeviceGray", (8, 8), None, &checker, None, (80, 80));
+    assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a small image was smoothed");
+}
+
+/// A scan shrunk across and stretched down (a fax shown at screen size, zoomed in): the shrunk
+/// side is still averaged, and the stretched side is smoothed as a scan enlarged both ways
+/// is. Shrinking one side kept the nearest sampler for the other, so its edges were staircases.
+#[test]
+fn a_scan_shrunk_one_way_is_smoothed_the_way_it_is_stretched() {
+    // Top half black; bottom half columns alternating black and white, which averages to gray.
+    let side = 512usize;
+    let source: Vec<u8> = (0..side * side).map(|i| if i / side < side / 2 || i % 2 == 0 { 0 } else { 255 }).collect();
+    let page = draw_minified_image("DeviceGray", (512, 512), None, &source, None, (256, 1536));
+    let gray = |x: usize, y: usize| page.rgba[(y * 256 + x) * 4];
+    let edge: Vec<u8> = (760..776).map(|y| gray(128, y)).collect();
+    assert!(edge.iter().any(|v| (16..=112).contains(v)), "a hard edge down the stretched side: {edge:?}");
+    assert_eq!(gray(128, 700), 0, "above the edge");
+    assert!((0..256).all(|x| gray(x, 836).abs_diff(128) <= 1), "the shrunk side is averaged at 1:1");
+}
+
+/// An image shrunk across and stretched down (a 204 × 98 dpi fax shown at screen size): the
+/// shrunk side is still averaged. The area shrink was asked to enlarge the other side too,
+/// refused, and the image fell back to its source resolution and the nearest sampler, which
+/// read single columns.
+#[test]
+fn an_image_shrunk_one_way_and_stretched_the_other_is_still_averaged() {
+    let ramp: Vec<u8> = [10u8, 20, 30, 40, 50, 60, 70, 80].repeat(2);
+    let page = draw_minified_image("DeviceGray", (8, 2), None, &ramp, None, (4, 4));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert_eq!(grays, [15, 35, 55, 75].repeat(4), "each pixel is the mean of the two columns it covers");
+}
+
+/// Averaging straight colours would tint an opaque sample with the colour of a transparent
+/// neighbour: white beside transparent black, shrunk to one pixel, came out gray over the white
+/// page. Premultiplied, the transparent sample adds nothing but its transparency.
+#[test]
+fn non_interpolated_minification_does_not_bleed_transparent_colour() {
+    let page = draw_minified_image("DeviceGray", (2, 1), None, &[255, 0], Some(&[255, 0]), (1, 1));
+    assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), vec![[255, 255, 255, 255]]);
+}
+
+/// The same with a soft mask smaller than its image: red, red, blue, blue under a mask that is
+/// opaque, then transparent, shrunk to one pixel, is half-covered red over the white page.
+/// Colour and mask were averaged apart and multiplied, so the transparent blue came through
+/// as purple (191, 127, 191).
+#[test]
+fn a_smaller_soft_mask_does_not_bleed_transparent_colour_when_minified() {
+    let content = "q 1 0 0 1 0 0 cm /Im0 Do Q";
+    let (image, mask) = ("FF0000FF00000000FF0000FF", "FF00");
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 6 0 R /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{mask}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1,
+        mask.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let [r, g, b, _] = page.rgba.as_chunks::<4>().0.first().copied().unwrap_or_default();
+    assert!(r >= 254 && g.abs_diff(128) <= 1 && b == g, "half-covered red over white, got ({r}, {g}, {b})");
+}
+
+/// A smaller soft mask that asks for `/Interpolate` stays smooth when it is sampled onto the grid
+/// of an area-shrunk image. Here a 64 × 64 black image is drawn at 32 × 32 under a 2 × 2 mask,
+/// opaque on the left and clear on the right: the mask is enlarged while the image shrinks, and
+/// sampled nearest-neighbour onto the image's grid the edge became a hard black and white step.
+#[test]
+fn an_interpolated_smaller_soft_mask_stays_smooth_when_its_image_is_minified() {
+    let content = "q 32 0 0 32 0 0 cm /Im0 Do Q";
+    let (image, mask) = ("00".repeat(64 * 64), "FF00FF00");
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 32 32] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 6 0 R /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{mask}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1,
+        mask.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (32, 32));
+    let row: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().skip(16 * 32).take(32).map(|[r, ..]| *r).collect();
+    let ramp = row.iter().filter(|v| (1..255).contains(*v)).count();
+    assert!(ramp >= 8 && row.is_sorted() && row.first() == Some(&0) && row.last() == Some(&255), "a smooth black to white edge, got {row:?}");
 }
 
 #[test]
@@ -5024,6 +6898,59 @@ fn shrunk_soft_mask_larger_than_its_image_keeps_thin_strokes() {
     // The stroke covers half of device pixel 1, so it is a mid-tone; the far side stays white.
     assert!((64..=191).contains(&grays[1]), "the stroke is lost or not a mid-tone: {grays:?}");
     assert_eq!(grays[3], 255, "{grays:?}");
+}
+
+/// Issue #4800: scanners save the text of a page as a 1-bit `/ImageMask` stencil, painted in the
+/// fill colour, and a stencil shrunk by nearest-neighbour lost the strokes thinner than the shrink
+/// factor. Here a one-column red stroke of an 8-column stencil is drawn 4 pixels wide: nearest
+/// reads columns 1, 3, 5 and 7 and misses it, while the area average makes it a half-covered red.
+#[test]
+fn a_shrunk_stencil_mask_keeps_thin_strokes() {
+    // Sample 0 paints (the default `/Decode [0 1]`), so 0xDF is a stroke in column 2.
+    let content = "q 1 0 0 rg 4 0 0 1 0 0 cm /Im0 Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true /Filter /ASCIIHexDecode /Length 3 >> stream\nDF>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (4, 1));
+    let px = page.rgba.as_chunks::<4>().0.to_vec();
+    let [r, g, b, _] = px.get(1).copied().unwrap_or_default();
+    assert!(r >= 254 && g.abs_diff(128) <= 1 && b == g, "half-covered red over white, got {px:?}");
+    assert_eq!(px.get(3), Some(&[255, 255, 255, 255]), "{px:?}");
+}
+
+/// A scan drawn at its own resolution keeps its hard pixels when its scale passes 1 only by
+/// rounding: `x_scale` is an `f32`, and a 192 dpi scan on a 2× display at 100% can come out a
+/// few ulps above 1. Smoothed bilinearly at a half-pixel offset, one-pixel stripes became gray.
+/// Here `600.0001` (an `f32` of 600.00012) draws 600 samples 2·10⁻⁷ wider than 1:1.
+#[test]
+fn a_scan_drawn_a_rounding_error_above_its_resolution_stays_sharp() {
+    let content = "q 600.0001 0 0 600 0.5 0 cm /Im0 Do Q";
+    let image: String = (0..600 * 600).map(|i| if i % 2 == 0 { "00" } else { "FF" }).collect();
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 601 600] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 600 /Height 600 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let row: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().skip(300 * page.width as usize).take(page.width as usize).map(|[r, ..]| *r).collect();
+    let gray = row.iter().skip(10).take(580).filter(|v| (16..240).contains(*v)).count();
+    assert_eq!(gray, 0, "one-pixel stripes were blurred: {:?}", row.get(10..30));
 }
 
 /// Type 3 glyph images used to be sampled bicubically (`ImageQuality::High`) whatever their
@@ -6099,7 +8026,7 @@ fn stitched_render_partitions_match_a_whole_render() {
 /// and square caps, a sharp miter, a rotated and a stretched matrix, a hairline, dashes, a
 /// curve, text, and a page shown rotated.
 ///
-/// Images are skipped the same way (vendored patch (10)): an image on a tile, one crossing
+/// Images are skipped the same way (vendored patch (11)): an image on a tile, one crossing
 /// tile lines, and one fully off the page.
 #[test]
 fn skipping_paths_off_the_canvas_changes_no_pixel() {
@@ -6601,6 +8528,61 @@ fn japanese_substitute_spaces_keep_pdf_widths_and_unicode() {
     }
 }
 
+/// One code, `<0010>`, in a Type 0 font named `base_font` that the PDF doesn't embed, with a
+/// `/ToUnicode` that maps it to the UTF-16 `unicode`. 0x10 is the hyphen's glyph index in Arial,
+/// and Identity-H with an identity `/CIDToGIDMap` makes the code that index, as Word writes it.
+fn soft_hyphen_pdf(base_font: &str, unicode: &str) -> Vec<u8> {
+    let content = "BT /F1 60 Tf 10 20 Td <0010> Tj ET";
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def /CMapType 2 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+1 beginbfchar <0010> <{unicode}> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end"
+    );
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 60 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 8 0 R >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>
+  /FontDescriptor 7 0 R /CIDToGIDMap /Identity /DW 1000 /W [16 [333]] >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 32 /FontBBox [-665 -325 2000 1040] /ItalicAngle 0 /Ascent 728 /Descent -210 /CapHeight 716 /StemV 80 >> endobj
+8 0 obj << /Length {} >> stream
+{cmap}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        cmap.len()
+    )
+    .into_bytes()
+}
+
+/// #5888: Windows exporters map the hyphen glyph of an Arial they don't embed to U+00AD. The
+/// standard substitute has no soft hyphen, so code 0x0010 was taken as its glyph 16 and drew
+/// `Ë` (`!` in bold). It draws the substitute's hyphen now, and the text keeps the soft hyphen.
+#[test]
+fn a_soft_hyphen_a_substitute_lacks_draws_its_hyphen() {
+    for base_font in ["ArialMT", "Arial-BoldMT"] {
+        let soft = soft_hyphen_pdf(base_font, "00AD");
+        let out = render_first_page(soft.clone());
+        let expected = render_first_page(soft_hyphen_pdf(base_font, "002D"));
+        assert!(expected.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0] < 128), "{base_font}: the hyphen control must draw ink");
+        assert!(out.rgba.as_ref() == expected.rgba.as_ref(), "{base_font}: a soft hyphen draws as the substitute's hyphen");
+        let mut renderer = PageRenderer::new(Arc::new(soft), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+        assert!(text.error.is_none(), "{:?}", text.error);
+        let glyphs: String = text.text.unwrap().glyphs.iter().map(|glyph| glyph.text.as_str()).collect();
+        assert_eq!(glyphs, "\u{ad}", "{base_font}: drawing the hyphen must not rewrite Unicode");
+    }
+}
+
 /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
 /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
 /// (Shippori Mincho) draws them as .notdef.
@@ -7084,9 +9066,109 @@ mod default_colour_spaces;
 // (vendored hayro-syntax patch 28, hayro-interpret patch 55).
 mod devicen_inks;
 
+// #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 35).
+mod png_predicted_images;
+
+// TIFF-predicted Flate images at 8 and 16 bits are undone byte by byte (vendored hayro-syntax
+// patch 42).
+mod tiff_predicted_images;
+
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
 mod isolated_cmyk_groups;
+
+/// The generation-0 stand-in a rebuilt table files an object under must not make the object a
+/// second object: enumeration yielded it once per key, so a document recovered without a readable
+/// page tree reported the page twice (noted in review of #5580).
+///
+/// And a later header for the same object number replaces the stand-in, so `N 0 R` cannot be left
+/// pointing at a body the exact key no longer names.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object() {
+    // No table, no `startxref`, and no readable page tree: the pages are recovered by looking for
+    // objects that are pages, which is where a doubled object shows up as a doubled page.
+    let pdf = "%PDF-1.4\n\
+               1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+               3 99999 obj << /Type /Page /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj\n\
+               4 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+               trailer << /Root 1 0 R >>\n\
+               %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
+    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(first.error.is_none(), "the page is recovered: {:?}", first.error);
+    let second = r.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(second.error.is_some(), "and it is one page, not two: page 2 must not exist");
+
+    // Two headers for object 3, the second the one the exact key names: the stand-in follows it.
+    // `(B)` is drawn by the later body, so the page that comes back says which one was read.
+    let twice = "%PDF-1.4\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 5 0 R >> endobj\n\
+                 3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Contents 5 0 R >> endobj\n\
+                 5 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n\
+                 %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(twice.to_string().into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "the page is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (300, 150), "`3 0 R` reads the later body, as `3 1` does");
+}
+
+/// A file whose cross-reference table has to be rebuilt keeps an object whose header names a
+/// generation the reference does not.
+///
+/// `poppler-85140-0.pdf` is 340 bytes with no table at all, and its one page's header reads
+/// `3 18446744073709551616 obj` while the page tree points at `3 0 R`. Before #427 the digits
+/// wrapped, and 2^64 wrapped to exactly 0, so the header read as `3 0 obj` and the file opened by
+/// accident; once an overflowing integer became a real the object was unreachable and the file
+/// stopped opening at all, which `cargo xtask check` reports as a regression (#5580).
+///
+/// A rebuilt table has no revision history to tell two generations of an object apart -- the scan
+/// already files objects found in object streams under generation 0 -- so the object number is
+/// what identifies one. A readable generation that simply is not the one referenced
+/// (`3 99999 obj`) was lost the same way, and is covered here too.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
+    for generation in [
+        // The generation the reference names, which always worked.
+        "0",
+        // One that reads as an integer but is not the one referenced.
+        "99999",
+        // And one no generation may be: 2^64, which is what the reported file carries. A
+        // generation number is at most 65,535 (ISO 32000-2 §7.5.4).
+        "18446744073709551616",
+    ] {
+        // No table and no `startxref`, so the objects are recovered by scanning the file.
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 {generation} obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+             trailer << /Root 1 0 R >>\n\
+             %%EOF\n"
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "generation {generation}: the page is found: {:?}", page.error);
+        assert_eq!((page.width, page.height), (200, 100), "generation {generation}: and it is the page's own size");
+    }
+
+    // A stray number before a header (`42 3 0 obj`) is not a header, and must not cost the one
+    // after it: the lenient read leaves the scan where it was when it fails (noted in review).
+    let pdf = "%PDF-1.4\n\
+               1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+               2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+               42 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+               trailer << /Root 1 0 R >>\n\
+               %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "the header after a stray number is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 100));
+}
 
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
@@ -7361,4 +9443,272 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     // The image ran to the real `EI`, so the text after it is the page's only text: the first
     // `EI` inside the data was not taken for the end.
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
+}
+
+/// `/Crypt` has nothing to undo, so a chain naming it thousands of times costs no copy of the data
+/// for each. A chain of filters that does work has its own cost, which this isn't about.
+#[test]
+fn a_long_chain_of_crypt_filters_takes_no_time() {
+    use super::*;
+    let content = format!("1 0 0 rg 0 0 200 200 re f\n{}", " ".repeat(16 << 20));
+    let chain = "/Crypt ".repeat(100_000);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Filter [{chain}] /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let _ = done.send(page.rgba.get(start..start + 4).map(<[u8]>::to_vec));
+    });
+    // Skipped, this takes a moment; copied, 1.6 TB, which a margin this wide tells apart however
+    // busy the machine.
+    let pixel = finished.recv_timeout(std::time::Duration::from_secs(120)).expect("the chain costs no copy for each entry");
+    assert_eq!(pixel, Some(vec![255, 0, 0, 255]));
+}
+
+/// A lone filter takes its parameters as a dictionary or as an array of one, and given as an array
+/// of one itself it takes either too. The form of `/Filter` decided which was read, so a predictor
+/// in the other form was lost and the content came out as noise. `/StmF` and `/StrF` are optional,
+/// meaning `/Identity`: such a file didn't open at all, though a stream can still name a filter.
+#[test]
+fn a_filters_parameters_are_read_in_either_form() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Dict, Document, NewEncryption, Object, SaveOptions, Stream, write_full, write_incremental};
+    let content = b"1 0 0 rg 0 0 200 200 re f";
+    let centre = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let page = |stream: &[u8]| {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n".to_vec();
+        pdf.extend_from_slice(stream);
+        pdf.extend_from_slice(b"\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        pdf
+    };
+    // PNG Sub over one row, which reads as noise if it isn't undone.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in content {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = Stream::flate(Dict::new(), &rows).raw;
+    let parms = format!("<< /Predictor 11 /Columns {} >>", content.len());
+    for (filter, decode_parms) in [
+        ("/FlateDecode", parms.clone()),
+        ("/FlateDecode", format!("[{parms}]")),
+        ("[/FlateDecode]", parms.clone()),
+        ("[/FlateDecode]", format!("[{parms}]")),
+    ] {
+        let mut stream = format!("4 0 obj << /Filter {filter} /DecodeParms {decode_parms} /Length {} >> stream\n", coded.len()).into_bytes();
+        stream.extend_from_slice(&coded);
+        stream.extend_from_slice(b"\nendstream endobj");
+        assert_eq!(centre(page(&stream)), [255, 0, 0, 255], "{filter} with {decode_parms}");
+    }
+
+    let plain = format!("4 0 obj << /Length {} >> stream\n{}\nendstream endobj", content.len(), String::from_utf8_lossy(content));
+    let mut doc = Document::open(Arc::new(page(plain.as_bytes()))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    // No object streams: they would be encrypted under the /StmF about to go.
+    let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let mut doc = Document::open(Arc::new(saved)).unwrap();
+    let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+    doc.update_dict(encrypt, |e| {
+        e.remove(b"StmF");
+        e.remove(b"StrF");
+    })
+    .unwrap();
+    let mut doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+    let first = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+    let contents = first.as_dict().unwrap().reference(b"Contents").unwrap();
+    let mut named = Dict::new();
+    named.set(b"Name".to_vec(), Object::name("StdCF"));
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("Crypt"));
+    dict.set(b"DecodeParms".to_vec(), Object::Dict(named));
+    doc.set(contents, Object::Stream(Stream::from_raw(dict, content.to_vec())));
+    assert_eq!(centre(write_incremental(&doc, &SaveOptions::default()).unwrap()), [255, 0, 0, 255], "no /StmF, and a stream naming StdCF");
+}
+
+/// A stream can pick its own crypt filter: `/Crypt` in `/Filter`, with the filter's name in
+/// `/DecodeParms`, or `/Identity` without one (ISO 32000-2 §7.4.10). The renderer used the
+/// document's filter for every stream, and then couldn't decode `/Crypt`, so the page stayed blank.
+#[test]
+fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Dict, Document, NewEncryption, Object, SaveOptions, Stream, write_full, write_incremental};
+    let content = "1 0 0 rg 0 0 200 200 re f";
+    let page = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let centre = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let name = |n: &str| {
+        let mut parms = Dict::new();
+        parms.set(b"Name".to_vec(), Object::name(n));
+        Object::Dict(parms)
+    };
+    let hex: String = content.bytes().map(|b| format!("{b:02X}")).chain([">".to_string()]).collect();
+    let crypt = || Object::name("Crypt");
+    let contents_of = |doc: &Document| {
+        let catalog = doc.get(doc.root().unwrap());
+        let pages = doc.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+        let page = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+        page.as_dict().unwrap().reference(b"Contents").unwrap()
+    };
+    for (algorithm, filters) in [(Algorithm::Rc4_128, false), (Algorithm::Aes128, true), (Algorithm::Aes256, true)] {
+        let mut doc = Document::open(Arc::new(page.clone().into_bytes())).unwrap();
+        doc.set_encryption(&NewEncryption {
+            algorithm,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [9; 32],
+        })
+        .unwrap();
+        let protected = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(centre(protected.clone()), [255, 0, 0, 255], "{algorithm:?}: the document's own filter");
+        // A filter of its own name that stores streams as they are, beside the document's.
+        let mut doc = Document::open(Arc::new(protected)).unwrap();
+        if filters {
+            let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+            doc.update_dict(encrypt, |e| {
+                let Some(Object::Dict(cf)) = e.get(b"CF") else { panic!("no /CF") };
+                let mut cf = cf.clone();
+                let mut stored = Dict::new();
+                stored.set(b"CFM".to_vec(), Object::name("None"));
+                cf.set(b"Stored".to_vec(), Object::Dict(stored));
+                // `/Identity` is never one of these, whatever a file says.
+                let mut named = Dict::new();
+                named.set(b"CFM".to_vec(), Object::name("AESV2"));
+                cf.set(b"Identity".to_vec(), Object::Dict(named));
+                e.set(b"CF".to_vec(), Object::Dict(cf));
+            })
+            .unwrap();
+        }
+        let protected = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let spellings = [
+            "no name",
+            "/Identity",
+            "StdCF",
+            "Stored",
+            "/DecodeParms by reference",
+            "/Filter by reference",
+            "an entry of /Filter by reference",
+            "an entry of /DecodeParms by reference",
+            "/Name by reference",
+            "before another filter",
+            "a lone dictionary for an array of one",
+            "an array of one for a name",
+            "a dictionary by reference for an array of one",
+            "an array of one by reference for a dictionary",
+            "a name by reference for an array",
+            "a lone dictionary before another filter",
+            "past the longest chain",
+        ];
+        for what in spellings {
+            let mut doc = Document::open(Arc::new(protected.clone())).unwrap();
+            let (filter, parms) = match what {
+                "no name" => (crypt(), None),
+                "/Identity" => (crypt(), Some(name("Identity"))),
+                "StdCF" => (crypt(), Some(name("StdCF"))),
+                "Stored" => (crypt(), Some(name("Stored"))),
+                "/DecodeParms by reference" => (crypt(), Some(Object::Ref(doc.add(name("StdCF"))))),
+                "/Filter by reference" => (Object::Ref(doc.add(crypt())), Some(name("StdCF"))),
+                "an entry of /Filter by reference" => (Object::Array(vec![Object::Ref(doc.add(crypt()))]), Some(Object::Array(vec![name("StdCF")]))),
+                "an entry of /DecodeParms by reference" => {
+                    (Object::Array(vec![crypt()]), Some(Object::Array(vec![Object::Ref(doc.add(name("StdCF")))])))
+                }
+                "/Name by reference" => {
+                    let mut parms = Dict::new();
+                    parms.set(b"Name".to_vec(), Object::Ref(doc.add(Object::name("StdCF"))));
+                    (crypt(), Some(Object::Dict(parms)))
+                }
+                "a lone dictionary for an array of one" => (Object::Array(vec![crypt()]), Some(name("StdCF"))),
+                "an array of one for a name" => (crypt(), Some(Object::Array(vec![name("StdCF")]))),
+                "a dictionary by reference for an array of one" => (Object::Array(vec![crypt()]), Some(Object::Ref(doc.add(name("StdCF"))))),
+                "an array of one by reference for a dictionary" => (Object::Ref(doc.add(Object::Array(vec![crypt()]))), Some(name("StdCF"))),
+                "a name by reference for an array" => (Object::Ref(doc.add(crypt())), Some(Object::Array(vec![name("StdCF")]))),
+                "a lone dictionary before another filter" => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(name("StdCF"))),
+                // One filter more than cos decodes: it names none there, so here neither, and the
+                // stream is read with the document's filter, not the `Stored` it says.
+                "past the longest chain" => {
+                    let mut chain = vec![crypt()];
+                    chain.extend(std::iter::repeat_n(Object::name("ASCIIHexDecode"), 9));
+                    (Object::Array(chain), Some(Object::Array(vec![name("Stored")])))
+                }
+                _ => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(Object::Array(vec![name("StdCF"), Object::Null]))),
+            };
+            let contents = contents_of(&doc);
+            let Object::Stream(s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+            let mut dict = s.dict.clone();
+            dict.set(b"Filter".to_vec(), filter);
+            if let Some(parms) = parms {
+                dict.set(b"DecodeParms".to_vec(), parms);
+            }
+            let raw = match what {
+                "before another filter" | "a lone dictionary before another filter" => hex.clone().into_bytes(),
+                "past the longest chain" => (0..9).fold(content.as_bytes().to_vec(), |data, _| {
+                    let mut coded: Vec<u8> = data.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+                    coded.push(b'>');
+                    coded
+                }),
+                _ => content.as_bytes().to_vec(),
+            };
+            doc.set(contents, Object::Stream(Stream::from_raw(dict, raw)));
+            let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(centre(saved), [255, 0, 0, 255], "{algorithm:?}: {what}");
+        }
+    }
 }

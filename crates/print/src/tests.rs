@@ -84,7 +84,7 @@ fn page_selection() {
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]
 fn wordings_are_said() {
-    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into())];
+    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into()), PrintError::TooManySelected(1_000)];
     for e in &mistakes {
         assert_eq!(e.said(&in_english), e.to_string(), "{e:?} says itself in English the way it prints itself");
     }
@@ -303,6 +303,107 @@ fn spooler_arguments_and_printer_list() {
         "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
     );
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
+}
+
+/// The job name and owner, read from the `lp` arguments, since `lp_args` drops a value it can't
+/// pass on: the job must reach the spooler named, whatever its title holds (#5743).
+#[test]
+fn a_job_names_its_title_and_owner_to_the_spooler() {
+    let args_for = |title: &str, owner: Option<&str>| {
+        let job = Job { title: title.into(), ..Job::default() };
+        lp_args(&spool::with_job_info(&job, owner))
+    };
+    let option = |args: &[String], key: &str| {
+        let prefix = format!("com.apple.print.JobInfo.{key}=");
+        args.iter().find_map(|a| a.strip_prefix(prefix.as_str()).map(str::to_string))
+    };
+    let args = args_for("memo.pdf", Some("sam"));
+    assert_eq!(option(&args, "PMJobName").as_deref(), Some("memo.pdf"), "{args:?}");
+    assert_eq!(option(&args, "PMJobOwner").as_deref(), Some("sam"), "{args:?}");
+    // The title keeps its place as `-t`, in full.
+    assert!(args_for("Q3 report: a/b=\"c\".pdf", None).windows(2).any(|w| w[0] == "-t" && w[1] == "Q3 report: a/b=\"c\".pdf"));
+
+    let named = args_for("Q3 report: a/b=\"c\".pdf", None);
+    assert_eq!(option(&named, "PMJobName").as_deref(), Some("Q3_report__a_b__c_.pdf"), "what lp can't be given becomes _");
+    assert_eq!(option(&named, "PMJobOwner").as_deref(), Some("PdfCraft"), "no owner known: the filter still gets one");
+
+    for nothing_left in ["", "   ", "見積書", "/:=\""] {
+        assert_eq!(option(&args_for(nothing_left, Some("")), "PMJobName").as_deref(), Some("PdfCraft"), "{nothing_left:?}");
+    }
+    assert_eq!(option(&args_for("見積書2.pdf", None), "PMJobName").as_deref(), Some("___2.pdf"), "a part of it is kept");
+    let long = option(&args_for(&format!("a{}", "é".repeat(200)), None), "PMJobName").unwrap_or_default();
+    assert_eq!(long.len(), 64, "cut to what lp_args takes, on a multi-byte title too: {long}");
+
+    // What CUPS would quote away or send as another type, as this Mac's libcups does.
+    for (title, name) in [("it's.pdf", "it_s.pdf"), (r"a\b.pdf", "a_b.pdf"), ("{draft}.pdf", "_draft}.pdf"), ("a{b", "a_b")] {
+        assert_eq!(option(&args_for(title, None), "PMJobName").as_deref(), Some(name), "{title:?}");
+    }
+    for boolean in ["true", "TRUE", "false", "False"] {
+        assert_eq!(option(&args_for(boolean, Some(boolean)), "PMJobName").as_deref(), Some("PdfCraft"), "{boolean:?}");
+        assert_eq!(option(&args_for(boolean, Some(boolean)), "PMJobOwner").as_deref(), Some("PdfCraft"), "{boolean:?}");
+    }
+    assert_eq!(option(&args_for("true.pdf", None), "PMJobName").as_deref(), Some("true.pdf"), "only the bare word is a boolean");
+}
+
+/// A job's own values stand: CUPS keeps the last of a repeated option, ignoring the case of its
+/// name, so a default after them would replace what a `doc_print` caller set (#5743).
+#[test]
+fn a_job_keeps_the_title_and_owner_it_already_sets() {
+    let values = |job: &Job, key: &str| -> Vec<String> {
+        let found = spool::with_job_info(job, Some("sam")).options;
+        found.into_iter().filter(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v).collect()
+    };
+    let (name, owner) = ("com.apple.print.JobInfo.PMJobName", "com.apple.print.JobInfo.PMJobOwner");
+    let job = Job { title: "memo.pdf".into(), options: vec![(name.to_string(), "Mine".to_string())], ..Job::default() };
+    assert_eq!(values(&job, name), ["Mine"]);
+    assert_eq!(values(&job, owner), ["sam"], "the one it left out still gets its default");
+
+    let job = Job { title: "memo.pdf".into(), options: vec![(owner.to_ascii_uppercase(), "Theirs".to_string())], ..Job::default() };
+    assert_eq!(values(&job, owner), ["Theirs"]);
+    assert_eq!(values(&job, name), ["memo.pdf"]);
+}
+
+/// Both ways to submit reach `lp` with the job named. `lp` comes from `PATH`, which only a child
+/// process can change here, so the test runs itself again with a stand-in that records its
+/// arguments; no job reaches a real spooler (#5743).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_submitted_job_reaches_lp_named() {
+    const TEST: &str = "tests::a_submitted_job_reaches_lp_named";
+    if let Ok(way) = std::env::var("PDFCRAFT_SUBMIT_TO_STAND_IN") {
+        let job = Job { title: "memo.pdf".into(), ..Job::default() };
+        let sent = match way.as_str() {
+            "submit" => spool::submit(b"%PDF-1.7", &job),
+            _ => spool::submit_with_progress(b"%PDF-1.7", &job, &mut |_, _| {}),
+        };
+        assert!(sent.is_ok(), "{sent:?}");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-lp-stand-in-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let lp = dir.join("lp");
+    let recorded = dir.join("args");
+    let script =
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n/bin/cat > /dev/null\necho 'request id is stand-in-1 (1 file(s))'\n", recorded.display());
+    std::fs::write(&lp, script).expect("stand-in");
+    std::fs::set_permissions(&lp, std::fs::Permissions::from_mode(0o700)).expect("executable");
+    for way in ["submit", "submit_with_progress"] {
+        let _ = std::fs::remove_file(&recorded);
+        let this = std::env::current_exe().expect("this test binary");
+        let child = std::process::Command::new(this)
+            .args(["--exact", TEST, "--nocapture"])
+            .env("PDFCRAFT_SUBMIT_TO_STAND_IN", way)
+            .env("PATH", &dir)
+            .env("USER", "sam")
+            .output()
+            .expect("run the test again");
+        assert!(child.status.success(), "{way}: {}", String::from_utf8_lossy(&child.stdout));
+        let args = std::fs::read_to_string(&recorded).expect("lp was run");
+        assert!(args.lines().any(|a| a == "com.apple.print.JobInfo.PMJobName=memo.pdf"), "{way}: {args}");
+        assert!(args.lines().any(|a| a == "com.apple.print.JobInfo.PMJobOwner=sam"), "{way}: {args}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
