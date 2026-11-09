@@ -117,6 +117,19 @@ pub enum XfaEffect {
     Relayout,
     /// `app.runtimeHighlight = on`.
     Highlight(bool),
+    /// A property of the object at `som` set (XFA 3.3 ch. 3, "Properties vs. Children",
+    /// p. 78): attribute `attr` (`None`: the text) of the property at `path`, its steps from
+    /// the object as `tag#occurrence` (`border#0/fill#0/color#0`), to `value`.
+    SetProperty {
+        som: String,
+        path: String,
+        attr: Option<String>,
+        value: String,
+        /// A value the host copied from the edge or corner drawn on a side when a script
+        /// reached one the border doesn't list, not one the script wrote: kept apart from
+        /// writes, and not counted as a change.
+        copied: bool,
+    },
 }
 
 /// What running a script did.
@@ -206,6 +219,10 @@ pub(super) fn effect_key(e: &XfaEffect) -> Option<(u8, String)> {
         XfaEffect::SetValue { som, .. } => Some((0, som.clone())),
         XfaEffect::SetPresence { som, .. } => Some((1, som.clone())),
         XfaEffect::SetAccess { som, .. } => Some((2, som.clone())),
+        // A path never holds `@`, so the attribute after it can't run into the path.
+        XfaEffect::SetProperty { som, path, attr, copied, .. } => {
+            Some((if *copied { 4 } else { 3 }, format!("{som}\u{0}{path}@{}", attr.as_deref().unwrap_or("#text"))))
+        }
         _ => None,
     }
 }
@@ -215,6 +232,9 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
     match e {
         XfaEffect::SetValue { som, value: s } | XfaEffect::SetPresence { som, presence: s } | XfaEffect::SetAccess { som, access: s } => {
             som.len().saturating_add(s.len())
+        }
+        XfaEffect::SetProperty { som, path, attr, value, .. } => {
+            som.len().saturating_add(path.len()).saturating_add(attr.as_ref().map_or(0, String::len)).saturating_add(value.len())
         }
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
         XfaEffect::MessageBox(m) => m.bytes(),

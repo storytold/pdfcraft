@@ -10,7 +10,8 @@
 //! per script); a property object is a Proxy naming its node and its path from there
 //! (`border#0/edge#1/color#0`), so defaults need no storage. What a script writes is kept in
 //! the run's overlay ([`super::XHost::prop_writes`]) and read back by later reads in the same
-//! run; it changes nothing on the form yet.
+//! run; each write is also an [`XfaEffect::SetProperty`], which the engine applies to the form
+//! (its layout, its fields, the instance limits) and keeps in the file.
 
 use std::collections::HashMap;
 
@@ -21,7 +22,7 @@ use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, 
 
 use super::host::host;
 use super::nodes::node_object;
-use super::{XHost, XfaKind};
+use super::{XHost, XfaEffect, XfaKind};
 use crate::host::text_line;
 use crate::{arg, error, function, s, text};
 
@@ -254,7 +255,7 @@ fn join(path: &str, tag: &str, index: usize) -> String {
 }
 
 /// The tag of the property `path` names, empty for the node itself.
-fn tag_of(path: &str) -> &str {
+pub(crate) fn tag_of(path: &str) -> &str {
     steps(path).last().map_or("", |(t, _)| t)
 }
 
@@ -501,7 +502,7 @@ fn is_attr(h: &XHost, node: usize, path: &str, name: &str) -> bool {
 
 /// The value a property object stands for in comparisons and text: its text when it holds text
 /// (`picture`, `toolTip`), else its `value` attribute (`color`), else empty.
-fn value_of(h: &XHost, node: usize, path: &str) -> String {
+pub(crate) fn value_of(h: &XHost, node: usize, path: &str) -> String {
     if schema(tag_of(path)).is_some_and(|s| s.content) {
         return content(h, node, path);
     }
@@ -944,9 +945,11 @@ impl XHost {
                         for (below, attrs, text) in copied {
                             let at = if below.is_empty() { own.clone() } else { format!("{own}/{below}") };
                             for (k, v) in attrs {
+                                self.copy_to_form(node, &at, Some(&k), &v);
                                 self.put_prop(node, &at, Some(&k), v);
                             }
                             if let Some(t) = text {
+                                self.copy_to_form(node, &at, None, &t);
                                 self.put_prop(node, &at, None, t);
                             }
                         }
@@ -957,9 +960,10 @@ impl XHost {
         }
     }
 
-    /// A node's colour shorthand (`member`) set: kept for later reads in this run, with no effect
-    /// yet. `borderColor` colours all four edges, making the ones the border doesn't list first
-    /// (as copies of the edge drawn there, see [`XHost::instantiate`]). Reads come from edge 0.
+    /// A node's colour shorthand (`member`) set (see [`XHost::write_prop`]): for later reads and
+    /// for the form. `borderColor` colours all four edges, making the ones the border doesn't
+    /// list first (as copies of the edge drawn there, see [`XHost::instantiate`]). Reads come from
+    /// edge 0.
     pub(crate) fn set_color(&mut self, node: usize, member: &str, value: String) {
         let Some(path) = shorthand_color(member) else { return };
         if member != "borderColor" {
@@ -972,7 +976,7 @@ impl XHost {
 
     /// `mandatory`, `validationMessage`, `formatMessage` or `mandatoryMessage` set on node
     /// `node`: kept for later reads in this run (`mandatory` only to `disabled`, `error` or
-    /// `warning`), with no effect yet.
+    /// `warning`), and for the form (see [`XHost::write_prop`]): `error` makes it Required.
     pub(crate) fn set_validation(&mut self, node: usize, member: &str, value: String) {
         match (member, message_test(member)) {
             ("mandatory", _) if matches!(value.as_str(), "disabled" | "error" | "warning") => {
@@ -998,19 +1002,59 @@ impl XHost {
         self.write_prop(node, &path, None, value);
     }
 
-    /// Keep what a script wrote to the property at `path` of node `node` (an attribute, or its
-    /// text when `name` is `None`) for later reads in this run, within the run's text budget;
-    /// an edge or corner the border doesn't list is made first ([`XHost::instantiate`]).
-    fn write_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
+    /// Set what a script wrote to the property at `path` of node `node` (an attribute, or its
+    /// text when `name` is `None`): kept for later reads in this run and handed to the engine
+    /// as an [`XfaEffect::SetProperty`], which applies it to the form. An edge or corner the
+    /// border doesn't list is made first ([`XHost::instantiate`]), and the copy it is made as
+    /// goes to the form too, so the form makes that side as the script reads it.
+    pub(crate) fn write_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
+        self.copying = true;
         self.instantiate(node, path);
+        self.copying = false;
         self.store_prop(node, path, name, value);
     }
 
-    /// [`XHost::write_prop`] at exactly `path`, without making anything first.
+    /// [`XHost::write_prop`] at exactly `path`, without making anything first. The write and
+    /// its effect are charged to the run's text budget and the effect to its count before
+    /// either is kept: past them the write is left out of both, so a script never reads back a
+    /// change the form won't get. A value the form would refuse ([`property_value_ok`]) is
+    /// noted on the console and changes nothing.
     fn store_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
-        let bytes = path.len().saturating_add(name.map_or(0, str::len)).saturating_add(value.len());
-        if self.attr_room(node, path, name) && self.room(bytes) {
-            self.put_prop(node, path, name, value);
+        if !self.attr_room(node, path, name) {
+            return;
+        }
+        let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
+        if let Err(why) = property_value_ok(path, name, &value) {
+            let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
+            self.print(super::clip(format!("{som}: {what} not set: {why}; the property keeps its value")));
+            return;
+        }
+        let effect = XfaEffect::SetProperty { som, path: path.to_string(), attr: name.map(str::to_string), value: value.clone(), copied: false };
+        let bytes = path.len().saturating_add(name.map_or(0, str::len)).saturating_add(value.len()).saturating_add(super::model::payload(&effect));
+        if !self.reserve(&effect, bytes) {
+            return;
+        }
+        if path == "occur#0" {
+            self.set_occur(node, name, &value);
+        }
+        self.put_prop(node, path, name, value);
+        self.record(effect);
+    }
+
+    /// While a script writes ([`XHost::copying`]), hand the form a value copied from the edge or
+    /// corner drawn on a side ([`XHost::instantiate`]), marked as a copy: the form applies it
+    /// before the writes to that property and doesn't count it as a change. One the form would
+    /// not take (a template's own odd value), or past the run's budget, is left out quietly: the
+    /// form then makes that side from the side drawn there, as it is by then.
+    fn copy_to_form(&mut self, node: usize, path: &str, name: Option<&str>, value: &str) {
+        if !self.copying || property_value_ok(path, name, value).is_err() {
+            return;
+        }
+        let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
+        let effect = XfaEffect::SetProperty { som, path: path.to_string(), attr: name.map(str::to_string), value: value.to_string(), copied: true };
+        let bytes = super::model::payload(&effect);
+        if self.reserve(&effect, bytes) {
+            self.record(effect);
         }
     }
 
@@ -1037,6 +1081,38 @@ impl XHost {
             None => w.text = Some(value),
         }
     }
+
+    /// `occur.min` or `occur.max` set on node `node` (XFA 3.3 p. 786): what the instance manager
+    /// allows for the rest of the run, for every instance of the subform, read as the template's
+    /// are (a whole number up to 1000; a negative `max` is unlimited and `max` is never below
+    /// `min`). A value that is no whole number changes nothing (the engine refuses it too).
+    fn set_occur(&mut self, node: usize, name: Option<&str>, value: &str) {
+        let Ok(v) = value.trim().parse::<i64>() else { return };
+        let Some((parent, own)) = self.nodes.get(node).map(|n| (n.parent, n.name.clone())) else { return };
+        let all = match parent {
+            Some(p) => super::instances(self, p, &own),
+            None => vec![node],
+        };
+        for i in all {
+            let Some(n) = self.nodes.get_mut(i) else { continue };
+            match name {
+                Some("min") => n.occur_min = v.clamp(0, 1_000) as usize,
+                Some("max") if v < 0 => n.occur_max = None,
+                Some("max") => n.occur_max = Some(v.clamp(0, 1_000) as usize),
+                _ => continue,
+            }
+            n.occur_max = n.occur_max.map(|m| m.max(n.occur_min));
+            n.repeatable = n.occur_max != Some(1);
+        }
+    }
+}
+
+/// Whether a write may set `value` as attribute `attr` (`None`: the text) of the property at
+/// `path`: the rules the form applies before keeping a change, from the one file both read
+/// (`pdfcraft_xfa`'s `prop_rules.rs`, see [`super::prop_rules::check`]). A write refused here
+/// is noted and changes nothing, so a script never reads back a value the form won't get.
+pub fn property_value_ok(path: &str, attr: Option<&str>, value: &str) -> Result<(), String> {
+    super::prop_rules::check(path, attr, value)
 }
 
 /// The overlay: what a script wrote, by node, then by property path.
@@ -1188,49 +1264,7 @@ fn prop_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         }
         _ => {}
     }
-    enum Read {
-        Text(String),
-        Prop(String),
-        Null,
-        Empty,
-        Missing,
-        Failed,
-    }
-    let read = {
-        let h = host(ctx)?.borrow();
-        // A child named `key` comes before an attribute or property of that name, as for
-        // nodes ("XFA SOM resolves the name clash in favor of the explicit naming", XFA 3.3
-        // p. 99): `extras.id` is the extras' value named `id`, not its id attribute.
-        let named = if key.starts_with('#') || !has_named_children(&h, node, &path) { None } else { named_child(&h, node, &path, &key) };
-        match (named, key.as_str()) {
-            (Some(p), _) => Read::Prop(p),
-            // A message's text named for a test it has none for: readers raise an error.
-            (None, k) if tag_of(&path) == "message" && TESTS.contains(&k) => Read::Missing,
-            (None, "oneOfChild") => match one_of_child(&h, node, &path) {
-                Some(tag) => Read::Prop(join(&path, &tag, 0)),
-                None => Read::Null,
-            },
-            // A caption's `value` is its value element (p. 643), whose content holds the label.
-            (None, "value") if is_child_prop(&h, node, &path, "value") => Read::Prop(join(&path, "value", 0)),
-            (None, "value") => Read::Text(value_of(&h, node, &path)),
-            // A fill type other than the one the fill has (its `pattern` when it is solid): the
-            // fill can't hand one out, so the read fails and the fill keeps its type, as readers
-            // do (p. 734: one fill type).
-            (None, k) if tag_of(&path) == "fill" && is_other_one_of(&h, node, &path, k.strip_prefix('#').unwrap_or(k)) => Read::Failed,
-            // A one-of property other than the one the element has (a caption's `exData` when it
-            // holds text): there is none, so it reads as null (p. 598: at most one of them).
-            (None, k) if is_other_one_of(&h, node, &path, k.strip_prefix('#').unwrap_or(k)) => Read::Null,
-            (None, "rawValue") => Read::Text(raw_value(&h, node, &path)),
-            (None, "name") => Read::Text(attr(&h, node, &path, "name").unwrap_or_default()),
-            (None, k) if is_attr(&h, node, &path, k) => Read::Text(attr(&h, node, &path, k).unwrap_or_default()),
-            (None, k) if is_child_prop(&h, node, &path, k) => Read::Prop(join(&path, k, 0)),
-            // `#textEdit`: the property by its class name.
-            (None, k) if k.strip_prefix('#').is_some_and(|c| is_child_prop(&h, node, &path, c)) => {
-                Read::Prop(join(&path, k.get(1..).unwrap_or_default(), 0))
-            }
-            _ => Read::Empty,
-        }
-    };
+    let read = read_member(&host(ctx)?.borrow(), node, &path, &key);
     match read {
         Read::Text(v) => Ok(s(&v)),
         Read::Prop(p) => prop_object(ctx, node, &p),
@@ -1238,6 +1272,59 @@ fn prop_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         Read::Empty => empty(ctx),
         Read::Missing => Err(error(format!("the validation's message has no text named {key}"))),
         Read::Failed => Err(general_error(ctx, "operation failed")),
+    }
+}
+
+/// What a member read on the property at `path` of node `node` gives (see [`read_member`]).
+pub(crate) enum Read {
+    /// An attribute, or the property's value.
+    Text(String),
+    /// The property at this path.
+    Prop(String),
+    Null,
+    /// Nothing here: an object that takes anything.
+    Empty,
+    /// A message's text named for a test the message has none for: an error.
+    Missing,
+    /// A fill type other than the fill's: the read fails.
+    Failed,
+}
+
+/// Member `key` of the property at `path` of node `node`, other than its methods and relatives:
+/// a child named `key`, its one-of child, value, attributes (with the spec's defaults) and
+/// properties (present or default). JavaScript's property objects and FormCalc read through it.
+pub(crate) fn read_member(h: &XHost, node: usize, path: &str, key: &str) -> Read {
+    // A child named `key` comes before an attribute or property of that name, as for
+    // nodes ("XFA SOM resolves the name clash in favor of the explicit naming", XFA 3.3
+    // p. 99): `extras.id` is the extras' value named `id`, not its id attribute.
+    let named = if key.starts_with('#') || !has_named_children(h, node, path) { None } else { named_child(h, node, path, key) };
+    match (named, key) {
+        (Some(p), _) => Read::Prop(p),
+        // A message's text named for a test it has none for: readers raise an error.
+        (None, k) if tag_of(path) == "message" && TESTS.contains(&k) => Read::Missing,
+        (None, "oneOfChild") => match one_of_child(h, node, path) {
+            Some(tag) => Read::Prop(join(path, &tag, 0)),
+            None => Read::Null,
+        },
+        // A caption's `value` is its value element (p. 643), whose content holds the label.
+        (None, "value") if is_child_prop(h, node, path, "value") => Read::Prop(join(path, "value", 0)),
+        (None, "value") => Read::Text(value_of(h, node, path)),
+        // A fill type other than the one the fill has (its `pattern` when it is solid): the
+        // fill can't hand one out, so the read fails and the fill keeps its type, as readers
+        // do (p. 734: one fill type).
+        (None, k) if tag_of(path) == "fill" && is_other_one_of(h, node, path, k.strip_prefix('#').unwrap_or(k)) => Read::Failed,
+        // A one-of property other than the one the element has (a caption's `exData` when it
+        // holds text): there is none, so it reads as null (p. 598: at most one of them).
+        (None, k) if is_other_one_of(h, node, path, k.strip_prefix('#').unwrap_or(k)) => Read::Null,
+        (None, "rawValue") => Read::Text(raw_value(h, node, path)),
+        (None, "name") => Read::Text(attr(h, node, path, "name").unwrap_or_default()),
+        (None, k) if is_attr(h, node, path, k) => Read::Text(attr(h, node, path, k).unwrap_or_default()),
+        (None, k) if is_child_prop(h, node, path, k) => Read::Prop(join(path, k, 0)),
+        // `#textEdit`: the property by its class name.
+        (None, k) if k.strip_prefix('#').is_some_and(|c| is_child_prop(h, node, path, c)) => {
+            Read::Prop(join(path, k.get(1..).unwrap_or_default(), 0))
+        }
+        _ => Read::Empty,
     }
 }
 
@@ -1275,9 +1362,7 @@ const RESERVED: &[&str] = &[
     "then",
 ];
 
-/// A write on a property object: its `value` (its text, or its `value` attribute) or an
-/// attribute is kept for later reads in this run (a name the spec doesn't give it too, as the
-/// form may know better); a property's name, or a method's, is ignored.
+/// A write on a property object: see [`XHost::assign_member`].
 fn prop_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let key = arg(args, 1);
     if key.as_symbol().is_some() {
@@ -1287,24 +1372,37 @@ fn prop_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     let t = arg(args, 0).as_object().ok_or_else(|| error("not an XFA property"))?.clone();
     let (node, path) = prop_ref(&t, ctx)?;
     let value = text_line(&arg(args, 2), ctx)?;
-    let mut h = host(ctx)?.borrow_mut();
-    if path.is_empty() {
-        return Ok(JsValue::from(true));
-    }
-    // As for reads: a child named `key` comes first, and the write sets its value.
-    let named = if key.starts_with('#') || !has_named_children(&h, node, &path) { None } else { named_child(&h, node, &path, &key) };
-    if let Some(child) = named {
-        h.write_raw(node, &child, value);
-        return Ok(JsValue::from(true));
-    }
-    let is_content = schema(tag_of(&path)).is_some_and(|s| s.content);
-    match key.as_str() {
-        "value" if is_content => h.write_prop(node, &path, None, value),
-        "rawValue" => h.write_raw(node, &path, value),
-        k if !is_child_prop(&h, node, &path, k) && !RESERVED.contains(&k) => h.write_prop(node, &path, Some(k), value),
-        _ => {}
-    }
+    host(ctx)?.borrow_mut().assign_member(node, &path, &key, value);
     Ok(JsValue::from(true))
+}
+
+impl XHost {
+    /// Member `key` of the property at `path` of node `node` set to `value` (JavaScript's
+    /// property objects and FormCalc write through it): a child named `key` takes it as its
+    /// value, as for reads; a property that holds text (`assist.speak = "…"`, a tooltip, a
+    /// picture) takes it as its text; `value` sets the text or the `value` attribute; any other
+    /// name sets that attribute (a name the spec doesn't give it too, as the form may know
+    /// better). A property's name, or a method's, is ignored.
+    pub(crate) fn assign_member(&mut self, node: usize, path: &str, key: &str, value: String) {
+        if path.is_empty() {
+            return;
+        }
+        let named = if key.starts_with('#') || !has_named_children(self, node, path) { None } else { named_child(self, node, path, key) };
+        if let Some(child) = named {
+            return self.write_raw(node, &child, value);
+        }
+        if !RESERVED.contains(&key) && is_child_prop(self, node, path, key) && schema(key).is_some_and(|s| s.content) {
+            let child = join(path, key, 0);
+            return self.write_prop(node, &child, None, value);
+        }
+        let is_content = schema(tag_of(path)).is_some_and(|s| s.content);
+        match key {
+            "value" if is_content => self.write_prop(node, path, None, value),
+            "rawValue" => self.write_raw(node, path, value),
+            k if !is_child_prop(self, node, path, k) && !RESERVED.contains(&k) => self.write_prop(node, path, Some(k), value),
+            _ => {}
+        }
+    }
 }
 
 impl XHost {
@@ -1464,6 +1562,59 @@ pub(crate) fn list_object(ctx: &mut Context, items: Vec<(usize, String)>) -> JsR
         .property(js_string!("namedItem"), named, Attribute::all())
         .build()
         .into())
+}
+
+/// What `execValidate()` says when a required object is empty: the validation's message for
+/// the null test as written (XFA 3.3 p. 782), else this, naming the object by its caption, else
+/// by its name. Readers are seen to do both.
+fn null_message(given: &str, caption: &str, name: &str) -> String {
+    let given = given.trim();
+    if !given.is_empty() {
+        return given.to_string();
+    }
+    let label = if caption.trim().is_empty() { name } else { caption.trim() };
+    format!("{label} cannot be left blank.")
+}
+
+/// The required objects under (and including) node `node` that are empty, in form order: the
+/// fields and exclusion groups whose null test is on (`warning` or `error`, XFA 3.3 p. 881)
+/// and that hold no value, each with what it says ([`null_message`]). Hidden and inactive
+/// objects, and those under them, are not validated, as they can't be filled in.
+pub(crate) fn null_failures(h: &XHost, node: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![node];
+    // A tree: each node is visited once, so never more visits than there are nodes.
+    let mut budget = h.nodes.len();
+    while let Some(n) = stack.pop() {
+        let Some(hn) = h.nodes.get(n) else { continue };
+        let Some(left) = budget.checked_sub(1) else { break };
+        budget = left;
+        if hn.gone || matches!(&*hn.presence, "hidden" | "inactive") {
+            continue;
+        }
+        if matches!(hn.kind, XfaKind::Field | XfaKind::ExclGroup) {
+            let test = attr(h, n, "validate#0", "nullTest").unwrap_or_default();
+            if matches!(test.trim(), "warning" | "error") && hn.value.trim().is_empty() {
+                let caption = content(h, n, "caption#0/value#0/text#0");
+                out.push(null_message(&node_message(h, n, "nullTest"), &caption, &hn.name));
+            }
+        }
+        stack.extend(hn.children.iter().rev());
+    }
+    out
+}
+
+/// `execValidate()`: the null test of every required object under the node (XFA 3.3 p. 396),
+/// reported in one message that lists every failure in form order, as readers do; true when
+/// none failed. The format and script tests run as the user leaves each field.
+pub(crate) fn exec_validate(_: &JsValue, _: &[JsValue], r: &JsObject, ctx: &mut Context) -> JsResult<JsValue> {
+    let (node, _) = prop_ref(r, ctx)?;
+    let failures = null_failures(&host(ctx)?.borrow(), node);
+    if failures.is_empty() {
+        return Ok(JsValue::from(true));
+    }
+    host(ctx)?.borrow_mut().push(XfaEffect::MessageBox(crate::Message::plain(super::clip(failures.join("\n")))));
+    Ok(JsValue::from(false))
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::xfa::{
-    HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
+    HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances, props,
     reset_names, resolve_som, run_within,
 };
 use crate::{Limits, Message, MessageButtons, MessageIcon};

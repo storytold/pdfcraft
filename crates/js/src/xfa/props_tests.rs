@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::super::{XfaDoc, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
+use super::super::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
 use super::{XfaProp, XfaProps};
 use crate::Limits;
 
@@ -277,10 +277,20 @@ fn widget_border_and_validate_reads_throw_no_type_error() {
     }
 }
 
-/// A script's writes are read back later in the same run, make the property specified, and
-/// change nothing on the form (no effect comes back).
+/// The property change a script's write hands the form.
+fn set(som: &str, path: &str, attr: Option<&str>, value: &str) -> XfaEffect {
+    XfaEffect::SetProperty { som: som.into(), path: path.into(), attr: attr.map(str::to_string), value: value.into(), copied: false }
+}
+
+/// The property change the host hands the form for a value it copied from a drawn edge.
+fn copy(som: &str, path: &str, attr: Option<&str>, value: &str) -> XfaEffect {
+    XfaEffect::SetProperty { som: som.into(), path: path.into(), attr: attr.map(str::to_string), value: value.into(), copied: true }
+}
+
+/// Every write reaches the engine as a property change, once per property (the last value
+/// wins), with the path the read takes.
 #[test]
-fn writes_are_read_back_in_the_run_and_have_no_effect() {
+fn writes_are_read_back_in_the_run_and_handed_to_the_engine() {
     let script = "this.border.fill.color.value = '255,0,0'; \
                   this.validate.nullTest = 'error'; \
                   this.assist.toolTip.value = 'Now'; \
@@ -291,14 +301,115 @@ fn writes_are_read_back_in_the_run_and_have_no_effect() {
     let o = go_on(&form(), script, "plain");
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("255,0,0|error|Now|bold|true|true|true|bold"));
-    assert!(o.effects.is_empty(), "{o:?}");
-    // Another object is untouched, and a fresh run starts from the template again.
+    let som = "form1[0].plain[0]";
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "border#0/fill#0/color#0", Some("value"), "255,0,0"),
+            set(som, "validate#0", Some("nullTest"), "error"),
+            set(som, "assist#0/toolTip#0", None, "Now"),
+            set(som, "font#0", Some("weight"), "bold"),
+        ]
+    );
+    // Another object is untouched, and a fresh run starts from the snapshot it is given.
     assert_eq!(eval("this.border.fill.color.value", "label"), "255,255,255");
     assert_eq!(eval("this.validate.nullTest", "plain"), "disabled");
+    // Set again: one change, the last value.
+    let o = go_on(&form(), "this.fillColor = '1,1,1'; this.fillColor = '2,2,2'; this.mandatory = 'error'; this.mandatory = 'bogus';", "plain");
+    assert_eq!(o.effects, [set(som, "border#0/fill#0/color#0", Some("value"), "2,2,2"), set(som, "validate#0", Some("nullTest"), "error")]);
+}
+
+/// What forms write, as the 367 inventoried forms write it: a text property assigned directly
+/// (`assist.speak = …`), an edge by `getElement` (past the listed ones: the one function that
+/// decides it, `element_path`), the colour shorthands, validation messages.
+#[test]
+fn the_writes_forms_make_name_their_properties() {
+    let som = "form1[0].styled[0]";
+    let o = go_on(
+        &form(),
+        "this.assist.speak = 'Say'; this.assist.toolTip = 'Tip'; \
+         this.border.getElement('edge', 1).color.value = '0,128,0'; \
+         this.ui.oneOfChild.border.getElement('edge', 0).thickness = '1pt'; \
+         this.fontColor = '0,0,255'; this.validationMessage = 'Bad'; \
+         this.font.size = '12pt';",
+        "styled",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "assist#0/speak#0", None, "Say"),
+            set(som, "assist#0/toolTip#0", None, "Tip"),
+            set(som, "border#0/edge#1/color#0", Some("value"), "0,128,0"),
+            set(som, "ui#0/choiceList#0/border#0/edge#0", Some("thickness"), "1pt"),
+            set(som, "font#0/fill#0/color#0", Some("value"), "0,0,255"),
+            set(som, "validate#0/message#0/text#1", None, "Bad"),
+            set(som, "font#0", Some("size"), "12pt"),
+        ]
+    );
+    // An edge past the two listed is made as a copy of the edge drawn on its side (the second,
+    // 2pt); borderColor then makes the bottom edge too (a copy of the first, as it is by then),
+    // each attribute of that copy handed to the engine as one, and colours all four.
+    let o = go_on(&form(), "this.border.getElement('edge', 3).presence = 'hidden'; this.borderColor = '1,1,1';", "styled");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(
+        o.effects,
+        [
+            // `getElement` reached the left edge, made as a copy of the edge drawn there (the
+            // second) when it was read: the form makes it from the same edge, so only the write
+            // is handed on.
+            set(som, "border#0/edge#3", Some("presence"), "hidden"),
+            set(som, "border#0/edge#0/color#0", Some("value"), "1,1,1"),
+            set(som, "border#0/edge#1/color#0", Some("value"), "1,1,1"),
+            // The bottom, copied from the top as it is by then.
+            copy(som, "border#0/edge#2", Some("thickness"), "2pt"),
+            copy(som, "border#0/edge#2/color#0", Some("value"), "1,1,1"),
+            set(som, "border#0/edge#2/color#0", Some("value"), "1,1,1"),
+            set(som, "border#0/edge#3/color#0", Some("value"), "1,1,1"),
+        ]
+    );
+}
+
+/// `occur.max` written changes what the instance manager allows for the rest of the run (the
+/// engine keeps it for later runs).
+#[test]
+fn occur_written_changes_what_the_instance_manager_allows() {
+    let mut root = form();
+    if let Some(rows) = root.children.iter_mut().find(|c| c.name == "rows") {
+        rows.occur_max = Some(1);
+        rows.repeatable = false;
+    }
+    let script = "var m = this.parent._rows; var a = m.addInstance(); rows.occur.max = '3'; var b = m.addInstance(); var c = m.addInstance(); \
+                  var d = m.addInstance(); [a === null, b !== null, c !== null, d === null, m.count, this.parent._rows.max].join('|')";
+    let o = go_on(&root, script, "plain");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("true|true|true|true|3|3"));
+    assert!(o.effects.contains(&set("form1[0].rows[0]", "occur#0", Some("max"), "3")), "{o:?}");
+}
+
+/// FormCalc reads and writes the same property objects (`$.font.fill.color.value = …`).
+#[test]
+fn formcalc_reads_and_writes_properties() {
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].styled[0]".into(), ..Default::default() };
+    let run = |s: &str| crate::formcalc::run_formcalc(s, &ev, &XfaDoc::default(), &form(), Limits::default());
+    let o = run(
+        "$.font.fill.color.value = \"0,0,255\"\n$.mandatory = \"disabled\"\n$.fillColor = \"9,9,9\"\nconcat($.font.fill.color.value, \"|\", $.validate.nullTest, \"|\", $.border.edge.color.value, \"|\", $.assist.toolTip, \"|\", $.ui.oneOfChild.className)",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0,0,255|disabled|255,0,0|Pick one|choiceList"));
+    let som = "form1[0].styled[0]";
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "font#0/fill#0/color#0", Some("value"), "0,0,255"),
+            set(som, "validate#0", Some("nullTest"), "disabled"),
+            set(som, "border#0/fill#0/color#0", Some("value"), "9,9,9"),
+        ]
+    );
 }
 
 /// form1 > { label (a field captioned "Name:"), rich (a field whose caption is rich text),
-/// list (a choice list with shown and saved items), box (a check button with on and off values) }
+/// list (a choice list that takes typed text, with shown and saved items), box (a check button with on and off values) }
 fn caption_form() -> XfaNode {
     let caption =
         |content: XfaProp| p("caption", &[("reserve", "1in")], vec![p("value", &[], vec![content]), p("font", &[("weight", "bold")], vec![])]);
@@ -306,7 +417,16 @@ fn caption_form() -> XfaNode {
     let fields = vec![
         node("label", XfaKind::Field, &[], vec![caption(t("text", &[], "Name:"))]),
         node("rich", XfaKind::Field, &[], vec![caption(t("exData", &[("contentType", "text/html")], "Date of birth:"))]),
-        node("list", XfaKind::Field, &[], vec![items(&[], "text", &["A", "B", "C"]), items(&[("save", "1")], "text", &["1", "2", "3"])]),
+        node(
+            "list",
+            XfaKind::Field,
+            &[],
+            vec![
+                p("ui", &[], vec![p("choiceList", &[("textEntry", "1")], vec![])]),
+                items(&[], "text", &["A", "B", "C"]),
+                items(&[("save", "1")], "text", &["1", "2", "3"]),
+            ],
+        ),
         node("box", XfaKind::Field, &[], vec![items(&[], "integer", &["1", "0"])]),
         node("bare", XfaKind::Field, &[], vec![]),
     ];
@@ -513,7 +633,11 @@ fn named_children_class_names_and_validation_members_read_as_forms_use_them() {
         "this.mandatory = 'error'; this.validationMessage = 'Bad'; var a = this.mandatory + this.validate.nullTest + this.validationMessage; this.mandatory = 'nonsense'; a + this.mandatory",
         "plain",
     );
-    assert_eq!((o.error, o.result.as_deref(), o.effects.len()), (None, Some("errorerrorBaderror"), 0));
+    assert_eq!(
+        (o.error, o.result.as_deref(), o.effects.len()),
+        (None, Some("errorerrorBaderror"), 3),
+        "nullTest, and the message text with its name"
+    );
 }
 
 /// A validation message set through the node is the message's text of that name, read back
@@ -992,4 +1116,128 @@ fn assist_speak_reads_its_text_and_attributes() {
     let expr = "[this.assist.speak.value, this.assist.speak.priority, this.assist.speak.disable, this.assist.speak.className].join('|')";
     assert_eq!(eval_on(&root, expr, "spoken"), "Say this|toolTip|1|speak");
     assert_eq!(eval_on(&root, "this.assist.speak.value + '|' + this.assist.isPropertySpecified('speak')", "plain"), "|false");
+}
+
+/// A value the form can't take (a colour that isn't `r,g,b`, a measurement or count that
+/// doesn't read) is refused in the script, as the engine would refuse it: the property keeps
+/// its value, no change is handed on, and the console says so.
+#[test]
+fn values_the_form_cannot_take_are_refused_in_the_script() {
+    let o = go_on(
+        &form(),
+        "this.border.fill.color.value = 'red'; this.font.size = 'big'; this.occur.max = 'lots'; this.fillColor = '9,9,9'; \
+         [this.border.fill.color.value, this.font.size].join('|')",
+        "styled",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("9,9,9|10pt"));
+    assert_eq!(o.effects, [set("form1[0].styled[0]", "border#0/fill#0/color#0", Some("value"), "9,9,9")]);
+    assert_eq!(o.console.len(), 3, "{:?}", o.console);
+    assert!(o.console.iter().all(|l| l.contains("keeps its value")), "{:?}", o.console);
+}
+
+/// `execValidate()` reports every empty object that must be filled in, in form order, in one
+/// message: a written `mandatoryMessage` as written, else one naming the object; hidden objects
+/// and filled ones are not reported, and the call answers whether all passed. A
+/// `mandatoryMessage` nobody set reads empty.
+#[test]
+fn exec_validate_lists_every_empty_required_object_in_one_message() {
+    let required = |name: &str| node(name, XfaKind::Field, &[], vec![p("validate", &[("nullTest", "error")], vec![])]);
+    let hidden = XfaNode { presence: "hidden".into(), ..required("R3") };
+    let filled = XfaNode { value: "x".into(), ..required("R4") };
+    let warned = node("R5", XfaKind::Field, &[], vec![p("validate", &[("nullTest", "warning")], vec![])]);
+    let mut root = form();
+    root.children.extend([required("R1"), required("R2"), hidden, filled, warned]);
+    let script = "R1.mandatoryMessage = 'Custom required message'; var ok = xfa.form.execValidate(); \
+                  [ok, R2.mandatoryMessage === '', R4.execValidate()].join('|')";
+    let o = go_on(&root, script, "R1");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("false|true|true")));
+    let boxes: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::MessageBox(m) = e { Some(&m.text) } else { None }).collect();
+    assert_eq!(boxes, ["Required\nCustom required message\nR2 cannot be left blank.\nR5 cannot be left blank."]);
+}
+
+/// The caption, item and calculation writes forms make (round two of the property writes) reach
+/// the engine as property changes and read back in the run: a caption's font colour, weight,
+/// posture and underline, its reserve and its rich text's words (`caption.value.exData.value`),
+/// a check button's on value (`items.nodes.item(0).value`), a calculation's override, a field's
+/// font posture, a spoken text turned on (`assist.speak.disable`) and a choice list that stops
+/// taking typed text (`ui.choiceList.textEntry`).
+#[test]
+fn caption_item_and_calculation_writes_reach_the_engine() {
+    let root = caption_form();
+    let o = go_on(
+        &root,
+        "this.caption.font.fill.color.value = '244,15,55'; this.caption.font.weight = 'normal'; \
+         this.caption.font.posture = 'italic'; this.caption.font.underline = '1'; this.caption.reserve = '2in'; \
+         this.font.posture = 'italic'; this.assist.speak.disable = '0'; this.calculate.override = 'warning'; \
+         [this.caption.font.fill.color.value, this.caption.font.weight, this.caption.font.posture, this.caption.font.underline, \
+          this.caption.reserve, this.font.posture, this.assist.speak.disable, this.calculate.override].join('|')",
+        "label",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("244,15,55|normal|italic|1|2in|italic|0|warning"));
+    let som = "form1[0].label[0]";
+    assert_eq!(
+        o.effects,
+        [
+            set(som, "caption#0/font#0/fill#0/color#0", Some("value"), "244,15,55"),
+            set(som, "caption#0/font#0", Some("weight"), "normal"),
+            set(som, "caption#0/font#0", Some("posture"), "italic"),
+            set(som, "caption#0/font#0", Some("underline"), "1"),
+            set(som, "caption#0", Some("reserve"), "2in"),
+            set(som, "font#0", Some("posture"), "italic"),
+            set(som, "assist#0/speak#0", Some("disable"), "0"),
+            set(som, "calculate#0", Some("override"), "warning"),
+        ]
+    );
+    // A caption's rich text takes new words, as forms mark a label required.
+    let script = "var v = this.caption.value.exData; v.value = v.value.replace(':', '* :'); v.value";
+    let o = go_on(&root, script, "rich");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("Date of birth* :")));
+    assert_eq!(o.effects, [set("form1[0].rich[0]", "caption#0/value#0/exData#0", None, "Date of birth* :")]);
+    // A check button's on value set to its caption's text; its off value emptied.
+    let script = "if (this.items.nodes.item(0).value == '1') this.items.nodes.item(0).value = 'Yes'; \
+                  this.items.nodes.item(1).value = ''; this.items.nodes.item(0).value + '|' + this.items.nodes.item(1).value";
+    let o = go_on(&root, script, "box");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("Yes|")));
+    assert_eq!(o.effects, [set("form1[0].box[0]", "items#0/integer#0", None, "Yes"), set("form1[0].box[0]", "items#0/integer#1", None, "")]);
+    // A choice list that stops taking typed text.
+    let o = go_on(&root, "this.ui.choiceList.textEntry = '0'; this.ui.choiceList.textEntry", "list");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("0")));
+    assert_eq!(o.effects, [set("form1[0].list[0]", "ui#0/choiceList#0", Some("textEntry"), "0")]);
+    // A size that is no measurement is refused, as the form would: nothing reaches it.
+    let o = go_on(&root, "this.caption.reserve = 'wide'; this.caption.reserve", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref(), o.effects.len()), (None, Some("1in"), 0));
+    assert!(o.console.iter().any(|l| l.contains("\"wide\" is not a measurement")), "{:?}", o.console);
+}
+
+/// FormCalc reads a caption as JavaScript does (`$.caption.value.text.value`), and a SOM string
+/// that runs into properties (`resolveNode("label.ui.#textEdit.border.fill.color")`) gives the
+/// property object, which reads and takes a value as the property does.
+#[test]
+fn formcalc_reads_captions_and_resolves_into_properties() {
+    let mut root = caption_form();
+    if let Some(label) = root.children.iter_mut().find(|n| &*n.name == "label") {
+        let mut props = (*label.props).clone();
+        props.elements.push(p(
+            "ui",
+            &[],
+            vec![p("textEdit", &[], vec![p("border", &[], vec![p("fill", &[], vec![p("color", &[("value", "1,2,3")], vec![])])])])],
+        ));
+        label.props = Arc::new(props);
+    }
+    let fc = |script: &str, target: &str| {
+        let ev = XfaEvent { activity: "click".into(), target: format!("form1[0].{target}[0]"), ..Default::default() };
+        crate::formcalc::run_formcalc(script, &ev, &XfaDoc::default(), &root, Limits::default())
+    };
+    let o = fc("Concat($.caption.value.text.value, \"|\", $.caption.font.weight, \"|\", $.caption.reserve)", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("Name:|bold|1in")));
+    let o = fc("xfa.resolveNode(\"form1.label.ui.#textEdit.border.fill.color\").value", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("1,2,3")));
+    let o = fc("$.resolveNode(\"ui.#textEdit.border.fill.color\").value = \"255,255,255\"\n$.ui.oneOfChild.border.fill.color.value", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("255,255,255")));
+    assert_eq!(o.effects, [set("form1[0].label[0]", "ui#0/textEdit#0/border#0/fill#0/color#0", Some("value"), "255,255,255")]);
+    // A node is still a node: its value, as before.
+    let o = fc("xfa.resolveNode(\"form1.label\").name", "label");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("label")));
 }

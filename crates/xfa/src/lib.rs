@@ -17,7 +17,9 @@ pub mod packets;
 pub mod parse;
 pub mod pdf;
 pub mod picture;
+pub mod prop_rules;
 mod proto;
+pub mod restyle;
 pub mod script;
 pub mod text;
 pub mod validation_rules;
@@ -106,10 +108,10 @@ pub use parse::{measure, numbers_pages, parse};
 pub use pdf::{AREA_KEY, CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use picture::typed_date;
 pub use script::{
-    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
-    field_grows_with_text, field_is_embedded, field_now, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts,
-    mark_value_override, overrides, page_area_uses, path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
-    value_overridden,
+    Applied, FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, PropRefused, ScriptEvent, apply_overrides,
+    apply_overrides_split, data_of, embedded_fields, field_grows_with_text, field_is_embedded, field_now, fields_by_som, form_tree, form_tree_paged,
+    has_focus_scripts, has_scripts, mark_value_override, overrides, page_area_uses, path_is_embedded, property_notes, refresh_props, refresh_value,
+    rerender, reset_default, set_overrides, template_of, value_overridden,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -166,8 +168,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     parse_warnings.extend(linked_images::resolve(&mut tpl, doc));
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
-    let laid = apply_overrides(&tpl, &ov);
-    let mut form = layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
+    let applied = script::apply_overrides_split(&tpl, &ov);
+    let mut form = layout::layout_with_overrides(&applied.template, data.as_ref(), &ov, &applied.per_instance)?;
+    form.warnings.extend(script::property_notes(&ov, &applied));
     form.warnings.splice(0..0, parse_warnings);
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));

@@ -821,9 +821,19 @@ mod xfa_model {
                 XfaEffect::LaunchUrl("https://x.test".into()),
                 XfaEffect::SetFocus("form1[0].page1[0].qty[0]".into()),
                 XfaEffect::Recalculate,
+                // Both writes set the same colour: the second, `x`, is no colour and is refused.
+                XfaEffect::SetProperty {
+                    som: "form1[0].page1[0].go[0]".into(),
+                    path: "border#0/fill#0/color#0".into(),
+                    attr: Some("value".into()),
+                    value: "255,0,0".into(),
+                    copied: false
+                },
             ]
         );
-        assert_eq!(o.console, vec!["p2/3/1/click".to_string()]);
+        assert_eq!(o.console.len(), 2, "{:?}", o.console);
+        assert_eq!(o.console[0], "p2/3/1/click");
+        assert!(o.console[1].contains("\"x\" is not a colour") && o.console[1].contains("keeps its value"), "{:?}", o.console);
         assert_eq!(o.result.as_deref(), Some("7"));
     }
 
@@ -1455,7 +1465,7 @@ s"#
         assert_eq!(calc("$layout.pageCount()"), "3");
         assert_eq!(calc("$event.name"), "calculate");
         assert_eq!(calc("xfa.resolveNode(\"page1.price\").rawValue"), "2.5");
-        assert_eq!(calc("$.border.fill.color.value"), "");
+        assert_eq!(calc("$.border.fill.color.value"), "255,255,255", "the default fill (XFA 3.3 p. 734)");
         assert!(go("nothing + 1", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown name"));
     }
 
@@ -1482,6 +1492,13 @@ table._row.count"#,
                 XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "7".into() },
                 XfaEffect::SetPresence { som: "form1[0].page1[0].details[0]".into(), presence: "visible".into() },
                 XfaEffect::SetAccess { som: "form1[0].page1[0].price[0]".into(), access: "readOnly".into() },
+                XfaEffect::SetProperty {
+                    som: "form1[0].page1[0].go[0]".into(),
+                    path: "border#0/fill#0/color#0".into(),
+                    attr: Some("value".into()),
+                    value: "255,0,0".into(),
+                    copied: false,
+                },
                 XfaEffect::MessageBox(Message::plain("Total 17.5")),
                 XfaEffect::SetFocus("form1[0].page1[0].qty[0]".into()),
                 XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() },

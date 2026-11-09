@@ -516,6 +516,26 @@ fn line_through(doc: &Document, wd: &Dict) -> u8 {
     }
 }
 
+/// The lines `strikes` (1 or 2, see [`line_through`]) draws through each of the `shown` lines
+/// of text (where, and what) at `size`, in the text's colour (still the fill colour after `ET`):
+/// one at about half the height of a lower-case letter, two a little above and below it.
+fn line_through_marks(shown: &[(f64, f64, String)], strikes: u8, size: f64, width_of: impl Fn(&str, f64) -> f64) -> String {
+    let mut out = String::new();
+    if strikes == 0 {
+        return out;
+    }
+    let offsets: &[f64] = if strikes > 1 { &[-0.06, 0.06] } else { &[0.0] };
+    let thick = (size * 0.05).max(0.3);
+    for (x, y, text) in shown.iter().filter(|(_, _, t)| !t.trim().is_empty()) {
+        let w = width_of(text.trim_end(), size);
+        for dy in offsets {
+            let mid = y + size * (0.28 + dy);
+            out.push_str(&format!("{} {} {} {} re f\n", n(*x), n(mid - thick / 2.0), n(w), n(thick)));
+        }
+    }
+    out
+}
+
 /// [`frame`] for a round check button: the `/MK /BG` background as a disc and the `/MK /BC`
 /// border as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A
 /// dashed border stays dashed and an underline stays an underline; any other style is drawn
@@ -972,19 +992,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     .into_bytes();
     content.extend(body);
     content.extend_from_slice(b"ET\n");
-    // Lines through the text, in its colour (still the fill colour after ET): one at about half
-    // the height of a lower-case letter, two a little above and below it.
-    if strikes > 0 {
-        let offsets: &[f64] = if strikes > 1 { &[-0.06, 0.06] } else { &[0.0] };
-        let thick = (size * 0.05).max(0.3);
-        for (x, y, text) in shown.iter().filter(|(_, _, t)| !t.trim().is_empty()) {
-            let w = width_of(text.trim_end(), size);
-            for dy in offsets {
-                let mid = y + size * (0.28 + dy);
-                content.extend(format!("{} {} {} {} re f\n", n(*x), n(mid - thick / 2.0), n(w), n(thick)).bytes());
-            }
-        }
-    }
+    content.extend(line_through_marks(&shown, strikes, size, width_of).bytes());
     content.extend_from_slice(b"Q\nEMC\n");
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));

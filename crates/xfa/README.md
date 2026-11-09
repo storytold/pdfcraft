@@ -122,7 +122,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | --- | --- | --- |
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
-  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props << /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >> >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object, 16 KiB a value), are read or written |
   | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
@@ -155,12 +155,31 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (the parser keeps each object's property elements, shared by every instance and every
   script's snapshot) with the spec's defaults for what forms read, `getElement`,
   `isPropertySpecified`, `getAttribute`, and a node's `mandatory`, validation messages and
-  colour shorthands; writes to them are read back in the same script but change nothing yet.
+  colour shorthands. FormCalc reads and writes the same property objects (`$.font.fill.color.value`,
+  `$.caption.value.text.value`, and a SOM string that runs into properties,
+  `resolveNode("f.ui.#textEdit.border.fill.color")`). What a script writes to them takes effect
+  (`restyle`): each write is a property change of the object instance, kept in
+  `/PCXfaOverrides /Props`; the property group it falls under is read again by the functions that
+  read the template (`parse::restyle_from`), so the border, fill, edges and corners, font,
+  paragraph, margins, widget border and kind of choice list, caption (font, reserve, label),
+  item lists, the Required flag, tooltip, maxChars, pictures, validation and format tests,
+  the calculation's override, page breaks and occurrences follow it. An object with one instance
+  takes its changes in the template; each instance of a repeating subform, and each page's copy
+  of page-master content, is drawn with its own. The rules a change must meet (paths, colours,
+  measurements, whole numbers, sizes) are one file, `prop_rules.rs`, read by both crates, so a
+  script never reads back a value the form drops. `execValidate()` runs the null test on every
+  required object under the node and lists the empty ones in one message.
   Not `xfa.template`, data descriptions, `xfa.connectionSet`, the choice-list methods
   (`addItem`, `clearItems`, `boundItem`; `selectedIndex` reads give a sink that accepts
-  writes), a node's `value` as its value element, `traversal` and `overflow`, property reads
-  in FormCalc, `execEvent`, or the change event per keystroke.
-  Validate failures show their message and keep the value, as Acrobat does for scripts.
+  writes), a node's `value` as its value element, `traversal` and `overflow`, `execEvent`, or
+  the change event per keystroke. Kept but not drawn: `assist.speak` (only the tooltip maps to
+  `/TU`), barcode `dataLength` (barcodes are drawn as text), `keep` on a subform.
+  Validate failures show their message and keep the value, as Acrobat does for scripts. A value
+  its validation picture doesn't describe (`formatTest`, XFA 3.3 p. 880) shows the format message
+  when the user leaves the field, and stays. A value typed into a field whose calculation the
+  form only recommends (`calculate override="warning"`, p. 642) is kept and marked an override
+  (`/Overridden`), and the app asks whether to keep it or go back to the calculated value.
+  These choices live in `validation_rules`.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
   `initial` count, and never fewer than one (`occur min="0"` still shows one row).

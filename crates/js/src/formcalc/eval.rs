@@ -2,7 +2,7 @@ use super::ast::{Expr, Stmt};
 use super::value::{Val, is_numeric_text, num_text};
 use super::{
     CALLS_TOO_DEEP, Flow, Func, HashMap, HashSet, Interp, LIST_TOO_LONG, LOOPED_TOO_MUCH, MAX_LIST, Message, MessageButtons, MessageIcon, R, Rc,
-    TOO_DEEP, XfaEffect, child_named, clip, descendants_named, instances, reset_names, resolve_som,
+    TOO_DEEP, XfaEffect, child_named, clip, descendants_named, instances, props, reset_names, resolve_som,
 };
 
 impl Interp<'_> {
@@ -312,8 +312,7 @@ impl Interp<'_> {
             Val::Xfa => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;
-                    let found = resolve_som(self.h, self.h.current, &s);
-                    Ok(self.set_val(found, m == "resolvenodes"))
+                    Ok(self.resolved(self.h.current, &s, m == "resolvenodes"))
                 }
                 "recalculate" => {
                     self.h.push(XfaEffect::Recalculate);
@@ -328,8 +327,7 @@ impl Interp<'_> {
             Val::Node(i) => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;
-                    let found = resolve_som(self.h, i, &s);
-                    Ok(self.set_val(found, m == "resolvenodes"))
+                    Ok(self.resolved(i, &s, m == "resolvenodes"))
                 }
                 "recalculate" => {
                     self.h.push(XfaEffect::Recalculate);
@@ -359,10 +357,25 @@ impl Interp<'_> {
                 }
                 _ => Ok(Val::Null),
             },
-            Val::Event | Val::Sink | Val::List(_) => Ok(Val::Null),
+            Val::Event | Val::Sink | Val::Prop(..) | Val::List(_) => Ok(Val::Null),
             Val::Null => Err(format!("no object to call {method} on")),
             Val::Num(_) | Val::Str(_) => Err(format!("{} has no method {method}", self.to_str(&base))),
         }
+    }
+
+    /// What `resolveNode(expr)` (`many`: `resolveNodes`) from node `from` gives: the property
+    /// objects a SOM expression runs into (`"field.ui.#textEdit.border.fill.color"`, XFA 3.3
+    /// p. 96), as JavaScript's `resolveNode` gives them, else the nodes it names.
+    fn resolved(&self, from: usize, expr: &str, many: bool) -> Val {
+        let into = props::resolve_into_props(self.h, from, expr);
+        if into.is_empty() {
+            return self.set_val(resolve_som(self.h, from, expr), many);
+        }
+        let mut vals: Vec<Val> = into.into_iter().map(|(n, p)| if p.is_empty() { Val::Node(n) } else { Val::Prop(n, p) }).collect();
+        if !many && vals.len() == 1 {
+            return vals.pop().unwrap_or(Val::Null);
+        }
+        Val::List(vals)
     }
 
     fn set_val(&self, found: Vec<usize>, many: bool) -> Val {
@@ -424,6 +437,16 @@ impl Interp<'_> {
                             self.h.set_state(i, XfaEffect::SetAccess { som, access: a });
                         }
                     }
+                    "mandatory" | "validationMessage" | "formatMessage" | "mandatoryMessage" if child_named(self.h, i, prop).is_none() => {
+                        let text = clip(self.to_str(&v));
+                        self.h.set_validation(i, prop, text);
+                    }
+                    "fillColor" | "fontColor" | "borderColor" if child_named(self.h, i, prop).is_none() => {
+                        let text = clip(self.to_str(&v));
+                        self.h.set_color(i, prop, text);
+                    }
+                    // A property object itself takes no value.
+                    p if props::NODE_PROPS.contains(&p) && child_named(self.h, i, p).is_none() => {}
                     other => {
                         // `page1.qty = 7`: the child object named by the last step takes the value.
                         if let Some(child) = other.strip_prefix('_') {
@@ -457,6 +480,12 @@ impl Interp<'_> {
                 if want.is_finite() && want >= 0.0 {
                     self.h.set_instances(parent, &name, want as usize);
                 }
+                Ok(())
+            }
+            // `$.font.fill.color.value = "0,0,255"`: as a JavaScript property object takes it.
+            Val::Prop(i, path) => {
+                let text = clip(self.to_str(&v));
+                self.h.assign_member(i, &path, prop, text);
                 Ok(())
             }
             _ => Ok(()),

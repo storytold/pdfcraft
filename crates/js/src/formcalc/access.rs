@@ -3,7 +3,7 @@ use super::CLOCK_EVERY;
 use super::ast::{Expr, Idx};
 use super::value::{Val, num_text, parse_num};
 use super::{
-    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instances,
+    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instances, props,
     resolve_som,
 };
 
@@ -101,6 +101,7 @@ impl Interp<'_> {
     pub(super) fn deref(&self, v: Val) -> Val {
         match v {
             Val::Node(i) => self.node_value(i),
+            Val::Prop(i, p) => Val::Str(props::value_of(self.h, i, &p)),
             Val::List(items) => Val::List(items.into_iter().map(|x| self.deref(x)).collect()),
             other => other,
         }
@@ -129,6 +130,7 @@ impl Interp<'_> {
             Val::Event => "event".into(),
             Val::Xfa => "xfa".into(),
             Val::Im(..) => "instanceManager".into(),
+            Val::Prop(i, p) => props::value_of(self.h, *i, p),
             Val::Sink => String::new(),
         }
     }
@@ -287,6 +289,17 @@ impl Interp<'_> {
                 "classname" => Val::Str("instanceManager".into()),
                 _ => Val::Sink,
             }),
+            Val::Prop(i, path) => match name {
+                "className" => Ok(Val::Str(props::tag_of(&path).to_string())),
+                _ => match props::read_member(self.h, i, &path, name) {
+                    props::Read::Text(t) => Ok(Val::Str(t)),
+                    props::Read::Prop(p) => Ok(Val::Prop(i, p)),
+                    props::Read::Null => Ok(Val::Null),
+                    props::Read::Empty => Ok(Val::Sink),
+                    props::Read::Missing => Err(format!("the validation's message has no text named {name}")),
+                    props::Read::Failed => Err(format!("{name}: operation failed")),
+                },
+            },
             Val::Sink => Ok(Val::Sink),
             Val::Null => Err(format!("no object to take {name} from")),
             Val::Num(_) | Val::Str(_) => Err(format!("{} has no property {name}", self.to_str(&base))),
@@ -324,7 +337,16 @@ impl Interp<'_> {
             "presence" => Val::Str(n.presence.to_string()),
             "access" => Val::Str(n.access.to_string()),
             "isNull" => Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 }),
-            "mandatory" => Val::Str("disabled".into()),
+            "mandatory" if child_named(self.h, i, name).is_none() => Val::Str(props::node_mandatory(self.h, i)),
+            "fillColor" | "fontColor" | "borderColor" if child_named(self.h, i, name).is_none() => {
+                Val::Str(props::node_color(self.h, i, props::shorthand_color(name).unwrap_or_default()))
+            }
+            "validationMessage" | "formatMessage" | "mandatoryMessage" if child_named(self.h, i, name).is_none() => {
+                Val::Str(props::node_message(self.h, i, props::message_test(name).unwrap_or_default()))
+            }
+            // Property objects (XFA 3.3 p. 78), caption and items included, unless a child has the
+            // name (p. 99).
+            p if props::NODE_PROPS.contains(&p) && child_named(self.h, i, p).is_none() => Val::Prop(i, props::node_prop_path(p)),
             "parent" => n.parent.map_or(Val::Null, Val::Node),
             "nodes" => Val::List(n.children.iter().copied().filter(|c| self.node(*c).is_some()).map(Val::Node).collect()),
             "all" => match n.parent {
@@ -335,10 +357,8 @@ impl Interp<'_> {
                 Some(p) => Val::Im(p, n.name.to_string()),
                 None => Val::Null,
             },
-            "border" | "ui" | "font" | "caption" | "fillColor" | "borderColor" | "fontColor" | "margin" | "para" | "assist" | "validate"
-            | "format" | "items" | "bind" | "keep" | "h" | "w" | "x" | "y" | "minH" | "maxH" | "minW" | "maxW" | "layout" | "model"
-            | "oneOfChild" | "locale" | "relevant" | "colSpan" | "dataNode" | "defaultValue" | "editValue" | "selectedIndex" | "event"
-            | "calculate" | "traversal" | "extras" | "desc" => Val::Sink,
+            "h" | "w" | "x" | "y" | "minH" | "maxH" | "minW" | "maxW" | "layout" | "model" | "oneOfChild" | "locale" | "relevant" | "colSpan"
+            | "dataNode" | "defaultValue" | "editValue" | "selectedIndex" | "event" | "traversal" => Val::Sink,
             other => {
                 if let Some(child) = other.strip_prefix('_') {
                     return Ok(if child_named(self.h, i, child).is_some() { Val::Im(i, child.to_string()) } else { Val::Null });

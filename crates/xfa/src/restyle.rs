@@ -1,0 +1,361 @@
+//! Property changes scripts make to a form's objects (XFA 3.3 ch. 3, "Properties vs. Children",
+//! p. 78): `this.border.fill.color.value = "255,0,0"`, `this.mandatory = "error"`,
+//! `Row.occur.max = "5"`. Each change names the property by its path from the object
+//! (`border#0/fill#0/color#0`, occurrences counted per tag) and sets one attribute of it, or its
+//! text. Applied to the object's property tree, the change is read back by later scripts; the
+//! properties it falls under (`border`, `validate`, …) are then read again by the same functions
+//! that read the template ([`crate::parse::restyle_from`]), so the page, the field's flags and
+//! the instance limits follow it the way they follow the template.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use crate::model::{Area, Border, Common, Draw, ExclGroup, Field, Node, Prop, Props, Subform, Value};
+use crate::prop_rules;
+
+/// Most property changes one form keeps, as many as it keeps presence or access changes. Of the
+/// 163 dynamic forms of 367, opened and given up to 50 generic interactions, 36 change properties:
+/// median 15, p90 134, at most 200 (Ontario Works 0983, colouring each field's text on open),
+/// so 50 times the most measured; the most property writes one form's scripts hold is 1,125.
+pub const MAX_PROP_OVERRIDES: usize = 10_000;
+/// Most bytes of SOM paths, property paths and values those changes hold together. Measured:
+/// median 1,555 B, p90 12,716 B, at most 35,508 B (CFIA 5800), so about 30 times the most.
+pub const MAX_PROP_OVERRIDE_BYTES: usize = 1 << 20;
+/// Longest value one change may set (a tooltip or a screen-reader text): the property budget
+/// of one whole object as the template is read ([`crate::parse::MAX_OBJECT_PROP_BYTES`]).
+/// The longest measured is 248 B (CFIA 5800's tooltips).
+pub const MAX_PROP_VALUE: usize = crate::parse::MAX_OBJECT_PROP_BYTES;
+/// Most steps a property path takes from its object (the parser keeps 8 levels).
+const MAX_STEPS: usize = prop_rules::MAX_STEPS;
+const _: () = assert!(prop_rules::MAX_STEPS == crate::parse::MAX_PROP_DEPTH && prop_rules::MAX_VALUE == crate::parse::MAX_OBJECT_PROP_BYTES);
+/// Most property changes one object keeps, copies of the edges and corners the scripting host
+/// makes included (see [`crate::script::Overrides::set_prop`]). On the 163 dynamic forms of 367
+/// an object takes at most 3 (Indian passport PCC form), the deepest path 5 steps; a script
+/// that sets every attribute forms set on all of a border's edges and corners, with the copies
+/// the host makes of them, comes to about 40, so 64 leaves room. It bounds what one object can
+/// make (with [`prop_rules::MAX_INDEX`] and the steps), and so the work of laying it out again.
+pub const MAX_PROP_CHANGES_PER_OBJECT: usize = 64;
+
+pub use prop_rules::check;
+use prop_rules::{is_name, steps};
+
+/// The key a change is kept under: the property path, then `@` and the attribute, or the path
+/// alone for the element's text. A copy of an edge or corner the scripting host made (see
+/// [`crate::script::Overrides::set_prop_copy`]) is kept under its key with `=` in front.
+pub fn prop_key(path: &str, attr: Option<&str>) -> String {
+    match attr {
+        Some(a) => format!("{path}@{a}"),
+        None => path.to_string(),
+    }
+}
+
+/// The property path and attribute (`None`: the text) of a key [`prop_key`] made, a copy's
+/// `=` left off.
+pub fn split_key(key: &str) -> (&str, Option<&str>) {
+    let key = key.strip_prefix('=').unwrap_or(key);
+    match key.split_once('@') {
+        Some((p, a)) => (p, Some(a)),
+        None => (key, None),
+    }
+}
+
+/// Elements and bytes (tags, attribute names and values, text) of the elements `list` holds,
+/// all levels, as the template reader counts them against an object's budget.
+fn size_of(list: &[Prop], depth: usize) -> (usize, usize) {
+    if depth > MAX_STEPS.saturating_mul(2) {
+        return (0, 0);
+    }
+    list.iter().fold((0usize, 0usize), |(n, b), p| {
+        let own = p
+            .tag
+            .len()
+            .saturating_add(p.attrs.iter().map(|(k, v)| k.len().saturating_add(v.len())).sum::<usize>())
+            .saturating_add(p.text.as_ref().map_or(0, |t| t.len()));
+        let (cn, cb) = size_of(&p.children, depth + 1);
+        (n.saturating_add(1).saturating_add(cn), b.saturating_add(own).saturating_add(cb))
+    })
+}
+
+/// The property tree `base` with the changes `sets` (by [`prop_key`]) applied, in the order of
+/// their keys, and whether any was left out for the object's budget. A change to a property
+/// the tree doesn't have adds it, as an element of its own that starts empty, so its other
+/// attributes read as their defaults. An edge or corner past the ones a border lists is added,
+/// with those between, each as a copy of the element drawn on its side as it is at that point
+/// ([`crate::parse::drawn_side`]; a default one when the border lists none), so only the side
+/// changed looks different, as the scripting host reads it; once added, they are listed and
+/// drawn as their own. Changes go by path, so a border's lower edges come before its higher
+/// ones and a copy takes what was written to the edge it copies, as the scripting host reads
+/// it; a copy the host made (an `=` key) gives the copied values itself, ahead of the writes
+/// to the same property. The result stays within the
+/// template reader's budget for one object (`parse::MAX_OBJECT_PROPS` elements,
+/// `parse::MAX_OBJECT_PROP_BYTES` bytes): a change past it is left out. Keys that are no
+/// property path are skipped.
+pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, bool) {
+    let mut out = base.clone();
+    let (mut elements, mut bytes) = size_of(&out.elements, 0);
+    let mut cut = false;
+    // By path, a copy before a write to the same key (the host copies an element before a
+    // script writes to it).
+    let mut order: Vec<(&str, bool, &String, &String)> =
+        sets.iter().map(|(k, v)| (k.strip_prefix('=').unwrap_or(k), !k.starts_with('='), k, v)).collect();
+    order.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    for (_, _, key, value) in order {
+        let (path, attr) = split_key(key);
+        let Some(st) = steps(path) else { continue };
+        if find_mut(&mut out.elements, &st, 0).is_none() {
+            // The change adds elements: made on a copy kept until they fit the budget.
+            let before = out.elements.clone();
+            add_missing(&mut out.elements, &st, 0);
+            let (n, b) = size_of(&out.elements, 0);
+            if n > crate::parse::MAX_OBJECT_PROPS || b > crate::parse::MAX_OBJECT_PROP_BYTES {
+                out.elements = before;
+                cut = true;
+                continue;
+            }
+            (elements, bytes) = (n, b);
+        }
+        let Some(p) = find_mut(&mut out.elements, &st, 0) else { continue };
+        let old = match attr {
+            Some(name) => p.attrs.iter().find(|(k, _)| k == name).map_or(0, |(k, v)| k.len().saturating_add(v.len())),
+            None => p.text.as_ref().map_or(0, |t| t.len()),
+        };
+        let new = attr.map_or(0, str::len).saturating_add(value.len());
+        let grown = bytes.saturating_sub(old).saturating_add(new);
+        if grown > crate::parse::MAX_OBJECT_PROP_BYTES {
+            cut = true;
+            continue;
+        }
+        match attr {
+            Some(name) => {
+                let room = p.attrs.len() < crate::parse::MAX_PROP_ATTRS;
+                match p.attrs.iter_mut().find(|(k, _)| k == name) {
+                    Some(slot) => slot.1 = value.to_string(),
+                    None if room => p.attrs.push((name.to_string(), value.to_string())),
+                    None => {
+                        cut = true;
+                        continue;
+                    }
+                }
+            }
+            None => p.text = Some(Arc::from(value.as_str())),
+        }
+        bytes = grown;
+    }
+    let _ = elements;
+    (out, cut)
+}
+
+/// Add what `steps` names under `list` and the tree doesn't have yet (see [`apply_props`]).
+fn add_missing(list: &mut Vec<Prop>, steps: &[(&str, usize)], depth: usize) {
+    let Some(((tag, index), rest)) = steps.split_first() else { return };
+    if depth > MAX_STEPS {
+        return;
+    }
+    let have = list.iter().filter(|p| p.tag == *tag).count();
+    if have <= *index {
+        // `index` is at most `prop_rules::MAX_INDEX` (an edge or corner at most 3), so this adds
+        // a handful of elements.
+        let added: Vec<Prop> = (have..=*index).map(|k| added_element(list, tag, have, k)).collect();
+        let at = list.iter().rposition(|p| p.tag == *tag).map_or(list.len(), |i| i.saturating_add(1));
+        for (k, p) in added.into_iter().enumerate() {
+            list.insert(at.saturating_add(k).min(list.len()), p);
+        }
+    }
+    if let Some(p) = list.iter_mut().filter(|p| p.tag == *tag).nth(*index) {
+        add_missing(&mut p.children, rest, depth + 1);
+    }
+}
+
+/// The element added as occurrence `k` of `tag` under `list`, which lists `have` of them (see
+/// [`apply_props`]): for a border's edge or corner, a copy of the one drawn on that side as it
+/// is now (a default edge or corner when none is listed), so a change to it changes only that
+/// side; anything else starts empty. Which occurrence a script's change names is the scripting
+/// host's to decide (`pdfcraft_js`), not this.
+fn added_element(list: &[Prop], tag: &str, have: usize, k: usize) -> Prop {
+    let drawn = matches!(tag, "edge" | "corner")
+        .then(|| crate::parse::drawn_side(have, k))
+        .flatten()
+        .and_then(|i| list.iter().filter(|p| p.tag == tag).nth(i));
+    drawn.cloned().unwrap_or_else(|| Prop { tag: tag.to_string(), ..Prop::default() })
+}
+
+/// The element `steps` names under `list`.
+fn find_mut<'a>(list: &'a mut [Prop], steps: &[(&str, usize)], depth: usize) -> Option<&'a mut Prop> {
+    let ((tag, index), rest) = steps.split_first()?;
+    if depth > MAX_STEPS {
+        return None;
+    }
+    let p = list.iter_mut().filter(|p| p.tag == *tag).nth(*index)?;
+    if rest.is_empty() { Some(p) } else { find_mut(&mut p.children, rest, depth + 1) }
+}
+
+/// `s` escaped for XML text and attribute values; characters XML 1.0 can't hold are left out.
+fn escape(s: &str, out: &mut String) {
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '\t' | '\n' | '\r' => out.push(c),
+            c if (c as u32) < 0x20 || c == '\u{FFFE}' || c == '\u{FFFF}' => {}
+            c => out.push(c),
+        }
+    }
+}
+
+/// `attrs` as XML attributes, each name once (the first), names that are no XML name left out.
+fn write_attrs(attrs: &[(String, String)], out: &mut String) {
+    let mut seen = BTreeSet::new();
+    for (k, v) in attrs {
+        if !is_name(k) || !seen.insert(k.as_str()) {
+            continue;
+        }
+        out.push(' ');
+        out.push_str(k);
+        out.push_str("=\"");
+        escape(v, out);
+        out.push('"');
+    }
+}
+
+fn write_element(p: &Prop, out: &mut String, depth: usize) {
+    if !is_name(&p.tag) || depth > MAX_STEPS.saturating_mul(2) {
+        return;
+    }
+    out.push('<');
+    out.push_str(&p.tag);
+    write_attrs(&p.attrs, out);
+    out.push('>');
+    if let Some(t) = &p.text {
+        escape(t, out);
+    }
+    for c in &p.children {
+        write_element(c, out, depth + 1);
+    }
+    out.push_str("</");
+    out.push_str(&p.tag);
+    out.push('>');
+}
+
+/// An object's property tree as XML: an element with the object's attributes holding its
+/// property elements, which the template reader reads like the object itself.
+fn props_xml(props: &Props) -> String {
+    let mut out = String::from("<object");
+    write_attrs(&props.attrs, &mut out);
+    out.push('>');
+    for e in &props.elements {
+        write_element(e, &mut out, 0);
+    }
+    out.push_str("</object>");
+    out
+}
+
+/// Apply the changes `sets` to `node`: its property tree, and what the properties they fall
+/// under give its layout, fields and instances (see [`crate::parse::restyle_from`]). `true`
+/// when not all of it reaches the object: a change past the object's budget is left out (see
+/// [`apply_props`]), and an object whose template the reader cut short ([`Props::cut`]) is
+/// not laid out from its property tree again (that tree lacks what the cut left out), so only
+/// scripts see its changes.
+pub(crate) fn restyle(node: &mut Node, sets: &BTreeMap<String, String>) -> bool {
+    if sets.is_empty() {
+        return false;
+    }
+    let (props, mut cut) = apply_props(&node.common().props, sets);
+    if node.common().props.cut {
+        cut = true;
+    } else {
+        let mut roots: BTreeSet<&str> = sets.keys().filter_map(|k| k.trim_start_matches('=').split('#').next()).collect();
+        // A change to a caption's label, not only to how it is drawn.
+        if sets.keys().any(|k| k.trim_start_matches('=').starts_with("caption#0/value#0")) {
+            roots.insert("caption.value");
+        }
+        let xml = props_xml(&props);
+        // Written from names and escaped text above, so it parses; should it not, the object
+        // keeps its layout and only scripts see the change.
+        match roxmltree::Document::parse(&xml) {
+            Ok(doc) => crate::parse::restyle_from(node, doc.root_element(), &|t| roots.contains(t)),
+            Err(_) => cut = true,
+        }
+    }
+    node.common_mut().props = Arc::new(props);
+    cut
+}
+
+/// `node` alone, without what it holds (a subform's children and page set, a group's fields, a
+/// draw's value) or its scripts: what [`restyle`] reads and changes, copied cheaply.
+fn shallow(node: &Node) -> Node {
+    match node {
+        Node::Subform(s) => Node::Subform(Box::new(Subform {
+            common: s.common.clone(),
+            layout: s.layout,
+            occur: s.occur,
+            break_before_page: s.break_before_page,
+            break_after_page: s.break_after_page,
+            ..Subform::default()
+        })),
+        Node::Area(a) => Node::Area(Box::new(Area { common: a.common.clone(), children: Vec::new() })),
+        Node::Draw(d) => Node::Draw(Box::new(Draw { common: d.common.clone(), value: Value::Empty })),
+        Node::ExclGroup(g) => Node::ExclGroup(Box::new(ExclGroup {
+            common: g.common.clone(),
+            layout: g.layout,
+            tooltip: g.tooltip.clone(),
+            required: g.required,
+            ..ExclGroup::default()
+        })),
+        Node::Field(f) => Node::Field(f.clone()),
+    }
+}
+
+/// `node`'s own properties with the changes `sets` applied (see [`restyle`]), without what it
+/// holds (see [`shallow`]).
+pub(crate) fn restyled(node: &Node, sets: &BTreeMap<String, String>) -> Node {
+    let mut n = shallow(node);
+    restyle(&mut n, sets);
+    n
+}
+
+/// The border of an object whose common properties are `c`, with the changes `sets` applied.
+pub(crate) fn restyled_border(c: &Common, sets: &BTreeMap<String, String>) -> Option<Border> {
+    let mut n = Node::Area(Box::new(Area { common: c.clone(), children: Vec::new() }));
+    restyle(&mut n, sets);
+    n.common().border.clone()
+}
+
+/// Draw `d` with the changes `sets` applied (see [`restyle`]).
+pub(crate) fn restyled_draw(d: &Draw, sets: &BTreeMap<String, String>) -> Draw {
+    let mut n = Node::Draw(Box::new(d.clone()));
+    restyle(&mut n, sets);
+    match n {
+        Node::Draw(d) => *d,
+        // `restyle` keeps the node's kind.
+        _ => d.clone(),
+    }
+}
+
+/// Exclusion group `g` with the changes `sets` applied (see [`restyle`]).
+pub(crate) fn restyled_group(g: &ExclGroup, sets: &BTreeMap<String, String>) -> ExclGroup {
+    let mut n = Node::ExclGroup(Box::new(g.clone()));
+    restyle(&mut n, sets);
+    match n {
+        Node::ExclGroup(g) => *g,
+        // `restyle` keeps the node's kind.
+        _ => g.clone(),
+    }
+}
+
+/// Field `f` with the changes `sets` applied (see [`restyle`]).
+pub(crate) fn restyled_field(f: &Field, sets: &BTreeMap<String, String>) -> Field {
+    let mut n = Node::Field(Box::new(f.clone()));
+    restyle(&mut n, sets);
+    match n {
+        Node::Field(f) => *f,
+        // `restyle` keeps the node's kind.
+        _ => f.clone(),
+    }
+}
+
+#[cfg(test)]
+#[path = "restyle_tests.rs"]
+mod tests;

@@ -264,7 +264,8 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "getAttribute" => node_method(ctx, idx, props::get_attribute),
         "getElement" => node_method(ctx, idx, props::get_element),
         "isPropertySpecified" => node_method(ctx, idx, props::is_property_specified),
-        "setAttribute" | "execEvent" | "execInitialize" | "execCalculate" | "execValidate" | "setElement" | "loadXML" | "saveXML" | "clone" => {
+        "execValidate" => node_method(ctx, idx, props::exec_validate),
+        "setAttribute" | "execEvent" | "execInitialize" | "execCalculate" | "setElement" | "loadXML" | "saveXML" | "clone" => {
             function(ctx, NativeFunction::from_fn_ptr(noop)).into()
         }
         "toString" | "valueOf" | "toJSON" => function(ctx, NativeFunction::from_fn_ptr(node_to_string)).into(),

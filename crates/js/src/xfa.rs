@@ -22,7 +22,12 @@ mod host;
 mod instances;
 mod model;
 mod nodes;
-mod props;
+pub(crate) mod props;
+// The rules a property change must meet, shared word for word with the form (`pdfcraft_xfa`,
+// which reads them as `pdfcraft_xfa::prop_rules`): one source for both sides.
+#[path = "../../xfa/src/prop_rules.rs"]
+#[allow(dead_code)]
+pub(crate) mod prop_rules;
 mod run;
 
 #[cfg(target_arch = "wasm32")]
@@ -31,7 +36,7 @@ pub(crate) use host::{HNode, XHost};
 pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome};
 pub(crate) use model::{MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};
 pub(crate) use nodes::{child_named, descendants_named, instances, resolve_som};
-pub use props::{XfaProp, XfaProps};
+pub use props::{XfaProp, XfaProps, property_value_ok};
 #[cfg(test)]
 pub(crate) use run::run_within_limits;
 #[cfg(not(target_arch = "wasm32"))]

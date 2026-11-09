@@ -6,10 +6,29 @@ use super::{
 };
 
 impl Layouter<'_> {
+    /// Draw field `f`, instance `sib` under `ctx`, as scripts' property changes for that
+    /// instance leave it (see [`Self::draw_field_as`]).
+    pub(super) fn draw_field(
+        &mut self,
+        f: &Field,
+        rect: Rect,
+        ctx: &Ctx,
+        radio: Option<(&str, &str, Option<String>, bool)>,
+        sib: usize,
+    ) -> Result<(), XfaError> {
+        match self.changes_of(&f.common, ctx, sib, Some("field")) {
+            Some(sets) => {
+                let changed = crate::restyle::restyled_field(f, sets);
+                self.draw_field_as(&changed, rect, ctx, radio, sib)
+            }
+            None => self.draw_field_as(f, rect, ctx, radio, sib),
+        }
+    }
+
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
     /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
-    pub(super) fn draw_field(
+    fn draw_field_as(
         &mut self,
         f: &Field,
         rect: Rect,

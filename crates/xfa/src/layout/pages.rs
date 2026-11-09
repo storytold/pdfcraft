@@ -177,6 +177,20 @@ impl Layouter<'_> {
                 self.master_copies.push(Rc::clone(&copy));
                 copy
             });
+        // An unnamed page area's content goes by `#pageArea[i]` in the live form, where scripts
+        // change its properties; the layout names it from its own names, so those changes go on a
+        // copy of it here.
+        let unnamed = format!("#pageArea[{idx}].");
+        let copy = match copy {
+            None if ctx.som.is_empty() && self.props.keys().any(|k| k.starts_with(&unnamed)) => {
+                let mut copy = area.items.clone();
+                crate::script::apply_props_to(&mut copy, &format!("#pageArea[{idx}]"), self.props, 1);
+                let copy = Rc::new(copy);
+                self.master_copies.push(Rc::clone(&copy));
+                Some(copy)
+            }
+            other => other,
+        };
         let items: &[Node] = copy.as_deref().map_or(&area.items, Vec::as_slice);
         let sibs = SomIndices::of(items);
         // The master page's own objects: shown where they say, whatever the body was drawing

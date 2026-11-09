@@ -103,13 +103,17 @@ pub(crate) struct XHost {
     kept: usize,
     dropped_bytes: usize,
     /// What the script wrote to property objects, by (node, property path): read back later in
-    /// the run, applied nowhere yet. Charged against [`MAX_PAYLOAD`].
+    /// the run, and each handed to the engine as an [`XfaEffect::SetProperty`]. Charged against
+    /// [`MAX_PAYLOAD`].
     pub(crate) prop_writes: super::props::PropWrites,
     /// Attributes written to a property past [`super::props::MAX_WRITTEN_ATTRS`], left out.
     pub(super) dropped_prop_writes: usize,
     /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
+    /// The writes being made are copies of a drawn edge or corner (`XHost::instantiate`), not
+    /// the script's own.
+    pub(crate) copying: bool,
 }
 
 impl XHost {
@@ -153,6 +157,7 @@ impl XHost {
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
             copied: 0,
+            copying: false,
         }
     }
 

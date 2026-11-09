@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use super::common::{clean_name, corner_strokes};
 use super::items::{Item, Rounded, Turned};
 use super::{
-    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, Side,
-    SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
+    Arc, Border, Common, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect,
+    Side, SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -27,8 +29,8 @@ impl Layouter<'_> {
 
     /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
     pub(super) fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
-        if let Some(b) = &row.common.border {
-            self.draw_border(b, rect)?;
+        if let Some(b) = self.border_of(&row.common, ctx, sib) {
+            self.draw_border(&b, rect)?;
         }
         let ctx = ctx.with_som(&row.common, sib);
         let inner = rect.inset(&row.common.margin);
@@ -73,6 +75,25 @@ impl Layouter<'_> {
         }
     }
 
+    /// The property changes scripts made to the instance of object `c` at index `sib` under
+    /// `ctx` (`default` names an unnamed field or group, as the live form does), if any.
+    pub(super) fn changes_of(&self, c: &Common, ctx: &Ctx, sib: usize, default: Option<&str>) -> Option<&BTreeMap<String, String>> {
+        if self.props.is_empty() {
+            return None;
+        }
+        let name = c.name.as_deref().or(default)?;
+        let som = if ctx.som.is_empty() { format!("{name}[{sib}]") } else { format!("{}.{name}[{sib}]", ctx.som) };
+        self.props.get(&som)
+    }
+
+    /// The border of container `c` (instance `sib` under `ctx`) as scripts changed it.
+    pub(super) fn border_of(&self, c: &Common, ctx: &Ctx, sib: usize) -> Option<Border> {
+        match self.changes_of(c, ctx, sib, None) {
+            Some(sets) => crate::restyle::restyled_border(c, sets),
+            None => c.border.clone(),
+        }
+    }
+
     /// Draw `node` at `rect`, shown where it and what it is inside say ([`Common::views`]): an
     /// invisible object that `relevant` prints is drawn for print only, and one shown nowhere
     /// draws nothing.
@@ -97,7 +118,13 @@ impl Layouter<'_> {
         match node {
             Node::Draw(d) => {
                 let start = self.item_count();
-                self.draw_draw(d, rect, ctx)?;
+                match self.changes_of(&d.common, ctx, sib, None) {
+                    Some(sets) => {
+                        let changed = crate::restyle::restyled_draw(d, sets);
+                        self.draw_draw(&changed, rect, ctx)?;
+                    }
+                    None => self.draw_draw(d, rect, ctx)?,
+                }
                 // Text and pictures stay with their border; a bare line or rectangle is cut.
                 if matches!(d.value, Value::Text(_) | Value::Rich(_) | Value::Image { .. }) {
                     self.keep_whole(start, rect);
@@ -110,7 +137,13 @@ impl Layouter<'_> {
                 self.keep_whole(start, rect);
                 Ok(())
             }
-            Node::ExclGroup(g) => self.draw_group(g, rect, ctx, depth, sib),
+            Node::ExclGroup(g) => match self.changes_of(&g.common, ctx, sib, Some("group")) {
+                Some(sets) => {
+                    let changed = crate::restyle::restyled_group(g, sets);
+                    self.draw_group(&changed, rect, ctx, depth, sib)
+                }
+                None => self.draw_group(g, rect, ctx, depth, sib),
+            },
             Node::Area(a) => {
                 let ctx = ctx.with_som(&a.common, sib);
                 let sibs = SomIndices::of(&a.children);
@@ -124,8 +157,8 @@ impl Layouter<'_> {
                 // place nothing still stop.
                 self.measures.set(self.measures.get().saturating_add(1));
                 self.check_measures()?;
-                if let Some(b) = &s.common.border {
-                    self.draw_border(b, rect)?;
+                if let Some(b) = self.border_of(&s.common, ctx, sib) {
+                    self.draw_border(&b, rect)?;
                 }
                 let parent_ctx = ctx;
                 let ctx = ctx.with_som(&s.common, sib);

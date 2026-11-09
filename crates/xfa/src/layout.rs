@@ -197,6 +197,9 @@ struct Layouter<'t> {
     field_border: Option<(usize, usize)>,
     /// Where what is being drawn shows, as the objects it is inside say ([`Common::views`]).
     views: Views,
+    /// Property changes scripts made, by the SOM path of the instance they were made to (see
+    /// [`crate::restyle`]): each instance of a repeating subform is drawn with its own.
+    props: &'t PropChanges,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -215,19 +218,32 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
     n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
 }
 
+/// Property changes by the SOM path of the object instance they were made to.
+pub type PropChanges = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
+
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
-    layout_inner(tpl, data, None)
+    layout_inner(tpl, data, None, &PropChanges::new())
 }
 
 /// [`layout`], with what scripts set (`ov`) applied to page-master content page by page: a
 /// field hidden on the second page made from a page area is hidden there only. The rest of the
-/// template takes `ov` before this ([`crate::script::apply_overrides`]).
-pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides) -> Result<Form, XfaError> {
-    layout_inner(tpl, data, Some(ov))
+/// template takes `ov` before this ([`crate::script::apply_overrides_split`]). Each object
+/// instance is drawn with the property changes `props` holds for it (`tpl` already has those of
+/// the objects with one instance): a repeating subform's later instances, and each page's copy
+/// of page-master content, get their own colours, borders, fonts and field flags. Sizes are
+/// measured once per template object, so a change that would size one instance differently (a
+/// font size, a margin) is laid out at the first instance's size.
+pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides, props: &PropChanges) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, Some(ov), props)
 }
 
-fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>) -> Result<Form, XfaError> {
+fn layout_inner(
+    tpl: &Template,
+    data: Option<&DataNode>,
+    overrides: Option<&crate::script::Overrides>,
+    props: &PropChanges,
+) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -271,6 +287,7 @@ fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crat
         frames: Vec::new(),
         overrides,
         master_copies: Vec::new(),
+        props,
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;

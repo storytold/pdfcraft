@@ -347,7 +347,8 @@ impl Layouter<'_> {
             // Its border and fill go round what it takes from here, a part on each content area.
             let framed = match self.flow_mark() {
                 Some(part) => {
-                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false, held: false });
+                    let border = self.border_of(&sf.common, ctx_parent, sib + i);
+                    self.frames.push(Frame { x, w, margin: m, border, part, parts: Vec::new(), lost: false, held: false });
                     true
                 }
                 None => false,

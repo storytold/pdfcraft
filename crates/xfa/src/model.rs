@@ -87,8 +87,7 @@ impl Color {
 
     /// `value="r,g,b"` with components 0–255.
     pub fn parse(s: &str) -> Option<Color> {
-        let mut parts = s.split(',').map(|p| p.trim().parse::<f64>().ok());
-        let (r, g, b) = (parts.next()??, parts.next()??, parts.next()??);
+        let [r, g, b] = crate::prop_rules::color_components(s)?;
         let c = |v: f64| if v.is_finite() { (v / 255.0).clamp(0.0, 1.0) } else { 0.0 };
         Some(Color([c(r), c(g), c(b)]))
     }
@@ -475,6 +474,10 @@ pub struct Common {
 pub struct Props {
     pub attrs: Vec<(String, String)>,
     pub elements: Vec<Prop>,
+    /// The template wrote more than the reader keeps for scripts (see
+    /// `parse::MAX_OBJECT_PROPS`): the tree is cut short, so it is no source to lay the object
+    /// out from again.
+    pub cut: bool,
 }
 
 /// One property element: its tag, attributes, text (for elements that hold text, such as
@@ -539,6 +542,16 @@ impl Node {
             Node::Field(f) => &f.common,
             Node::Draw(d) => &d.common,
             Node::ExclGroup(g) => &g.common,
+        }
+    }
+
+    pub fn common_mut(&mut self) -> &mut Common {
+        match self {
+            Node::Subform(s) => &mut s.common,
+            Node::Area(a) => &mut a.common,
+            Node::Field(f) => &mut f.common,
+            Node::Draw(d) => &mut d.common,
+            Node::ExclGroup(g) => &mut g.common,
         }
     }
 }

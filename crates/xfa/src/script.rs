@@ -91,11 +91,125 @@ pub struct Overrides {
     /// (`calculate override="warning"`, XFA 3.3 p. 642), by SOM path, each `1`: the value is an
     /// override (`value@override`, p. 883), which calculations leave alone.
     pub overridden: BTreeMap<String, String>,
+    /// Property changes (see [`crate::restyle`]): by SOM path, then by property key
+    /// ([`crate::restyle::prop_key`]), the value set. Bounded by
+    /// [`crate::restyle::MAX_PROP_OVERRIDES`] changes and
+    /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes; changed only through
+    /// [`Overrides::set_prop`], which keeps the count.
+    props: BTreeMap<String, BTreeMap<String, String>>,
+    prop_count: usize,
+    prop_bytes: usize,
+    /// Property changes the file held that were not kept when it was read (not a change a
+    /// script could make, or past the limits): counted for a note, as the next save leaves
+    /// them out.
+    pub dropped: usize,
+}
+
+/// Why a property change was not kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PropRefused {
+    /// The value or the path is not one the property takes ([`crate::restyle::check`]).
+    Invalid(String),
+    /// The form already holds as many changes, or bytes of them, as it may.
+    Full,
 }
 
 impl Overrides {
     pub fn is_empty(&self) -> bool {
-        self.presence.is_empty() && self.access.is_empty() && self.overridden.is_empty()
+        self.presence.is_empty() && self.access.is_empty() && self.overridden.is_empty() && self.props.is_empty()
+    }
+
+    /// The property changes, by SOM path.
+    pub fn props(&self) -> &BTreeMap<String, BTreeMap<String, String>> {
+        &self.props
+    }
+
+    /// Set attribute `attr` (`None`: the text) of the property at `path` of the object at `som`
+    /// to `value`. `Ok(true)` when that changed what is kept, `Ok(false)` when it was already so.
+    /// Refused past [`crate::restyle::MAX_PROP_OVERRIDES`] changes or
+    /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes in the form, or
+    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object.
+    pub fn set_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) -> Result<bool, PropRefused> {
+        self.set(som, path, attr, value, false)
+    }
+
+    /// [`Overrides::set_prop`] for a value the scripting host copied from the edge or corner
+    /// drawn on a side when a script reached one the border doesn't list (so that only that
+    /// side changes): kept under its own key, applied before the writes to the same property,
+    /// and not counted as a change against the form's limit (its bytes are).
+    pub fn set_prop_copy(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) -> Result<bool, PropRefused> {
+        self.set(som, path, attr, value, true)
+    }
+
+    fn set(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str, copy: bool) -> Result<bool, PropRefused> {
+        crate::restyle::check(path, attr, value).map_err(PropRefused::Invalid)?;
+        let key = if copy { format!("={}", crate::restyle::prop_key(path, attr)) } else { crate::restyle::prop_key(path, attr) };
+        let on_object = self.props.get(som).map_or(0, BTreeMap::len);
+        if on_object >= crate::restyle::MAX_PROP_CHANGES_PER_OBJECT && self.props.get(som).is_none_or(|m| !m.contains_key(&key)) {
+            return Err(PropRefused::Full);
+        }
+        let old = self.props.get(som).and_then(|m| m.get(&key));
+        if old.is_some_and(|v| v == value) {
+            return Ok(false);
+        }
+        let added = match old {
+            Some(v) => value.len().saturating_sub(v.len()),
+            None => som.len().saturating_add(key.len()).saturating_add(value.len()),
+        };
+        let removed = old.map_or(0, |v| v.len().saturating_sub(value.len()));
+        let count = if old.is_some() || copy { self.prop_count } else { self.prop_count.saturating_add(1) };
+        let bytes = self.prop_bytes.saturating_add(added).saturating_sub(removed);
+        if count > crate::restyle::MAX_PROP_OVERRIDES || bytes > crate::restyle::MAX_PROP_OVERRIDE_BYTES {
+            return Err(PropRefused::Full);
+        }
+        self.props.entry(som.to_string()).or_default().insert(key, value.to_string());
+        self.prop_count = count;
+        self.prop_bytes = bytes;
+        Ok(true)
+    }
+
+    /// The instance at `som` (`…table[0].row[2]`) was removed: what scripts changed on it, or
+    /// on anything in it, goes with it, and the changes of the later instances of the same
+    /// subform move down one place (`row[3]…` becomes `row[2]…`), so presence, access and
+    /// property changes stay with the instance they were made to.
+    /// `true` when that changed anything.
+    pub fn remove_instance(&mut self, som: &str) -> bool {
+        let Some((head, index)) = som.strip_suffix(']').and_then(|s| s.rsplit_once('[')) else { return false };
+        let Ok(index) = index.parse::<usize>() else { return false };
+        /// The key `k` once instance `index` under `head` is gone: `None` when it was that
+        /// instance's, else the key, renumbered when it was a later instance's.
+        fn moved(k: &str, head: &str, index: usize) -> Option<String> {
+            let Some(rest) = k.strip_prefix(head).and_then(|r| r.strip_prefix('[')) else { return Some(k.to_string()) };
+            let Some((n, tail)) = rest.split_once(']') else { return Some(k.to_string()) };
+            let (Ok(n), true) = (n.parse::<usize>(), tail.is_empty() || tail.starts_with('.')) else { return Some(k.to_string()) };
+            match n.cmp(&index) {
+                std::cmp::Ordering::Less => Some(k.to_string()),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(format!("{head}[{}]{tail}", n.saturating_sub(1))),
+            }
+        }
+        /// Rekey `map`; `true` when a key moved or went.
+        fn rekey<V>(map: &mut BTreeMap<String, V>, head: &str, index: usize) -> bool {
+            let mut changed = false;
+            let old = std::mem::take(map);
+            *map = old
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    let new = moved(&k, head, index);
+                    changed |= new.as_deref() != Some(k.as_str());
+                    new.map(|k| (k, v))
+                })
+                .collect();
+            changed
+        }
+        let changed = rekey(&mut self.presence, head, index)
+            | rekey(&mut self.access, head, index)
+            | rekey(&mut self.overridden, head, index)
+            | rekey(&mut self.props, head, index);
+        self.prop_count = self.props.values().flat_map(|m| m.keys()).filter(|k| !k.starts_with('=')).count();
+        self.prop_bytes =
+            self.props.iter().map(|(s, m)| m.iter().map(|(k, v)| s.len().saturating_add(k.len()).saturating_add(v.len())).sum::<usize>()).sum();
+        changed
     }
 }
 
@@ -142,6 +256,39 @@ pub fn overrides(doc: &Document) -> Overrides {
             }
         }
     }
+    // Property changes: each checked and counted as a script's would be, so a file can hold
+    // no more than a script could have made, and nothing a script couldn't have set.
+    if let Some(m) = d.get(b"Props").map(|m| doc.resolve(m))
+        && let Some(m) = m.as_dict()
+    {
+        // An entry refused (invalid, or past a limit) is counted in `dropped` for a note; no more
+        // entries than the limit twice over are looked at, the rest counted unread.
+        let mut read = 0usize;
+        for (som, sets) in m.iter() {
+            let Some(sets) = doc.resolve(sets).as_dict().cloned() else {
+                out.dropped = out.dropped.saturating_add(1);
+                continue;
+            };
+            let som = String::from_utf8_lossy(som).into_owned();
+            for (key, v) in sets.iter() {
+                read = read.saturating_add(1);
+                if read > crate::restyle::MAX_PROP_OVERRIDES.saturating_mul(2) {
+                    out.dropped = out.dropped.saturating_add(1);
+                    continue;
+                }
+                let Some(v) = doc.resolve(v).as_string().map(|s| s.to_text()) else {
+                    out.dropped = out.dropped.saturating_add(1);
+                    continue;
+                };
+                let key = String::from_utf8_lossy(key);
+                let (path, attr) = crate::restyle::split_key(&key);
+                let kept = if key.starts_with('=') { out.set_prop_copy(&som, path, attr, &v) } else { out.set_prop(&som, path, attr, &v) };
+                if kept.is_err() {
+                    out.dropped = out.dropped.saturating_add(1);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -163,6 +310,17 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
             }
             d.set(which.as_bytes().to_vec(), Object::Dict(m));
         }
+        if !ov.props.is_empty() {
+            let mut objects = Dict::new();
+            for (som, sets) in &ov.props {
+                let mut m = Dict::new();
+                for (k, v) in sets {
+                    m.set(k.as_bytes().to_vec(), Object::String(PdfString::text(v)));
+                }
+                objects.set(som.as_bytes().to_vec(), Object::Dict(m));
+            }
+            d.set(b"Props".to_vec(), Object::Dict(objects));
+        }
         acro.set(OVERRIDES_KEY.to_vec(), Object::Dict(d));
     }
     match acro_ref {
@@ -170,31 +328,6 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro)))?,
     }
     Ok(())
-}
-
-/// The template field at `som` (its validation's format test, its calculation's override), for
-/// the checks after the user changes its value; `None` when no template field is there.
-pub fn field_now(tpl: &Template, som: &str) -> Option<Field> {
-    crate::data::template_field(tpl, som).cloned()
-}
-
-/// Whether the user overrode the calculation of the field at `som` (its template value says so,
-/// or [`mark_value_override`] did), so that calculations leave it alone.
-pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
-    match ov.overridden.get(som) {
-        Some(v) => crate::validation_rules::is_override(Some(v)),
-        None => crate::data::template_field(tpl, som).is_some_and(|f| f.value_override),
-    }
-}
-
-/// Keep that the user overrode the calculation of the field at `som`. False when that changed
-/// nothing, or the overrides already hold as many entries as they keep.
-pub fn mark_value_override(ov: &mut Overrides, som: &str) -> bool {
-    if ov.overridden.contains_key(som) || ov.overridden.len() >= MAX_OVERRIDES {
-        return false;
-    }
-    ov.overridden.insert(som.to_string(), "1".to_string());
-    true
 }
 
 fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
@@ -280,6 +413,15 @@ impl Walker<'_> {
     /// else empty; elsewhere it is its data value (as saved, as scripts read it) or its template default.
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
+        // The field as scripts changed its properties (its validation, pictures, its tree).
+        let changed;
+        let f = match self.ov.props.get(&som) {
+            Some(sets) => {
+                changed = crate::restyle::restyled_field(f, sets);
+                &changed
+            }
+            None => f,
+        };
         let data_value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let value = match (radio, data_value) {
             // A radio button's value is its on value when the group picked it.
@@ -329,6 +471,20 @@ impl Walker<'_> {
     /// The live nodes of `nodes`, the children of `parent_som`, with their scripts recorded: one per
     /// instance of a repeating subform (what the data holds, else its initial count). Nothing past
     /// [`MAX_DEPTH`] is built, and building stops once the object budget is spent.
+    /// The property changes scripts made to the object at `som`, when it is named (an unnamed
+    /// draw, area or subform shares its parent's SOM path, so the changes there are not its own).
+    fn sets(&self, named: bool, som: &str) -> Option<&BTreeMap<String, String>> {
+        if named { self.ov.props.get(som) } else { None }
+    }
+
+    /// The tree of properties of the object at `som` as scripts changed it, else `props`.
+    fn props_at(&self, named: bool, som: &str, node: &Node) -> Arc<Props> {
+        match self.sets(named, som) {
+            Some(sets) => Arc::clone(&crate::restyle::restyled(node, sets).common().props),
+            None => Arc::clone(&node.common().props),
+        }
+    }
+
     fn children(&mut self, nodes: &[Node], parent_som: &str, depth: usize) -> Vec<FormNode> {
         let mut out = Vec::new();
         if depth > MAX_DEPTH {
@@ -342,11 +498,19 @@ impl Walker<'_> {
             let sib = sibs.at(i);
             match n {
                 Node::Subform(sf) => {
+                    let named = sf.common.name.is_some();
+                    // How often it occurs, as scripts changed it on its first instance (the
+                    // instance manager's limits are the subform's, not one instance's).
+                    let first_som = child_som(parent_som, sf.common.name.as_deref(), sib);
+                    let occur = match self.sets(named, &first_som).map(|sets| crate::restyle::restyled(n, sets)) {
+                        Some(Node::Subform(changed)) => changed.occur,
+                        _ => sf.occur,
+                    };
                     let from_data = match (&sf.common.name, self.data) {
-                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
+                        (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
                         _ => 0,
                     };
-                    let instances = crate::layout::instance_count(&sf.occur, from_data);
+                    let instances = crate::layout::instance_count(&occur, from_data);
                     for k in 0..instances {
                         // The first instance was counted above.
                         if k > 0 && !self.take() {
@@ -364,18 +528,19 @@ impl Walker<'_> {
                             numeric: false,
                             presence: self.presence(sf.common.name.as_deref(), &som, sf.common.presence),
                             access: "open".into(),
-                            repeatable: sf.occur.max != Some(1),
-                            occur_min: sf.occur.min,
-                            occur_max: sf.occur.max,
+                            repeatable: occur.max != Some(1),
+                            occur_min: occur.min,
+                            occur_max: occur.max,
                             index,
                             children,
                             display_picture: None,
-                            props: Arc::clone(&sf.common.props),
+                            props: self.props_at(named, &som, n),
                         });
                     }
                 }
                 Node::Area(a) => {
                     let som = child_som(parent_som, a.common.name.as_deref(), sib);
+                    let props = self.props_at(a.common.name.is_some(), &som, n);
                     let children = self.children(&a.children, &som, depth + 1);
                     out.push(FormNode {
                         name: a.common.name.clone().unwrap_or_else(|| "#area".into()),
@@ -387,7 +552,7 @@ impl Walker<'_> {
                         occur_max: Some(1),
                         index: sib,
                         children,
-                        props: Arc::clone(&a.common.props),
+                        props,
                         ..Default::default()
                     });
                 }
@@ -399,7 +564,7 @@ impl Walker<'_> {
                         som: som.clone(),
                         kind: Some(NodeKind::Draw),
                         value: d.value.plain().unwrap_or_default(),
-                        props: Arc::clone(&d.common.props),
+                        props: self.props_at(d.common.name.is_some(), &som, n),
                         presence: self.presence(d.common.name.as_deref(), &som, d.common.presence),
                         access: "open".into(),
                         occur_min: 1,
@@ -433,7 +598,7 @@ impl Walker<'_> {
                         occur_max: Some(1),
                         index: sib,
                         children,
-                        props: Arc::clone(&g.common.props),
+                        props: self.props_at(true, &som, n),
                         ..Default::default()
                     });
                 }
@@ -609,20 +774,254 @@ pub(crate) fn apply_overrides_to(nodes: &mut [Node], parent_som: &str, ov: &Over
     }
 }
 
+/// Apply the property changes `props` holds to each of `nodes` (children of `parent_som`) and
+/// their descendants, down to [`MAX_DEPTH`], by their SOM paths: the content of a page made from
+/// an unnamed page area, which the live form names `#pageArea[i]` and the layout doesn't (its
+/// objects' paths start at their own names). `true` when an object's changes don't all reach it
+/// (see [`crate::restyle::restyle`]).
+pub(crate) fn apply_props_to(nodes: &mut [Node], parent_som: &str, props: &crate::layout::PropChanges, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    let mut cut = false;
+    let sibs = SomIndices::of(nodes);
+    for (i, n) in nodes.iter_mut().enumerate() {
+        let name_default = match n {
+            Node::Field(_) => Some("field"),
+            Node::ExclGroup(_) => Some("group"),
+            _ => None,
+        };
+        let Some(name) = n.common().name.clone().or(name_default.map(str::to_string)) else { continue };
+        let som = child_som(parent_som, Some(&name), sibs.at(i));
+        if let Some(sets) = props.get(&som) {
+            cut |= crate::restyle::restyle(n, sets);
+        }
+        match n {
+            Node::Subform(s) => cut |= apply_props_to(&mut s.children, &som, props, depth + 1),
+            Node::Area(a) => cut |= apply_props_to(&mut a.children, &som, props, depth + 1),
+            Node::Field(_) | Node::Draw(_) | Node::ExclGroup(_) => {}
+        }
+    }
+    cut
+}
+
 /// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
-/// instance of a repeating subform hide them all). Page-master content is left as it is: a page
-/// area makes many pages, each with its own SOM path, so `ov` is applied to it page by page as
-/// the pages are laid out ([`crate::layout::layout_with_overrides`]).
+/// instance of a repeating subform hide them all). See [`apply_overrides_split`] for the
+/// property changes.
 pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
+    apply_overrides_split(tpl, ov).template
+}
+
+/// What [`apply_overrides_split`] gives.
+#[derive(Clone, Debug, Default)]
+pub struct Applied {
+    /// The template with the changes that belong to the template object applied.
+    pub template: Template,
+    /// The property changes of objects inside a repeating subform, by the SOM path of the
+    /// instance they were made to: the layout draws each instance with its own
+    /// ([`crate::layout::layout_with`]), as the template object stands for every instance.
+    pub per_instance: crate::layout::PropChanges,
+    /// Objects some of whose property changes don't reach the page (see
+    /// [`crate::restyle::restyle`]).
+    pub cut: usize,
+}
+
+/// The template with `ov` applied: presence and access as [`apply_overrides`] does, and the
+/// property changes of each object that has one instance (outside any repeating subform). A
+/// repeating subform takes only its occurrence changes, made to its first instance (the
+/// instance manager's limits are the subform's); every other change inside a repeating subform
+/// stays per instance, in [`Applied::per_instance`], so no instance is drawn with another's.
+/// Page-master content is left as it is: a page area makes many pages, each with its own SOM
+/// path, so its presence and access are applied page by page as the pages are laid out, and its
+/// property changes stay in [`Applied::per_instance`] for the page they were made on
+/// ([`crate::layout::layout_with_overrides`]).
+pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
+    struct W<'a> {
+        ov: &'a Overrides,
+        consumed: BTreeMap<String, Vec<String>>,
+        cut: usize,
+    }
+    impl W<'_> {
+        /// Apply the property changes of the object at `som` to `n`, those `keep` lets through,
+        /// and note them as taken.
+        fn props(&mut self, n: &mut Node, som: &str, keep: &dyn Fn(&str) -> bool) {
+            let Some(sets) = self.ov.props.get(som) else { return };
+            let taken: BTreeMap<String, String> = sets.iter().filter(|(k, _)| keep(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            if taken.is_empty() {
+                return;
+            }
+            if crate::restyle::restyle(n, &taken) {
+                self.cut = self.cut.saturating_add(1);
+            }
+            self.consumed.entry(som.to_string()).or_default().extend(taken.into_keys());
+        }
+
+        /// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their
+        /// descendants, down to [`MAX_DEPTH`], the access it gives a field outside an exclusion
+        /// group, and (`props`) the property changes. An unnamed draw, area or subform shares
+        /// its parent's SOM path, so it takes no change of its own. `in_repeat`: the nodes are
+        /// inside a repeating subform, whose instances keep their own property changes.
+        fn walk(&mut self, nodes: &mut [Node], parent_som: &str, props: bool, presence_on: bool, in_repeat: bool, depth: usize) {
+            if depth > MAX_DEPTH {
+                return;
+            }
+            let ov = self.ov;
+            let sibs = SomIndices::of(nodes);
+            for (i, n) in nodes.iter_mut().enumerate() {
+                let sib = sibs.at(i);
+                let name_default = match n {
+                    Node::Field(_) => Some("field"),
+                    Node::ExclGroup(_) => Some("group"),
+                    _ => None,
+                };
+                let name: Option<String> = n.common().name.as_deref().or(name_default).map(str::to_string);
+                let som = child_som(parent_som, name.as_deref(), sib);
+                let presence = name.as_ref().filter(|_| presence_on).and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
+                let access = name.as_ref().filter(|_| presence_on).and_then(|_| ov.access.get(&som)).cloned();
+                let repeats = matches!(n, Node::Subform(s) if s.occur.max != Some(1));
+                if props && name.is_some() && !in_repeat {
+                    if repeats {
+                        self.props(n, &som, &|k| k.trim_start_matches('=').starts_with("occur#"));
+                    } else {
+                        self.props(n, &som, &|_| true);
+                    }
+                }
+                let inner = in_repeat || repeats;
+                match n {
+                    Node::Subform(s) => {
+                        if let Some(p) = presence {
+                            s.common.presence = p;
+                        }
+                        self.walk(&mut s.children, &som, props, presence_on, inner, depth + 1);
+                    }
+                    Node::Area(a) => {
+                        if let Some(p) = presence {
+                            a.common.presence = p;
+                        }
+                        self.walk(&mut a.children, &som, props, presence_on, inner, depth + 1);
+                    }
+                    Node::Field(f) => {
+                        if let Some(p) = presence {
+                            f.common.presence = p;
+                        }
+                        if let Some(a) = access {
+                            f.access = match a.as_str() {
+                                "readOnly" => Access::ReadOnly,
+                                "protected" => Access::Protected,
+                                "nonInteractive" => Access::NonInteractive,
+                                _ => Access::Open,
+                            };
+                        }
+                    }
+                    Node::Draw(d) => {
+                        if let Some(p) = presence {
+                            d.common.presence = p;
+                        }
+                    }
+                    Node::ExclGroup(g) => {
+                        if let Some(p) = presence {
+                            g.common.presence = p;
+                        }
+                        let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                        let fsibs = SomIndices::of(&fields);
+                        for (fi, f) in g.fields.iter_mut().enumerate() {
+                            let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
+                            if presence_on && let Some(p) = ov.presence.get(&fsom) {
+                                f.common.presence = Presence::parse(Some(p));
+                            }
+                            if props
+                                && !inner
+                                && let Some(sets) = ov.props.get(&fsom)
+                            {
+                                let mut node = Node::Field(Box::new(std::mem::take(f)));
+                                if crate::restyle::restyle(&mut node, sets) {
+                                    self.cut = self.cut.saturating_add(1);
+                                }
+                                if let Node::Field(changed) = node {
+                                    *f = *changed;
+                                }
+                                self.consumed.entry(fsom).or_default().extend(sets.keys().cloned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut w = W { ov, consumed: BTreeMap::new(), cut: 0 };
     let mut t = tpl.clone();
     if !ov.is_empty() {
+        let props = !ov.props.is_empty();
         let mut root = vec![Node::Subform(Box::new(t.root.clone()))];
-        apply_overrides_to(&mut root, "", ov, 0);
+        w.walk(&mut root, "", props, true, false, 0);
         if let Some(Node::Subform(r)) = root.pop() {
             t.root = *r;
         }
     }
-    t
+    let mut per_instance = crate::layout::PropChanges::new();
+    for (som, sets) in &ov.props {
+        let taken = w.consumed.get(som);
+        let left: BTreeMap<String, String> =
+            sets.iter().filter(|(k, _)| taken.is_none_or(|t| !t.contains(k))).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if !left.is_empty() {
+            per_instance.insert(som.clone(), left);
+        }
+    }
+    Applied { template: t, per_instance, cut: w.cut }
+}
+
+/// The field at `som` as the template and the property changes in `ov` make it now (its
+/// validation's format test, its calculation's override), for checks after the user changes
+/// its value; `None` when no template field is there.
+pub fn field_now(tpl: &Template, ov: &Overrides, som: &str) -> Option<Field> {
+    if ov.props().is_empty() {
+        return crate::data::template_field(tpl, som).cloned();
+    }
+    let applied = apply_overrides_split(tpl, ov);
+    let f = crate::data::template_field(&applied.template, som)?;
+    Some(match applied.per_instance.get(som) {
+        Some(sets) => crate::restyle::restyled_field(f, sets),
+        None => f.clone(),
+    })
+}
+
+/// Whether the user overrode the calculation of the field at `som` (its template value says so,
+/// or [`mark_value_override`] did), so that calculations leave it alone.
+pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
+    match ov.overridden.get(som) {
+        Some(v) => crate::validation_rules::is_override(Some(v)),
+        None => crate::data::template_field(tpl, som).is_some_and(|f| f.value_override),
+    }
+}
+
+/// Keep that the user overrode the calculation of the field at `som`. False when that changed
+/// nothing, or the overrides already hold as many entries as they keep.
+pub fn mark_value_override(ov: &mut Overrides, som: &str) -> bool {
+    if ov.overridden.contains_key(som) || ov.overridden.len() >= MAX_OVERRIDES {
+        return false;
+    }
+    ov.overridden.insert(som.to_string(), "1".to_string());
+    true
+}
+
+/// Notes for the layout's warnings: property changes the file held that weren't kept
+/// ([`Overrides::dropped`], which the next save leaves out) and objects some of whose changes
+/// don't reach the page ([`Applied::cut`]).
+pub fn property_notes(ov: &Overrides, applied: &Applied) -> Vec<String> {
+    let mut out = Vec::new();
+    if ov.dropped > 0 {
+        out.push(format!(
+            "{} property change(s) scripts made, kept in the file, are not ones a script could make or are past the form's limits; they were left out and are not saved again",
+            ov.dropped
+        ));
+    }
+    if applied.cut > 0 {
+        out.push(format!(
+            "{} object(s) have more properties than are kept for scripts; some of the changes scripts made to them are not drawn",
+            applied.cut
+        ));
+    }
+    out
 }
 
 /// The generated fields of the AcroForm by SOM path: `som → (field name, is a radio group)`.
@@ -744,8 +1143,9 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let packets = crate::read_packets(doc)?.ok_or(XfaError::NotXfa)?;
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
-    let laid = apply_overrides(tpl, &ov);
-    let form = crate::layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
+    let applied = apply_overrides_split(tpl, &ov);
+    let mut form = crate::layout::layout_with_overrides(&applied.template, data.as_ref(), &ov, &applied.per_instance)?;
+    form.warnings.extend(property_notes(&ov, &applied));
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }
@@ -920,6 +1320,44 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
     }
     walk(live, tpl, data, &path, 1, &mut changed, 0)?;
     Some(changed)
+}
+
+/// Bring the live node at `som` up to date with the property changes `ov` holds for it, as
+/// [`form_tree`] would build it, so a property change needs no rebuild of the tree. `false`:
+/// there is no such node, or it is not one the tree can refresh alone: rebuild the tree. A
+/// change to how often a subform occurs, or one turning a validation's script off, changes
+/// more than the node (the instance manager, the events) and is the caller's to rebuild for.
+pub fn refresh_props(live: &mut FormNode, tpl: &Template, ov: &Overrides, som: &str) -> bool {
+    /// The node at `som` under `n`, followed down the path: only children on the way to it (whose
+    /// SOM path starts it) or sharing their parent's (unnamed ones) are looked into, so finding
+    /// one costs the depth, not the form.
+    fn find<'a>(n: &'a mut FormNode, som: &str, depth: usize) -> Option<&'a mut FormNode> {
+        if n.som == som {
+            return Some(n);
+        }
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let own = n.som.clone();
+        n.children
+            .iter_mut()
+            .filter(|c| c.som == own || c.som == som || som.strip_prefix(c.som.as_str()).is_some_and(|r| r.starts_with('.')))
+            .find_map(|c| find(c, som, depth + 1))
+    }
+    let Some(sets) = ov.props.get(som) else { return false };
+    let Some(n) = find(live, som, 0) else { return false };
+    match n.kind {
+        Some(NodeKind::Field) => {
+            let Some(f) = crate::data::template_field(tpl, som) else { return false };
+            let f = crate::restyle::restyled_field(f, sets);
+            n.props = Arc::clone(&f.common.props);
+            n.display_picture = f.display_picture;
+        }
+        // The changes are whole values, so applying them again over the node's tree gives what
+        // applying them to the template's does.
+        _ => n.props = Arc::new(crate::restyle::apply_props(&n.props, sets).0),
+    }
+    true
 }
 
 /// The data tree of a document's datasets packet.
