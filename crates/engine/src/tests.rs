@@ -1713,8 +1713,8 @@ fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_outpu
 /// A document that allows page changes but not copying, so not page extraction (#5081), takes
 /// pages back from a file under exactly its own protection (a cut and paste, or another file
 /// made with the same key and `/Encrypt` values), through Insert Pages' file check as well, and
-/// keeps the restriction; the same file is refused as a source for an unprotected or a
-/// differently protected document.
+/// through Replace Pages and its check, and keeps the restriction; the same file is refused as a
+/// source for an unprotected or a differently protected document.
 #[test]
 fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
     use pdfcraft_cos::Algorithm::Aes256;
@@ -1744,6 +1744,11 @@ fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
     assert!(matches!(same.page_count_of("other.pdf", &other), Err(EditError::Source(_))), "a plain page source must allow extraction");
     assert_eq!(same.insert_source(same_id, "other.pdf", &other).map(|(n, _)| n), Ok(3));
     same.apply(same_id, insert("other.pdf", &other, 4)).unwrap();
+    // Replace Pages takes them on the same terms.
+    let replace = |bytes: &Arc<Vec<u8>>| Edit::ReplacePages { pages: vec![0], name: "other.pdf".into(), bytes: bytes.clone(), src_pages: vec![2] };
+    assert_eq!(same.replace_source(same_id, "other.pdf", &other), Ok(3));
+    same.apply(same_id, replace(&other)).unwrap();
+    assert_eq!(same.get(same_id).unwrap().info.pages.len(), 7);
     let saved = same.save_bytes(same_id).unwrap();
     let reopened = pdfcraft_cos::Document::open_with_password(saved, None).unwrap();
     assert_eq!(pdfcraft_organize::page_count(&reopened).unwrap(), 7);
@@ -1756,7 +1761,9 @@ fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
         let before = session.get(dest).unwrap().bytes.clone();
         assert!(matches!(session.insert_source(dest, "same.pdf", &bytes), Err(EditError::Source(_))));
         assert!(matches!(session.apply(dest, insert("same.pdf", &bytes, 1)), Err(EditError::Source(_))));
-        assert_eq!(session.get(dest).unwrap().bytes, before, "a refused insert leaves the destination untouched");
+        assert!(matches!(session.replace_source(dest, "same.pdf", &bytes), Err(EditError::Source(_))));
+        assert!(matches!(session.apply(dest, replace(&bytes)), Err(EditError::Source(_))));
+        assert_eq!(session.get(dest).unwrap().bytes, before, "a refused insert or replace leaves the destination untouched");
         assert_eq!(session.get(dest).unwrap().info.pages.len(), 1);
     }
 }

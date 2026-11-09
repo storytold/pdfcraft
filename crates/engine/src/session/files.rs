@@ -71,6 +71,13 @@ impl Session {
         Ok((pdfcraft_organize::page_count(&src)?, bytes.clone()))
     }
 
+    /// The page count of a PDF for Replace Pages in `dest`, checked as the replace itself checks
+    /// it: as with [`Self::insert_source`], a file under `dest`'s own protection that withholds
+    /// only page extraction is accepted (#5081).
+    pub fn replace_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<usize, EditError> {
+        Ok(pdfcraft_organize::page_count(&crate::sources::open_source_into(name, bytes, self.cos(dest)?)?)?)
+    }
+
     /// A file for Combine as PDF bytes: an image or text file is converted; a PDF is returned as
     /// it is, unchecked (Combine reads it itself, with its password), as is a file named .pdf
     /// without a `%PDF-` header, which the reader may still open.
