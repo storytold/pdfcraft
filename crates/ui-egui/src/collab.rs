@@ -707,6 +707,7 @@ impl PdfCraftApp {
                 | Edit::DeletePages { .. }
                 | Edit::InsertBlankPage { .. }
                 | Edit::DuplicatePages { .. }
+                | Edit::ReplacePages { .. }
                 | Edit::InsertPagesFrom { .. }
         );
         if structural && !collab.role.can_structural() {

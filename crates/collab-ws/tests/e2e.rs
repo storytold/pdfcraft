@@ -7,8 +7,8 @@
 //! catches up from a snapshot tail.
 
 use pdfcraft_collab_client_pdf::{
-    add_annotation_payload, add_note_payload, apply, duplicate_page_payload, insert_page_payload, merge_op, reply_payload, rotate_payload,
-    set_contents_payload, structural_op,
+    add_annotation_payload, add_note_payload, apply, blank_page_payload, duplicate_page_payload, insert_page_payload, merge_op, replace_page_payload,
+    reply_payload, rotate_payload, set_contents_payload, structural_op,
 };
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
@@ -916,6 +916,121 @@ fn two_clients_insert_and_duplicate_a_page_and_converge() -> Result<(), Box<dyn 
     assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Stale && r.retryable));
     for peer in [&ada, &bo] {
         assert_eq!(peer.page_count(), 3, "the stale insert changed nothing");
+    }
+    Ok(())
+}
+
+/// Read until both replicas have applied the same operation.
+fn applied_on_both(first: &mut Peer, second: &mut Peer) -> Result<pdfcraft_collab_proto::Applied, Box<dyn std::error::Error>> {
+    let mut applied = None;
+    for peer in [&mut *first, &mut *second] {
+        match peer.settle()? {
+            ServerMessage::Applied(accepted) => applied = Some(accepted),
+            other => return Err(format!("expected an applied operation, got {other:?}").into()),
+        }
+    }
+    applied.ok_or_else(|| "no applied operation".into())
+}
+
+/// Replace Pages travels as an addressed operation carrying one page: both
+/// replicas converge, an over-limit or misaddressed replacement is refused
+/// without a change, and a blank insert names the size of the page it adds.
+#[test]
+fn two_clients_replace_a_page_and_insert_a_blank_one() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    // Ada joins first, so the writer lease is hers: structural operations are
+    // serialised and only the lease holder may send them.
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let original = fixture(2);
+
+    // Ada replaces page 0 with a copy of page 1.
+    let copy = one_page_copy(&original, 1)?;
+    let replace = structural_op(doc.clone(), OpId::new("op-replace")?, ada.version, ada.epoch, page(0, ada.epoch), replace_page_payload(&copy));
+    ada.send(replace)?;
+    let replaced = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(replaced.epoch, 1, "a replacement is structural");
+    assert!(replaced.result["copy"].is_string(), "the server kept the page it replaced");
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "a replacement does not change the page count");
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the page is the copy Ada sent");
+    }
+
+    // A replacement over the budget is refused before anything changes, and so
+    // is one addressed to a page that is not there.
+    let huge = vec![0u8; pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES + 1];
+    let oversized = structural_op(doc.clone(), OpId::new("op-oversized")?, ada.version, ada.epoch, page(0, ada.epoch), replace_page_payload(&huge));
+    ada.send(oversized)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Limit && !r.retryable));
+    let missing = structural_op(doc.clone(), OpId::new("op-missing")?, ada.version, ada.epoch, page(5, ada.epoch), replace_page_payload(&copy));
+    ada.send(missing)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Invalid && !r.retryable));
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 2, "a refusal changes nothing");
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the refused replacement is not applied");
+    }
+
+    // A blank page of an explicit size, after page 0.
+    let blank = structural_op(doc.clone(), OpId::new("op-blank")?, ada.version, ada.epoch, page(1, ada.epoch), blank_page_payload(300.0, 400.0));
+    ada.send(blank)?;
+    let inserted = applied_on_both(&mut ada, &mut bo)?;
+    assert_eq!(inserted.epoch, 2);
+    for peer in [&ada, &bo] {
+        assert_eq!(peer.page_count(), 3);
+        let document = peer.session.get(peer.id).ok_or("the peer document is open")?;
+        let crop = document.info.pages[1].crop;
+        assert_eq!((crop[2] - crop[0]).abs(), 300.0, "the blank page has the width the operation named");
+        assert_eq!((crop[3] - crop[1]).abs(), 400.0);
+    }
+    Ok(())
+}
+
+/// The undo of a replacement is the operation the server's copy names: the old
+/// page comes back exactly on both replicas, the redo repeats the replacement,
+/// and an operation addressed to a passed epoch changes nothing.
+#[test]
+fn a_page_replacement_undoes_from_the_copy_and_redoes() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let addr = handle.local_addr();
+    let mut ada = Peer::join(addr, "editor:ada", "ada")?;
+    let mut bo = Peer::join(addr, "editor:bo", "bo")?;
+    let doc = DocKey::new("file-1")?;
+    let copy = one_page_copy(&fixture(2), 1)?;
+
+    let replace = structural_op(doc.clone(), OpId::new("op-replace")?, ada.version, ada.epoch, page(0, ada.epoch), replace_page_payload(&copy));
+    ada.send(replace)?;
+    let replaced = applied_on_both(&mut ada, &mut bo)?;
+    for peer in [&ada, &bo] {
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2");
+    }
+
+    // The undo names the server's copy. Its own target was built in the epoch
+    // the replacement left; a raw frame re-addresses it to the head, as the
+    // client does when it resends after a resync.
+    let undo = pdfcraft_collab_client_pdf::inverse_after(&replaced).ok_or("the replacement kept a copy")?;
+    let undo = Op { op_id: OpId::new("op-replace-undo")?, base_version: ada.version, epoch: ada.epoch, target: page(0, ada.epoch), ..undo };
+    ada.send(undo)?;
+    applied_on_both(&mut ada, &mut bo)?;
+    for peer in [&ada, &bo] {
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 1", "the page came back from the copy");
+    }
+
+    // The redo repeats the replacement at the head.
+    let redo = structural_op(doc.clone(), OpId::new("op-replace-redo")?, ada.version, ada.epoch, page(0, ada.epoch), replace_page_payload(&copy));
+    ada.send(redo)?;
+    applied_on_both(&mut ada, &mut bo)?;
+    for peer in [&ada, &bo] {
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the redo replaced the page again");
+    }
+
+    // An operation addressed to a passed epoch is retryable and changes nothing.
+    let stale = structural_op(doc.clone(), OpId::new("op-stale-replace")?, ada.version, 0, page(0, 0), replace_page_payload(&copy));
+    ada.send(stale)?;
+    assert!(matches!(ada.settle()?, ServerMessage::Rejected(r) if r.code == ErrorCode::Stale && r.retryable));
+    for peer in [&ada, &bo] {
+        assert_eq!(page_text(peer.saved()?, 0)?, "Page 2", "the stale operation changed nothing");
     }
     Ok(())
 }

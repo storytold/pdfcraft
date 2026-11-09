@@ -238,6 +238,28 @@ pub fn duplicate_page_payload(copy: &[u8], at: usize) -> Value {
     json!({"action": "page.duplicate", "at": at, "bytes": encode_base64(copy)})
 }
 
+/// The content of the addressed page replaced by a one-page PDF (RFC §3.1.4).
+/// The address is the operation's target page; the copy travels whole.
+pub fn replace_page_payload(copy: &[u8]) -> Value {
+    json!({"action": "page.replace", "bytes": encode_base64(copy)})
+}
+
+/// The undo of a replacement: the page the server kept, named by its copy
+/// token. A replacement whose page was too large to keep answers no token, and
+/// the undo that names none (`copy: null`) is refused as `conflict` before the
+/// document changes.
+pub fn replace_page_from_copy_payload(token: Option<&str>) -> Value {
+    match token {
+        Some(token) => json!({"action": "page.replace", "copy": token}),
+        None => json!({"action": "page.replace", "copy": null}),
+    }
+}
+
+/// A blank page of `width × height` points at `at` (the page count appends).
+pub fn blank_page_payload(width: f64, height: f64) -> Value {
+    json!({"action": "page.insert_blank", "width": width, "height": height})
+}
+
 /// The engine edit for an accepted operation. Names are resolved against
 /// `document`; a comment that vanished is an error, never a silent skip.
 pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
@@ -388,6 +410,26 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
             let page = page_target(op)?;
             let at = page_position(op).unwrap_or_else(|| (page.index as usize).saturating_add(1));
             insert_edit(op, at, "duplicate-page.pdf")
+        }
+        ("page.replace", ConflictClass::Structural) => {
+            // The replacement travels in the operation; the address is the page
+            // it replaces. A page beyond the budget is refused here too, so this
+            // replica never applies what the server would not accept.
+            let page = page_target(op)?;
+            let encoded = op.payload.get("bytes").and_then(Value::as_str).ok_or(ProjectionError::Missing("bytes"))?;
+            let bytes = decode_base64(encoded)?;
+            if bytes.len() > pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES {
+                return Err(ProjectionError::TooLarge(bytes.len()));
+            }
+            Ok(Edit::ReplacePages { pages: vec![page.index as usize], name: "replaced-page.pdf".into(), bytes: Arc::new(bytes), src_pages: vec![0] })
+        }
+        ("page.insert_blank", ConflictClass::Structural) => {
+            // A blank page is built from its size, which travels with the
+            // operation, so every replica adds the same page.
+            let at = page_position(op).unwrap_or_else(|| page_target(op).map_or(0, |page| page.index as usize));
+            let width = op.payload.get("width").and_then(Value::as_f64).ok_or(ProjectionError::Missing("width"))?;
+            let height = op.payload.get("height").and_then(Value::as_f64).ok_or(ProjectionError::Missing("height"))?;
+            Ok(Edit::InsertBlankPage { at, width, height })
         }
         (other, _) => Err(ProjectionError::Unsupported(other.to_owned())),
     }
@@ -709,6 +751,37 @@ pub fn ops_for_edit(
                 })
                 .collect::<Result<Vec<_>, ProjectionError>>()
         }
+        Edit::ReplacePages { pages, bytes, src_pages, .. } => {
+            // One page per operation: each replacement travels whole and is
+            // addressed to the page it replaces, so the page count and the
+            // addresses of the other pages do not move.
+            if pages.len() != src_pages.len() || pages.is_empty() {
+                return Err(ProjectionError::Invalid(format!("{} sources cannot replace {} pages", src_pages.len(), pages.len())));
+            }
+            pages
+                .iter()
+                .zip(src_pages)
+                .map(|(page, src)| {
+                    let copy = one_page_copy(&bytes[..], *src)?;
+                    Ok(structural_op(
+                        doc.clone(),
+                        next_id(client_id, counter)?,
+                        base_version,
+                        epoch,
+                        Target::Page(PageRef { index: *page as u32, epoch }),
+                        replace_page_payload(&copy),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProjectionError>>()
+        }
+        Edit::InsertBlankPage { at, width, height } => Ok(vec![structural_op(
+            doc,
+            next_id(client_id, counter)?,
+            base_version,
+            epoch,
+            Target::Page(PageRef { index: *at as u32, epoch }),
+            blank_page_payload(*width, *height),
+        )]),
         other => Err(ProjectionError::Unsupported(other.label().to_string())),
     }
 }
@@ -906,11 +979,15 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             let to = op.payload.get("to").and_then(Value::as_u64).and_then(|to| usize::try_from(to).ok()).ok_or(ProjectionError::Missing("to"))?;
             structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: to as u32, epoch }), move_payload(page.index as usize))
         }
-        "page.delete" => return Ok(None),
-        "page.insert" | "page.duplicate" => {
+        // A deletion and a replacement keep what they removed on the server, so
+        // their undo is built from the accepted operation's copy token
+        // (`inverse_after`), exactly alike: this replica no longer has what was
+        // deleted or replaced.
+        "page.delete" | "page.replace" => return Ok(None),
+        "page.insert" | "page.duplicate" | "page.insert_blank" => {
             // The undo of an insert is a delete of the page it put there; the
             // page is addressed where the operation placed it.
-            let at = page_position(op).ok_or(ProjectionError::Missing("at"))?;
+            let at = page_position(op).or_else(|| page_target(op).ok().map(|page| page.index as usize)).ok_or(ProjectionError::Missing("at"))?;
             structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: at as u32, epoch }), delete_page_payload())
         }
         other => return Err(ProjectionError::Unsupported(other.to_owned())),
@@ -958,6 +1035,16 @@ pub fn inverse_after(applied: &Applied) -> Option<Op> {
         let Target::Annotation { page, nm } = &op.target else { return None };
         let target = Target::Annotation { page: *page, nm: nm.clone() };
         return Some(merge_op(doc, op_id, applied.version, applied.epoch, target, info_restore_payload(&before, &info)));
+    }
+    // A replaced page comes back from the copy the server kept — and when it
+    // kept none (the page was over the budget), the undo is still sent, naming
+    // no copy, so the refusal is `conflict` from the room rather than a guess
+    // made here. A refusal changes neither the document nor the version.
+    if action == "page.replace" {
+        let Target::Page(page) = &op.target else { return None };
+        let token = op.payload.get("copy").and_then(Value::as_str);
+        let target = Target::Page(PageRef { index: page.index, epoch: applied.epoch });
+        return Some(structural_op(doc, op_id, applied.version, applied.epoch, target, replace_page_from_copy_payload(token)));
     }
     let copy = op.payload.get("copy").and_then(Value::as_str)?.to_owned();
     match action {
@@ -1379,6 +1466,158 @@ mod tests {
         let huge = vec![0u8; pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES + 1];
         let op =
             super::structural_op(doc()?, OpId::new("i1")?, 0, 0, Target::Page(PageRef { index: 0, epoch: 0 }), super::insert_page_payload(&huge, 0));
+        assert!(matches!(super::edit_for(document, &op), Err(ProjectionError::TooLarge(_))));
+        Ok(())
+    }
+
+    /// The text of one page of the open document, as a reader sees it.
+    fn page_text(session: &Session, id: pdfcraft_engine::DocId, page: usize) -> Result<String, Box<dyn std::error::Error>> {
+        let document = session.get(id).ok_or("gone")?;
+        let mut exporter = pdfcraft_engine::export::Exporter::new(document);
+        Ok(exporter.text(page)?.trim().to_owned())
+    }
+
+    /// Replace Pages is one operation per page: the replacement travels whole,
+    /// the address is the page it replaces, and the undo comes from the copy the
+    /// server keeps (this replica no longer has the page).
+    #[test]
+    fn a_page_replacement_becomes_one_addressed_operation_and_its_undo() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let mut counter = 0;
+        let mut source = Session::new();
+        let src = source.open("replacement.pdf", None, fixture(2).into(), None)?;
+        let bytes = source.save_bytes(src)?;
+        let edit = pdfcraft_engine::Edit::ReplacePages { pages: vec![1], name: "replacement.pdf".into(), bytes, src_pages: vec![0] };
+        let document = session.get(id).ok_or("gone")?;
+        let ops = super::ops_for_edit(document, &edit, doc()?, "client", 0, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1, "one page, one operation");
+        assert_eq!(ops[0].payload["action"], "page.replace");
+        assert_eq!(ops[0].target, Target::Page(PageRef { index: 1, epoch: 0 }));
+        assert!(ops[0].payload["bytes"].is_string(), "the page travels with the operation");
+        assert!(
+            super::inverse_for(document, &ops[0], OpId::new("inv-1")?)?.is_none(),
+            "the replica has no page to put back: the server keeps the copy"
+        );
+        apply(&mut session, id, &ops[0])?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 2, "a replacement does not change the page count");
+        assert_eq!(page_text(&session, id, 1)?, "Page 1", "the page is the replacement's content");
+        Ok(())
+    }
+
+    /// A multi-page Replace Pages is one operation per page, so no page's
+    /// address moves; a count mismatch is refused as a whole.
+    #[test]
+    fn a_multi_page_replacement_is_one_operation_per_page() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let mut counter = 0;
+        let mut source = Session::new();
+        let src = source.open("replacement.pdf", None, fixture(2).into(), None)?;
+        let bytes = source.save_bytes(src)?;
+        let edit =
+            pdfcraft_engine::Edit::ReplacePages { pages: vec![0, 1], name: "replacement.pdf".into(), bytes: bytes.clone(), src_pages: vec![1, 0] };
+        let document = session.get(id).ok_or("gone")?;
+        let ops = super::ops_for_edit(document, &edit, doc()?, "client", 0, 0, &mut counter)?;
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].target, Target::Page(PageRef { index: 0, epoch: 0 }));
+        assert_eq!(ops[1].target, Target::Page(PageRef { index: 1, epoch: 0 }));
+        let mismatch = pdfcraft_engine::Edit::ReplacePages { pages: vec![0], name: "replacement.pdf".into(), bytes, src_pages: vec![0, 1] };
+        assert!(super::ops_for_edit(document, &mismatch, doc()?, "client", 0, 0, &mut counter).is_err(), "a count mismatch is refused whole");
+        Ok(())
+    }
+
+    /// The accepted replacement answers with the operation that undoes it: the
+    /// same page, addressed in the epoch the replacement left, with the copy the
+    /// server kept. No copy means the undo names none and the room refuses it.
+    #[test]
+    fn the_accepted_replacement_answers_with_the_operation_that_undoes_it() -> Result<(), Box<dyn std::error::Error>> {
+        let mut replace = super::structural_op(
+            doc()?,
+            OpId::new("r1")?,
+            4,
+            3,
+            Target::Page(PageRef { index: 1, epoch: 3 }),
+            serde_json::json!({"action": "page.replace", "bytes": "AA=="}),
+        );
+        replace.payload["copy"] = serde_json::json!("c9");
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: replace.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 5,
+            epoch: 4,
+            op: replace,
+            result: serde_json::json!({"page": 1, "copy": "c9"}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("a replacement with a copy can be undone")?;
+        assert_eq!(undo.payload["action"], "page.replace");
+        assert_eq!(undo.payload["copy"], "c9");
+        assert_eq!(undo.target, Target::Page(PageRef { index: 1, epoch: 4 }), "the undo addresses the page in the new epoch");
+        assert_eq!(undo.class, pdfcraft_collab_proto::ConflictClass::Structural);
+        assert_eq!((undo.base_version, undo.epoch), (5, 4), "the undo is built on the head the replacement left");
+        assert!(undo.payload.get("bytes").is_none(), "the page comes from the server's copy, not from this replica");
+
+        let no_copy = super::structural_op(
+            doc()?,
+            OpId::new("r2")?,
+            5,
+            4,
+            Target::Page(PageRef { index: 1, epoch: 4 }),
+            serde_json::json!({"action": "page.replace", "bytes": "AA=="}),
+        );
+        let applied = pdfcraft_collab_proto::Applied {
+            op_id: no_copy.op_id.clone(),
+            actor_id: pdfcraft_collab_proto::ActorId::new("ada")?,
+            version: 6,
+            epoch: 5,
+            op: no_copy,
+            result: serde_json::json!({"page": 1}),
+        };
+        let undo = super::inverse_after(&applied).ok_or("the undo is still attempted")?;
+        assert_eq!(undo.payload["action"], "page.replace");
+        assert!(undo.payload["copy"].is_null(), "the room refuses it as conflict instead of this side guessing");
+        Ok(())
+    }
+
+    /// A blank page is an addressable operation: the position is the target,
+    /// the size travels with it, and its undo deletes the page it added.
+    #[test]
+    fn a_blank_page_becomes_an_addressed_operation_with_its_size() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        let mut counter = 0;
+        let edit = pdfcraft_engine::Edit::InsertBlankPage { at: 2, width: 300.0, height: 400.0 };
+        let document = session.get(id).ok_or("gone")?;
+        let ops = super::ops_for_edit(document, &edit, doc()?, "client", 0, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "page.insert_blank");
+        assert_eq!(ops[0].payload["width"], 300.0);
+        assert_eq!(ops[0].payload["height"], 400.0);
+        assert_eq!(ops[0].target, Target::Page(PageRef { index: 2, epoch: 0 }), "the address is the insert position");
+        let inverse = super::inverse_for(document, &ops[0], OpId::new("inv-1")?)?.ok_or("a blank insert can be undone")?;
+        assert_eq!(inverse.payload["action"], "page.delete");
+        assert_eq!(inverse.target, Target::Page(PageRef { index: 2, epoch: 0 }));
+        apply(&mut session, id, &ops[0])?;
+        assert_eq!(session.get(id).ok_or("gone")?.info.pages.len(), 3, "the replica added the page");
+        Ok(())
+    }
+
+    /// A replacement whose page is over the budget is refused here before an
+    /// operation is built, and an accepted one over the budget is never applied.
+    #[test]
+    fn a_replacement_over_the_limit_is_refused_on_this_side_too() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("gone")?;
+        let huge = vec![0u8; pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES + 1];
+        let encoded = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(&huge)
+        };
+        let op = super::structural_op(
+            doc()?,
+            OpId::new("r1")?,
+            0,
+            0,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            serde_json::json!({"action": "page.replace", "bytes": encoded}),
+        );
         assert!(matches!(super::edit_for(document, &op), Err(ProjectionError::TooLarge(_))));
         Ok(())
     }

@@ -22,6 +22,8 @@
 //! | `page.restore` | structural | page |
 //! | `page.insert` | structural | page |
 //! | `page.duplicate` | structural | page |
+//! | `page.replace` | structural | page |
+//! | `page.insert_blank` | structural | page (insert position) |
 //!
 //! A delete keeps a copy of what it removed (RFC §6): the accepted operation
 //! answers with its `copy` token, and `annotation.restore` / `page.restore` put
@@ -29,10 +31,17 @@
 //! the same thing. The copies live in memory and are rebuilt by `replay`, not
 //! written next to the journal: replaying the delete rebuilds the copy.
 //!
-//! An insert and a duplicate carry their own one-page copy in the operation
-//! (`bytes`, base64): the page travels whole, so every replica and the journal
-//! insert exactly the same content, and a page over
+//! An insert, a duplicate and a page replacement carry their own one-page copy
+//! in the operation (`bytes`, base64): the page travels whole, so every replica
+//! and the journal insert exactly the same content, and a page over
 //! [`MAX_RESTORE_PAGE_BYTES`] is refused before the document changes.
+//!
+//! A replacement keeps the page it replaced, so its undo can put that page back
+//! exactly: the accepted operation answers with the `copy` token, and an undo
+//! addresses the same page with that token. When the replaced page did not fit
+//! [`MAX_RESTORE_PAGE_BYTES`], no copy is kept and an undo (`"copy": null`) is
+//! refused as `conflict` before the document changes. A blank insert names the
+//! size of the page it adds (points), so every replica builds the same page.
 //!
 //! Structural operations bump the epoch; merge operations keep it. Annotations
 //! are addressed by `/NM` (ADR-0002), never by a client-side index. Commit
@@ -107,6 +116,11 @@ pub const MAX_RESTORE_PAGE_BYTES: usize = pdfcraft_collab_proto::MAX_PAGE_COPY_B
 /// How many deletions keep a copy, and how many bytes they may hold together.
 const MAX_COPIES: usize = 64;
 const MAX_COPY_BYTES: usize = 64 * 1024 * 1024;
+
+/// The largest blank page a `page.insert_blank` may ask for, in points (200
+/// inches, the limit of the PDF page size in ISO 32000-2 Annex C). A bigger
+/// number is a client mistake, not a page.
+const MAX_PAGE_POINTS: f64 = 14400.0;
 
 impl PdfAdapter {
     /// Open a PDF for a collaboration session. Encrypted and signed documents are
@@ -683,6 +697,109 @@ impl PdfAdapter {
         self.insert_page(payload, at)
     }
 
+    /// Replace the content of `page` with the one-page copy the operation
+    /// carries (RFC §3.1.4). The address is the page in the current epoch; a
+    /// missing page is `invalid` and a foreign epoch `stale` (retryable). The
+    /// payload is checked as a whole — base64, one page, the size budget —
+    /// before the document changes, so a bad replacement is never half applied.
+    ///
+    /// What the page was is copied first, so the undo can put it back exactly
+    /// (the `copy` token, like `page.delete`). A page over the budget is still
+    /// replaceable; only its undo is refused, because there is no copy to go
+    /// back to.
+    fn replace_page(&mut self, page: usize, payload: &mut Value) -> Result<Value, AdapterError> {
+        let bytes = match payload.get("bytes").filter(|value| value.is_string()) {
+            Some(_) => Self::carried_page(payload)?,
+            None => match payload.get("copy") {
+                Some(Value::String(token)) => match &self.copy(token)?.kind {
+                    DeletedKind::Page { bytes, .. } => {
+                        if bytes.len() > MAX_RESTORE_PAGE_BYTES {
+                            return Err(AdapterError::new(
+                                ErrorCode::Limit,
+                                format!("the page is {} bytes; one operation can carry at most {MAX_RESTORE_PAGE_BYTES}", bytes.len()),
+                                false,
+                            ));
+                        }
+                        bytes.as_slice().to_vec()
+                    }
+                    DeletedKind::Annotation { .. } => {
+                        return Err(AdapterError::new(ErrorCode::Conflict, "the copy is a comment, not a page", false));
+                    }
+                },
+                // The replacement kept no copy (the page was over the budget),
+                // so its undo cannot name one: that is a refusal, not a guess.
+                Some(Value::Null) => {
+                    return Err(AdapterError::new(
+                        ErrorCode::Conflict,
+                        "the replaced page was too large to keep; the undo cannot put it back",
+                        false,
+                    ));
+                }
+                _ => return Err(AdapterError::new(ErrorCode::Invalid, "the operation carries no page", false)),
+            },
+        };
+        Self::one_page_only(&bytes)?;
+        // The copy is made before the page goes: afterwards its content is out
+        // of the page and only the server still has it.
+        let before = self.page_copy(page);
+        self.apply_edit(Edit::ReplacePages {
+            pages: vec![page],
+            name: "replaced-page.pdf".into(),
+            bytes: Arc::new(bytes.clone()),
+            src_pages: vec![0],
+        })?;
+        self.epoch = self.epoch.saturating_add(1);
+        // The accepted operation describes the page it put there, never the copy
+        // token it was applied from: every replica and the journal replay the
+        // same bytes (`page.restore` follows the same rule).
+        if let Value::Object(map) = payload {
+            map.remove("copy");
+        }
+        payload["bytes"] = json!(base64_encode(&bytes));
+        let mut result = json!({ "page": page });
+        if let Some((index, copy)) = before {
+            let size = copy.len();
+            let token = self.push_copy(DeletedKind::Page { index, bytes: copy }, size);
+            result["copy"] = json!(token);
+        }
+        Ok(result)
+    }
+
+    /// Insert a blank page of the size the operation names at `at` (RFC §3.1.4).
+    /// The size travels in the operation, so every replica builds the same page;
+    /// a size that is not a positive finite number of points is `invalid` before
+    /// anything changes.
+    fn insert_blank(&mut self, at: usize, payload: &mut Value) -> Result<Value, AdapterError> {
+        let size = |field: &str| payload.get(field).and_then(Value::as_f64);
+        let (Some(width), Some(height)) = (size("width"), size("height")) else {
+            return Err(AdapterError::new(ErrorCode::Invalid, "the blank page names no size", false));
+        };
+        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 || width > MAX_PAGE_POINTS || height > MAX_PAGE_POINTS {
+            return Err(AdapterError::new(ErrorCode::Invalid, "the blank page size is out of range", false));
+        }
+        self.apply_edit(Edit::InsertBlankPage { at, width, height })?;
+        self.epoch = self.epoch.saturating_add(1);
+        payload["at"] = json!(at);
+        payload["width"] = json!(width);
+        payload["height"] = json!(height);
+        Ok(json!({ "page": at }))
+    }
+
+    /// A replacement is exactly one page: a copy with two pages (or none) would
+    /// put content into the document that nobody asked for. Checked in a scratch
+    /// session, before the document changes.
+    fn one_page_only(bytes: &[u8]) -> Result<(), AdapterError> {
+        let mut scratch = Session::new();
+        let id = scratch
+            .open("replacement-page.pdf", None, Arc::new(bytes.to_vec()), None)
+            .map_err(|e| AdapterError::new(ErrorCode::Invalid, format!("the replacement is not a readable PDF: {e}"), false))?;
+        let count = scratch.get(id).map_or(0, |document| document.info.pages.len());
+        if count != 1 {
+            return Err(AdapterError::new(ErrorCode::Invalid, format!("a page replacement must carry exactly one page, not {count}"), false));
+        }
+        Ok(())
+    }
+
     /// Keep a copy and answer its token. The oldest copies go first, so a long
     /// session cannot grow without bound (ADR-0010: no copy, no undo).
     fn push_copy(&mut self, kind: DeletedKind, bytes: usize) -> String {
@@ -842,6 +959,15 @@ impl Adapter for PdfAdapter {
                 let page = self.page_index(target_page(&effective)?)?;
                 self.duplicate_page(page, &mut effective.payload)?
             }
+            ("page.replace", ConflictClass::Structural) => {
+                let page = self.page_index(target_page(&effective)?)?;
+                self.replace_page(page, &mut effective.payload)?
+            }
+            ("page.insert_blank", ConflictClass::Structural) => {
+                let page = target_page(&effective)?;
+                let at = self.insert_position(page)?;
+                self.insert_blank(at, &mut effective.payload)?
+            }
             (other, _) => {
                 return Err(AdapterError::new(ErrorCode::Unsupported, format!("unsupported pdfcraft action {other:?}"), false));
             }
@@ -961,13 +1087,25 @@ pub const DEFAULT_AUTHOR: &str = "PdfCraft";
 /// A synthetic document with `n` pages, for adapter and store tests.
 #[cfg(test)]
 pub(crate) fn fixture(n: usize) -> Vec<u8> {
+    fixture_with_padding(n, None)
+}
+
+/// The same fixture with one page's content stream padded, so the page's
+/// one-page copy can be pushed over [`MAX_RESTORE_PAGE_BYTES`] in a test.
+#[cfg(test)]
+fn fixture_with_padding(n: usize, padded: Option<(usize, usize)>) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
     objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
     for i in 0..n {
         objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i).into_bytes());
-        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        let mut body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        if let Some((page, size)) = padded
+            && page == i
+        {
+            body.push_str(&" ".repeat(size));
+        }
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
     }
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -989,7 +1127,7 @@ pub(crate) fn fixture(n: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, base64_encode, fixture};
+    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, base64_encode, fixture, fixture_with_padding};
     use pdfcraft_collab_proto::{
         ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
@@ -1508,6 +1646,265 @@ mod tests {
         commit(&mut room, &editor, version)?;
         let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
         assert_eq!(page_text(&bytes, 2)?, "Page 2", "the copy follows its source");
+        Ok(())
+    }
+
+    /// A replacement keeps what it replaced, so the undo puts the page back
+    /// exactly; the address is the page, and the page count does not move.
+    #[test]
+    fn a_replaced_page_comes_back_from_the_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (_, copy) = room.adapter().page_copy(2).ok_or("the fixture page copies")?;
+        let replace = op(
+            "rep-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.replace", "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &replace, 0)?;
+        assert_eq!(applied.epoch, 1, "a replacement is structural");
+        assert!(applied.op.payload["bytes"].is_string(), "the accepted operation carries the page");
+        assert_eq!(applied.op.payload["copy"], applied.result["copy"], "the accepted operation names the copy it kept");
+        let token = applied.result["copy"].as_str().ok_or("the replacement kept no copy")?.to_owned();
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "the page count did not move");
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 3", "the page is the copy the client sent");
+
+        // Undo: the same address, the copy the server kept, and the page as it
+        // was before the replacement — byte for byte the content it had.
+        let undo = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.replace", "copy": token}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        assert_eq!(undone.epoch, 2);
+        assert!(undone.op.payload["bytes"].is_string(), "the undo describes the page it put back");
+        assert_ne!(undone.op.payload["copy"], json!(token), "the undo keeps what it replaced itself, not the token it named");
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 1", "the replaced page came back exactly");
+        Ok(())
+    }
+
+    /// A replacement is one page and within the budget: a payload the operation
+    /// cannot carry is refused before the document changes.
+    #[test]
+    fn a_replacement_that_is_not_one_page_is_refused_before_the_document_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let two = fixture(2);
+        let cases = [("bad-b64", base64_encode(b"not a pdf at all")), ("two-pages", base64_encode(&two)), ("empty", String::new())];
+        for (id, bytes) in cases {
+            let replace = op(
+                id,
+                ConflictClass::Structural,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                0,
+                0,
+                json!({"action": "page.replace", "bytes": bytes}),
+            )?;
+            let rejected = room.apply(&editor, &replace, 0).err().ok_or("a replacement that is not one page was accepted")?;
+            assert_eq!(rejected.code, ErrorCode::Invalid, "{id}");
+            assert!(!rejected.retryable, "{id}");
+        }
+        let missing =
+            op("missing", ConflictClass::Structural, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0, json!({"action": "page.replace"}))?;
+        assert_eq!(room.apply(&editor, &missing, 0).err().ok_or("an empty replacement was accepted")?.code, ErrorCode::Invalid);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "nothing was replaced");
+        assert_eq!(room.epoch(), 0, "the epoch did not move");
+        assert_eq!(room.version(), 0, "nothing was accepted");
+        Ok(())
+    }
+
+    /// A replacement carries the page, so a page over the budget is refused
+    /// before the document changes: no partial replacement, no epoch bump, no
+    /// journal entry.
+    #[test]
+    fn a_replacement_over_the_limit_is_refused_before_the_document_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let huge = vec![0u8; MAX_RESTORE_PAGE_BYTES + 1];
+        let replace = op(
+            "rep-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.replace", "bytes": base64_encode(&huge)}),
+        )?;
+        let rejected = room.apply(&editor, &replace, 0).err().ok_or("an oversized page was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Limit);
+        assert!(!rejected.retryable);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "nothing was replaced");
+        assert_eq!(room.epoch(), 0, "the epoch did not move");
+        assert_eq!(room.version(), 0, "nothing was accepted");
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 1", "the page is untouched");
+        Ok(())
+    }
+
+    /// The page the replacement removed was too large to keep, so no copy token
+    /// comes back; the undo that names none is a refusal, and the document and
+    /// the version are left as they were.
+    #[test]
+    fn the_undo_of_a_replacement_without_a_copy_is_a_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let bytes = fixture_with_padding(2, Some((0, MAX_RESTORE_PAGE_BYTES + 4096)));
+        let adapter = PdfAdapter::open("fixture.pdf", bytes.into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let (_, copy) = room.adapter().page_copy(1).ok_or("the small page copies")?;
+        let replace = op(
+            "rep-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.replace", "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &replace, 0)?;
+        assert!(applied.result.get("copy").is_none(), "the big page was not kept, so there is no token");
+        assert!(applied.op.payload.get("copy").is_none(), "and the accepted operation names none");
+        let undo = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.replace", "copy": null}),
+        )?;
+        let rejected = room.apply(&editor, &undo, 0).err().ok_or("an undo with no copy was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Conflict);
+        assert!(!rejected.retryable);
+        assert_eq!(room.version(), 1, "the refusal moved nothing");
+        assert_eq!(room.epoch(), 1);
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 2, "the replacement itself stays");
+        Ok(())
+    }
+
+    /// A replacement addressed to a passed epoch is retryable and changes
+    /// nothing: the client resyncs and re-addresses the page.
+    #[test]
+    fn a_replacement_addressed_to_another_epoch_is_retryable() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let turn = op(
+            "rot-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.rotate", "degrees": 90}),
+        )?;
+        let turned = room.apply(&editor, &turn, 0)?;
+        let (_, copy) = room.adapter().page_copy(1).ok_or("the fixture page copies")?;
+        let replace = op(
+            "rep-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            turned.version,
+            turned.epoch,
+            json!({"action": "page.replace", "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let rejected = room.apply(&editor, &replace, 0).err().ok_or("a foreign epoch was accepted")?;
+        assert_eq!(rejected.code, ErrorCode::Stale);
+        assert!(rejected.retryable);
+        assert_eq!(room.version(), 1, "the stale replacement moved nothing");
+        Ok(())
+    }
+
+    /// A blank page is built from the size the operation names, at the position
+    /// it names; a size that is not a positive number of points is refused.
+    #[test]
+    fn a_blank_page_is_inserted_with_the_size_it_names() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let insert = op(
+            "blank-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.insert_blank", "width": 300.0, "height": 400.0}),
+        )?;
+        let applied = room.apply(&editor, &insert, 0)?;
+        assert_eq!(applied.epoch, 1);
+        assert_eq!(applied.op.payload["at"], 1, "the accepted operation names the position");
+        let document = room.adapter().document().ok_or("gone")?;
+        assert_eq!(document.info.pages.len(), 4);
+        let crop = document.info.pages[1].crop;
+        assert_eq!((crop[2] - crop[0]).abs(), 300.0, "the width is the one the operation named");
+        assert_eq!((crop[3] - crop[1]).abs(), 400.0);
+        let version = room.version();
+        commit(&mut room, &editor, version)?;
+        let bytes = room.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 1", "the pages before it did not move");
+
+        // The undo of a blank insert is a delete of the page it put there.
+        let undo = op(
+            "undo-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 1, epoch: applied.epoch }),
+            applied.version,
+            applied.epoch,
+            json!({"action": "page.delete"}),
+        )?;
+        room.apply(&editor, &undo, 0)?;
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "the page count is back");
+
+        for (id, payload) in [
+            ("zero", json!({"action": "page.insert_blank", "width": 0.0, "height": 400.0})),
+            ("negative", json!({"action": "page.insert_blank", "width": 300.0, "height": -1.0})),
+            ("huge", json!({"action": "page.insert_blank", "width": 300.0, "height": 1e9})),
+            ("nan", json!({"action": "page.insert_blank", "width": "wide", "height": 400.0})),
+        ] {
+            let bad = op(id, ConflictClass::Structural, Target::Page(PageRef { index: 0, epoch: 2 }), 2, 2, payload)?;
+            let rejected = room.apply(&editor, &bad, 0).err().ok_or("a bad blank page size was accepted")?;
+            assert_eq!(rejected.code, ErrorCode::Invalid, "{id}");
+        }
+        assert_eq!(room.adapter().document().ok_or("gone")?.info.pages.len(), 3, "no bad blank page was added");
+        assert_eq!(room.version(), 2, "a refusal accepts nothing");
+        Ok(())
+    }
+
+    /// The accepted operation carries the page, so a restart replays the
+    /// replacement without any client file or in-memory copy.
+    #[test]
+    fn a_replacement_replays_from_its_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let editor = ActorId::new("editor")?;
+        let mut room = room_with(&editor)?;
+        let (_, copy) = room.adapter().page_copy(2).ok_or("the fixture page copies")?;
+        let replace = op(
+            "rep-1",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: 0 }),
+            0,
+            0,
+            json!({"action": "page.replace", "bytes": base64_encode(copy.as_slice())}),
+        )?;
+        let applied = room.apply(&editor, &replace, 0)?.op;
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(3).into())?;
+        let mut fresh = Room::new(SessionId::new("session-2")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        fresh.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        fresh.replay(editor.clone(), applied, 1)?;
+        assert_eq!(fresh.epoch(), 1);
+        assert_eq!(fresh.adapter().document().ok_or("gone")?.info.pages.len(), 3);
+        let version = fresh.version();
+        commit(&mut fresh, &editor, version)?;
+        let bytes = fresh.adapter().last_commit().cloned().ok_or("no commit bytes")?;
+        assert_eq!(page_text(&bytes, 0)?, "Page 3", "the journal's copy replaced the page");
         Ok(())
     }
 
