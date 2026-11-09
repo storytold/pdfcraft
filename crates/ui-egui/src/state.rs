@@ -283,13 +283,8 @@ impl DocumentCopyJob {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
-            if out.len() >= MAX_COPY_BYTES {
-                // What fits is copied; the rest of the document is left unread.
-                cut = true;
-                break;
-            }
-            match p {
-                CopyPage::Read(t) => cut |= push_bounded(&mut out, &t.text_of(0..t.glyphs.len()), MAX_COPY_BYTES),
+            let left_out = match p {
+                CopyPage::Read(t) => push_page_bounded(&mut out, &t, MAX_COPY_BYTES),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -303,24 +298,52 @@ impl DocumentCopyJob {
                         tag: 0,
                         preview: false,
                     };
-                    if let Some(t) = r.render(req).text {
-                        cut |= push_bounded(&mut out, &t.text_of(0..t.glyphs.len()), MAX_COPY_BYTES);
-                    }
+                    r.render(req).text.is_some_and(|t| push_page_bounded(&mut out, &t, MAX_COPY_BYTES))
                 }
-                CopyPage::Skip => {}
+                CopyPage::Skip => false,
+            };
+            if left_out {
+                // What fits is copied; the rest of the document is left unread.
+                cut = true;
+                break;
             }
         }
         Some((out, cut))
     }
 }
 
+/// Glyphs of one page expanded at a time, so a page whose text is far past the clipboard limit is
+/// never built whole before it is cut: the temporary stays one chunk's size.
+const PAGE_TEXT_CHUNK: usize = 4096;
+
+/// Append a page's text in chunks, as a new line, cut so `out` stays within `max` bytes. Whether
+/// anything was left out.
+fn push_page_bounded(out: &mut String, t: &pdfcraft_render::PageText, max: usize) -> bool {
+    let glyphs = t.glyphs.len();
+    let mut start = 0;
+    while start < glyphs {
+        let end = (start + PAGE_TEXT_CHUNK).min(glyphs);
+        // Only the page's first chunk starts a new line; the rest continue it.
+        if push_bounded_sep(out, &t.text_of(start..end), max, start == 0) {
+            return true;
+        }
+        start = end;
+    }
+    false
+}
+
 /// Append `text` to `out` as a new line, cut (at a character boundary) so `out` stays within `max`
 /// bytes. Whether anything was left out.
 fn push_bounded(out: &mut String, text: &str, max: usize) -> bool {
+    push_bounded_sep(out, text, max, true)
+}
+
+/// [`push_bounded`], with whether `text` starts a new line (`false` continues the line before it).
+fn push_bounded_sep(out: &mut String, text: &str, max: usize, new_line: bool) -> bool {
     if text.is_empty() {
         return false;
     }
-    let sep = usize::from(!out.is_empty());
+    let sep = usize::from(new_line && !out.is_empty());
     let room = max.saturating_sub(out.len()).saturating_sub(sep);
     if room == 0 {
         return true;
