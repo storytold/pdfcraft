@@ -3,7 +3,7 @@ use super::{
     image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
-use crate::sources::{comment_source, import_pdf_comments};
+use crate::sources::{comment_source, import_pdf_comments, open_source_with};
 use pdfcraft_content::Matrix;
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
@@ -447,8 +447,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
-        Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
-            let src = open_source(name, bytes)?;
+        Edit::InsertPagesFrom { name, bytes, password, pages, at, field_conflicts } => {
+            let src = open_source_with(name, bytes, password.as_deref())?;
             let pages = match pages {
                 Some(p) => p.clone(),
                 None => (0..pdfcraft_organize::page_count(&src)?).collect(),

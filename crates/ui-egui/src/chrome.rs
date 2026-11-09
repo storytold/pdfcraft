@@ -30,6 +30,8 @@ const STRIP_BUTTON: f32 = 28.0;
 /// Draw the window's tab strip: home and open controls, shrinkable and scrollable document tabs with drag
 /// reordering, and platform window controls.
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    // Resolve the held source once: the strip must stay linear in the number of tabs.
+    let page_source = app.page_drag_source();
     let t = Tokens::get(ui.ctx());
     // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
     // buttons shrink to keep a margin above and below.
@@ -173,8 +175,19 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         ui.close();
                                     }
                                 });
-                                if response.clicked() {
+                                let page_drop_tab = page_source.is_some_and(|source| source != id)
+                                    && !egui::Popup::is_any_open(ui.ctx())
+                                    && !app.modal_open()
+                                    && !app.palette_open
+                                    && ui.input(|input| {
+                                        input.pointer.primary_down()
+                                            && input.pointer.interact_pos().is_some_and(|p| response.rect.intersect(ui.clip_rect()).contains(p))
+                                    });
+                                if response.clicked() || page_drop_tab {
                                     app.active = Some(i);
+                                    if page_drop_tab && !app.views[i].organize {
+                                        app.views[i].open_organize();
+                                    }
                                 }
                                 // A middle click closes the tab, as in Acrobat and browsers (#1853);
                                 // unsaved changes ask first, as the close button does.

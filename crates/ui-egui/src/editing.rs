@@ -624,6 +624,9 @@ impl PdfCraftApp {
             return;
         }
         let Some((i, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
         let Some(doc) = self.session.get(id) else { return };
         let pages = self.views[i].target_pages();
         let n = doc.info.pages.len();
@@ -631,7 +634,13 @@ impl PdfCraftApp {
             self.notify_tr("A document needs at least one page: copy instead");
             return;
         }
-        self.page_clipboard = Some(crate::PageClip { from: id, name: doc.name.clone(), bytes: doc.bytes.clone(), pages: pages.clone() });
+        self.page_clipboard = Some(crate::PageClip {
+            password: doc.password.clone(),
+            from: id,
+            name: doc.name.clone(),
+            bytes: doc.bytes.clone(),
+            pages: pages.clone(),
+        });
         if cut {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }
@@ -659,6 +668,7 @@ impl PdfCraftApp {
         if self.apply_edit(Edit::InsertPagesFrom {
             name: clip.name.clone(),
             bytes: clip.bytes.clone(),
+            password: clip.password.clone(),
             pages: Some(clip.pages.clone()),
             at,
             field_conflicts,

@@ -1092,9 +1092,13 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
             n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(text))
         }
     };
-    h.get_by(menu_row("編集")).click();
+    // macOS moves Preferences into the application menu, including the headless bar.
+    let heading = if cfg!(target_os = "macos") { "PdfCraft" } else { "編集" };
+    h.get_by(menu_row(heading)).click();
     h.run_steps(2);
-    h.get_by(menu_row("環境設定")).click();
+    let key = if cfg!(target_os = "macos") { "Settings…" } else { "Preferences…" };
+    let settings = pdfcraft_ui_egui::i18n::tr(pdfcraft_ui_egui::i18n::Lang::from_pref("ja"), key);
+    h.get_by(menu_row(settings.trim_end_matches('…'))).click();
     h.run_steps(2);
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {

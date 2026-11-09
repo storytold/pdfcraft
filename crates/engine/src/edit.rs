@@ -73,6 +73,7 @@ pub enum Edit {
     InsertPagesFrom {
         name: String,
         bytes: Arc<Vec<u8>>,
+        password: Option<String>,
         pages: Option<Vec<usize>>,
         at: usize,
         /// How a form field whose name the document already uses is kept separate.

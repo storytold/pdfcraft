@@ -715,6 +715,8 @@ pub struct DocView {
     pub sign: crate::sign_ui::SignView,
     /// Organize: the pages being dragged to a new place.
     pub org_drag: Option<Vec<usize>>,
+    /// A held page snapshot belongs to its source view (and therefore its window).
+    pub(crate) page_drag: Option<crate::page_transfer::PageDrag>,
     /// Pages panel: the pages being dragged to a new place.
     pub panel_drag: Option<Vec<usize>>,
     /// Transient keyboard owner for this document's Pages sidebar.
@@ -965,6 +967,7 @@ impl DocView {
             q.grab = None;
         }
         self.org_drag = None;
+        self.page_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
         self.router.cancel();
@@ -1120,6 +1123,7 @@ impl DocView {
             camera_done: None,
             sign: Default::default(),
             org_drag: None,
+            page_drag: None,
             panel_drag: None,
             pages_focus_id: None,
             marquee: None,
@@ -1158,6 +1162,7 @@ impl DocView {
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        self.page_drag = None;
         self.reset_coarse_state();
     }
 
