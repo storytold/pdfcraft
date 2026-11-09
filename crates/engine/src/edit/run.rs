@@ -165,6 +165,47 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
+/// What a comment import left out of comments it did import (an appearance it could not read),
+/// in the repair log as one line: said, not slipped in. The first five are named, each in at
+/// most [`SKIPPED_CHARS`] characters with control characters escaped (a name from the file
+/// holding a line break would otherwise read as a repair of its own).
+fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
+    if report.skipped.is_empty() {
+        return;
+    }
+    let shown: Vec<String> = report.skipped.iter().take(5).map(|s| skipped_text(s)).collect();
+    let more = report.skipped.len().saturating_sub(shown.len());
+    let more = if more > 0 { format!("; and {more} more") } else { String::new() };
+    doc.note_repair(format!(
+        "imported {} comment{} without the appearance the file gave {} (PdfCraft draws it where it can; it may look different or not show): {}{more}",
+        report.skipped.len(),
+        if report.skipped.len() == 1 { "" } else { "s" },
+        if report.skipped.len() == 1 { "it" } else { "them" },
+        shown.join("; ")
+    ));
+}
+
+/// At most this many characters of one skipped comment's description in the repair log.
+const SKIPPED_CHARS: usize = 200;
+
+/// `s` for one line of the repair log: control characters and line separators escaped, cut to
+/// [`SKIPPED_CHARS`] characters.
+fn skipped_text(s: &str) -> String {
+    let mut out = String::new();
+    for (n, c) in s.chars().enumerate() {
+        if n == SKIPPED_CHARS {
+            out.push('…');
+            break;
+        }
+        if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Dates and unique ids stamped onto what an edit creates.
 pub(crate) struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
@@ -519,6 +560,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             if report.comments == 0 {
                 return Err(EditError::Invalid("the clipboard holds no comments".into()));
             }
+            note_skipped(doc, &report);
         }
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
@@ -883,7 +925,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     // the data importer's error.
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
-                        Ok(_) => *doc = data,
+                        Ok(report) => {
+                            note_skipped(&mut data, &report);
+                            *doc = data;
+                        }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
                             Ok(src) => import_pdf_comments(doc, &src)?,
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
