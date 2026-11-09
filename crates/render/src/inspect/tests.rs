@@ -1986,3 +1986,64 @@ fn inspection_keeps_no_private_page_data() {
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
 }
+
+/// A `/Kids` entry that loops back, or names a root field that doesn't name this one as its
+/// `/Parent`, is not a child (ISO 32000-2 §12.7.3, Table 224; §12.7.4.1, Table 226): the field
+/// keeps its other kids and is listed with them.
+#[test]
+fn kids_that_loop_back_or_are_roots_are_not_children() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [6 0 R 9 0 R 12 0 R 15 0 R] >> endobj
+4 0 obj << /Fields [5 0 R 7 0 R 8 0 R 10 0 R] >> endobj
+5 0 obj << /FT /Btn /Ff 49152 /T (size) /Kids [5 0 R 6 0 R] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 150 20 160] >> endobj
+7 0 obj << /FT /Btn /Ff 49152 /T (left) /Kids [8 0 R 9 0 R] >> endobj
+8 0 obj << /FT /Btn /Ff 49152 /T (right) /Kids [7 0 R 12 0 R] >> endobj
+9 0 obj << /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [10 120 20 130] >> endobj
+10 0 obj << /T (group) /Kids [13 0 R] >> endobj
+12 0 obj << /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 90 20 100] >> endobj
+13 0 obj << /FT /Tx /T (inner) /Parent 10 0 R /Kids [14 0 R] >> endobj
+14 0 obj << /FT /Tx /T (deep) /Parent 13 0 R /Kids [13 0 R 15 0 R] >> endobj
+15 0 obj << /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [10 60 90 80] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.kind, f.page, f.rect.map(|r| r[1]))).collect();
+    assert_eq!(
+        listed,
+        [
+            ("size", FieldKind::Radio, Some(0), Some(150.0)),
+            ("left", FieldKind::Radio, Some(0), Some(120.0)),
+            ("right", FieldKind::Radio, Some(0), Some(90.0)),
+            ("group.inner.deep", FieldKind::Text, Some(0), Some(60.0)),
+        ],
+        "{:?}",
+        info.fields
+    );
+}
+
+/// A field with no widget among its `/Kids` takes the page widget that names it as its
+/// `/Parent`: a child names its parent (ISO 32000-2 §12.7.4.1, Table 226). Here `pair` and `other`
+/// list each other (roots, so not children), and only a page widget says it belongs to `other`.
+#[test]
+fn a_field_takes_the_page_widget_naming_it_when_its_kids_list_none() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 7 0 R 11 0 R 13 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 150 20 160] >> endobj
+5 0 obj << /FT /Btn /Ff 49152 /T (radio) /Kids [5 0 R 7 0 R] >> endobj
+6 0 obj << /Fields [5 0 R 8 0 R 9 0 R] >> endobj
+7 0 obj << /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 120 20 130] >> endobj
+8 0 obj << /FT /Btn /Ff 49152 /T (pair) /Kids [9 0 R 11 0 R] >> endobj
+9 0 obj << /FT /Btn /Ff 49152 /T (other) /Kids [8 0 R] >> endobj
+11 0 obj << /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 90 20 100] >> endobj
+13 0 obj << /Type /Annot /Subtype /Widget /Parent 9 0 R /Rect [10 60 20 70] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.page, f.rect.map(|r| r[1]))).collect();
+    assert_eq!(listed, [("radio", Some(0), Some(120.0)), ("pair", Some(0), Some(90.0)), ("other", Some(0), Some(60.0))], "{:?}", info.fields);
+}
