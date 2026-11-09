@@ -93,7 +93,8 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         if seen.len() > 64 || !seen.insert(c) {
             break;
         }
-        let obj = doc.get(c);
+        // An object that is only a reference to another is followed, as `Document::resolve` does.
+        let obj = doc.resolve(&Object::Ref(c));
         let d = obj.as_dict()?;
         if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
             parts.push(t);
@@ -109,6 +110,38 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
 /// 32000-2 §7.3.9): the field is then a root, as if it named no parent.
 fn parent_of(doc: &Document, d: &Dict) -> Option<ObjRef> {
     d.reference(b"Parent").filter(|p| doc.get(*p).as_dict().is_some())
+}
+
+/// The fields of the form's tree whose `/Kids` list one of `kids` and whose own fully qualified
+/// name is `name`: a field listing kids that don't name it as their `/Parent`, and so share its
+/// name rather than extend it. Each node is visited once, at most 64 levels down.
+pub(crate) fn listing_fields_named(doc: &Document, name: &str, kids: &[ObjRef]) -> Vec<ObjRef> {
+    let mut out = Vec::new();
+    let Some(af) = acroform(doc) else { return out };
+    let top = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let mut stack: Vec<(ObjRef, usize)> = top.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((r, depth)) = stack.pop() {
+        if depth > 64 || !seen.insert(r) {
+            continue;
+        }
+        let obj = doc.get(r);
+        let Some(d) = obj.as_dict() else { continue };
+        let list: Vec<ObjRef> = d
+            .get(b"Kids")
+            .map(|k| doc.resolve(k))
+            .and_then(|k| k.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Object::as_ref)
+            .collect();
+        if list.iter().any(|k| kids.contains(k)) && qualified_name(doc, r).as_deref() == Some(name) {
+            out.push(r);
+        }
+        let next = depth.saturating_add(1);
+        stack.extend(list.into_iter().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).map(|k| (k, next)));
+    }
+    out
 }
 
 /// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
@@ -141,7 +174,11 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
             .and_then(|w| w.as_dict().and_then(|wd| wd.get(b"AA").map(|a| doc.resolve(a))))
             .and_then(|a| a.as_dict().cloned())
     });
-    let mut out = af::Actions::default();
+    let mut out = af::Actions {
+        // A date field the XFA layout generated: what its format doesn't read is kept as typed.
+        xfa_date: matches!(d.get(b"PCXfaDate").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))),
+        ..af::Actions::default()
+    };
     let Some(aa) = aa else { return out };
     let mut js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a, scripts));
     if let Some(f) = js(b"F") {
@@ -373,6 +410,19 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
     };
     for r in listed_roots {
+        // A `/Fields` entry that is a nameless kid of a field `/Fields` doesn't list is read
+        // through that field, which names it (ISO 32000-2 §12.7.4.2). A kid a field already read
+        // has claimed as its widget is not read again as a nameless field; one its parent's
+        // `/Kids` omits is still read on its own, as before.
+        let nameless_kid = doc.get(r).as_dict().is_some_and(|d| !d.contains(b"T") && d.contains(b"Parent"));
+        if nameless_kid {
+            if let Some(root) = unlisted_root(doc, r, &seen.fields) {
+                walk(doc, root, &base, &page_of, &mut seen, &mut out, 0);
+            }
+            if seen.widgets.contains(&r) {
+                continue;
+            }
+        }
         walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
     }
     let listed = out.len();
@@ -520,15 +570,34 @@ fn walk(
     let kids: Vec<ObjRef> =
         d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
     // Kids with /T are fields; kids without are this field's widgets.
-    let (field_kids, kids): (Vec<ObjRef>, Vec<ObjRef>) = kids.into_iter().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
+    let (field_kids, mut kids): (Vec<ObjRef>, Vec<ObjRef>) =
+        kids.into_iter().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
     let field_kids: Vec<ObjRef> = field_kids.into_iter().filter(|k| !not_a_child(doc, seen, r, *k)).collect();
     if !field_kids.is_empty() {
         seen.path.push(r);
         for k in field_kids {
-            walk(doc, k, &inh, page_of, seen, out, depth + 1);
+            // A fully qualified name is built up the field's own `/Parent` chain (ISO 32000-2
+            // §12.7.4.2). A kid that doesn't name this field as its `/Parent` is named from its
+            // own chain, as other readers name it; it still inherits this field's attributes.
+            // The `/Parent` as written: `qualified_name` follows an object that only refers on,
+            // and names a missing one as no parent.
+            let parent = doc.get(k).as_dict().and_then(|kd| kd.reference(b"Parent"));
+            if parent == Some(r) {
+                walk(doc, k, &inh, page_of, seen, out, depth + 1);
+            } else {
+                let mut own = inh.clone();
+                own.name = parent.and_then(|p| qualified_name(doc, p)).unwrap_or_default();
+                walk(doc, k, &own, page_of, seen, out, depth + 1);
+            }
         }
         seen.path.pop();
-        return;
+        // "A field's children in the hierarchy may also include widget annotations" (ISO 32000-2
+        // §12.7.4): widget annotations listed beside named kids are still this field's widgets,
+        // read as a field of this name next to the named kids.
+        kids.retain(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.name(b"Subtype") == Some(b"Widget")));
+        if kids.is_empty() {
+            return;
+        }
     }
     // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
     // field listing them then reads.
@@ -545,8 +614,16 @@ fn walk(
     };
     // A child names its parent (ISO 32000-2 §12.7.4.1, Table 226): a page widget naming this field
     // is one of its widgets even when its `/Kids` leave it out, as MuPDF and PDFium read it.
-    let widget_refs: Vec<ObjRef> =
-        if d.contains(b"Rect") { vec![r] } else { kids.into_iter().chain(seen.by_parent.get(&r).into_iter().flatten().copied()).collect() };
+    // A field's widgets are its widget kids. The field dictionary is its own widget only when it
+    // has none (no kid whose `/Subtype` is `/Widget`): field and widget are merged "when a field has only a single associated widget
+    // annotation" (ISO 32000-2 §12.7.4), so a merged dictionary that also lists widget kids is a
+    // field whose buttons are those kids, not one more (often zero-area) button.
+    let has_widget_kids = kids.iter().any(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.name(b"Subtype") == Some(b"Widget")));
+    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") && !has_widget_kids {
+        vec![r]
+    } else {
+        kids.into_iter().chain(seen.by_parent.get(&r).into_iter().flatten().copied()).collect()
+    };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
