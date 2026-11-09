@@ -1,7 +1,10 @@
 use super::Zip;
 use super::as_html::{esc, language_tag};
 use super::clip::font_family;
-use super::layout::{Block, Field, FieldKind, Image, Item, Page, Shape, Table, body_size, items};
+use super::layout::{Block, Field, FieldKind, Image, Item, Page, Paint, Shape, Table, body_size, items, reading_order};
+
+#[path = "docx_art.rs"]
+mod drawing;
 
 // This package contains one custom XML store. Its ID must agree in itemProps and every binding.
 const FIELD_STORE_ID: &str = "{A8EA4468-05AB-4E2B-BB18-926B8DA50E55}";
@@ -9,17 +12,22 @@ const FIELD_STORE_NS: &str = "urn:pdfcraft:form-values";
 
 #[derive(Default)]
 struct FieldBindings<'a> {
-    names: std::collections::HashMap<&'a str, usize>,
+    names: std::collections::HashMap<(&'a str, u8), usize>,
     values: Vec<&'a str>,
 }
 
 impl<'a> FieldBindings<'a> {
     fn field(&mut self, field: &'a Field) -> String {
-        let FieldKind::Text { value, .. } = &field.kind else { return String::new() };
+        let (kind, value) = match &field.kind {
+            FieldKind::Text { value, .. } => (0, value.as_str()),
+            FieldKind::Choice { value, .. } => (1, value.as_str()),
+            FieldKind::Check { checked } => (2, if *checked { "true" } else { "false" }),
+            FieldKind::Radio { .. } => return String::new(),
+        };
         // The full qualified name identifies the PDF field; the displayed tag is truncated and
         // two different long names may share it. Each widget binds to the same XML element.
         let next = self.values.len() + 1;
-        let id = *self.names.entry(&field.name).or_insert_with(|| {
+        let id = *self.names.entry((&field.name, kind)).or_insert_with(|| {
             self.values.push(value);
             next
         });
@@ -222,15 +230,30 @@ impl Page {
     /// collecting it with the other pages, to bound retained shape memory across the export.
     pub fn limit_shape_points(&mut self, remaining_points: &mut usize) {
         self.art_framed |= framed(self);
+        let mut remap = Vec::with_capacity(self.shapes.len());
+        let mut retained = 0usize;
         self.shapes.retain(|shape| {
             let points = shape.paths.iter().fold(0usize, |n, (path, _)| n.saturating_add(path.len()));
             if points <= *remaining_points {
                 *remaining_points -= points;
+                remap.push(Some(retained));
+                retained += 1;
                 true
             } else {
                 self.art_truncated = true;
+                remap.push(None);
                 false
             }
+        });
+        self.paint_order.retain_mut(|paint| match paint {
+            Paint::Shape(index) => match remap.get(*index).copied().flatten() {
+                Some(new) => {
+                    *index = new;
+                    true
+                }
+                None => false,
+            },
+            Paint::Image(_) => true,
         });
         // Vec::retain drops each removed shape's points but keeps the outer allocation. Shrink
         // that too: many pages beyond the limit must not retain a page's full shape capacity.
@@ -271,9 +294,15 @@ fn emu(pt: f64) -> i64 {
 
 /// The `a:graphic` of one picture (DrawingML), rotated by `rotation` degrees when given and
 /// flipped (horizontally, vertically) as `flips` says.
-fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>, flips: (bool, bool)) -> String {
+fn picture_xml(n: usize, name: &str, size: (i64, i64), rotation: Option<f64>, flips: (bool, bool)) -> String {
+    let picture = picture_shape(n, name, size, rotation, flips, (0, 0));
+    format!(
+        "<wp:docPr id=\"{n}\" name=\"Picture {n}\"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">{picture}</a:graphicData></a:graphic>"
+    )
+}
+
+fn picture_shape(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>, flips: (bool, bool), (x, y): (i64, i64)) -> String {
     let mut rot = rotation.map_or(String::new(), |r| format!(" rot=\"{}\"", (r * 60000.0).round() as i64));
-    // DrawingML flips a picture in its own frame before it rotates it, as the PDF placement does.
     if flips.0 {
         rot.push_str(" flipH=\"1\"");
     }
@@ -281,12 +310,9 @@ fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>
         rot.push_str(" flipV=\"1\"");
     }
     format!(
-        "<wp:docPr id=\"{n}\" name=\"Picture {n}\"/><wp:cNvGraphicFramePr/>\
-<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
-<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
+        "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
 <pic:blipFill><a:blip r:embed=\"rIdImg{n}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
-<pic:spPr><a:xfrm{rot}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>\
-</a:graphicData></a:graphic>"
+<pic:spPr><a:xfrm{rot}><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
     )
 }
 
@@ -352,11 +378,43 @@ struct ArtBudget {
     shapes: usize,
     points: usize,
     dropped: bool,
+    /// Only boundaries actually emitted within both limits can replace a widget's border.
+    outlines: Vec<[f64; 4]>,
+}
+
+/// A closed ellipse, covering its perimeter once. Matching bounds alone also accepts a
+/// triangle, a rounded rectangle, or an arc closed by a chord, none of which replaces a circle.
+fn round_outline(points: &[[f64; 2]], closed: bool) -> Option<[f64; 4]> {
+    if !closed || points.len() < 8 {
+        return None;
+    }
+    let bounds = point_bounds(points.iter())?;
+    let width = bounds[2] - bounds[0];
+    let height = bounds[3] - bounds[1];
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let unit = |p: &[f64; 2]| [(2.0 * p[0] - bounds[0] - bounds[2]) / width, (2.0 * p[1] - bounds[1] - bounds[3]) / height];
+    let mut turn = 0.0;
+    let mut distance = 0.0;
+    for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
+        let (a, b) = (unit(a), unit(b));
+        if (a[0] * a[0] + a[1] * a[1] - 1.0).abs() > 0.12 {
+            return None;
+        }
+        let angle = (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]);
+        if angle.abs() > std::f64::consts::FRAC_PI_2 {
+            return None;
+        }
+        turn += angle;
+        distance += angle.abs();
+    }
+    ((turn.abs() - std::f64::consts::TAU).abs() < 0.1 && distance < std::f64::consts::TAU + 0.1).then_some(bounds)
 }
 
 impl ArtBudget {
     fn new() -> Self {
-        Self { shapes: MAX_DOCX_PAGE_SHAPES, points: MAX_DOCX_PAGE_POINTS, dropped: false }
+        Self { shapes: MAX_DOCX_PAGE_SHAPES, points: MAX_DOCX_PAGE_POINTS, dropped: false, outlines: Vec::new() }
     }
 
     /// Room for one more shape of `points` points: `false`, and the page marked as having
@@ -450,6 +508,11 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut A
         if !budget.take(points.len()) {
             continue;
         }
+        if s.stroke.is_some()
+            && let Some(bounds) = round_outline(&points, closed)
+        {
+            budget.outlines.push(bounds);
+        }
         *id = id.saturating_add(1);
         let n = *id;
         // A line runs from its top (then left) end down to the other: LibreOffice draws nothing
@@ -509,11 +572,11 @@ fn field_rpr(f: &Field, family: &str, size: f64, spacing: f64) -> String {
     let family = esc(family);
     let mut rpr = format!("<w:rPr><w:rFonts w:ascii=\"{family}\" w:hAnsi=\"{family}\" w:eastAsia=\"{family}\" w:cs=\"{family}\"/>");
     if matches!(f.kind, FieldKind::Text { .. } | FieldKind::Choice { .. }) {
-        let font = f.font.to_ascii_lowercase();
-        if font.contains("bold") || font.contains("black") || font.contains("heavy") {
+        let (bold, italic) = super::font_weight_and_slant(&f.font);
+        if bold {
             rpr.push_str("<w:b/><w:bCs/>");
         }
-        if font.contains("italic") || font.contains("oblique") {
+        if italic {
             rpr.push_str("<w:i/><w:iCs/>");
         }
     }
@@ -553,20 +616,14 @@ const FIELD_LOOK_HEIGHT: usize = 1 << 20;
 /// VML: LibreOffice stacks every VML shape behind a DrawingML picture. `None` for a field with
 /// neither, or a hostile box.
 fn field_look_xml(f: &Field, page_height: f64, id: usize, outlined: bool) -> Option<String> {
-    // A round button may draw its only circle in /AP, which isn't page artwork. Keep that
-    // boundary even when /MK has no border, but don't draw another over a page's own circle.
-    let border = f.border.filter(|_| !f.round || !outlined || f.background.is_some()).or_else(|| {
-        (f.round && !outlined && matches!(f.kind, FieldKind::Check { .. } | FieldKind::Radio { .. })).then_some(super::Stroke {
-            color: f.color,
-            width: 1.0,
-            dashed: false,
-        })
-    });
+    // Preparation supplies borders from /MK or the displayed appearance. Absence means no
+    // visible boundary, including deliberately borderless radio buttons.
+    let border = f.border.filter(|_| !f.round || !outlined || f.background.is_some());
     if border.is_none() && f.background.is_none() {
         return None;
     }
     let r = f.rect;
-    if !r.iter().all(|v| v.is_finite()) {
+    if !f.valid_rect() {
         return None;
     }
     let width = border.map_or(0.0, |b| if b.width.is_finite() { b.width.clamp(0.25, 12.0) } else { 1.0 });
@@ -609,19 +666,18 @@ pub(crate) const MAX_FIELD_NAME_CHARS: usize = 128;
 /// drop-down.
 fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
     let r = f.rect;
-    if !r.iter().all(|v| v.is_finite()) {
+    if !f.valid_rect() {
         return None;
     }
     let (w, h) = (layout_number(r[2] - r[0]).max(1.0), layout_number(r[3] - r[1]).max(1.0));
-    // Auto size fits the box's height, within a legible range.
-    let size = if f.size.is_finite() && f.size > 0.0 { f.size.clamp(2.0, 72.0) } else { (h * 0.65).clamp(4.0, 12.0) };
+    let size = if f.size.is_finite() && f.size > 0.0 { f.size.clamp(2.0, 72.0) } else { f.auto_size() };
     // One line of `size` points sits in the middle of the box.
     let middle = |size: f64| ((h - 1.15 * size) / 2.0).max(0.0);
     let label: String = f.name.chars().take(MAX_FIELD_NAME_CHARS).collect();
     let name = esc(&label);
     let props = format!("<w:alias w:val=\"{name}\"/><w:tag w:val=\"{name}\"/>");
     // A read-only field's control keeps its content: Word lets it be read and copied, not changed.
-    let lock = if f.read_only { "<w:lock w:val=\"contentLocked\"/>" } else { "" };
+    let lock = if f.read_only || matches!(f.kind, FieldKind::Radio { .. }) { "<w:lock w:val=\"contentLocked\"/>" } else { "" };
     // En spaces (half an em each) keep an empty field as wide as its box.
     let blank = |n: usize| "\u{2002}".repeat(n.clamp(1, 200));
     let fits = |advance: f64| if advance > 0.0 { (w / advance).floor() as usize } else { 1 };
@@ -690,16 +746,16 @@ fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
             let size = (h.min(w) * 0.8).clamp(4.0, 24.0);
             // The X is Arial's, whatever font the PDF's field names (often ZapfDingbats).
             let rpr = field_rpr(f, "Arial", size, 0.0);
-            // Word has no control that lets only one of several boxes, each in its own place, be
-            // on: a radio button is a check box whose title says its group takes one choice.
+            // Word cannot enforce mutual exclusion between positioned checkboxes. Preserve the
+            // group's displayed state, lock these controls, and report lost editability.
             let props = match &f.kind {
                 FieldKind::Radio { buttons, .. } if *buttons > 1 => {
-                    format!("<w:alias w:val=\"{}\"/><w:tag w:val=\"{name}\"/>", esc(&format!("{label} (choose 1 of {buttons})")))
+                    format!("<w:alias w:val=\"{}\"/><w:tag w:val=\"{name}\"/>", esc(&format!("{label} (read-only radio group, {buttons} options)")))
                 }
                 _ => props,
             };
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{binding}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:jc w:val=\"center\"/>"),
                 u8::from(*checked),
                 if *checked { "X" } else { "\u{2002}" }
@@ -716,7 +772,7 @@ fn field_xml(f: &Field, page_height: f64, binding: &str) -> Option<String> {
             // A combo box that takes typed text is a Word combo box, which does too.
             let list = if *editable { "comboBox" } else { "dropDownList" };
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{placeholder}<w:{list}>{items}</w:{list}></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{placeholder}{binding}<w:{list}>{items}</w:{list}></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), &format!("<w:ind w:left=\"20\"/>{alignment}")),
                 esc(&text)
             )
@@ -764,25 +820,35 @@ fn positioned_page<'a>(
     // page-sized watermark cannot push the invoice footer onto another page.
     let mut s = String::from("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
     let body = body_size(std::slice::from_ref(page)).max(1.0);
-    // Vector art goes behind everything else, in painting order: the first shape is furthest
-    // back, the last just behind watermark-sized text (z-index -2) and the text (1).
-    // Each shape written (a subpath) counts, not each path: one path can hold thousands.
+    // Pictures and paths share both source order and DrawingML stacking. Legacy callers
+    // without a shared order retain the documented paths-before-pictures default.
+    let layers: std::collections::HashMap<_, _> = page.paint_order.iter().enumerate().map(|(i, paint)| (*paint, i.saturating_add(1))).collect();
+    let mut artwork = Vec::new();
     let mut budget = ArtBudget::new();
     let shapes = page.shapes.len();
     for (i, shape) in page.shapes.iter().enumerate() {
-        let z = i64::try_from(i).unwrap_or(i64::MAX).saturating_sub(i64::try_from(shapes).unwrap_or(i64::MAX)).saturating_sub(3);
-        if let Some(xml) = shape_xml(shape, page.height, shape_id, z, &mut budget) {
-            s.push_str(&xml);
+        let layer = layers.get(&Paint::Shape(i)).copied().unwrap_or(i.saturating_add(1));
+        let xml = if page.images.is_empty() {
+            let z = i64::try_from(i).unwrap_or(i64::MAX).saturating_sub(i64::try_from(shapes).unwrap_or(i64::MAX)).saturating_sub(3);
+            shape_xml(shape, page.height, shape_id, z, &mut budget)
+        } else {
+            drawing::shape_xml(shape, page.height, shape_id, &mut budget)
+        };
+        if let Some(xml) = xml {
+            artwork.push((layer, xml));
         }
         if budget.dropped && budget.shapes == 0 {
-            // Nothing more fits; the page is already marked.
             break;
         }
     }
     // Lines are placed in rows: the pieces of one visual line that follow each other within
     // a couple of spaces (a bold word inside a sentence) share a text box, so the reader sets
     // the space between them; a wider gap (a tab stop, a column) starts a box of its own.
-    let groups: Vec<Vec<&Block>> = if page.lines.is_empty() { page.blocks.iter().map(|b| vec![b]).collect() } else { rows(&page.lines) };
+    let groups: Vec<Vec<&Block>> = if page.lines.is_empty() {
+        reading_order(page, page.blocks.iter().map(|b| (b.rect, b.size, b)).collect()).into_iter().map(|b| vec![b]).collect()
+    } else {
+        rows(&page.lines)
+    };
     for group in &groups {
         let Some(b) = group.first().copied() else { continue };
         *shape_id = shape_id.saturating_add(1);
@@ -831,7 +897,7 @@ fn positioned_page<'a>(
             shape_id
         ));
     }
-    for im in &page.images {
+    for (index, im) in page.images.iter().enumerate() {
         if !room_for(media, im) {
             continue;
         }
@@ -841,36 +907,43 @@ fn positioned_page<'a>(
         let (x, y) = (layout_number((im.rect[0] + im.rect[2] - w) / 2.0), layout_number(page.height - (im.rect[1] + im.rect[3] + h) / 2.0));
         let rotation = layout_number(-im.rotation).rem_euclid(360.0);
         let name = format!("image{n}.{}", im.ext);
-        // Rotated as the PDF turns it, so a mirror is a vertical flip before that turn.
+        let layer = layers.get(&Paint::Image(index)).copied().unwrap_or(shapes.saturating_add(index).saturating_add(1));
+        if !page.shapes.is_empty() {
+            artwork.push((layer, picture_shape(n, &name, (emu(w), emu(h)), Some(rotation), (false, im.flip), (emu(x), emu(y)))));
+            media.push((name, im));
+            continue;
+        }
         let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation), (false, im.flip));
         // A DrawingML anchor, the way Word itself stores a picture placed behind text: a VML
         // rectangle with an image does not show the picture.
-        s.push_str(&format!(
+        let mut drawing = format!(
             "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"{}\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">\
 <wp:simplePos x=\"0\" y=\"0\"/><wp:positionH relativeFrom=\"page\"><wp:posOffset>{}</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"page\"><wp:posOffset>{}</wp:posOffset></wp:positionV>\
 <wp:extent cx=\"{}\" cy=\"{}\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:wrapNone/>",
-            n.saturating_add(1),
+            layer,
             emu(x),
             emu(y),
             emu(w),
             emu(h),
-        ));
-        s.push_str(&pic);
-        s.push_str("</wp:anchor></w:drawing></w:r>");
+        );
+        drawing.push_str(&pic);
+        drawing.push_str("</wp:anchor></w:drawing></w:r>");
+        artwork.push((layer, drawing));
         media.push((name, im));
+    }
+    artwork.sort_by_key(|(layer, _)| *layer);
+    let artwork: String = artwork.into_iter().map(|(_, xml)| xml).collect();
+    if !page.shapes.is_empty() && !page.images.is_empty() {
+        *shape_id = shape_id.saturating_add(1);
+        s.push_str(&drawing::group_xml(&artwork, page, *shape_id));
+    } else {
+        s.push_str(&artwork);
     }
     // The fields' borders and fills, behind the text but over the page's own art and pictures:
     // a scanned form's thin check box lines get the solid box the PDF's fields draw over them.
-    let outlines: Vec<_> = page
-        .shapes
-        .iter()
-        .filter(|s| s.stroke.is_some())
-        .flat_map(|s| &s.paths)
-        .take(MAX_DOCX_PAGE_SHAPES)
-        .filter_map(|(points, _)| (points.len() >= 4).then(|| point_bounds(points.iter())).flatten())
-        .collect();
+    let outlines = &budget.outlines;
     let mut outline_work = 1_000_000usize;
-    for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
+    for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES).filter(|f| f.valid_rect()) {
         *shape_id = shape_id.saturating_add(1);
         let outlined = f.round
             && outlines.iter().take(outline_work).any(|r| {
@@ -884,8 +957,9 @@ fn positioned_page<'a>(
     s.push_str("</w:p>");
     // Fields follow as framed paragraphs over their boxes, in front of the shapes behind the
     // text.
-    let mut long_list = false;
-    for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
+    let mut long_list =
+        page.fields.iter().take(MAX_DOCX_PAGE_SHAPES).any(|f| !f.valid_rect() || matches!(f.kind, FieldKind::Radio { .. }) && !f.read_only);
+    for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES).filter(|f| f.valid_rect()) {
         if let Some(xml) = field_xml(f, page.height, &bindings.field(f)) {
             s.push_str(&xml);
             long_list |= matches!(&f.kind, FieldKind::Choice { options, .. } if options.len() > MAX_DOCX_LIST_ITEMS);

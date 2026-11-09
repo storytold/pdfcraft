@@ -163,7 +163,7 @@ fn text_keeps_leading_spaces_and_tabs() {
 fn text_helvetica_cannot_draw_is_refused_or_escaped() {
     let err = from_text("notes", "Café —\tok\r\n\u{c}第二页 notes", LETTER, 11.0).unwrap_err();
     let CreateError::Invalid(msg) = &err else { panic!("{err:?}") };
-    assert!(msg.contains("(line 2)") && msg.contains("\"第\" (U+7B2C)") && msg.contains("Western European"), "{msg}");
+    assert!(msg.contains("(line 2)") && msg.contains("\"第\" (U+7B2C)") && msg.contains("Cyrillic letters"), "{msg}");
     // Western European text, tabs, CRLF and form feeds included, still converts.
     from_text("notes", "Café —\tok\r\n\u{c}Seite zwei: Grüße", LETTER, 11.0).unwrap();
     let (doc, escaped) = from_text_escaped("Summary of Comments on 报告.pdf", "Comment: 签名 ok\nPage 2", LETTER, 11.0).unwrap();
@@ -181,6 +181,99 @@ fn text_helvetica_cannot_draw_is_refused_or_escaped() {
     let p = pages(&doc);
     let Object::Stream(s) = &*doc.resolve(p[0].get(b"Contents").unwrap()) else { panic!() };
     assert!(!String::from_utf8_lossy(&s.decoded().unwrap()).contains("U+XXXX"));
+}
+
+/// The decoded content of each page.
+fn page_contents(doc: &Document) -> Vec<String> {
+    pages(doc)
+        .iter()
+        .map(|p| {
+            let Object::Stream(s) = &*doc.resolve(p.get(b"Contents").unwrap()) else { panic!("no content stream") };
+            String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+        })
+        .collect()
+}
+
+/// The text each page shows, read back through its font's `ToUnicode`, one line per `Tj`.
+fn page_text(doc: &Document, page: &Dict) -> Vec<String> {
+    let res = doc.resolve(page.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let font = doc.resolve(fonts.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font);
+    let Object::Stream(s) = &*doc.resolve(page.get(b"Contents").unwrap()) else { panic!("no content stream") };
+    let content = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    content
+        .split("> Tj")
+        .filter_map(|part| part.rsplit_once('<').map(|(_, hex)| hex))
+        .map(|hex| {
+            let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+            metrics.decode(&bytes)
+        })
+        .collect()
+}
+
+const PANGRAM: &str = "Жълтата дюля беше щастлива, че пухът, който цъфна, замръзна като гьон.";
+
+/// Cyrillic text was refused (Helvetica can't draw it). Text with letters Helvetica lacks is set
+/// in the bundled Inter face when that draws all of it, its Latin lines too, with Helvetica's
+/// page, margins, line height, wrapping, tabs and form feeds; it reads back as typed.
+#[test]
+fn text_with_cyrillic_is_set_in_the_bundled_face() {
+    let long: String = (0..120).map(|i| format!("Ред {i}: {PANGRAM}\n")).collect();
+    let text = format!("{long}\tТаб, „кавички“, № 5 и Ελληνικά\u{c}Нова страница");
+    let doc = reopen(&from_text("бележки", &text, LETTER, 11.0).unwrap());
+    let fonts: Vec<_> = doc.scan_objects().filter_map(|(_, o)| o.as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec))).collect();
+    assert!(fonts.iter().any(|f| f == b"Inter") && !fonts.iter().any(|f| f == b"Helvetica"), "{fonts:?}");
+    let programs = doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
+    assert_eq!(programs, 1, "one copy of the face for every page");
+    let p = pages(&doc);
+    let contents = page_contents(&doc);
+    assert!(p.len() >= 4, "{} pages", p.len());
+    assert_eq!(media(&p[0]), [0.0, 0.0, 612.0, 792.0]);
+    // The same page set-up as Helvetica's: 11 pt, 1.25 line height, 1-inch margins.
+    assert!(contents[0].starts_with("BT /F1 11 Tf 13.750 TL 72 709.000 Td\n<"), "{}", contents[0]);
+    assert!(contents.iter().all(|c| !c.contains('?') && !c.contains("[U+")));
+    // Each line fits between the margins in Inter's widths, and long lines wrap.
+    let lines: Vec<String> = p.iter().flat_map(|page| page_text(&doc, page)).collect();
+    assert!(lines.len() > 120, "{} lines", lines.len());
+    assert!(lines.iter().all(|l| pdfcraft_fonts::inter_width(l, 11.0) <= 612.0 - 144.0 + 1e-6), "{lines:?}");
+    let joined = lines.join(" ");
+    assert!(joined.contains("Ред 0: Жълтата дюля") && joined.contains("Ред 119:"), "{joined}");
+    assert!(joined.contains("    Таб, „кавички“, № 5 и Ελληνικά"), "a tab is four spaces: {joined}");
+    assert_eq!(page_text(&doc, p.last().unwrap()), ["Нова страница"], "a form feed starts a page");
+    // As many lines on a page as in Helvetica.
+    let latin: String = (0..120).map(|i| format!("Row {i}\n")).collect();
+    let cyrillic: String = (0..120).map(|i| format!("Ред {i}\n")).collect();
+    let per_page =
+        |text: &str| page_contents(&from_text("t", text, LETTER, 11.0).unwrap()).iter().map(|c| c.matches("Tj T*").count()).collect::<Vec<_>>();
+    assert_eq!(per_page(&cyrillic), per_page(&latin));
+}
+
+/// Text the bundled face can't draw all of keeps the Helvetica way: refused, naming the first
+/// character neither face draws, or, for text PdfCraft generates, escaped as before. Text it draws
+/// all of is set in it with nothing escaped, and Western European text stays in Helvetica.
+#[test]
+fn text_the_bundled_face_cannot_draw_is_refused_or_escaped_as_before() {
+    let err = from_text("t", "Бележка\nПодпис: 签名", LETTER, 11.0).unwrap_err();
+    let CreateError::Invalid(msg) = &err else { panic!("{err:?}") };
+    assert!(msg.contains("(line 2)") && msg.contains("\"签\" (U+7B7E)"), "{msg}");
+    let (doc, escaped) = from_text_escaped("r", "Бележка: 签名", LETTER, 11.0).unwrap();
+    assert_eq!(escaped, 9, "every character Helvetica can't draw, as before");
+    let shown = page_contents(&reopen(&doc)).join("\n");
+    assert!(shown.contains(&format!("({ESCAPED_NOTE}) Tj")) && shown.contains("([U+0411][U+0435]"), "{shown}");
+    let (doc, escaped) = from_text_escaped("Обобщение на коментарите", &format!("Коментар: {PANGRAM}\nPage 2"), LETTER, 11.0).unwrap();
+    assert_eq!(escaped, 0);
+    let doc = reopen(&doc);
+    let shown = page_contents(&doc).join("\n");
+    assert!(!shown.contains("[U+") && !shown.contains(ESCAPED_NOTE), "{shown}");
+    assert_eq!(page_text(&doc, &pages(&doc)[0]), [format!("Коментар: {PANGRAM}"), "Page 2".to_string()]);
+    // A soft hyphen, which Inter lacks, is drawn as the hyphen Helvetica draws for it.
+    let doc = reopen(&from_text("t", "при\u{ad}мер", LETTER, 11.0).unwrap());
+    assert_eq!(page_text(&doc, &pages(&doc)[0]), ["при-мер"]);
+    // Western European text is still set in Helvetica, exactly as before.
+    let doc = from_text("t", "Café 5€ ™", LETTER, 11.0).unwrap();
+    let fonts: Vec<_> = doc.scan_objects().filter_map(|(_, o)| o.as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec))).collect();
+    assert_eq!(fonts, [b"Helvetica".to_vec()]);
 }
 
 fn image_of(doc: &Document, page: usize) -> Dict {
@@ -314,6 +407,13 @@ fn a_tiny_png_claiming_huge_dimensions_is_refused_before_allocating() {
         let r = from_images(&[("huge.png".into(), png)]);
         assert!(matches!(&r, Err(CreateError::Image(_, m)) if m.contains("too large")), "{w}x{h}");
     }
+}
+
+#[test]
+fn a_small_png_claiming_a_large_frame_is_refused_before_zero_filling() {
+    // 100 MP RGBA = 400 MB is under the 2 GiB ceiling, but 68 bytes cannot hold it.
+    let r = from_images(&[("big.png".into(), png_claiming(10_000, 10_000))]);
+    assert!(matches!(&r, Err(CreateError::Image(_, m)) if m.contains("too large")));
 }
 
 /// Likewise a PNG: the png crate's limits don't cover the frame buffer, which its header sizes
@@ -939,6 +1039,43 @@ fn damaged_masks_and_sizes_never_panic() {
         let _ = extract_images(&doc, &[0], 0);
         let _ = image_file(&doc, r);
     }
+}
+
+#[test]
+fn a_jpeg_with_thousands_of_extended_xmp_chunks_keeps_its_mask() {
+    // Export decodes a JPEG with a soft mask, or a JPEG soft mask, to make a PNG with alpha. A JPEG
+    // whose Extended XMP chunks would take the decoder quadratic time is decoded without them,
+    // which is linear in what is left, so the mask survives; a JPEG mask past the same bound is
+    // still left out, without reaching the decoder.
+    let flood = crate::upright_image::tests::with_extended_xmp_chunks(&real_jpeg(), 5_000);
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mask = doc.add(Object::Stream(Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![0; 8])));
+        let mut d = image_dict(4, 2, "DeviceGray", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::from_raw(d, flood.clone())
+    });
+    crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(out.images[0].extension, "png");
+    assert_eq!(crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), 1);
+    // The chunks themselves are gone, so the decoder never saw them.
+    assert!(!out.images[0].data.windows(5).any(|w| w == b"http:"));
+
+    crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut md = image_dict(4, 2, "DeviceGray", 8);
+        md.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        let mask = doc.add(Object::Stream(Stream::from_raw(md, flood.clone())));
+        let mut d = image_dict(4, 2, "DeviceRGB", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::from_raw(d, vec![10; 24])
+    });
+    assert_eq!(alphas(&exported_rgba(&doc).1), [255; 8]);
+    assert_eq!(crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), 0);
 }
 
 #[test]
@@ -2787,4 +2924,31 @@ fn proportions_up_to_the_limit_scale_as_they_did() {
     // A mask of its image's size comes through as it is.
     let mask = noise(20, 10);
     assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}
+
+/// A CMYK JPEG past the decoder's Extended XMP bound is still decoded (its chunks left out) and
+/// exported with the colours the page shows, not written as stored, which inverts them.
+#[test]
+fn a_cmyk_jpeg_flooded_with_extended_xmp_is_exported_in_its_colours() {
+    let jpeg = crate::upright_image::tests::with_extended_xmp_chunks(&flat_four_component_jpeg([255, 0, 0, 0], 0), 5_000);
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut d = image_dict(8, 8, "DeviceCMYK", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        let m = doc.add(Object::Stream(Stream::from_raw(image_dict(8, 8, "DeviceGray", 8), vec![255; 64])));
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, jpeg.clone())
+    });
+    let (_, rgba) = exported_rgba(&doc);
+    assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[0] <= 6 && p[1] >= 249 && p[2] >= 249), "{:?}", &rgba[..4]);
+}
+
+/// Stripping leaves everything but the Extended XMP chunks, byte for byte.
+#[test]
+fn stripping_extended_xmp_leaves_the_rest_of_the_jpeg() {
+    let plain = flat_four_component_jpeg([255, 0, 0, 0], 0);
+    let flooded = crate::upright_image::tests::with_extended_xmp_chunks(&plain, 3);
+    assert_ne!(flooded, plain);
+    // The helper puts a stray byte before the chunks, which the decoder skips: it stays.
+    assert_eq!(crate::upright_image::without_extended_xmp(&flooded), [&plain[..2], b"\0".as_slice(), &plain[2..]].concat());
 }

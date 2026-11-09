@@ -77,6 +77,11 @@ pub fn html(pages: &[Page], title: &str) -> String {
 }
 
 /// A simple HTML export with no CSS; page layout and colours are omitted.
+///
+/// Image bytes must already have the displayed orientation: this low-level writer does not
+/// decode images or apply [`super::Image::upright_flips`]. Callers preparing [`Page`] values
+/// must bake mirrors and half turns into the pixels and clear their orientation flags.
+/// The engine's `OfficeFormat::HtmlSimple` export performs this bounded preprocessing.
 pub fn html_simple(pages: &[Page], title: &str) -> String {
     html_simple_with_language(pages, title, None)
 }
@@ -89,7 +94,8 @@ pub fn html_with_language(pages: &[Page], title: &str, language: Option<&str>) -
 }
 
 /// [`html_simple`] for a document in `language`, named as [`html_with_language`] names it: a
-/// language is not styling, so the simple export keeps it.
+/// language is not styling, so the simple export keeps it. Images have the same normalized-pixel
+/// precondition as [`html_simple`].
 pub fn html_simple_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
     html_with_mode(pages, title, true, language)
 }

@@ -30,7 +30,7 @@ fn widget_shapes_are_read_once_per_stream_within_the_exports_budget() {
             x + 10
         )
     };
-    let data = "0 G 5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c S";
+    let data = "0 G 5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c 2.2 10 0 7.8 0 5 c 0 2.2 2.2 0 5 0 c h S";
     let doc = document(&[
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -289,6 +289,7 @@ fn office_regression_square_boundaries_survive_curved_check_marks() {
 fn office_regression_choice_preparation_preserves_first_match_and_bounds_values() {
     let doc = office_regression_single_field("/FT /Ch /V [(same) (raw)] /Opt [[(same) (First)] [(same) (Second)]]", "10 10 100 30", "");
     let mut fields = pdfcraft_forms::fields(&doc);
+    fields[0].value = vec!["same".into(), "raw".into()];
     let prepared = field_preparation(&fields[0]);
     assert_eq!(prepared.shown, ["First", "raw"]);
     assert!(prepared.bytes.is_some());
@@ -353,4 +354,116 @@ fn office_regression_simple_html_bakes_flips_into_shared_pixels() {
         assert_eq!(pages[0].images[index].upright_flips(), (false, false));
     }
     assert!(!pdfcraft_export::html_simple(&pages, "flipped").contains("style="));
+}
+
+#[test]
+fn review_multiline_auto_size_uses_the_full_height() {
+    let doc = office_regression_single_field("/FT /Tx /Ff 4096 /V (one\\ntwo\\nthree) /DA (/Helv 0 Tf)", "10 10 190 70", "");
+    let mut session = Session::new();
+    let id = session.open("multiline.pdf", None, doc.bytes().clone(), None).unwrap();
+    let pages = session.get(id).unwrap().export_pages();
+    assert_eq!(pages[0].fields[0].size, 12.0);
+}
+
+#[test]
+fn review_appearance_bounds_use_the_graphics_state() {
+    let data = "q 10 0 0 10 0 0 cm 0 0 1 1 re S Q 5 2 m 6.65 2 8 3.35 8 5 c 8 6.65 6.65 8 5 8 c 3.35 8 2 6.65 2 5 c 2 3.35 3.35 2 5 2 c h S";
+    assert!(!appearance_round(&pdfcraft_content::parse(data.as_bytes()).ops));
+}
+
+#[test]
+fn review_rounded_rectangles_are_not_ellipses() {
+    let data = "2 0 m 8 0 l 9 0 10 1 10 2 c 10 8 l 10 9 9 10 8 10 c 2 10 l 1 10 0 9 0 8 c 0 2 l 0 1 1 0 2 0 c h S";
+    assert!(!appearance_round(&pdfcraft_content::parse(data.as_bytes()).ops));
+}
+
+#[test]
+fn review_choice_preparation_shares_a_document_budget() {
+    let doc = office_regression_single_field("/FT /Ch /V (v) /Opt [[(v) (Shown)]]", "10 10 100 30", "");
+    let mut fields = pdfcraft_forms::fields(&doc);
+    fields[0].value = vec![String::new(); 1000];
+    let mut budget = 25_000;
+    let first = field_preparation_within(&fields[0], &mut budget);
+    assert!(first.bytes.is_some());
+    assert_eq!(first.shown.len(), 1000);
+    let second = field_preparation_within(&fields[0], &mut budget);
+    assert!(second.bytes.is_none());
+    assert!(second.shown.is_empty());
+}
+
+#[test]
+fn review_appearance_only_rectangles_and_empty_radios_keep_their_boundaries() {
+    for (kind, data, border) in [("/FT /Tx", "0 0 10 10 re S", true), ("/FT /Btn /Ff 32768 /BS << /W 0 >>", "", false)] {
+        let doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+            "null".into(),
+            format!("<< /Type /Annot /Subtype /Widget {kind} /T (Field) /Rect [10 10 20 20] /P 3 0 R /AS /Off /AP << /N << /Off 6 0 R >> >> >>"),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{data}\nendstream", data.len()),
+        ]);
+        let mut session = Session::new();
+        let id = session.open("appearance.pdf", None, doc.bytes().clone(), None).unwrap();
+        let pages = session.get(id).unwrap().export_pages();
+        assert_eq!(pages[0].fields[0].border.is_some(), border);
+        assert_eq!(pages[0].fields[0].round, !border);
+    }
+}
+
+#[test]
+fn review_nested_paths_and_images_share_the_source_paint_order() {
+    for image_first in [true, false] {
+        let data = if image_first { "/Im Do 0 0 1 1 re S" } else { "0 0 1 1 re S /Im Do" };
+        let doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R >> >> >>".into(),
+            "<< /Length 6 >>\nstream\n/Fm Do\nendstream".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 6 0 R >> >> /Length {} >>\nstream\n{data}\nendstream", data.len()),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /ASCIIHexDecode /Length 3 >>\nstream\nFF>\nendstream".into(),
+        ]);
+        let mut session = Session::new();
+        let id = session.open("paint.pdf", None, doc.bytes().clone(), None).unwrap();
+        let pages = session.get(id).unwrap().export_pages();
+        use pdfcraft_export::Paint::{Image, Shape};
+        assert_eq!(pages[0].paint_order, if image_first { vec![Image(0), Shape(0)] } else { vec![Shape(0), Image(0)] });
+    }
+}
+
+#[test]
+fn review_simple_html_uses_one_budget_for_all_final_images() {
+    let source = image::RgbaImage::from_pixel(2, 2, image::Rgba([50, 10, 20, 255]));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    source.write_to(&mut encoded, image::ImageFormat::Png).unwrap();
+    let bytes: Arc<[u8]> = Arc::from(encoded.into_inner());
+    for first_flip in [true, false] {
+        let im =
+            |flip| pdfcraft_export::Image { ext: "png", bytes: bytes.clone(), rect: [0.0, 0.0, 20.0, 20.0], size: [20.0; 2], flip, rotation: 0.0 };
+        let mut pages = vec![pdfcraft_export::Page { images: vec![im(first_flip), im(!first_flip)], ..Default::default() }];
+        let mut dropped = Vec::new();
+        upright_html_images_within(&mut pages, &mut dropped, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20), bytes.len());
+        assert_eq!(pages[0].images.len(), 1);
+        assert_eq!(dropped, [0]);
+    }
+}
+
+#[test]
+fn review_simple_html_bounds_expanded_rgba_before_decoding() {
+    // A grayscale PNG fits the sample limit but would expand to 100 MiB of RGBA.
+    // Only its header is needed: the converter must reject before paying for decode work.
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, 5120, 5120);
+        encoder.set_color(png::ColorType::Grayscale);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&vec![0; 5120 * 5120]).unwrap();
+    }
+    let im = pdfcraft_export::Image { ext: "png", bytes: Arc::from(bytes), rect: [0.0, 0.0, 20.0, 20.0], size: [20.0; 2], flip: true, rotation: 0.0 };
+    let mut pages = vec![pdfcraft_export::Page { images: vec![im], ..Default::default() }];
+    let mut dropped = Vec::new();
+    let mut work = pdfcraft_cos::ImageBudget::with_work(1);
+    upright_html_images(&mut pages, &mut dropped, &mut work);
+    assert_eq!(work.refused(), 0, "oversized RGBA is rejected before charging decode work");
+    assert!(pages[0].images.is_empty());
+    assert_eq!(dropped, [0]);
 }

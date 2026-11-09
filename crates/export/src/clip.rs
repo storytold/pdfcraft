@@ -279,6 +279,22 @@ fn num(v: f64) -> String {
     if r.fract() == 0.0 { format!("{r:.0}") } else { format!("{r:.1}") }
 }
 
+/// Weight and slant from a PDF font's style suffix, not a word inside its family name.
+pub fn font_weight_and_slant(base: &str) -> (bool, bool) {
+    let name = base.to_ascii_lowercase();
+    let style = name.rsplit(['-', ',']).next().unwrap_or(&name);
+    let explicit = style != name;
+    let style = style.trim_end_matches("mt").trim_end_matches("ps");
+    let italic = style.ends_with("italic") || style.ends_with("oblique");
+    let weight = style.trim_end_matches("italic").trim_end_matches("oblique");
+    let bold = if explicit {
+        weight.contains("bold") || weight == "black" || weight == "heavy"
+    } else {
+        weight.ends_with("bold") || weight.ends_with("black") || weight.ends_with("heavy")
+    };
+    (bold, italic)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

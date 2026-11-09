@@ -46,6 +46,8 @@ pub struct Subpath {
 /// A painted path.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageShape {
+    /// Operator indexes from the page through nested Form calls; sorts with image paint order.
+    pub paint_order: Vec<usize>,
     pub subpaths: Vec<Subpath>,
     pub stroke: Option<Stroke>,
     pub fill: Option<Rgb>,
@@ -252,6 +254,7 @@ impl Path {
 struct Walk<'a> {
     doc: &'a Document,
     out: ReadingShapes,
+    order: Vec<usize>,
     points: usize,
     forms: Vec<ObjRef>,
     budget: crate::text::FormBudget,
@@ -289,7 +292,11 @@ impl Walk<'_> {
         let mut lost_saves = 0usize;
         let mut path = Path::default();
         let mut clip_pending = false;
-        for op in ops {
+        self.order.push(0);
+        for (index, op) in ops.iter().enumerate() {
+            if let Some(current) = self.order.last_mut() {
+                *current = index;
+            }
             // Ignore the entire over-deep scope. In particular its cm, path and clip changes
             // must not survive the matching Q, whose graphics state we could not save.
             if lost_saves > 0 {
@@ -301,7 +308,7 @@ impl Walk<'_> {
                 continue;
             }
             if self.out.truncated && (self.out.shapes.len() >= MAX_PAGE_SHAPES || self.points >= MAX_PAGE_POINTS) {
-                return;
+                break;
             }
             match op.op.as_slice() {
                 b"q" => {
@@ -315,9 +322,7 @@ impl Walk<'_> {
                     }
                 }
                 b"Q" => {
-                    if lost_saves > 0 {
-                        lost_saves -= 1;
-                    } else if let Some(s) = saved.pop() {
+                    if let Some(s) = saved.pop() {
                         *st = s;
                     }
                 }
@@ -468,6 +473,7 @@ impl Walk<'_> {
                 self.out.truncated = true;
             }
         }
+        self.order.pop();
         if self.budget.truncated {
             self.out.truncated = true;
         }
@@ -497,7 +503,14 @@ impl Walk<'_> {
             return;
         }
         self.points = self.points.saturating_add(n);
-        self.out.shapes.push(PageShape { subpaths, stroke, fill, even_odd: matches!(paint, b"f*" | b"B*" | b"b*"), bounds });
+        self.out.shapes.push(PageShape {
+            paint_order: self.order.clone(),
+            subpaths,
+            stroke,
+            fill,
+            even_odd: matches!(paint, b"f*" | b"B*" | b"b*"),
+            bounds,
+        });
     }
 }
 
@@ -515,12 +528,30 @@ pub fn reading_shapes(doc: &Document, page: usize) -> Result<ReadingShapes, Edit
         doc,
         out: ReadingShapes { truncated, ..Default::default() },
         points: 0,
+        order: Vec::new(),
         forms: Vec::new(),
         budget: crate::text::FormBudget::new(decode),
     };
     let mut st = State::new(Matrix::IDENTITY, p.crop(doc));
     walk.ops(&pieces.parse().ops, &resources, &mut st);
     Ok(walk.out)
+}
+
+/// Read bounded vector geometry from already decoded operators, for widget appearances.
+/// The caller bounds the decoded input. Nested forms are not decoded by this probe: encountering
+/// one marks the result truncated, so callers can avoid classifying an incomplete appearance.
+pub fn reading_shape_ops(doc: &Document, ops: &[Op], resources: &Dict) -> ReadingShapes {
+    let mut walk = Walk {
+        doc,
+        out: ReadingShapes::default(),
+        points: 0,
+        order: Vec::new(),
+        forms: Vec::new(),
+        budget: crate::text::FormBudget::new(pdfcraft_cos::DecodeBudget::new(0, 0)),
+    };
+    let mut state = State::new(Matrix::IDENTITY, [-MAX_COORD, -MAX_COORD, MAX_COORD, MAX_COORD]);
+    walk.ops(ops, resources, &mut state);
+    walk.out
 }
 
 #[cfg(test)]

@@ -12,3 +12,5 @@ workspace = true
 
 [dependencies]
 flate2.workspace = true
+pdfcraft-fonts.workspace = true
+pdfcraft-forms.workspace = true

@@ -202,7 +202,10 @@ update the numbers.
   filled in without protecting the document (checked
   in LibreOffice, WordCraft and Word on a 7-page claim form); Word doesn't limit a control's
   length, so a text field's `/MaxLen` is only named in its title.
-  Holes in filled paths, clipping, shadings, transparency, radio groups, exact font matching
+  Radio groups keep their displayed selection as locked controls, with lost editability
+  reported through `truncated_pages`; repeated text, checkbox and choice controls share values.
+  Pictures and paths retain their shared painting order, including paths over scanned pictures.
+  Holes in filled paths, clipping, shadings, transparency, editable radio groups, exact font matching
   and broader layout fidelity remain incomplete;
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
@@ -357,7 +360,8 @@ update the numbers.
 ### 16. UI precision gaps
 
 - **Missing:** moving several selected objects across pages (same-page moves shipped, #844), single-key tool accelerators,
-  rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
+  rulers, grids and guides, loupe and dynamic zoom, multiple windows and spreadsheet split (split
+  view shipped), comment
   pop-ups that can be moved, connector lines, customisable quick tools; shortcut display and tool-mode bugs (#746, #721), macOS window controls
   (#789).
 - **Estimate:** 30–60 h. **Doc:** [ui-parity.md](ui-parity.md).
@@ -372,9 +376,11 @@ update the numbers.
 ### 18. Print production tools absent
 
 - **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
-  colour conversion, printer marks, fix hairlines, flattener preview, colour management settings;
-  print as image; PostScript output.
-- **Evidence:** 18 print-production features planned (L area).
+  colour conversion, fix hairlines, flattener preview, colour management settings;
+  print as image; PostScript output. Printer marks are in (Print production ▸ Add printer marks…).
+  colour conversion, printer marks, flattener preview, colour management settings;
+  print as image; PostScript output. Fix hairlines is in (Print production ▸ Fix hairlines…).
+- **Evidence:** 17 print-production features planned (L area).
 - **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 19. Preferences mostly missing

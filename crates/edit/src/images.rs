@@ -29,6 +29,8 @@ impl PartialEq for MaskIdentity {
 /// An image drawn on a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageImage {
+    /// Operator indexes from the page through Form calls, for ordering against vector paths.
+    pub paint_order: Vec<usize>,
     /// Its box in user space.
     pub rect: [f64; 4],
     /// Visible frame after page and analytic path bounds. Hit testing also respects curve
@@ -49,7 +51,7 @@ pub struct PageImage {
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
     /// operators of the page's streams joined ([`pdfcraft_content::Pieces`]).
     pub stream: usize,
-    op: usize,
+    pub(crate) op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
     draw_matrix: [f64; 6],
     clips: Vec<ClipPath>,
@@ -234,11 +236,9 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
+            // ClosePath with no subpath panics by the same contract (#3581).
+            b"h" if self.has_current_point() => {
+                self.path.close_path();
             }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()
@@ -335,6 +335,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 return Err(too_many_images());
             }
             out.push(PageImage {
+                paint_order: vec![i],
                 rect,
                 visible_rect: intersection(rect, state.placement.clip),
                 clip_rect: Some(state.placement.clip),
@@ -363,6 +364,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     /// The forms being read (cycle guard) and how many were entered (the page's budget).
     struct Forms {
         path: Vec<ObjRef>,
+        order: Vec<usize>,
         budget: crate::text::FormBudget,
     }
     fn walk(
@@ -395,7 +397,9 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
                     let piece = stream(op);
+                    forms.order.push(i);
                     walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_| piece, forms, out)?;
+                    forms.order.pop();
                     if form.obj.is_some() {
                         forms.path.pop();
                     }
@@ -410,7 +414,10 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                 if out.len() >= MAX_PAGE_IMAGES {
                     return Err(too_many_images());
                 }
+                let mut paint_order = forms.order.clone();
+                paint_order.push(i);
                 out.push(PageImage {
+                    paint_order,
                     rect: ctm.bbox([0.0, 0.0, 1.0, 1.0]),
                     visible_rect: intersection(ctm.bbox([0.0, 0.0, 1.0, 1.0]), st.placement.clip),
                     clip_rect: Some(st.placement.clip),
@@ -435,7 +442,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     let mut st = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut decode = pdfcraft_cos::DecodeBudget::page();
     let pieces = joined(&crate::text::content_streams_within(doc, &p.dict, &mut decode)?);
-    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
+    let mut forms = Forms { path: Vec::new(), order: Vec::new(), budget: crate::text::FormBudget::new(decode) };
     walk(doc, &pieces.parse().ops, &res, &mut st, &|op| pieces.piece_of(op.span.start), &mut forms, &mut out)?;
     Ok(out)
 }
@@ -1668,10 +1675,11 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
                 return Err(EditError::Invalid("only grouped Form artwork can be ungrouped".into()));
             }
             let res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-            let translucent = crate::ungroup::translucent_at(doc, &res, &ops, img.op);
             let space = crate::ungroup::page_blend_space(doc, &p.dict);
-            let (inline, mut merged, patterns) =
-                crate::ungroup::ungroup_ops(doc, &res, img.name.as_bytes(), translucent, space.as_ref(), Matrix(img.matrix))?;
+            // One allowance for the form and everything it draws.
+            let mut budget = pdfcraft_cos::DecodeBudget::new(crate::ungroup::MAX_FORM_BYTES, 0);
+            let crate::ungroup::Ungrouped { ops: inline, resources: mut merged, patterns, .. } =
+                crate::ungroup::ungroup_ops(doc, &res, &ops, img.op, space.as_ref(), Matrix(img.matrix), &mut budget).map_err(|r| r.error)?;
             if !patterns.is_empty() {
                 let mut table = merged.get(b"Pattern").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
                 for (name, copy) in patterns {
@@ -1881,6 +1889,24 @@ fn crop_image_impl(
     let contents = crate::text::rewritten_contents(doc, streams, changed)?;
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+/// The `Do` of each image `indexes` (from [`page_images`]) on `page`, as an index among the
+/// page's joined operators: what Copy takes of them.
+pub(crate) fn image_ops(doc: &Document, page: usize, indexes: &[usize]) -> Result<Vec<usize>, EditError> {
+    if indexes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let images = page_images(doc, page)?;
+    indexes
+        .iter()
+        .map(|i| {
+            images
+                .get(*i)
+                .map(|image| image.op)
+                .ok_or_else(|| EditError::Invalid("a selected image no longer exists; select the objects again".into()))
+        })
+        .collect()
 }
 
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.

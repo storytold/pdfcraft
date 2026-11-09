@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, unused, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
 impl Automation {
     pub(crate) fn doc_export_office(&self, a: &Args) -> Result<Value> {
@@ -22,7 +22,7 @@ impl Automation {
         if !export.truncated_pages.is_empty() {
             use pdfcraft_engine::compare::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
             out["warnings"] = json!([format!(
-                "content past what one page may decode, pictures past what one export may hold or decode, forms nested more than {MAX_FORM_DEPTH} deep or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), or (Word, where it keeps a page's layout) lines and boxes, fields or list items past what a Word page holds, were left out on the pages in truncated_pages: what was left out (for that content, its text; for those forms, their text and images) is missing from the export, although the viewer may still show it"
+                "content past what one page may decode, pictures past what one export may hold or decode, forms nested more than {MAX_FORM_DEPTH} deep or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), or (Word, where it keeps a page's layout) lines and boxes, fields or list items past what a Word page holds, or unsupported editable form features were omitted on the pages in truncated_pages (radio groups retain their displayed state as locked controls): what was left out (for that content, its text; for those forms, their text and images) is missing from the export, although the viewer may still show it"
             )]);
         }
         Ok(out)
@@ -103,8 +103,8 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
-        self.pdfa_verify(a)
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
+        Ok(with_warnings(self.pdfa_verify(a)?, warnings))
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
@@ -148,18 +148,7 @@ impl Automation {
                 .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
             out.push(match result {
                 Ok(r) => {
-                    let target = child(&folder, &name);
-                    let target = if target.exists() {
-                        let stem =
-                            std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                        unused(&folder, &stem)
-                    } else {
-                        target
-                    };
-                    if target.exists() {
-                        return Err(failed(format!("{}: no unused output name available", target.display())));
-                    }
-                    write_atomic(&target, &r.bytes)?;
+                    let target = crate::batch::publish(&child(&folder, &name), &r.bytes)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }
                 Err(e) => json!({ "path": p, "error": e }),
@@ -220,7 +209,7 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let n = self.session.mark_differences(old, new).map_err(failed)?;
-        Ok(json!({ "comments": n }))
+        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
+        Ok(with_warnings(json!({ "comments": n }), out.errors))
     }
 }

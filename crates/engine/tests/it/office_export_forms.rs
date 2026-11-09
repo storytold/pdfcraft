@@ -169,7 +169,10 @@ fn a_fields_border_and_fill_come_from_its_widget() {
         widget("Dashed", 50, "/MK << /BC [1 0 0] >> /BS << /W 2 /S /D >>"),
         widget("Plain", 70, ""),
         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 G 0.5 0.5 9 9 re S"),
-        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 G 5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c S"),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 10 10]",
+            "0 G 5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c 2.2 10 0 7.8 0 5 c 0 2.2 2.2 0 5 0 c h S",
+        ),
         // A square box whose on state, listed first, draws a round mark: it shows its off state.
         widget("CurveFirst", 90, "/MK << /BC [0] >> /AS /Off /AP << /N << /Yes 13 0 R /Off 9 0 R >> >>"),
         // A radio button showing an empty off state: the reader's round, not a square box.
