@@ -685,7 +685,8 @@ pub fn has_info(doc: &Document, key: &str) -> bool {
 ///
 /// Documents with XMP metadata also carry Title, Author, Subject, Keywords, Creator and Producer
 /// in the XMP packet, and viewers that read XMP first show its value: the packet's property is
-/// changed (or removed) to match (see `xmp`).
+/// changed (or removed) to match, and a custom property is kept there as `pdfx:<key>` as Acrobat
+/// keeps it (see `xmp`).
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     if !STANDARD_INFO_KEYS.contains(&key) {
         check_custom_key(key)?;
@@ -745,12 +746,16 @@ impl Standard {
 
 /// Remove what identifies the document as meeting `standard`: the `pdfaid:` XMP properties of
 /// ISO 19005, or ISO 15930's `GTS_PDFXVersion` and `GTS_PDFXConformance` in the document
-/// information and as `pdfxid:` XMP properties. Output intents and other metadata stay. Refused
-/// when the document declares nothing of the kind.
+/// information and as `pdfxid:` XMP properties, with the `pdfx:` copies that mirror those
+/// information entries as custom properties (see `xmp`). Output intents and other metadata stay.
+/// Refused when the document declares nothing of the kind.
 pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), OrganizeError> {
     let (props, info_keys): (&[&str], &[&str]) = match standard {
         Standard::PdfA => (&["pdfaid:part", "pdfaid:conformance", "pdfaid:amd", "pdfaid:rev"], &[]),
-        Standard::PdfX => (&["pdfxid:GTS_PDFXVersion", "pdfxid:GTS_PDFXConformance"], &["GTS_PDFXVersion", "GTS_PDFXConformance"]),
+        Standard::PdfX => (
+            &["pdfxid:GTS_PDFXVersion", "pdfxid:GTS_PDFXConformance", "pdfx:GTS_PDFXVersion", "pdfx:GTS_PDFXConformance"],
+            &["GTS_PDFXVersion", "GTS_PDFXConformance"],
+        ),
     };
     let mut removed = xmp::remove_properties(doc, props)?;
     for key in info_keys {

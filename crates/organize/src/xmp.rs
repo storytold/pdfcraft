@@ -6,7 +6,9 @@
 //! information key maps to the XMP property PDF/A pairs it with (ISO 19005-1 §6.7.3, the same
 //! mapping `pdfcraft-preflight` writes): Title → `dc:title`, Author → `dc:creator`, Subject →
 //! `dc:description`, Keywords → `pdf:Keywords`, Creator → `xmp:CreatorTool`, Producer →
-//! `pdf:Producer`.
+//! `pdf:Producer`. A custom property (Document Properties ▸ Custom) is kept as `pdfx:<name>`, plain
+//! text in the `http://ns.adobe.com/pdfx/1.3/` schema where Acrobat keeps them, so tools that read
+//! XMP see it too; one whose name can't be an XML element name stays in `/Info` only.
 //!
 //! The packet is edited as text, touching only the property that changed: everything else in it
 //! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
@@ -24,6 +26,8 @@ const MAX_XMP: usize = 16 << 20;
 const DC: &str = "http://purl.org/dc/elements/1.1/";
 const PDF: &str = "http://ns.adobe.com/pdf/1.3/";
 const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+/// Adobe's PDF extension schema: custom document properties, each under its own name.
+const PDFX: &str = "http://ns.adobe.com/pdfx/1.3/";
 
 /// How an XMP property holds its value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,11 +54,32 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 }
 
 /// After the information entry `key` became `value` (empty: removed), make the catalog's XMP
-/// packet say the same. Does nothing for keys XMP doesn't mirror, files without XMP, and packets
-/// that can't be edited safely.
+/// packet say the same: the standard keys' properties, and `pdfx:<key>` for a custom property.
+/// Does nothing for standard keys XMP doesn't mirror (the dates, Trapped), custom names that
+/// aren't XML names, files without XMP, and packets that can't be edited safely.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
-    let Some((name, ns, shape)) = property(key) else { return Ok(()) };
-    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
+    let (name, ns, shape) = match property(key) {
+        Some((name, ns, shape)) => (name.to_string(), ns, shape),
+        None if !crate::STANDARD_INFO_KEYS.contains(&key) && is_xml_name(key) => (format!("pdfx:{key}"), PDFX, Shape::Text),
+        None => return Ok(()),
+    };
+    edit_packet(doc, |xmp| set_property(xmp, &name, ns, shape, value)).map(|_| ())
+}
+
+/// Whether `name` can follow `pdfx:` in an element name: an XML name without a colon (XML 1.0
+/// §2.3 `NameStartChar` then `NameChar`s; Namespaces in XML `NCName`). Custom property names may
+/// hold characters XML names can't (`1st`, `Q&A`, `a:b`); those are not mirrored rather than
+/// written under an escaped name of our own.
+fn is_xml_name(name: &str) -> bool {
+    let start = |c: char| {
+        matches!(c,
+            'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}' | '\u{370}'..='\u{37D}'
+            | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}'
+            | '\u{3001}'..='\u{D7FF}' | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
+    };
+    let rest = |c: char| start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}');
+    let mut chars = name.chars();
+    chars.next().is_some_and(start) && chars.all(rest)
 }
 
 /// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
@@ -430,6 +455,16 @@ mod tests {
         let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
         assert!(out.contains("<dc:titles>keep</dc:titles>") && out.contains("say dc:title=\"no\""), "{out}");
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title></rdf:Description>"), "{out}");
+    }
+
+    #[test]
+    fn only_names_an_element_can_have_are_mirrored() {
+        for name in ["Project", "_draft", "Größe", "a.b-c_1", "日本語", "x·y", "Ω"] {
+            assert!(is_xml_name(name), "{name}");
+        }
+        for name in ["", "1st", "-x", ".x", "·x", "a:b", "Q&A", "it's", "a\"b", "×x", "a b", "a=b", "x\u{FFFE}"] {
+            assert!(!is_xml_name(name), "{name}");
+        }
     }
 
     #[test]
