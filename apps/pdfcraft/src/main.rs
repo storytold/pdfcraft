@@ -240,11 +240,9 @@ fn main() -> eframe::Result {
     // sessions keep server-side decorations, so only a Wayland session gets app-drawn controls
     // by default. An explicit app title-bar override is honored before that gate, so it also
     // applies on X11 and FreeBSD.
-    let titlebar_override = cfg!(all(unix, not(target_os = "macos")))
-        && std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) == Some("app");
-    let window_controls = if titlebar_override
-        || (cfg!(target_os = "linux") && std::env::var("WAYLAND_DISPLAY").is_ok_and(|v| !v.is_empty()))
-    {
+    let titlebar_override =
+        cfg!(all(unix, not(target_os = "macos"))) && std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) == Some("app");
+    let window_controls = if titlebar_override || (cfg!(target_os = "linux") && std::env::var("WAYLAND_DISPLAY").is_ok_and(|v| !v.is_empty())) {
         decorations::app_drawn()
     } else {
         None
