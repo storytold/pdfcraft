@@ -271,6 +271,44 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
     Merged::Changed(out)
 }
 
+/// Whether `node` is a multi-select choice list's data group: element children only, every one
+/// a `value` holding text alone; or, with no children, an element marked `xfa:dataNode=
+/// "dataGroup"`, as a group with no picks is written (XFA 3.3 p. 150).
+fn is_value_group(node: roxmltree::Node) -> bool {
+    let blank = node.children().filter(|c| c.is_text()).all(|c| c.text().is_some_and(|t| t.trim().is_empty()));
+    let mut elements = node.children().filter(|c| c.is_element()).peekable();
+    if elements.peek().is_none() {
+        return blank && marked_data_group(node);
+    }
+    blank && elements.all(|c| c.tag_name().name() == "value" && !c.children().any(|g| g.is_element()))
+}
+
+/// Whether `node` carries `xfa:dataNode="dataGroup"`.
+fn marked_data_group(node: roxmltree::Node) -> bool {
+    node.attribute((XFA_DATA_NS, "dataNode")) == Some("dataGroup")
+}
+
+/// The edit that marks the data group `node` as one, so that emptied of its picks it still loads
+/// as a group and not as a data value (XFA 3.3 p. 150): `xfa:dataNode="dataGroup"` added to its
+/// start tag, with the namespace declared there when the packet has no prefix for it.
+fn mark_data_group_edit(src: &str, node: roxmltree::Node) -> Option<Edit> {
+    let range = node.range();
+    let tag_end = start_tag_end(src, &range)?;
+    // Before `/>` of an empty tag, else before `>`.
+    let at = if src.get(..tag_end)?.ends_with('/') { tag_end.checked_sub(1)? } else { tag_end };
+    let text = match node.lookup_prefix(XFA_DATA_NS) {
+        Some(prefix) if !prefix.is_empty() => format!(" {prefix}:dataNode=\"dataGroup\""),
+        _ => {
+            // A prefix no namespace in scope is bound to, so declaring it rebinds nothing.
+            let prefix = (0..16)
+                .map(|i| if i == 0 { "pcxfa".to_string() } else { format!("pcxfa{i}") })
+                .find(|p| node.lookup_namespace_uri(Some(p)).is_none())?;
+            format!(" xmlns:{prefix}=\"{XFA_DATA_NS}\" {prefix}:dataNode=\"dataGroup\"")
+        }
+    };
+    Some(Edit { start: at, end: at, text })
+}
+
 /// The edits that put `wants` into the `data` element.
 fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
     // Element children by local name, per element visited (built once each).
@@ -311,19 +349,37 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                 continue;
             }
             let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
-            if w.picks && holds_picks(node) {
-                // A reset of a multi-select list's picks: one `value` per line, none for an
-                // empty value, unless the node already holds those.
-                let have: Vec<&str> = super::picks_of(node.children().filter(|c| c.is_element()).map(|c| c.text().unwrap_or(""))).collect();
-                let want: Vec<&str> = super::picks_of(w.text.lines()).collect();
-                if have == want {
+            // A multi-select choice list is bound to a data group of `value` elements, one per
+            // pick, and its value is theirs joined by newlines (XFA 3.3 p. 198); a new pick
+            // replaces them all, as in Acrobat (p. 199).
+            if is_value_group(node) {
+                // Every text segment of each `value`, as `current` reads a leaf (a comment may
+                // split or lead it).
+                let held: Vec<String> = node
+                    .children()
+                    .filter(|c| c.is_element())
+                    .map(|c| c.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect())
+                    .collect();
+                // Pick by pick: one `value` holding a line break is not two picks.
+                let wanted: Vec<&str> = w.text.split('\n').filter(|v| !v.is_empty()).collect();
+                if held.iter().map(String::as_str).eq(wanted.iter().copied()) {
                     continue;
                 }
-                // The first pick's own tag, prefix included.
-                let tag = node.children().find(|c| c.is_element()).and_then(|c| qname(src, &c.range())).unwrap_or("value");
-                let inner: String = want.iter().map(|p| format!("<{tag}>{}</{tag}>", escape(p).0)).collect();
+                let inner: String = wanted.iter().map(|v| format!("<value>{}</value>", escape(v).0)).collect();
+                // Emptied, the group keeps saying it is one (XFA 3.3 p. 150).
+                let needs_mark = wanted.is_empty() && !marked_data_group(node);
+                let mark = if needs_mark { mark_data_group_edit(src, node) } else { None };
+                if needs_mark && mark.is_none() {
+                    // No marker can be written (no free prefix): emptied, the group would load
+                    // as a data value, so it keeps its picks and the skip is reported.
+                    skipped(warnings, STRUCTURED, &w.som);
+                    continue;
+                }
                 match replace_edit(src, node, &inner) {
-                    Some(e) => edits.push(e),
+                    Some(e) => {
+                        edits.extend(mark);
+                        edits.push(e);
+                    }
                     None => skipped(warnings, STRUCTURED, &w.som),
                 }
                 if dropped {
@@ -386,13 +442,6 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
             None => warnings.push("Some XFA data nodes could not be added; their field values were not written".into()),
         }
     }
-}
-
-/// Whether `node` holds a multi-select list's picks: element children, all `value` elements
-/// (as [`DataNode::holds_picks`](super::DataNode::holds_picks) reads the parsed data).
-fn holds_picks(node: roxmltree::Node) -> bool {
-    let mut kids = node.children().filter(|c| c.is_element()).peekable();
-    kids.peek().is_some() && kids.all(|c| c.tag_name().name() == "value")
 }
 
 /// Merge `ops` into `text` in order. `None`: nothing changed (or nothing could be merged).

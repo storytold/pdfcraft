@@ -35,7 +35,7 @@ pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use passwords::{clear_password_values, has_password_values};
 pub use path::{data_path, parse_datasets, som_to_path};
-pub(crate) use path::{template_field, template_object};
+pub(crate) use path::{fields_with_ids, template_field, template_object};
 pub use values::{FieldData, FieldDatum, is_on, read_values, read_values_with};
 #[cfg(test)]
 pub(crate) use write::ENSURED;
@@ -55,6 +55,10 @@ pub struct DataNode {
     pub name: String,
     pub text: String,
     pub children: Vec<DataNode>,
+    /// Whether the element is a data group even with no children: marked
+    /// `xfa:dataNode="dataGroup"` (XFA 3.3 p. 150), or a multi-select list's group emptied of its
+    /// picks here, which the packet writer marks so.
+    pub group: bool,
 }
 
 /// A path into the data: `(name, index among same-named siblings)` per level.
@@ -68,6 +72,31 @@ impl DataNode {
             node = node.children.iter().filter(|c| &c.name == name).nth(*idx)?;
         }
         Some(node)
+    }
+
+    /// Every path to a node whose names, from here, are `names`: each instance of each step (a
+    /// repeating subform's rows), at most `cap` of them, in document order.
+    pub fn paths_named(&self, names: &[String], cap: usize) -> Vec<DataPath> {
+        fn walk(n: &DataNode, names: &[String], path: &mut DataPath, out: &mut Vec<DataPath>, cap: usize) {
+            let Some((first, rest)) = names.split_first() else {
+                if out.len() < cap {
+                    out.push(path.clone());
+                }
+                return;
+            };
+            for (i, c) in n.children.iter().filter(|c| &c.name == first).enumerate() {
+                if out.len() >= cap {
+                    return;
+                }
+                path.push((first.clone(), i));
+                walk(c, rest, path, out, cap);
+                path.pop();
+            }
+        }
+        let mut out = Vec::new();
+        // The depth is the length of `names`, a template's own path.
+        walk(self, names, &mut DataPath::new(), &mut out, cap);
+        out
     }
 
     /// How many children of the node at `parent` are named `name`.
@@ -114,11 +143,6 @@ pub enum DataOp {
     Instances { parent: DataPath, name: String, count: usize },
     /// Take the node at `path` out (a script removed a row).
     Remove(DataPath),
-    /// A reset to `text`: as [`DataOp::Value`], and also into a node holding a multi-select
-    /// list's picks (children, all `value` elements), which then holds one `value` per line of
-    /// `text`, none when it is empty. A node with other children is left as it is, as
-    /// [`DataOp::Value`] leaves it.
-    Reset { path: DataPath, text: String },
 }
 
 impl DataNode {
@@ -144,19 +168,21 @@ impl DataNode {
     pub fn apply(&mut self, op: &DataOp) {
         match op {
             DataOp::Value { path, text } => {
-                if let Some(n) = self.ensure(path)
-                    && n.children.is_empty()
-                {
-                    n.text = text.clone();
-                }
-            }
-            DataOp::Reset { path, text } => {
-                let Some(n) = self.ensure(path) else { return };
-                if n.children.is_empty() {
-                    n.text = text.clone();
-                } else if n.holds_picks() {
-                    n.children =
-                        picks_of(text.lines()).map(|t| DataNode { name: "value".into(), text: t.to_string(), children: Vec::new() }).collect();
+                if let Some(n) = self.ensure(path) {
+                    // A multi-select list's picks, one `value` each (see `value_at`), told apart
+                    // as the packet writer does: `value` leaves only, or a group holding none.
+                    let picks = if n.children.is_empty() { n.group } else { n.children.iter().all(|c| c.name == "value" && c.children.is_empty()) };
+                    if picks {
+                        n.children = text
+                            .split('\n')
+                            .filter(|v| !v.is_empty())
+                            .map(|v| DataNode { name: "value".into(), text: v.to_string(), ..Default::default() })
+                            .collect();
+                        // Emptied, it is still a group, and takes picks again.
+                        n.group = true;
+                    } else if n.children.is_empty() {
+                        n.text = text.clone();
+                    }
                 }
             }
             DataOp::Instances { parent, name, count } => {
