@@ -1420,6 +1420,35 @@ fn utf16_and_code_page_text_files_convert_to_their_text() {
     assert_eq!(page_texts(&s, id), ["Crème brûlée"]);
 }
 
+/// Create ▸ PDF from a text file in Cyrillic was refused, and a comment summary quoting Cyrillic
+/// wrote each letter as `[U+XXXX]`. Both are set in the bundled Inter face now and read back as
+/// typed.
+#[test]
+fn cyrillic_text_files_and_comment_summaries_read_back_as_typed() {
+    let mut s = Session::new();
+    let text = "Договор № 12\nЖълтата дюля беше щастлива, че пухът, който цъфна, замръзна като гьон.";
+    let (_, pdf) = s.convert_to_pdf("бележки.txt", &Arc::new(text.as_bytes().to_vec())).unwrap();
+    let id = s.open_new("бележки.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), [text]);
+    // A sticky note in Russian, summarized.
+    let note = "Проверьте сумму в разделе 3";
+    let hex: String = note.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Reviewer) /Contents <FEFF{hex}> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+    );
+    let id = s.open("note.pdf", None, Arc::new(pdf.into_bytes()), None).expect("opens");
+    let summary = s.summarize_comments(id, SummarySort::Page).unwrap();
+    let id = s.open_new("summary.pdf", summary).unwrap();
+    let shown = page_texts(&s, id).join("\n");
+    assert!(shown.contains(note) && !shown.contains("[U+"), "{shown}");
+}
+
 #[test]
 fn a_file_split_around_another_combines_in_order_with_one_bookmark() {
     let mut s = Session::new();
@@ -1647,9 +1676,26 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert_eq!(s.compare_report(oid, id).map(|_| ()), refused());
     assert!(s.compare(oid, oid).is_ok());
     assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
+    // The comment summary copies comment text out like the exports do.
+    assert_eq!(s.summarize_comments(id, SummarySort::Page).map(|_| ()), refused());
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
+}
+
+/// The renderer can open an encrypted file the editing parser rejects. Its permission bits are
+/// then unknown, which is not the same as none: copying and printing stay refused.
+#[test]
+fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing() {
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, protected("", "owner", -1 ^ 0b1_0000), None).unwrap();
+    s.doc_mut(id).unwrap().editor = None;
+    let d = s.get(id).unwrap();
+    assert!(d.info.encrypted && d.permissions().is_none());
+    assert!(!d.allows_copying() && !d.allows_printing());
+    let (mut s, plain) = session_with(1);
+    s.doc_mut(plain).unwrap().editor = None;
+    assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
 }
 
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead
@@ -4887,6 +4933,25 @@ fn split_by_size_and_bookmarks_and_page_filters() {
     assert_eq!(filter_pages(info, &all, PageParity::Odd, PageOrientation::Portrait), [0, 2, 4]);
 }
 
+/// A zoomed link follows its target page, not its number: deleting a page before the target keeps
+/// the link on that page at its zoom. Deleting the target page drops the link's destination, as
+/// for any link to a deleted page, and undo brings it back with its zoom.
+#[test]
+fn a_zoomed_link_follows_its_page_and_loses_it_when_the_page_is_deleted() {
+    let (mut s, id) = session_with(3);
+    let zoom = LinkZoom::Percent(200.0);
+    let rect = [10.0, 10.0, 60.0, 30.0];
+    s.apply(id, Edit::AddLink { page: 0, rect, action: LinkAction::Page { page: 2, zoom }, style: LinkStyle::default() }).unwrap();
+    let action = |s: &Session| s.get(id).unwrap().links()[0].action.clone();
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "the link follows its page");
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    // The destination is removed, not left pointing at a page that is gone.
+    assert_eq!(action(&s), LinkAction::Other("no action".into()), "no destination left");
+    s.undo(id).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "undo restores the destination and its zoom");
+}
+
 #[test]
 fn links_from_urls_and_link_edits() {
     // One page whose text contains a web address.
@@ -4928,8 +4993,12 @@ fn links_from_urls_and_link_edits() {
     assert_eq!(s.get(id).unwrap().links().len(), 1);
     // Link Properties and delete.
     let l = s.get(id).unwrap().links()[0].clone();
-    s.apply(id, Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
-    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page(0));
+    s.apply(
+        id,
+        Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }), style: None },
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page { page: 0, zoom: LinkZoom::FitPage });
     s.apply(id, Edit::DeleteLink { page: 0, index: l.index }).unwrap();
     assert!(s.get(id).unwrap().links().is_empty());
     assert!(s.apply(id, Edit::RemoveLinks { pages: None }).is_err(), "nothing left to remove");
@@ -5310,6 +5379,7 @@ fn sign_prepared_with(
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; reserve], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
     value(&mut v);
+    let certifies = v.get(b"Reference").is_some();
     let sig = doc.add(Object::Dict(v));
     // The field by name, never by number: a full save (encryption, repairs) is
     // free to renumber objects, and a hardcoded reference would stamp the value
@@ -5319,6 +5389,12 @@ fn sign_prepared_with(
     let fields = doc.resolve(&af).as_dict().expect("AcroForm dict").get(b"Fields").cloned().expect("Fields");
     let field = doc.resolve(&fields).as_array().expect("Fields array").iter().filter_map(|o| o.as_ref()).next().expect("signature field");
     doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+    if certifies {
+        // A certification is the signature the catalog's /Perms /DocMDP names (ISO 32000-2, 12.8.2.2).
+        let mut perms = Dict::new();
+        perms.set(b"DocMDP".to_vec(), Object::Ref(sig));
+        doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms))).unwrap();
+    }
     let save = pdfcraft_cos::SaveOptions { object_streams: false, ..pdfcraft_cos::SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(doc, &save).unwrap();
     let mark = format!("0 {} {} {}", LAYERED_BR_MARK[0], LAYERED_BR_MARK[1], LAYERED_BR_MARK[2]);
@@ -7933,6 +8009,29 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert!(!d2.dirty);
 }
 
+/// An XFA button's click returns only what the click produced. The alerts and errors of the
+/// scripts that ran on open stay in the document's output.
+#[test]
+fn an_xfa_click_returns_only_its_own_script_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    let mut s = Session::new();
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let o = s.run_javascript(id, "", Some("hello")).unwrap();
+    assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+    assert!(o.error.is_none(), "{o:?}");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["opened"]);
+    assert!(out.errors.iter().any(|e| e.contains("open failed")), "{out:?}");
+    // A click whose script fails returns that error, and the next click does not repeat it.
+    let broken =
+        pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, "throw new Error('click failed');");
+    let id = s.open("broken.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&broken)), None).unwrap();
+    s.take_js_output(id);
+    assert!(s.run_javascript(id, "", Some("hello")).unwrap().error.is_some_and(|e| e.contains("click failed")));
+    assert!(s.run_javascript(id, "", Some("legacy")).unwrap().error.is_none());
+}
+
 /// A repeating table inside an area of a positioned page (as in real Designer forms): every
 /// row is laid out, the values Adobe wrote (under the area's parent: areas are
 /// not data scopes) are read, a FormCalc total over all rows computes, and what is filled here
@@ -9211,8 +9310,9 @@ fn ocr_words_refresh_only_the_page_content_they_add() {
     let others = (words_on(&s, 0), words_on(&s, 2));
     assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")));
     take_full_refreshes();
-    let word = PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0] };
-    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None }]).unwrap(), 1);
+    let word =
+        PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
+    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
     assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
     let after = s.get(id).unwrap();
     assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);
@@ -10463,6 +10563,8 @@ fn exporting_to_word_keeps_the_page_background() {
     assert!(docx.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "Word is told to show the page colour");
 }
 
+/// A table of contents' entries with dotted leaders export to an office document as paragraphs, in
+/// reading order, not as a table.
 #[test]
 fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let mut content = String::new();
@@ -10485,7 +10587,8 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
 }
 
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
-/// yyyymd are rewritten as yyyymmdd, a date none of them reads is refused, and the data holds the date.
+/// yyyymd are rewritten as yyyymmdd, and the data holds the date. Text none of them reads is kept
+/// as typed, in the field and the data, as another viewer keeps it.
 #[test]
 fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first() {
     let mut s = Session::new();
@@ -10497,18 +10600,21 @@ fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first()
     assert_eq!(value(&s), ["20261018"]);
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2026118".into()) }).expect("so is yyyymd");
     assert_eq!(value(&s), ["20261108"]);
-    let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) });
-    assert!(refused.is_err_and(|e| e.to_string().contains("yyyymmdd")), "none of its patterns reads it");
-    assert_eq!(value(&s), ["20261108"]);
     // The data holds the date.
-    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
-    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
-    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")), Some("2026-11-08"));
+    let data_of = |s: &Session| {
+        let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+        data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")).map(str::to_string)
+    };
+    assert_eq!(data_of(&s).as_deref(), Some("2026-11-08"));
+    s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) }).expect("kept as typed");
+    assert_eq!(value(&s), ["2618"]);
+    assert_eq!(data_of(&s).as_deref(), Some("2618"));
 }
 
-/// A date the field's own scripts refuse is not tried again in another of an XFA date field's
-/// patterns: only a date its format refuses is, which happens before any script runs, so the
-/// scripts run once. This validate script counts its runs in `name` and accepts on its second.
+/// A date typed in another of an XFA date field's patterns is rewritten before any of the field's
+/// scripts run, so they run once, and a date they refuse stays refused. This validate script counts
+/// its runs in `name` and accepts on its second.
 #[test]
 fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let mut s = Session::new();
@@ -10518,7 +10624,7 @@ fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let script = Some("var n = Number(getField('name').value || 0) + 1; getField('name').value = String(n); event.rc = n >= 2;".to_string());
     s.apply(id, Edit::SetFieldScript { name: "leave".into(), event: "validate".into(), script }).unwrap();
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
-    // Its format reads 18OCT26, and so does its DDMMMYY pattern.
+    // Its DDMMMYY pattern reads 18OCT26, which its format would read more loosely too.
     let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("18OCT26".into()) });
     assert!(refused.is_err(), "the validate script refused it, once");
     assert!(value(&s, "name").is_empty(), "nothing the refused run changed is kept: {:?}", value(&s, "name"));
@@ -11867,4 +11973,119 @@ fn imported_bookmarks_undo_in_one_step() {
     let err = s.apply(id, Edit::ImportBookmarks { parent: vec![4], index: 0, bookmarks, replace: false }).unwrap_err();
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
+}
+
+/// A comment imported or pasted without the appearance its file carried (unreadable there) is
+/// said in the repair log, which the interface shows and the tools return.
+#[test]
+fn a_comment_imported_without_its_appearance_is_said_in_the_repair_log() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><stamp page="0" name="st" rect="10,10,110,60" icon="Draft"><appearance>@@@not base 64@@@</appearance></stamp></annots></xfdf>"#;
+    let said = |s: &Session, id: DocId| {
+        s.get(id)
+            .unwrap()
+            .repair_log()
+            .iter()
+            .filter(|l| l.contains("imported 1 comment without the appearance") && l.contains("st: the appearance is not base 64"))
+            .count()
+    };
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::ImportData { name: "notes.xfdf".into(), bytes: Arc::new(xfdf.as_bytes().to_vec()) }).unwrap();
+    assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::PasteComments { xfdf: xfdf.into(), page: 0, offset: None }).unwrap();
+    assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
+}
+
+/// Six comments without their appearances: one line naming five and counting the sixth, a name
+/// holding a line break stays on that line, and a long name is cut short.
+#[test]
+fn many_comments_imported_without_their_appearances_are_summed_up_in_one_line() {
+    let long = "L".repeat(1000);
+    let names = ["a&#10;imported 9 comments", "b", "c", "d", long.as_str(), "f"];
+    let stamps: String = names
+        .iter()
+        .map(|nm| format!(r#"<stamp page="0" name="{nm}" rect="10,10,110,60" icon="Draft"><appearance>@@@</appearance></stamp>"#))
+        .collect();
+    let xfdf = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).unwrap().repair_log().len();
+    s.apply(id, Edit::PasteComments { xfdf, page: 0, offset: None }).unwrap();
+    let log = s.get(id).unwrap().repair_log();
+    let added = log.get(before..).unwrap_or_default();
+    assert_eq!(added.len(), 1, "{added:?}");
+    let line = &added[0];
+    assert!(line.starts_with("imported 6 comments without the appearance"), "{line}");
+    assert!(line.ends_with("; and 1 more"), "{line}");
+    assert!(!line.contains('\n') && line.contains(r"a\nimported 9 comments: "), "{line}");
+    assert!(line.contains(&format!("{}…", "L".repeat(200))) && !line.contains(&"L".repeat(201)), "{line}");
+    assert_eq!(line.matches(": the appearance").count(), 4, "five named, the long one cut before its reason: {line}");
+}
+
+/// PDF/A-2 6.1.2 through the ordinary save: Save as PDF/A on a file without a binary comment, or
+/// with a 2.0 header, saves a file whose header verifies.
+#[test]
+fn save_as_pdfa_saves_a_compliant_file_header() {
+    let plain = fixture(1);
+    assert!(plain.starts_with(b"%PDF-1.7\n1 0 obj"), "the fixture has no binary comment");
+    let mut newer = plain.clone();
+    newer.splice(5..8, *b"2.0");
+    for bytes in [plain, newer] {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, Arc::new(bytes), None).unwrap();
+        s.apply(id, Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"), "{:?}", String::from_utf8_lossy(&saved[..20]));
+        let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+        assert!(pdfcraft_preflight::verify(&reopened, pdfcraft_preflight::Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    }
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: a document whose only encryption is for its embedded files,
+/// authorised when one is opened (`/AuthEvent /EFOpen`), opens without a password, lists its
+/// attachment, and saves with the attachment still encrypted.
+#[test]
+fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_password() {
+    // The password values of an AES-256 protection, as a save writes them.
+    let protected = protected("pw", "owner", -1);
+    let source = pdfcraft_cos::Document::open_with_password(protected, Some("pw")).unwrap();
+    let encrypt = source.resolve(source.trailer().get(b"Encrypt").unwrap());
+    let values: String = ["O", "U", "OE", "UE", "Perms"]
+        .iter()
+        .map(|k| {
+            let value = source.resolve(encrypt.as_dict().unwrap().get(k.as_bytes()).unwrap());
+            format!(" /{k} <{}>", value.as_string().unwrap().bytes.iter().map(|b| format!("{b:02X}")).collect::<String>())
+        })
+        .collect();
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
+        "<< /Type /EmbeddedFile /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream".to_string(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6{values} /P -4 /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>"
+        ),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+    );
+    let mut s = Session::new();
+    let id = s.open("efopen.pdf", None, Arc::new(pdf), None).expect("opens without a password");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.info.attachments.len(), 1);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+    assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
 }

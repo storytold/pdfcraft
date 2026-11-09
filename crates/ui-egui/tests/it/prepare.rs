@@ -55,6 +55,79 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().widgets[0].rect
 }
 
+fn text_center_near(h: &Harness<'static, PdfCraftApp>, label: &str, expected: Pos2) -> Option<Pos2> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .min_by(|a, b| a.distance(expected).total_cmp(&b.distance(expected)))
+}
+
+#[test]
+fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
+    use egui::{Color32, Event, Modifiers, PointerButton, Shape, StrokeKind};
+    use pdfcraft_engine::{Edit, NewField, Session};
+
+    let mut session = Session::new();
+    let bytes = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open("selection.pdf", None, bytes, None).unwrap();
+    for (name, rect, kind) in [
+        ("first", [40.0, 290.0, 54.0, 304.0], NewField::CheckBox),
+        ("second", [90.0, 290.0, 104.0, 304.0], NewField::CheckBox),
+        ("text", [40.0, 230.0, 230.0, 254.0], NewField::Text { multiline: false }),
+    ] {
+        session.apply(id, Edit::AddField { name: Some(name.into()), page: 0, rect, kind }).unwrap();
+    }
+    let mut h = harness_with("selection.pdf", session.save_bytes(id).unwrap().as_ref().clone());
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    for (x, modifiers) in [(47.0, Modifiers::NONE), (97.0, Modifiers::SHIFT)] {
+        let pos = at(&h, x, 103.0);
+        h.event(Event::ModifiersChanged(modifiers));
+        h.hover_at(pos);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+            h.run_steps(1);
+        }
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].prepare.names().len(), 2);
+    let blue = Color32::from_rgb(0x14, 0x73, 0xE6);
+    for (x, y, selected) in [(47.0, 103.0, true), (97.0, 103.0, true), (135.0, 158.0, false)] {
+        let center = at(&h, x, y);
+        let shapes: Vec<_> = h.output().shapes.iter().filter(|s| s.clip_rect.contains(center)).collect();
+        let tag = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.fill == if selected { blue } else { Color32::BLACK })
+        });
+        assert!(tag.is_some(), "widget at {center:?} must have its selection-colored name tag");
+        let outline = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.stroke.color == blue && r.stroke.width == 2.0 && r.stroke_kind == StrokeKind::Outside)
+        });
+        if selected {
+            assert!(outline > tag, "the selected outline must be outside and painted after the tag");
+        } else {
+            assert!(outline.is_none(), "unselected text field has no selection outline");
+        }
+    }
+    assert_eq!(
+        h.output()
+            .shapes
+            .iter()
+            .filter(|s| matches!(&s.shape, Shape::Circle(c)
+        if c.radius == 3.5 && c.stroke.color == blue))
+            .count(),
+        4,
+        "only the primary has resize handles"
+    );
+}
+
 #[test]
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
@@ -584,6 +657,99 @@ fn the_fields_panel_orders_tabs_manually() {
     let after = order(&h);
     assert_eq!(after[0], second, "{before:?} → {after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Set tab order"));
+}
+
+#[test]
+fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.get_by_label("Show tab numbers").click();
+    h.run_steps(3);
+
+    let (order, rects, undo) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info);
+        let rects = order
+            .iter()
+            .map(|(fi, wi)| {
+                let field = doc.form.get(*fi).expect("the traversal field exists");
+                pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, *wi).unwrap()
+            })
+            .collect::<Vec<_>>();
+        (order, rects, doc.can_undo())
+    };
+    assert!(h.state().views[0].prepare.show_tab_numbers);
+    assert_eq!(undo, None, "displaying the numbers does not edit the PDF");
+    let size_widgets = order
+        .iter()
+        .filter(|(fi, _)| h.state().session.get(h.state().views[0].id).unwrap().form.get(*fi).is_some_and(|field| field.name == "size"))
+        .count();
+    assert_eq!(size_widgets, 2, "each radio widget has its own tab stop");
+
+    let drawn: Vec<(String, egui::Pos2, egui::Rect, egui::Rect)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => {
+                Some((text.galley.text().to_owned(), text.visual_bounding_rect().center(), text.visual_bounding_rect(), clipped.clip_rect))
+            }
+            _ => None,
+        })
+        .collect();
+    for (i, rect) in rects.iter().enumerate() {
+        let expected = i.saturating_add(1).to_string();
+        let badge_center = rect.min + egui::vec2(3.0 + 4.0 + 3.0, 3.0 + 2.0 + 5.0);
+        let badge = drawn.iter().find(|(label, center, _, _)| label == &expected && center.distance(badge_center) < 8.0);
+        let Some((_, _, text_rect, clip_rect)) = badge else {
+            panic!("widget {:?} should show tab number {expected} near {:?}; drawn: {drawn:?}", order.get(i), rect.min);
+        };
+        assert!(clip_rect.contains_rect(*text_rect), "the whole tab number {expected} should be visible");
+    }
+}
+
+#[test]
+fn tab_badge_tracks_its_widget_during_a_drag() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.get_by_label("Show tab numbers").click();
+    h.run_steps(3);
+
+    let (name, widget, rect) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info);
+        let (fi, wi) = *order.first().expect("the form has a fillable widget");
+        let field = doc.form.get(fi).expect("the first fillable field exists");
+        (field.name.clone(), wi, pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, wi).unwrap())
+    };
+    let start = rect.center();
+    let badge_before = text_center_near(&h, "1", rect.min + egui::vec2(10.0, 10.0)).expect("the first badge is painted");
+
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.drop_at(start);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|selected| (selected.0.as_str(), selected.1)), Some((name.as_str(), widget)));
+
+    let delta = egui::vec2(24.0, 16.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(start + delta);
+    h.run_steps(3);
+
+    let badge_during_drag = text_center_near(&h, "1", badge_before + delta).expect("the badge stays painted during the drag");
+    assert!(badge_during_drag.distance(badge_before + delta) < 8.0, "badge {badge_before:?} moved to {badge_during_drag:?}");
+    assert!(badge_during_drag.distance(badge_before) > 12.0, "the badge follows the dragged widget");
+    h.drop_at(start + delta);
+    h.run_steps(3);
 }
 
 #[test]

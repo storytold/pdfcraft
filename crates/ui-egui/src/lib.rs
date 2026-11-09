@@ -58,6 +58,7 @@ mod editing;
 mod home;
 mod hotbar;
 mod panels;
+pub mod panes;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
@@ -80,6 +81,7 @@ use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
@@ -109,6 +111,7 @@ use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
+use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
@@ -194,6 +197,7 @@ use workflows::ocr_verify;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::optimize_ui;
+use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
@@ -280,6 +284,8 @@ struct DeferredOpen {
 pub type HtmlClipboard = Box<dyn FnMut(&str, &str) -> bool>;
 
 pub struct PdfCraftApp {
+    /// Split view (`panes`); which pane shows each tab is its view's.
+    pub panes: panes::Panes,
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
     pub session: Session,
@@ -419,6 +425,9 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: web and email addresses written as plain page text open on a click, like
+    /// links (#4207).
+    pub text_links: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
@@ -557,6 +566,16 @@ pub struct PdfCraftApp {
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// Frames in a row whose logic or drawing panicked, and whether this frame's did
+    /// (`frame_guard`, #3914).
+    panicking_frames: u32,
+    frame_panicked: bool,
+    /// The last `logic` ran without a `ui` after it yet (eframe skips `ui` while the window is
+    /// hidden).
+    logic_without_ui: bool,
+    /// Tests: the part of the next frame that panics on purpose.
+    #[cfg(test)]
+    panic_next: Option<frame_guard::FramePart>,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
@@ -661,6 +680,9 @@ pub struct PdfCraftApp {
     /// Entries left by a previous session, offered in the Recovery dialog.
     pub recoverable: Vec<RecoveryMeta>,
     recovery_keys: std::collections::HashMap<DocId, String>,
+    /// Recovered documents whose path came from a recovery sidecar and no save has confirmed
+    /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
+    recovered_paths: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
@@ -697,6 +719,7 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).

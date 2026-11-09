@@ -119,6 +119,49 @@ impl JsOutput {
             self.errors.push(e);
         }
     }
+
+    /// Takes out the alerts, console lines, requests and errors. The record of the document
+    /// scripts' errors stays, so they are still reported once.
+    fn set_aside(&mut self) -> JsOutput {
+        JsOutput {
+            alerts: std::mem::take(&mut self.alerts),
+            console: std::mem::take(&mut self.console),
+            requests: std::mem::take(&mut self.requests),
+            errors: std::mem::take(&mut self.errors),
+            doc_errors: Vec::new(),
+        }
+    }
+
+    /// Puts back what [`JsOutput::set_aside`] took out and returns what was added since.
+    fn put_back(&mut self, waiting: JsOutput) -> JsOutput {
+        let own = self.set_aside();
+        self.alerts = waiting.alerts;
+        self.console = waiting.console;
+        self.requests = waiting.requests;
+        self.errors = waiting.errors;
+        own
+    }
+}
+
+impl Session {
+    /// Runs `f` and returns its value with the script output `f` added to document `id`. The
+    /// output limits count that output alone, and the output that was waiting stays for
+    /// [`Session::take_js_output`]. When `f` fails, its output joins the waiting output.
+    pub fn with_own_js_output<T, E>(&mut self, id: DocId, f: impl FnOnce(&mut Session) -> Result<T, E>) -> Result<(T, JsOutput), E> {
+        let waiting = self.docs.iter_mut().find(|d| d.id == id).map(|d| d.js_output.set_aside());
+        let result = f(self);
+        let mut doc = self.docs.iter_mut().find(|d| d.id == id);
+        let own = doc.as_mut().zip(waiting).map(|(d, w)| d.js_output.put_back(w)).unwrap_or_default();
+        match result {
+            Ok(value) => Ok((value, own)),
+            Err(e) => {
+                if let Some(d) = doc {
+                    d.js_output.append(own);
+                }
+                Err(e)
+            }
+        }
+    }
 }
 
 fn kind(k: FieldKind) -> pdfcraft_js::FieldType {
@@ -342,8 +385,8 @@ impl Session {
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
-            self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
-            let out = self.take_js_output(id);
+            // The click returns only the output of its own edit; output from opening or from earlier edits stays.
+            let ((), out) = self.with_own_js_output(id, |s| s.apply(id, Edit::XfaEvent { som, activity: "click".into() }))?;
             return Ok(Outcome {
                 rc: true,
                 alerts: out.alerts,
@@ -579,6 +622,56 @@ mod review_tests {
         assert_eq!(reset_targets(&names, &requests), None, "a call without names resets the whole form");
     }
 
+    /// A click returns its own alert when the output waiting in the document is full, and the
+    /// waiting output stays.
+    #[test]
+    fn a_click_returns_its_alert_when_the_waiting_output_is_full() {
+        let mut s = Session::new();
+        let pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let id = s.open("xfa.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        s.take_js_output(id);
+        s.docs.iter_mut().find(|d| d.id == id).unwrap().js_output.alert(vec![Message::plain("waiting"); MAX_ALERTS]);
+        let o = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+        let out = s.take_js_output(id);
+        assert_eq!(out.alerts, vec![Message::plain("waiting"); MAX_ALERTS]);
+    }
+
+    /// With the console full and closed, an operation still gets its own lines. Output of an
+    /// operation that fails joins the waiting output.
+    #[test]
+    fn output_limits_count_only_the_operations_own_output() {
+        let mut s = Session::new();
+        let pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let id = s.open("xfa.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+        s.take_js_output(id);
+        fn output(s: &mut Session, id: DocId) -> &mut JsOutput {
+            &mut s.docs.iter_mut().find(|d| d.id == id).unwrap().js_output
+        }
+        output(&mut s, id).say(vec!["waiting".to_string(); MAX_CONSOLE_LINES + 1]);
+        let waiting = output(&mut s, id).console.clone();
+        assert!(waiting.last().unwrap().starts_with("more console lines were left out"));
+        let ((), own) = s
+            .with_own_js_output::<_, ()>(id, |s| {
+                output(s, id).say(["mine".to_string()]);
+                output(s, id).errors.push("own error".into());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(own.console, ["mine"]);
+        assert_eq!(own.errors, ["own error"]);
+        assert_eq!(output(&mut s, id).console, waiting);
+        assert!(output(&mut s, id).errors.is_empty());
+        let failed = s.with_own_js_output::<(), _>(id, |s| {
+            output(s, id).errors.push("failed edit".into());
+            Err("no")
+        });
+        assert_eq!(failed.unwrap_err(), "no");
+        let out = s.take_js_output(id);
+        assert_eq!(out.console, waiting);
+        assert_eq!(out.errors, ["failed edit"]);
+    }
+
     /// A form of many calculated fields, each printing its own cap of console lines, keeps a
     /// bounded console: past the budget, lines are left out and one closing line says so.
     #[test]
@@ -613,7 +706,8 @@ mod review_tests {
         };
         let mut glyphs: Vec<_> = (0..n).map(|i| glyph(i, "_")).collect();
         glyphs.push(glyph(n, "x"));
-        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs };
+        // Built by hand, not read from a page the renderer cut short, so the text is complete.
+        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs, truncated: false };
         UNDERSCORE_CHARS_READ.with(|c| c.set(0));
         let words = words_with(&text, |x, y| [x, y]);
         assert_eq!(words.iter().map(|(w, _)| w.len()).collect::<Vec<_>>(), [n, 1]);

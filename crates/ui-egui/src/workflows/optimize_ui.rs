@@ -251,6 +251,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.discard_thumbnails, tl!("Discard embedded page thumbnails")));
             ui.add(widgets::checkbox(&mut s.discard_tags, tl!("Discard document tags")));
             ui.add(widgets::checkbox(&mut s.discard_print_settings, tl!("Discard embedded print settings")));
+            ui.add(widgets::checkbox(&mut s.discard_form_actions, tl!("Discard all form submission, import and reset actions")));
             discard_box(ui, &mut d.discard, Hidden::Bookmarks, "Discard bookmarks");
             discard_box(ui, &mut d.discard, Hidden::FormFields, "Flatten form fields");
             discard_box(ui, &mut d.discard, Hidden::HiddenLayers, "Discard hidden layer content");
@@ -561,7 +562,7 @@ mod tests {
         assert!(app.optimize_run.is_none());
 
         app.scan_clean_run = None;
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, destination: None, progress: Arc::default() });
         app.start_scan_clean();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
         assert!(app.scan_clean_run.is_none());
