@@ -23,6 +23,9 @@ pub struct TagInfo {
     pub scope: Option<String>,
     /// Zero-based page when `/Pg` is known.
     pub page: Option<usize>,
+    /// Some of this tag's text was left out for the listing's allowance: an absent `alt` then
+    /// means "not shown", not "none".
+    pub truncated: bool,
 }
 
 /// A marked-content reference directly owned by a structure tag.
@@ -31,6 +34,9 @@ pub struct TagContentItem {
     pub page: Option<usize>,
     pub mcid: i64,
     pub text: String,
+    /// The text was left out for the listing's allowance: `text` is empty because it was not
+    /// shown, not because the mark has no text.
+    pub truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,29 +153,56 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
     Ok(())
 }
 
-fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
-    d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(PdfString::to_text))
-}
-
 /// List reachable, indirect tags in structure-tree order.
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
+    tags_where(doc, |_| true)
+}
+
+/// The tags of the given `/S` kinds, chosen before any text is read: a request for some types
+/// spends its text allowance only on the tags it can return, so an excluded tag can't starve a
+/// later one of the text the caller asked for.
+pub fn tags_of(doc: &Document, kinds: &[&str]) -> Vec<TagInfo> {
+    tags_where(doc, |d| d.name(b"S").is_some_and(|s| kinds.iter().any(|k| k.as_bytes() == s)))
+}
+
+fn tags_where(doc: &Document, keep: impl Fn(&Dict) -> bool) -> Vec<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let mut budget = alt::TextBudget::new();
     alt::elements(doc)
         .into_iter()
+        .filter(|e| keep(&e.dict))
         .filter_map(|e| {
+            // Each read's own answer, taken before the next read resets it: a property the
+            // allowance dropped reads as left out, not as absent, whichever property it was.
+            let title = budget.text(doc, &e.dict, b"T");
+            let title_dropped = budget.refused();
+            let actual_text = budget.text(doc, &e.dict, b"ActualText");
+            let actual_dropped = budget.refused();
+            let alt = budget.text(doc, &e.dict, b"Alt");
+            let alt_dropped = budget.refused();
+            let language = budget.text(doc, &e.dict, b"Lang");
+            let language_dropped = budget.refused();
+            // A `/Summary` may be an indirect string: it is resolved before the allowance sees it,
+            // or the listing drops the summary and reports nothing as left out.
+            let summary = table_attribute(doc, &e.dict, b"Summary").and_then(|o| doc.resolve(&o).as_string().and_then(|s| budget.string(s)));
+            // A missing attribute leaves `refused` from the read before it; that one is counted
+            // already, so a stale answer here can only keep `truncated` true.
+            let summary_dropped = budget.refused();
+            let truncated = title_dropped || actual_dropped || alt_dropped || language_dropped || summary_dropped;
             Some(TagInfo {
                 object: e.object,
                 parent: e.parent,
                 depth: e.depth,
                 kind: String::from_utf8_lossy(e.dict.name(b"S")?).into_owned(),
-                title: text(doc, &e.dict, b"T"),
-                actual_text: text(doc, &e.dict, b"ActualText"),
-                alt: text(doc, &e.dict, b"Alt"),
-                language: text(doc, &e.dict, b"Lang"),
-                summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().map(PdfString::to_text)),
+                title,
+                actual_text,
+                alt,
+                language,
+                summary,
                 scope: table_attribute(doc, &e.dict, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
+                truncated,
             })
         })
         .collect()
@@ -186,10 +219,13 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
     }
     // Each page's content is parsed once, however many of its MCIDs the tag owns.
     let mut texts: std::collections::HashMap<usize, std::collections::HashMap<i64, String>> = std::collections::HashMap::new();
+    // A mark listed twice (or a long run of text listed many times) copies its text each time.
+    let mut budget = alt::TextBudget::new();
     Ok(marks
         .into_iter()
         .map(|(page, mcid)| {
             let page = page.and_then(|p| page_index.get(&p).copied());
+            let mut truncated = false;
             let text = page
                 .and_then(|i| {
                     let page_texts = match texts.entry(i) {
@@ -198,10 +234,19 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
                             e.insert(pages.get(i).map(|p| crate::headings::mcid_texts(doc, &p.dict)).unwrap_or_default())
                         }
                     };
-                    page_texts.get(&mcid).cloned()
+                    match page_texts.get(&mcid) {
+                        Some(t) if budget.charge(t.len()) => Some(t.clone()),
+                        // The mark has text the allowance could not hold: it is marked, not
+                        // emptied, so a panel does not read it as a textless mark.
+                        Some(_) => {
+                            truncated = true;
+                            None
+                        }
+                        None => None,
+                    }
                 })
                 .unwrap_or_default();
-            TagContentItem { page, mcid, text }
+            TagContentItem { page, mcid, text, truncated }
         })
         .collect())
 }

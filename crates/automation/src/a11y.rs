@@ -451,7 +451,9 @@ impl Automation {
                     let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
                     Some([r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))])
                 });
-                json!({ "figure": f.obj.num, "page": f.page.map(|p| p + 1), "alt": f.alt, "rect": rect })
+                // `truncated` says an empty `alt` was left out of the listing for its size, so a
+                // caller does not read "not shown" as "no alternate text".
+                json!({ "figure": f.obj.num, "page": f.page.map(|p| p + 1), "alt": f.alt, "rect": rect, "truncated": f.truncated })
             })
             .collect();
         Ok(json!({ "count": list.len(), "figures": list }))
@@ -489,14 +491,17 @@ impl Automation {
             .opt_int("max_depth")?
             .map(|d| usize::try_from(d).map_err(|_| ToolError::InvalidArgs("max_depth must be 0 or more".into())))
             .transpose()?;
-        let matching: Vec<_> = self
-            .doc(a)?
-            .tags()
-            .into_iter()
-            .filter(|t| types.as_ref().is_none_or(|ty| ty.contains(&t.kind.as_str())))
-            .filter(|t| pages.as_ref().is_none_or(|p| t.page.is_some_and(|page| p.contains(&page))))
-            .filter(|t| max_depth.is_none_or(|d| t.depth <= d))
-            .collect();
+        let doc = self.doc(a)?;
+        let matching: Vec<_> = match &types {
+            // Chosen before any text is read, so tags the request excludes don't spend the
+            // allowance the returned ones need.
+            Some(ty) => doc.tags_of(ty),
+            None => doc.tags(),
+        }
+        .into_iter()
+        .filter(|t| pages.as_ref().is_none_or(|p| t.page.is_some_and(|page| p.contains(&page))))
+        .filter(|t| max_depth.is_none_or(|d| t.depth <= d))
+        .collect();
         let count = matching.len();
         let next = offset.checked_add(limit).filter(|n| *n < count);
         let tags: Vec<Value> = matching
@@ -509,6 +514,7 @@ impl Automation {
                     "parent": t.parent.map(|p| json!({ "object": p.num, "generation": p.generation })), "depth": t.depth,
                     "title": t.title, "actual_text": t.actual_text, "alternate_text": t.alt,
                     "language": t.language, "summary": t.summary, "scope": t.scope, "page": t.page.map(|p| p + 1),
+                    "truncated": t.truncated,
                 })
             })
             .collect();
@@ -521,7 +527,7 @@ impl Automation {
             u16::try_from(a.int("generation")?).map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation".into()))?;
         let content = self.doc(a)?.tag_content(pdfcraft_cos::ObjRef { num: object, generation }).map_err(failed)?;
         Ok(
-            json!({ "count": content.len(), "content": content.into_iter().map(|item| json!({ "page": item.page.map(|p| p + 1), "mcid": item.mcid, "text": item.text })).collect::<Vec<_>>() }),
+            json!({ "count": content.len(), "content": content.into_iter().map(|item| json!({ "page": item.page.map(|p| p + 1), "mcid": item.mcid, "text": item.text, "truncated": item.truncated })).collect::<Vec<_>>() }),
         )
     }
 

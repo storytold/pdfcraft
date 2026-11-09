@@ -220,7 +220,8 @@ fn walk<V: Visitor>(doc: &Document, pages: &[Page], v: &mut V) {
     let Some(root) = struct_root(doc) else { return };
     let role_map = root.as_dict().and_then(|d| d.get(b"RoleMap")).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let page_index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let mut w = Walker { doc, role_map, page_index, seen: HashSet::new(), frames: Vec::new(), tasks: Vec::new(), opened: 0 };
+    let mut w =
+        Walker { doc, role_map, page_index, seen: HashSet::new(), frames: Vec::new(), tasks: Vec::new(), opened: 0, text_of: Default::default() };
     if root.as_dict().is_some_and(|d| d.contains(b"K")) {
         w.tasks.push(Task::Node { loc: Loc { owner: root, path: vec![Step::K] }, depth: 0, page: None });
     }
@@ -286,6 +287,9 @@ struct Walker<'a> {
     tasks: Vec<Task>,
     /// Elements opened so far: the next element's position in document order.
     opened: usize,
+    /// Whether an indirect string holds any text, by reference: many elements can name one large
+    /// string, which is decoded once instead of once per element.
+    text_of: std::cell::RefCell<HashMap<ObjRef, bool>>,
 }
 
 impl Walker<'_> {
@@ -407,7 +411,16 @@ impl Walker<'_> {
 
     /// Whether `key` holds a string with some text in it.
     fn has_text(&self, d: &Dict, key: &[u8]) -> bool {
-        d.get(key).map(|o| self.doc.resolve(o)).and_then(|o| o.as_string().map(|s| !s.to_text().trim().is_empty())).unwrap_or(false)
+        let Some(value) = d.get(key) else { return false };
+        let reference = value.as_ref();
+        if let Some(known) = reference.and_then(|r| self.text_of.borrow().get(&r).copied()) {
+            return known;
+        }
+        let any = self.doc.resolve(value).as_string().is_some_and(|s| !s.to_text().trim().is_empty());
+        if let Some(r) = reference {
+            self.text_of.borrow_mut().insert(r, any);
+        }
+        any
     }
 
     /// The standard type of `ty`, following the role map (a bounded number of steps).
