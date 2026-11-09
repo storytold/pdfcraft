@@ -261,6 +261,7 @@ impl Scripts for JsRunner {
         self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
             rc: true,
             value: value.to_string(),
+            value_set: false,
             changes: Vec::new(),
             message: None,
         })
@@ -301,6 +302,7 @@ impl JsRunner {
         Some(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
+            value_set: o.value_set,
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         })

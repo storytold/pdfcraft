@@ -2790,16 +2790,12 @@ fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
     let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
     if cfg!(target_os = "linux") {
-        // Linux latches auto-scroll instead of panning with the drag.
-        assert!(s.views[0].auto_scrolling());
+        // Linux auto-scrolls while the wheel is held and stops on release.
+        assert!(!s.views[0].auto_scrolling());
     } else {
         assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
     }
     // The tool still draws with the primary button afterwards.
-    if cfg!(target_os = "linux") {
-        h.key_press(egui::Key::Escape);
-        h.run_steps(2);
-    }
     drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
     let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
     assert_eq!(kinds, ["Ink"]);
@@ -3592,6 +3588,40 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     h.query_all_by_role_and_label(Role::Button, "Freehand-Highlight").last().unwrap().click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+}
+
+/// #6548: resting on the hotbar's gear showed two stacked tooltips, "Hotbar settings" and
+/// "Hotbar settings / add tools". It shows the longer one only and keeps its short name.
+#[test]
+fn hotbar_settings_button_shows_one_tooltip() {
+    let mut h = harness(|_| {});
+    h.run_steps(2);
+    h.get_by_label("Hotbar settings").hover();
+    // egui shows a tooltip once the pointer has rested `tooltip_delay` seconds of *input* time,
+    // and the harness advances that clock by a fixed step every frame, so the wait is counted in
+    // simulated seconds rather than slept: it cannot pass early or depend on the machine's speed.
+    let delay = f64::from(h.ctx.global_style().interaction.tooltip_delay);
+    let start = h.ctx.input(|i| i.time);
+    let elapsed = |h: &Harness<'static, PdfCraftApp>| h.ctx.input(|i| i.time) - start;
+    // The button's name; a second tooltip repeating it would make two. Checked after every
+    // frame, so one that shows only briefly is caught too.
+    let names = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label("Hotbar settings").count();
+    let mut frames = 0;
+    while h.query_all_by_label("Hotbar settings / add tools").next().is_none() {
+        assert!(elapsed(&h) < 4.0 * delay && frames < 100, "no tooltip after {:.2}s of rest", elapsed(&h));
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    // Rest two more delays, so a second tooltip would have had its chance to open.
+    let shown = elapsed(&h);
+    while elapsed(&h) < shown + 2.0 * delay && frames < 100 {
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
+    assert_eq!(names(&h), 1, "the button's name, and no second tooltip");
 }
 
 #[test]
