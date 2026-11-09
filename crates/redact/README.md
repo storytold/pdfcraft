@@ -39,7 +39,8 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   compare generations draws it (cos reads such a reference as null); what one is stored again with,
   its size, filters and parameters, is read as cos reads it. Finding what to store again
   reads each object at most once for each way it is read (a `/JBIG2Globals` chain named part way,
-  or a ring of references or a chain of more than 32, may be read again), and what it fetches, remembers and decodes (a decode that
+  a ring of references or a chain of more than 33, or a value read through a reference of another
+  generation, may be read again), and what it fetches, remembers and decodes (a decode that
   fails counting as much as it was allowed, and an image the dictionaries it names) counts against
   one budget for the run; past it the redaction is refused (`RedactError::SharedJbig2Budget`). The
   images stored again, and the dictionaries read to know copies of them, are decoded within the
