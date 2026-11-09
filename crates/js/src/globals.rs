@@ -90,6 +90,28 @@ fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
 
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop. Later reads
+/// in the script see the new setting.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.highlight != on {
+        // Only the setting the script ends with matters: one request, the latest, under the
+        // host's request cap like any other. One the cap drops changes nothing, so the script
+        // goes on reading the setting the viewer has.
+        h.requests.retain(|r| !matches!(r, Request::Highlight(_)));
+        if h.request(Request::Highlight(on)) {
+            h.doc.highlight = on;
+        }
+    }
+    Ok(JsValue::undefined())
+}
+
 /// `app.launchURL(cURL)`: queues a request to open the URL, given as a string or as an object
 /// with `cURL`.
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -222,7 +244,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
