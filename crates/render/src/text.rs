@@ -23,6 +23,9 @@ pub struct TextFilter {
     pub code: bool,
     /// Exclude Figure-marked text and invisible text layers, including OCR.
     pub images: bool,
+    /// Exclude `/ActualText` that marks no glyph, whose words are drawn as outlines or pictures:
+    /// a page's own text, for deciding whether it still needs reading from its pixels.
+    pub painted: bool,
     /// Page-local MCIDs whose structure ancestors match the selected exclusions.
     pub mcids: HashSet<i32>,
 }
@@ -137,7 +140,9 @@ impl PageText {
     }
 
     /// Case-insensitive search. Returns glyph ranges of every match (words may span line breaks,
-    /// which count as a single space).
+    /// which count as a single space, or as nothing where the line runs on between two Chinese or
+    /// Japanese characters or ends in a soft hyphen: there a query with a space across the break
+    /// doesn't match, and one without does).
     pub fn find(&self, needle: &str) -> Vec<std::ops::Range<usize>> {
         self.find_opts(needle, false, false)
     }
@@ -182,6 +187,11 @@ impl PageText {
                 (start < end).then_some(start..end)
             })
             .collect()
+    }
+
+    /// Index of the first glyph whose box holds a view-space point: the text under the pointer.
+    pub fn glyph_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.glyphs.iter().position(|g| x >= g.rect[0] && x <= g.rect[2] && y >= g.rect[1] && y <= g.rect[3])
     }
 
     /// Index of the glyph nearest to a view-space point (for selection anchors).

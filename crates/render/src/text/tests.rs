@@ -195,9 +195,10 @@ fn redraws_of_a_long_replacement_share_a_text_budget() {
 fn text_after_an_inline_image_survives_a_non_ascii_byte_before_a_later_ei() {
     // Everyday content both ways: a string with a byte above 0x7F, and a later word holding
     // a capital "EI". The end-of-data look-ahead used to read the string's bytes as image
-    // data, so the image swallowed the rest of the page.
+    // data, so the image swallowed the rest of the page. The image is filtered, so its
+    // length isn't known up front and the look-ahead decides.
     let pdf = marked_pages(&[
-        "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \0 EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
+        "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray /F /AHx ID 00> EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
     ]);
 
     assert!(marked_text(&pdf, 0).plain_text().contains("EINGANG"), "the text after the inline image was not extracted");
@@ -277,6 +278,207 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
     ]);
     let plain: Vec<String> = (0..6).map(|p| marked_text(&pdf, p).plain_text()).collect();
     assert_eq!(plain, ["ofice", "AB", "co op", "x\ny", "afi", "abc"]);
+}
+
+#[test]
+fn actual_text_over_painted_paths_reads_where_they_are_painted() {
+    // Words drawn as outlines (a face that can't be embedded) carry their text in /ActualText
+    // (ISO 32000-2 §14.9.4): it reads at the box of the paths it marks, in view space (y down).
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (valid)>> BDC 100 40 m 160 40 l 160 60 l 100 60 l f EMC",
+        // A curve is measured by its control points, as redaction measures it.
+        "/Span <</ActualText (arc)>> BDC 100 40 m 100 100 160 100 160 40 c f EMC",
+        "BT /F1 20 Tf 1 0 0 1 20 150 Tm (a) Tj ET /Span <</ActualText (b)>> BDC 100 140 60 20 re f EMC BT /F1 20 Tf 1 0 0 1 200 150 Tm (c) Tj ET",
+        // Glyphs inside the span keep their own box; the paths beside them don't widen it.
+        "/Span <</ActualText (x)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (y) Tj ET 0 0 300 300 re f EMC",
+        // Paths are not text without a replacement, and an empty one stands for nothing.
+        "100 140 60 20 re f",
+        "/Span <</ActualText ()>> BDC 100 140 60 20 re f EMC",
+    ]);
+    let painted = marked_text(&pdf, 0);
+    assert_eq!(painted.plain_text(), "valid");
+    assert_eq!(painted.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+    assert_eq!(marked_text(&pdf, 1).glyphs[0].rect, [100.0, 200.0, 160.0, 260.0]);
+    let between = marked_text(&pdf, 2);
+    assert_eq!(between.glyphs.iter().map(|g| g.text.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+    let mixed = marked_text(&pdf, 3);
+    assert_eq!(mixed.plain_text(), "x");
+    assert!(mixed.glyphs[0].rect[2] - mixed.glyphs[0].rect[0] < 20.0, "{:?}", mixed.glyphs[0].rect);
+    for page in 4..6 {
+        assert_eq!(marked_text(&pdf, page).plain_text(), "", "page {page}");
+    }
+}
+
+#[test]
+fn the_painted_filter_leaves_out_replacements_that_mark_no_glyph() {
+    // A page's own text, without words that only /ActualText names.
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (valid)>> BDC 100 40 m 160 40 l 160 60 l 100 60 l f EMC",
+        "BT /F1 20 Tf 1 0 0 1 20 150 Tm (a) Tj ET /Span <</ActualText (b)>> BDC 100 140 60 20 re f EMC BT /F1 20 Tf 1 0 0 1 200 150 Tm (c) Tj ET",
+    ]);
+    let own = |page| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), TextFilter { painted: true, ..Default::default() });
+    assert_eq!(own(0).unwrap().plain_text(), "");
+    let between = own(1).unwrap().plain_text();
+    assert!(between.contains('a') && between.contains('c') && !between.contains('b'), "the glyphs stay: {between:?}");
+}
+
+#[test]
+fn actual_text_over_paint_reads_only_where_it_shows() {
+    let pdf = marked_pages(&[
+        // A page-sized fill clipped to a word's box reads at that box.
+        "q 100 40 30 20 re W n /Span <</ActualText (c)>> BDC 0 0 300 300 re f EMC Q",
+        // Wholly clipped away, it reads nowhere.
+        "q 0 0 10 10 re W n /Span <</ActualText (gone)>> BDC 100 40 60 20 re f EMC Q",
+        // A clip that ended before the paint no longer cuts it.
+        "q 0 0 10 10 re W n Q /Span <</ActualText (back)>> BDC 100 40 60 20 re f EMC",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).glyphs[0].rect, [100.0, 240.0, 130.0, 260.0]);
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "");
+    assert_eq!(marked_text(&pdf, 2).glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+}
+
+#[test]
+fn actual_text_over_paint_reads_only_inside_the_crop_box() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let (page, crop) = ([0, 0, 300, 300], [50, 60, 250, 240]);
+    let pages = [
+        // Wholly outside the crop box, as a glyph there is: it reads nowhere.
+        ("/Span <</ActualText (below)>> BDC 100 10 60 20 re f EMC", page, crop),
+        // Across its left edge: it reads from that edge, as a glyph across it still shows.
+        ("/Span <</ActualText (edge)>> BDC 20 100 60 20 re f EMC", page, crop),
+        // Partly painted outside it: its words may be among what the crop box hides.
+        ("/Span <</ActualText (part)>> BDC 100 100 60 20 re f 100 10 60 20 re f EMC", page, crop),
+        // A glyph the crop takes leaves the replacement no glyph, and the paint can't place it.
+        ("/Span <</ActualText (split)>> BDC BT /F1 12 Tf 1 0 0 1 100 10 Tm (x) Tj ET 100 100 60 20 re f EMC", page, crop),
+        // On a page wide enough to hold them, paint too far apart to be the place of words.
+        ("/Span <</ActualText (far)>> BDC 100 40 10 10 re f 12100 40 10 10 re f EMC", [0, 0, 14400, 300], [0, 0, 14400, 300]),
+    ];
+    let boxed = |b: [i64; 4]| b.map(Object::Integer).to_vec();
+    let mut doc = Document::with_version("1.7");
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+    let parent = doc.new_object_id();
+    let mut kids = Vec::new();
+    for (ops, media, crop) in pages {
+        let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
+        kids.push(Object::Reference(doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => parent,
+            "MediaBox" => boxed(media),
+            "CropBox" => boxed(crop),
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+            "Contents" => content,
+        })));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(parent, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }.into());
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => parent });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "");
+    // View space starts at the crop box's top-left corner.
+    assert_eq!(marked_text(&pdf, 1).glyphs[0].rect, [0.0, 120.0, 30.0, 140.0]);
+    for page in 2..5 {
+        assert_eq!(marked_text(&pdf, page).plain_text(), "", "page {page}");
+    }
+}
+
+#[test]
+fn actual_text_over_paint_reads_along_the_way_it_is_drawn() {
+    // The same quarter turn for a path and for text: the replacement runs the way the text does.
+    let pdf = marked_pages(&[
+        "q 0 1 -1 0 150 150 cm /Span <</ActualText (turned)>> BDC 0 0 40 10 re f EMC Q",
+        "q 0 1 -1 0 150 150 cm BT /F1 10 Tf 0 0 Td (t) Tj ET Q",
+    ]);
+    let (painted, text) = (marked_text(&pdf, 0), marked_text(&pdf, 1));
+    assert_eq!(painted.plain_text(), "turned");
+    assert_eq!(painted.glyphs[0].direction, text.glyphs[0].direction);
+    let [x0, y0, x1, y1] = painted.glyphs[0].rect;
+    assert_eq!((x1 - x0, y1 - y0), (10.0, 40.0), "40 along the turned line, 10 across it");
+}
+
+#[test]
+fn actual_text_over_a_picture_reads_where_it_is_drawn() {
+    // Two pixels square, so a box placed in pixels rather than across the picture shows.
+    let pdf = marked_pages(&["/Span <</ActualText (E=mc2)>> BDC q 60 0 0 20 100 40 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q EMC"]);
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "E=mc2");
+    assert_eq!(text.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+    // Counting without images leaves it out.
+    let filter = TextFilter { images: true, ..Default::default() };
+    assert_eq!(extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), filter).unwrap().plain_text(), "");
+}
+
+#[test]
+fn excluded_glyphs_beside_paint_leave_the_whole_replacement_out() {
+    // The marked glyphs are a figure's, so the replacement goes with them; the paint beside
+    // them neither keeps it nor turns it into a mixed span that can't be counted.
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (f)>> BDC /Figure BMC BT /F1 20 Tf 1 0 0 1 100 150 Tm (x) Tj ET EMC 100 40 60 20 re f EMC",
+        // Paint inside an excluded region is excluded with it.
+        "/Span <</ActualText (z)>> BDC /Figure BMC 100 40 60 20 re f EMC EMC",
+        "/Span <</ActualText (t)>> BDC /Table BMC q 60 0 0 20 100 40 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q EMC EMC",
+    ]);
+    let filtered = |page, filter| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), filter).unwrap().plain_text();
+    let (figures, tables) = (TextFilter { images: true, ..Default::default() }, TextFilter { tables: true, ..Default::default() });
+    assert_eq!(filtered(0, figures.clone()), "");
+    assert_eq!((filtered(1, TextFilter::default()), filtered(1, figures)), ("z".to_string(), String::new()));
+    assert_eq!((filtered(2, TextFilter::default()), filtered(2, tables)), ("t".to_string(), String::new()));
+}
+
+#[test]
+fn paint_split_by_an_exclusion_is_a_mixed_span_that_cant_be_counted() {
+    // Paint places a replacement that marks no glyph, so paint left out mixes it as excluded
+    // glyphs do: the words left out can't be told from the rest.
+    let picture = "q 60 0 0 20 100 40 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q";
+    let (table, beside) = (
+        format!("/Span <</ActualText (t)>> BDC /Table BMC {picture} EMC 200 40 60 20 re f EMC"),
+        format!("/Span <</ActualText (p)>> BDC {picture} 200 40 60 20 re f EMC"),
+    );
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (w)>> BDC /Figure BMC 100 40 60 20 re f EMC 200 40 60 20 re f EMC",
+        &table,
+        &beside,
+        // Glyphs place this one, and the paint beside them is not its words.
+        "/Span <</ActualText (g)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (y) Tj ET /Figure BMC 100 40 60 20 re f EMC EMC",
+    ]);
+    let filtered = |page, filter| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), filter).map(|t| t.plain_text());
+    let (figures, tables) = (TextFilter { images: true, ..Default::default() }, TextFilter { tables: true, ..Default::default() });
+    for (page, text, filter) in [(0, "w", figures.clone()), (1, "t", tables), (2, "p", figures.clone())] {
+        assert_eq!(filtered(page, TextFilter::default()), Ok(text.to_string()));
+        assert!(filtered(page, filter).is_err(), "page {page}");
+    }
+    assert_eq!(filtered(3, figures), Ok("g".to_string()));
+}
+
+#[test]
+fn annotations_never_join_a_replacement_the_page_left_open() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let pages = doc.new_object_id();
+    let content = doc.add_object(Stream::new(dictionary! {}, b"/Span <</ActualText (open)>> BDC 100 40 60 20 re f".to_vec()));
+    let ap = doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 50.into(), 50.into()] },
+        b"0 0 50 50 re f".to_vec(),
+    ));
+    let annot = doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Square", "F" => 4,
+        "Rect" => vec![200.into(), 200.into(), 250.into(), 250.into()], "AP" => dictionary! { "N" => ap },
+    });
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages, "Contents" => content, "Annots" => vec![Object::Reference(annot)],
+        "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)],
+    });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "open");
+    assert_eq!(text.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0], "the square comment is not part of it");
 }
 
 #[test]
@@ -1967,28 +2169,141 @@ fn text_outside_the_crop_box_is_clipped() {
         }
     }
 
-    // A CropBox that is zero-area or disjoint from the MediaBox leaves an empty visible region,
-    // even when a glyph straddles the clamped intersection point.
-    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+    // A CropBox that is zero-area or disjoint from the MediaBox is read as a missing one
+    // (vendored hayro-syntax patch 38): the visible region is the MediaBox, as on a page without
+    // a CropBox, not a region of no area.
+    let text_with = |crop: Option<[i64; 4]>| {
         let mut doc = Document::with_version("1.7");
         let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
         let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
         let pages = doc.new_object_id();
-        let page = doc.add_object(dictionary! {
+        let mut page = dictionary! {
             "Type" => "Page",
             "Parent" => pages,
             "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
-            "CropBox" => crop.map(Object::Integer).to_vec(),
             "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
             "Contents" => content,
-        });
+        };
+        if let Some(crop) = crop {
+            page.set("CropBox", crop.map(Object::Integer).to_vec());
+        }
+        let page = doc.add_object(page);
         doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
         let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
         doc.trailer.set("Root", catalog);
         let mut bytes = Vec::new();
         doc.save_to(&mut bytes).unwrap();
         let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
-        assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
+        extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+    };
+    let media = text_with(None);
+    assert!(media.contains("LeftOut") && media.contains("AboveOut") && !media.contains("OutSpan"), "{media:?}");
+    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+        assert_eq!(text_with(Some(crop)), media, "{crop:?}");
     }
+}
+
+/// A page box that encloses no area is read as a missing one (vendored hayro-syntax patch 38,
+/// ISO 32000-2 §14.11.2): a `/MediaBox [0 0 0 0]` as the default page, a `/CropBox [0 0 0 0]`,
+/// or one with nothing in common with the media box, as the media box. The page's visible region
+/// had no area, so its text was all outside it and none was extracted (pdf.js
+/// `boundingBox_invalid`). Each case is checked on both paths: the text is extracted, and the page
+/// renders at the size of the box that stands in, with the text's ink on it. A page's own box
+/// without area gives way to an inherited one with area; an inherited box without area falls
+/// through to the default as an own one does.
+#[test]
+fn text_on_a_page_whose_box_has_no_area_is_extracted() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    type Boxes = &'static [(&'static str, [i64; 4])];
+    /// (case, inherited boxes, the page's own boxes, where the word goes, expected size).
+    type Case = (&'static str, Boxes, Boxes, (i64, i64), (u32, u32));
+    /// A one-page document whose `/Pages` node carries `inherited`, and whose page carries `own`
+    /// and draws "Boxed" at `(x, y)` in Helvetica 30 pt.
+    fn boxed(inherited: Boxes, own: Boxes, (x, y): (i64, i64)) -> Vec<u8> {
+        let rect = |r: &[i64; 4]| r.iter().map(|v| Object::Integer(*v)).collect::<Vec<_>>();
+        let mut doc = Document::with_version("1.7");
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let pages = doc.new_object_id();
+        let ops = format!("BT /F1 30 Tf {x} {y} Td (Boxed) Tj ET");
+        let content = doc.add_object(Stream::new(dictionary! {}, ops.into_bytes()));
+        let mut page = dictionary! { "Type" => "Page", "Parent" => pages, "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content };
+        for (key, r) in own {
+            page.set(*key, rect(r));
+        }
+        let page = doc.add_object(page);
+        let mut node = dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1};
+        for (key, r) in inherited {
+            node.set(*key, rect(r));
+        }
+        doc.objects.insert(pages, node.into());
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
+    // US Letter (612 × 792 pt, hayro-syntax patch 44) covers 612 × 792 device pixels at scale 1.
+    const LETTER_PX: (u32, u32) = (612, 792);
+    let cases: [Case; 7] = [
+        ("own MediaBox without area", &[], &[("MediaBox", [0, 0, 0, 0])], (25, 500), LETTER_PX),
+        ("own CropBox without area", &[], &[("MediaBox", [0, 0, 800, 600]), ("CropBox", [0, 0, 0, 0])], (25, 500), (800, 600)),
+        (
+            "CropBox touching the media box at a corner",
+            &[],
+            &[("MediaBox", [0, 0, 600, 800]), ("CropBox", [600, 800, 1000, 1000])],
+            (25, 500),
+            (600, 800),
+        ),
+        // Text past US Letter but inside the inherited box is kept.
+        (
+            "own MediaBox without area, inherited one with area",
+            &[("MediaBox", [0, 0, 1200, 1200])],
+            &[("MediaBox", [0, 0, 0, 0])],
+            (700, 900),
+            (1200, 1200),
+        ),
+        (
+            "own CropBox without area, inherited one with area",
+            &[("CropBox", [0, 0, 300, 300])],
+            &[("MediaBox", [0, 0, 600, 800]), ("CropBox", [0, 0, 0, 0])],
+            (25, 100),
+            (300, 300),
+        ),
+        ("inherited MediaBox without area", &[("MediaBox", [0, 0, 0, 0])], &[], (25, 500), LETTER_PX),
+        ("inherited CropBox outside the media box", &[("CropBox", [600, 600, 900, 900])], &[("MediaBox", [0, 0, 500, 500])], (25, 400), (500, 500)),
+    ];
+    let mut failures = Vec::new();
+    for (case, inherited, own, at, size) in cases {
+        let bytes = boxed(inherited, own, at);
+        let pdf = Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).map(|t| t.plain_text().trim().to_string());
+        if text.as_deref() != Some("Boxed") {
+            failures.push(format!("{case}: text {text:?}"));
+        }
+        let mut renderer = crate::PageRenderer::new(std::sync::Arc::new(bytes), crate::RenderConfig::default());
+        let out = renderer.render(crate::RenderRequest { page: 0, kind: crate::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        let ink = out.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128 && p[1] < 128 && p[2] < 128).count();
+        if out.error.is_some() || (out.width, out.height) != size || ink < 50 {
+            failures.push(format!(
+                "{case}: rendered {}×{} with {ink} dark pixels ({:?}), expected {}×{} with ink",
+                out.width, out.height, out.error, size.0, size.1
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The glyph under a point is the first whose box holds it, edges included; between glyphs, none.
+#[test]
+fn the_glyph_at_a_point_is_the_first_whose_box_holds_it() {
+    let text = PageText {
+        glyphs: vec![em_box("a", 0.0, 0.0, 10.0, 10.0), em_box("b", 8.0, 0.0, 20.0, 10.0)],
+        line_of: vec![0, 0],
+        space_before: vec![false, false],
+    };
+    assert_eq!(text.glyph_at(5.0, 5.0), Some(0));
+    assert_eq!(text.glyph_at(9.0, 5.0), Some(0), "the first of overlapping boxes");
+    assert_eq!(text.glyph_at(20.0, 10.0), Some(1), "an edge is in");
+    assert_eq!(text.glyph_at(25.0, 5.0), None);
+    assert_eq!(PageText::default().glyph_at(0.0, 0.0), None);
 }

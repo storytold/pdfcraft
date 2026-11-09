@@ -240,8 +240,11 @@ pub fn stroke(
     // PdfCraft patch: kurbo's stroker can put NaN into the outline of a curve that is nearly a
     // line (all control points within a rounding error of the chord), and `fill` then drops the
     // whole outline. Stroke it again with such curves as lines. A finite outline is unchanged.
+    // PdfCraft patch (4): it can also put NaN into the offset of a cubic whose second control
+    // point is its end point (as `y` builds), so that control point is moved off it in the same
+    // pass.
     if !stroke_ctx.output().is_finite() {
-        let path = near_line_curves_as_lines(path, tolerance);
+        let path = robust_for_stroking(path, tolerance);
         expand_stroke(&path, style, tolerance, stroke_ctx);
     }
     fill(
@@ -256,8 +259,10 @@ pub fn stroke(
 
 // PdfCraft patch.
 /// `path` with each quadratic or cubic whose control points all lie within
-/// `tolerance` of its chord replaced by a line to its end point. One element out per element in.
-fn near_line_curves_as_lines(path: impl IntoIterator<Item = PathEl>, tolerance: f64) -> BezPath {
+/// `tolerance` of its chord replaced by a line to its end point, and (patch (4)) each other
+/// cubic whose second control point is its end point given a short end handle instead
+/// ([`open_zero_end_handle`]). One element out per element in.
+fn robust_for_stroking(path: impl IntoIterator<Item = PathEl>, tolerance: f64) -> BezPath {
     let mut out = BezPath::new();
     let mut start = kurbo::Point::ZERO;
     let mut last = start;
@@ -269,6 +274,9 @@ fn near_line_curves_as_lines(path: impl IntoIterator<Item = PathEl>, tolerance: 
                     && near_segment(p2, last, p3, tolerance) =>
             {
                 PathEl::LineTo(p3)
+            }
+            PathEl::CurveTo(p1, p2, p3) => {
+                PathEl::CurveTo(p1, open_zero_end_handle(last, p1, p2, p3, tolerance), p3)
             }
             el => el,
         };
@@ -283,6 +291,33 @@ fn near_line_curves_as_lines(path: impl IntoIterator<Item = PathEl>, tolerance: 
         out.push(el);
     }
     out
+}
+
+// PdfCraft patch (4).
+/// The second control point of the cubic `p0 p1 p2 p3`, moved `tolerance` towards `p1` (or `p0`
+/// when `p1` is that close too) when it sits on the end point `p3`, as a `y` curve's does.
+///
+/// There the curve's derivative vanishes at its end. kurbo finds the cusps of a wide stroke's
+/// offset curve with a root search on the curvature, which grows without bound towards such an
+/// end; at some widths the search returns the end point itself, and the unit tangent kurbo takes
+/// there is `0 / 0`. Only an exact zero does this: a handle even 1e-9 long strokes finitely, as
+/// does a first control point on the start point (`v`). The moved control point moves the curve
+/// by at most `4 / 9 * tolerance`.
+fn open_zero_end_handle(
+    p0: kurbo::Point,
+    p1: kurbo::Point,
+    p2: kurbo::Point,
+    p3: kurbo::Point,
+    tolerance: f64,
+) -> kurbo::Point {
+    if p2 != p3 {
+        return p2;
+    }
+    [p1, p0]
+        .into_iter()
+        .map(|q| q - p3)
+        .find(|v| v.hypot() > tolerance)
+        .map_or(p2, |v| p3 + v * (tolerance / v.hypot()))
 }
 
 /// Whether `p` is within `tolerance` of the segment from `a` to `b`. False for non-finite input.
@@ -388,6 +423,63 @@ mod tests {
         path.curve_to((f64::NAN, 10.0), (10.0, 60.0), (60.0, 60.0));
         let lines = stroke_lines(&path, 2.0, &mut StrokeCtx::default());
         assert!(lines.is_empty());
+    }
+
+    /// The outline of `path` stroked with `style`, drawn translated by (80, -136) so that the
+    /// test paths below land inside the 200 × 200 cull box, and whether kurbo's outline was finite.
+    fn stroke_style_lines(path: &BezPath, style: &Stroke) -> (Vec<Line>, bool) {
+        let mut lines = Vec::new();
+        let mut ctx = StrokeCtx::default();
+        stroke(
+            Level::baseline(),
+            path,
+            style,
+            Affine::translate((80.0, -136.0)),
+            &mut lines,
+            &mut FlattenCtx::default(),
+            &mut ctx,
+            RectU16::new(0, 0, 200, 200),
+        );
+        let finite = ctx.output().is_finite();
+        (lines, finite)
+    }
+
+    // A file in the PDFBox issue tracker strokes "XX" outlines at 32 pt whose subpaths include
+    // `y` curves (the second control point on the end point, so the end tangent vanishes), and at
+    // 16, 32 and 63 pt kurbo's offset of one of them came back with NaN, so the whole outline was
+    // dropped. These exact coordinates are the trigger. `v` (the first control point on the start
+    // point) is the mirrored case, the same two curves run backwards; kurbo strokes it finitely,
+    // and it is checked as a guard.
+    #[test]
+    fn a_wide_stroke_of_a_curve_with_a_zero_end_tangent_is_drawn() {
+        use crate::kurbo::{Cap, Join};
+        let a = Point::new(21.4166, 234.5928);
+        let b = Point::new(18.9478, 236.3428);
+        let e = Point::new(20.8697, 238.4209);
+        let mut y = BezPath::new();
+        y.move_to(a);
+        y.curve_to(Point::new(19.9009, 236.0303), b, b);
+        y.curve_to(Point::new(19.2603, 238.4209), e, e);
+        let mut v = BezPath::new();
+        v.move_to(e);
+        v.curve_to(e, Point::new(19.2603, 238.4209), b);
+        v.curve_to(b, Point::new(19.9009, 236.0303), a);
+
+        let mut failures = Vec::new();
+        for (name, path) in [("y", &y), ("v", &v)] {
+            for width in 1..=64 {
+                for join in [Join::Miter, Join::Round, Join::Bevel] {
+                    for cap in [Cap::Butt, Cap::Round, Cap::Square] {
+                        let style = Stroke::new(f64::from(width)).with_join(join).with_caps(cap);
+                        let (lines, finite) = stroke_style_lines(path, &style);
+                        if lines.is_empty() || !finite {
+                            failures.push((name, width, join, cap));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "strokes dropped: {failures:?}");
     }
 
     // A regression guard: it passes with or without the patch.
