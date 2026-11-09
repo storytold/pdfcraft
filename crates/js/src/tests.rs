@@ -74,6 +74,22 @@ fn scripts_change_other_fields_and_their_properties() {
 }
 
 #[test]
+fn widget_rect_reads_and_writes_a_four_number_array() {
+    let o = go(
+        "var t = getField('total'); t.rect = [10, 20, 110, 50]; event.value = getField('total').rect.join(',');",
+        &Event::field("Mouse Up", "agree", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "10,20,110,50");
+    assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 20.0, 110.0, 50.0]));
+    let o = go("getField('total').rect = [110, 50, 10, 20];", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 20.0, 110.0, 50.0]));
+    let o = go("getField('total').rect = [0, 0, Infinity, 10];", &Event::field("Mouse Up", "agree", ""));
+    assert!(o.error.is_some());
+    assert!(o.changed.iter().all(|f| f.name != "total"));
+}
+
+#[test]
 fn choice_and_check_box_object_model() {
     let o = go(
         "var s = getField('size'); event.value = [s.numItems, s.getItemAt(2, false), s.currentValueIndices, s.valueAsString, \
@@ -1024,6 +1040,20 @@ mod formcalc {
         assert_eq!(calc(r#"Format("9.9", -0.04)"#), "0.0");
         assert_eq!(calc(r#"Format("99", -0.2)"#), "00");
         assert_eq!(calc(r#"Format("9.9", -1.5)"#), "-1.5");
+    }
+
+    /// A calculated amount shows the number it is, not the binary noise past a double's 15
+    /// significant digits: 279893.88 is stored as 279893.880000000004656…, which twelve fixed
+    /// decimals printed as `279893.880000000005`. Small values keep their twelve decimals.
+    #[test]
+    fn calculated_numbers_print_at_most_fifteen_significant_digits() {
+        assert_eq!(calc("1 * 279893.88"), "279893.88");
+        assert_eq!(calc("1 * 291774.12"), "291774.12");
+        assert_eq!(calc("279893.88 + 291774.12 + 304171.06 + 317107.44 + 273970.85"), "1466917.35");
+        assert_eq!(calc("1000000 / 3"), "333333.333333333");
+        assert_eq!(calc("1000 / 3"), "333.333333333333");
+        assert_eq!(calc("1 / 3"), "0.333333333333");
+        assert_eq!(calc("0.1 + 0.2"), "0.3");
     }
 
     /// Assigning one long value to many fields at once stops at the run's byte budget and is

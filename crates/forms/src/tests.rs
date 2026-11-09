@@ -967,6 +967,61 @@ fn text_a_field_font_cannot_hold_is_kept_marked_and_redrawn_elsewhere() {
     assert!(need_appearances(&doc));
 }
 
+/// Thai typed into a field whose `/DA` font (Helvetica, WinAnsi) can't hold it is drawn from the
+/// Thai face as Add text draws it: Type 3 glyphs (stream objects of their own, with a ToUnicode
+/// map) beside the field's font, which draws the rest, so every viewer shows the same glyphs. The
+/// `/DA` is kept, nothing is marked and other viewers aren't asked to redraw. The ink of stacked
+/// marks and descenders stays inside the border, an automatic size shrinking to keep it there.
+/// A build without a Thai face refuses the text, saying why, and keeps the old value.
+#[test]
+fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /DA (/Helv 0 Tf 0 g) /V (Ada) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (big) /DA (/Helv 16 Tf 0 g) /Rect [50 600 350 640] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 12 Tf 0 g) /Rect [50 400 350 500] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let thai = "ชื่อ: บุญฤทธิ์ น้ำฎู";
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        let err = set_value(&mut doc, "name", &FieldValue::Text(thai.into())).unwrap_err();
+        assert!(matches!(&err, FormError::Invalid(m) if m.contains("Thai") && m.contains("CRAFT_FONTS_DIR")), "{err}");
+        assert_eq!(field(&fields(&doc), "name").value, ["Ada"]);
+        assert!(!need_appearances(&doc) && undrawn_fields(&doc).is_empty());
+        return;
+    }
+    set_value(&mut doc, "name", &FieldValue::Text(thai.into())).unwrap();
+    set_value(&mut doc, "big", &FieldValue::Text(thai.into())).unwrap();
+    set_value(&mut doc, "note", &FieldValue::Text(format!("น้ำฎู {thai}\nปั้น ฎู"))).unwrap();
+    let doc = reopen(&doc);
+    assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc));
+    let (lo, hi) = (pdfcraft_fonts::shaped_text::thai_reach("ฎู").unwrap()[0], pdfcraft_fonts::shaped_text::thai_reach("น้ำ").unwrap()[1]);
+    for (name, height) in [("name", 20.0), ("big", 40.0), ("note", 100.0)] {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        assert!(!ap.contains('?') && ap.contains("/PCTh1 ") && ap.contains("(: ) Tj"), "{ap}");
+        let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap();
+        let font = fonts.get(b"PCTh1").and_then(|f| f.as_dict()).unwrap();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        assert!(String::from_utf8_lossy(&cmap.decoded().unwrap()).contains("<0E190E490E33>"), "น้ำ copies as typed");
+        // The size each line is drawn at, and where: every line's ink is inside the box.
+        let size: f64 = ap.split(" Tf").next().and_then(|s| s.rsplit(' ').next()).and_then(|s| s.parse().ok()).unwrap();
+        let ys: Vec<f64> = ap.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect();
+        let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
+        assert!(top + hi * size <= height + 1e-3 && bottom + lo * size >= -1e-3, "{name}: {ys:?} at {size} in {height}");
+    }
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
@@ -3000,6 +3055,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
+                        rect: None,
                     }],
                     message: None,
                 }
@@ -3634,6 +3690,149 @@ fn repeated_script_references_share_one_decode_budget() {
     assert_eq!(all.len(), 300);
     let calculate: usize = all.iter().filter_map(|f| f.actions.scripts.calculate.as_ref()).map(String::len).sum();
     assert!(calculate > 0 && calculate <= limit, "{calculate} bytes of field scripts");
+}
+
+/// An unfiltered stream of `body`, as an object of [`document`].
+fn raw_stream(body: &str) -> String {
+    format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len())
+}
+
+/// 300 fields whose value is one 1 MiB text stream: a reading of the form decodes their values
+/// within one budget, not 300 MiB.
+#[test]
+fn repeated_value_streams_share_one_decode_budget() {
+    let fields_list: String = (0..300).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"x".repeat(1 << 20))];
+    objs.extend((0..300).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R /DV 2 0 R >>")));
+    let all = fields(&document(&objs));
+    assert_eq!(all.len(), 300);
+    let read: usize = all.iter().flat_map(|f| f.value.iter().chain(&f.default)).map(String::len).sum();
+    assert!(read > 0 && read <= crate::read::MAX_VALUE_BYTES, "{read} bytes of values");
+    assert_eq!(all[0].value, ["x".repeat(1 << 20)], "the first field still reads its value");
+}
+
+/// Clear form leaves a field as it is when its default is a stream the value budget didn't reach:
+/// 70 fields typed in, whose default is one 1 MiB text stream, keep a value, the first ones
+/// their default and the rest what was typed, none of them emptied.
+#[test]
+fn clear_form_keeps_a_field_whose_default_was_not_read() {
+    let n = 70;
+    let fields_list: String = (0..n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"d".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V (typed) /DV 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let values: Vec<String> = (0..n)
+        .map(|i| {
+            let field = doc.get(ObjRef::new(i as u32 + 3, 0));
+            field.as_dict().and_then(|d| d.get(b"V")).and_then(|v| v.as_string().map(PdfString::to_text)).unwrap_or_default()
+        })
+        .collect();
+    assert!(values.iter().all(|v| !v.is_empty()), "no field is emptied");
+    assert_eq!(values[0], "d".repeat(1 << 20), "the first field goes back to its default");
+    assert_eq!(values[n - 1], "typed", "the last field, whose default wasn't read, keeps its value");
+    // A value the reading didn't decode, with no default, is cleared: it isn't known to be empty.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"v".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let last = doc.get(ObjRef::new(n as u32 + 2, 0));
+    assert!(last.as_dict().and_then(|d| d.get(b"V")).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
+}
+
+/// Renaming a field that 300 calculations read through one shared Calculate action, whose script
+/// is a 256 KiB stream, decodes and rewrites that action once, in place: every calculation reads
+/// the new name, and nothing is decoded or written 300 times.
+#[test]
+fn a_rename_rewrites_a_shared_calculation_once() {
+    let n = 300;
+    let refs = |from: usize| -> String { (from..from + n).map(|i| format!("{i} 0 R ")).collect() };
+    let js = format!("AFSimple_Calculate(\"SUM\", new Array (\"a\"));{}", " ".repeat(256 << 10));
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [5 0 R {}] >>", refs(8)),
+        format!("<< /Fields [5 0 R {}] /DA (/Helv 0 Tf 0 g) >>", refs(8)),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        raw_stream(&js),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (c{i}) /Rect [50 10 250 30] /P 3 0 R /AA << /C 6 0 R >> >>")));
+    let mut doc = document(&objs);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let action = ObjRef::new(6, 0);
+    let renamed = (8..8 + n).all(|i| {
+        let field = doc.get(ObjRef::new(i as u32, 0));
+        field.as_dict().and_then(|d| d.get(b"AA")).and_then(|aa| aa.as_dict()?.get(b"C")?.as_ref()) == Some(action)
+    });
+    assert!(renamed, "every calculation still names the one shared action");
+    let js = doc.get(action).as_dict().and_then(|d| d.get(b"JS")?.as_string().map(PdfString::to_text)).unwrap_or_default();
+    assert!(js.contains("\"qty\"") && !js.contains("\"a\""), "the shared action reads the new name");
+    assert!(js.len() <= MAX_SCRIPT_BYTES, "{} bytes written once", js.len());
+}
+
+/// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
+/// pieces past it read as empty, so their rectangles aren't found.
+#[test]
+fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
+    let piece = format!("%{}\n10 10 20 20 re S\n", "x".repeat(1 << 20));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents [{}] >>", "4 0 R ".repeat(10)),
+        raw_stream(&piece),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes.len(), 10, "one page's allowance reads them all");
+    let mut budget = DecodeBudget::new(4 << 20, 0);
+    let boxes = crate::detect::shapes_within(&doc, 0, &mut budget).boxes.len();
+    assert!((1..=4).contains(&boxes), "{boxes} rectangles read within 4 MiB");
+    assert_eq!(budget.remaining(), 0, "the budget is spent");
+}
+
+/// Field detection keeps at most 256 saved graphics states, and each `Q` still restores its own
+/// `q` past that: a scale set 300 saves deep is gone once they are all restored.
+#[test]
+fn page_shapes_restore_saves_past_the_cap() {
+    let content = format!("{} 2 0 0 2 0 0 cm {} 10 10 20 20 re S", "q ".repeat(300), "Q ".repeat(300));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[10.0, 10.0, 30.0, 30.0]]);
+    // A scale set past the cap and closed by its own `Q` leaves a matrix that can't be known until
+    // the last lost save closes: what is drawn in between isn't reported at the scaled place.
+    let content = format!("{} q 2 0 0 2 0 0 cm Q 10 10 20 20 re S {} 40 40 10 10 re S", "q ".repeat(257), "Q ".repeat(257));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[40.0, 40.0, 50.0, 50.0]]);
+}
+
+/// The PDF/A declaration is read from metadata each filter stage of which decodes within
+/// [`crate::appearances::MAX_XMP_BYTES`], as preflight decodes it: a field drawn with characters its
+/// font lacks decodes no more than that a stage.
+#[test]
+fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
+    let declared = |xmp: String| declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]));
+    let pdfa = |padding: usize| format!("<x:xmpmeta><pdfaid:part>2</pdfaid:part>{}</x:xmpmeta>", " ".repeat(padding));
+    assert!(declared(pdfa(1 << 20)));
+    assert!(!declared(pdfa(crate::appearances::MAX_XMP_BYTES)), "metadata past the cap declares nothing");
+    assert!(!declared("<x:xmpmeta><dc:title>pdfaid</dc:title></x:xmpmeta>".into()), "metadata without pdfaid:part declares nothing");
+    // 3.5 MiB stored as hex, then Flate: its stages decode 7 and 3.5 MiB, each within the cap.
+    let xmp = pdfa(7 << 19);
+    let hex: Vec<u8> = xmp.bytes().flat_map(|b| [b"0123456789ABCDEF"[usize::from(b >> 4)], b"0123456789ABCDEF"[usize::from(b & 15)]]).collect();
+    let mut stream = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &hex);
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+    let mut doc = Document::new_empty();
+    let metadata = doc.add(Object::Stream(stream));
+    let catalog = doc.add(Object::Dict([(b"Metadata".to_vec(), Object::Ref(metadata))].into_iter().collect()));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert!(declares_pdfa(&doc), "metadata through a chain of filters declares PDF/A, as preflight decodes it");
 }
 
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,
@@ -5406,6 +5605,29 @@ fn sorting_keeps_which_of_two_items_with_one_export_value_is_selected() {
 }
 
 #[test]
+fn clearing_a_kids_length_limit_does_not_bring_back_its_parents() {
+    let mut doc = fixture();
+    let city = field(&fields(&doc), "address.city").clone();
+    let parent = doc.get(city.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(parent, |d| d.set(b"MaxLen".to_vec(), Object::Int(3))).unwrap();
+    set_props(&mut doc, "address.city", &FieldProps { max_len: Some(Some(8)), ..FieldProps::default() }).unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").max_len, Some(8));
+    set_props(&mut doc, "address.city", &FieldProps { max_len: Some(None), ..FieldProps::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let f = field(&fields(&doc), "address.city").clone();
+    assert_eq!(f.max_len, None, "no limit, not the parent's 3");
+    let own = doc.get(f.obj).as_dict().and_then(|d| d.get(b"MaxLen")).and_then(Object::as_int);
+    assert_eq!(own, Some(0), "the kid holds an explicit unlimited of its own");
+    set_value(&mut doc, "address.city", &FieldValue::Text("Absalom".into())).unwrap();
+    assert_eq!(field(&fields(&reopen(&doc)), "address.city").value, ["Absalom"], "not cut to 3 characters");
+    // Without a parent limit, clearing still removes the key.
+    set_props(&mut doc, "name", &FieldProps { max_len: Some(Some(4)), ..FieldProps::default() }).unwrap();
+    set_props(&mut doc, "name", &FieldProps { max_len: Some(None), ..FieldProps::default() }).unwrap();
+    let name = field(&fields(&doc), "name").clone();
+    assert!(doc.get(name.obj).as_dict().unwrap().get(b"MaxLen").is_none());
+}
+
+#[test]
 fn clearing_a_kids_default_does_not_bring_back_its_parents() {
     let mut doc = fixture();
     let all = fields(&doc);
@@ -5545,4 +5767,36 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
+}
+
+/// A `/MK /BC` or `/BG` written `[1 0 0 null]` is CMYK with the null as 0, as annotation `/C`
+/// colours are read (PDFBOX-2699), not RGB from the three numbers left; three numbers stay RGB.
+#[test]
+fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
+    let widget = |name: &str, mk: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({name}) /Rect [50 700 70 720] /P 3 0 R /MK << {mk} >> /BS << /W 1 /S /S >> >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] >>".into(),
+        widget("cmyk", "/BG [0 0 1 null] /BC [1 0 0 null]"),
+        widget("rgb", "/BG [0 0 1] /BC [1 0 0]"),
+    ];
+    let mut doc = document(&objs);
+    let off = |doc: &mut Document, name: &str| {
+        redraw_field(doc, name).unwrap();
+        let all = fields(doc);
+        let w = field(&all, name).widgets[0].obj;
+        let wd = doc.get(w).as_dict().cloned().unwrap();
+        let n = doc.resolve(wd.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+        let r = n.as_dict().unwrap().reference(b"Off").expect("an Off appearance");
+        let Object::Stream(s) = &*doc.get(r) else { panic!("Off is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let cmyk = off(&mut doc, "cmyk");
+    assert!(cmyk.contains("0 0 1 0 k") && cmyk.contains("1 0 0 0 K"), "CMYK background and border: {cmyk}");
+    let rgb = off(&mut doc, "rgb");
+    assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
 }
