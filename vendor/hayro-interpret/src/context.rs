@@ -153,6 +153,12 @@ impl<'a> InterpreterCache<'a> {
         self.decoded_cache.decodes()
     }
 
+    /// PdfCraft patch (82): how many of [`Self::decoded_image_decodes`] were of soft masks and
+    /// `/Mask` images, for diagnostics and tests.
+    pub fn decoded_mask_decodes(&self) -> usize {
+        self.decoded_cache.mask_decodes()
+    }
+
     /// PdfCraft patch (48): how many `/ICCBased` profiles were read through this cache, for
     /// diagnostics and tests. A profile used again, by the same stream object or by a copy with
     /// the same dictionary and bytes, is read once.
