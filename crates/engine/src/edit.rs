@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use crate::{
-    AddedContent, AddedText, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit, InitialView, Label,
-    LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox, Protection, ReviewState,
-    Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image, field_table, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
+    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
+    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
+    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster,
+    open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -119,6 +120,15 @@ pub enum Edit {
         bold: Option<bool>,
         italic: Option<bool>,
     },
+    /// Write `bookmarks` as children of `parent` from child `index` on, or with `replace` in
+    /// place of the whole outline (`parent` must then be `[]`). A bookmark whose page this
+    /// document lacks is kept without a destination (see [`pdfcraft_organize::import_outline`]).
+    ImportBookmarks {
+        parent: Vec<usize>,
+        index: usize,
+        bookmarks: Vec<pdfcraft_organize::OutlineNode>,
+        replace: bool,
+    },
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,
@@ -150,12 +160,25 @@ pub enum Edit {
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
     /// and centred in it (#4077).
+    /// `line` is a text line under the picture, already filled in ([`Session::stamp_line`](crate::Session::stamp_line)).
     AddCustomStamp {
         page: usize,
         rect: [f64; 4],
         name: String,
         file: MarkFile,
         author: String,
+        line: Option<String>,
+    },
+    /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
+    /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an
+    /// image) fitted inside `rect`, keeping its shape and centred, or a labelled frame without one.
+    AddModel3d {
+        page: usize,
+        rect: [f64; 4],
+        model: Arc<Vec<u8>>,
+        poster: Option<MarkFile>,
+        activation: pdfcraft_annot::Activation3d,
+        name: String,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
@@ -222,6 +245,14 @@ pub enum Edit {
         index: usize,
         points: Vec<[f64; 2]>,
     },
+    /// Open, close or move a comment's pop-up window (`rect` in user space; a comment without a
+    /// pop-up gets one).
+    SetAnnotationPopup {
+        page: usize,
+        index: usize,
+        rect: Option<[f64; 4]>,
+        open: Option<bool>,
+    },
     /// Resize a rectangle, oval or text box.
     ResizeAnnotation {
         page: usize,
@@ -243,11 +274,34 @@ pub enum Edit {
         index: usize,
         fill: Option<Rgb>,
     },
+    /// Draw a rectangle's, oval's, polygon's or text box's fill, or a text box's text, at an
+    /// opacity of its own (0–1), the line or border keeping the comment's; `None` leaves that
+    /// part as it is. `StyleAnnotation`'s opacity sets the whole comment's.
+    PartOpacity {
+        page: usize,
+        index: usize,
+        fill: Option<f64>,
+        text: Option<f64>,
+    },
     /// Change the font size (pt) of a text box, typewriter text or callout.
     FontSizeAnnotation {
         page: usize,
         index: usize,
         size: f64,
+    },
+    /// Give a text box, typewriter text or callout a border colour of its own (`None`: the
+    /// text's again).
+    BorderColorAnnotation {
+        page: usize,
+        index: usize,
+        color: Option<Rgb>,
+    },
+    /// Give a text box or typewriter text an oval, a circle or a rectangle for its border: the
+    /// text box keeps its place, the oval or circle goes around it.
+    BorderShapeAnnotation {
+        page: usize,
+        index: usize,
+        shape: BorderShape,
     },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
@@ -305,6 +359,20 @@ pub enum Edit {
     },
     /// Document Properties ▸ Initial View (and the language and binding).
     SetInitialView(Box<InitialView>),
+    /// Print production ▸ Add printer marks: trim and bleed marks, registration targets, colour
+    /// bars and page information outside the trim box, as a page mark; the page may be widened
+    /// to make room (`settings.make_room`), so the page geometry is read again.
+    AddPrinterMarks {
+        pages: Vec<usize>,
+        settings: PrinterMarks,
+        replace: bool,
+    },
+    /// Print production ▸ Fix hairlines: strokes narrower than `settings.narrower_than` points on
+    /// the page (after every transformation; zero-width lines always) get `settings.width`.
+    FixHairlines {
+        pages: Vec<usize>,
+        settings: Hairlines,
+    },
     /// Edit ▸ Attach a file: a document-level attachment (`/Names /EmbeddedFiles`) under
     /// `name`, made unique; `mime` is the embedded file's `/Subtype` when known.
     AddAttachment {
@@ -316,6 +384,16 @@ pub enum Edit {
     /// Remove the document-level attachment whose name-tree key is `key`.
     DeleteAttachment {
         key: String,
+    },
+    /// Print production ▸ Convert colours: every colour on the pages in grayscale, RGB or CMYK.
+    ConvertColours {
+        pages: Vec<usize>,
+        settings: pdfcraft_edit::ConvertColours,
+    },
+    /// Change or clear only `/Desc` on a document-level attachment's file specification.
+    EditAttachmentDescription {
+        key: String,
+        description: Option<String>,
     },
     /// Build a tagged structure tree for an untagged, text-only document.
     AutoTagText,
@@ -345,6 +423,11 @@ pub enum Edit {
     },
     /// Tags panel ▸ Mark as artifact: retire a leaf tag and mark its content as an artifact.
     MarkTagArtifact {
+        object: pdfcraft_cos::ObjRef,
+    },
+    /// A layout table as plain blocks: the table, its row groups and rows become Div tags and its
+    /// cells P tags (Div when they hold tags), without their Table attributes.
+    LayoutTableToBlocks {
         object: pdfcraft_cos::ObjRef,
     },
     /// Document JavaScripts: add, replace (`script`) or remove (`None`) the document-level
@@ -386,6 +469,13 @@ pub enum Edit {
         page: usize,
         words: Vec<pdfcraft_ocr::PlacedWord>,
     },
+    /// Scan & OCR ▸ Enhance ▸ Scanned document: put the scan images
+    /// [`ScanCleanJob::run`](crate::scan_clean::ScanCleanJob::run) cleaned in place of the old
+    /// ones (each object must still be an image). Built by
+    /// [`Session::apply_scan_clean`](crate::Session::apply_scan_clean).
+    EnhanceScan {
+        images: Vec<(pdfcraft_cos::ObjRef, pdfcraft_cos::Stream)>,
+    },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
     EditTextLine {
@@ -406,6 +496,12 @@ pub enum Edit {
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
     },
+    /// Delete mixed existing and added objects together (references from one inventory of
+    /// `page`), as one step: what Delete and Cut do to objects selected together.
+    DeleteObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {
@@ -414,6 +510,10 @@ pub enum Edit {
         text: String,
         /// Formatting changes (font, size, colour, alignment); default keeps the paragraph's.
         style: pdfcraft_edit::BlockStyle,
+    },
+    /// Expose supported grouped source text on one page for direct editing.
+    PrepareText {
+        page: usize,
     },
     /// An explicit open-licensed full font program, completing subsets or selected by a user.
     RegisterTextFont {
@@ -494,6 +594,13 @@ pub enum Edit {
         content: AddedContent,
         file: Option<(String, Arc<Vec<u8>>)>,
     },
+    /// Edit ▸ Paste of objects copied together in Edit a PDF ([`Document::copy_objects`](crate::Document::copy_objects)), in this
+    /// document or another: drawn on top of `page` as they were, moved by `offset` (user space).
+    PasteObjects {
+        page: usize,
+        clip: Arc<crate::ObjectClip>,
+        offset: [f64; 2],
+    },
     /// Apply redaction marks (all, or those on `pages`): remove what they cover for good.
     ApplyRedactions {
         pages: Option<Vec<usize>>,
@@ -533,6 +640,15 @@ pub enum Edit {
     ImportData {
         name: String,
         bytes: Arc<Vec<u8>>,
+    },
+    /// Paste copied comments (XFDF from [`Session::export_comments`]) onto `page` as new
+    /// comments: copies under names of their own, so nothing is replaced and pasting twice
+    /// gives two sets; replies keep their copied parent.
+    PasteComments {
+        xfdf: String,
+        page: usize,
+        /// Where the copies go: moved by (dx, dy) in user space, or at their own positions.
+        offset: Option<[f64; 2]>,
     },
     /// Remove Hidden Information: the chosen categories.
     RemoveHidden {

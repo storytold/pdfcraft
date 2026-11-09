@@ -3,8 +3,61 @@
 
 pub use craft_print::{
     Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
+    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
 };
+
+/// Windows: the in-box DLLs printing draws and describes jobs with. The executables delay-load
+/// them (`apps/pdfcraft{,-cli}/build.rs`, and `build.rs` for this crate's tests: the same list)
+/// so a Windows installation without them still starts (#2630); a call into a missing
+/// delay-loaded DLL would end the process, so printing checks for them first.
+#[cfg(windows)]
+pub(crate) const PRINT_DLLS: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
+
+/// The first print DLL missing from `system32`, if any.
+#[cfg(windows)]
+pub(crate) fn missing_print_dll_in(system32: &std::path::Path) -> Option<&'static str> {
+    PRINT_DLLS.into_iter().find(|dll| !system32.join(dll).is_file())
+}
+
+#[cfg(all(windows, test))]
+thread_local! {
+    /// Tests: the folder the print DLLs are looked for in, instead of the system's, so the
+    /// public entry points can be checked against a Windows that lacks them.
+    pub(crate) static SYSTEM32_FOR_TEST: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+    /// Tests: how many times [`printers`] asked the system's printer backend, so a test can tell
+    /// the guard answered without relying on the machine having no printers.
+    pub(crate) static PRINTER_BACKEND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The first print DLL this Windows installation lacks. `None` when all are there, and when the
+/// system folder is unknown (the loader then decides, as before).
+fn missing_print_dll() -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        #[cfg(test)]
+        if let Some(dir) = SYSTEM32_FOR_TEST.with(|d| d.borrow().clone()) {
+            return missing_print_dll_in(&dir);
+        }
+        let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"))?;
+        missing_print_dll_in(&std::path::Path::new(&root).join("System32"))
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+fn unavailable(dll: &str) -> crate::PrintError {
+    crate::PrintError::Spool(format!("printing needs {dll}, which this Windows installation lacks; use Save as PDF instead"))
+}
+
+/// The system's printers; none on a Windows installation without the print DLLs.
+pub fn printers() -> Vec<Printer> {
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    #[cfg(all(windows, test))]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    craft_print::printers()
+}
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
@@ -143,14 +196,68 @@ pub(crate) fn printer_options_via_within(
     options
 }
 
+/// The keys the macOS print dialog names a job's title and owner under.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_NAME_KEY: &str = "com.apple.print.JobInfo.PMJobName";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_OWNER_KEY: &str = "com.apple.print.JobInfo.PMJobOwner";
+
+/// `text` as a job option's value: `lp_args` passes on only printable ASCII, up to 64 bytes,
+/// without `/ : = "`, and CUPS would take `'` and `\` as quoting and `{` as the start of a
+/// collection, so all of these become `_`. Text with nothing left of it, such as a title in
+/// another script, takes `fallback`: the job must still name something. So does a bare `true` or
+/// `false`, which CUPS would send as a boolean, not the name a filter reads.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn job_option_value(text: &str, fallback: &str) -> String {
+    let kept = |c: char| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{');
+    let value: String = text.chars().take(64).map(|c| if kept(c) { c } else { '_' }).collect();
+    if !text.chars().any(kept) || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+        return fallback.to_string();
+    }
+    value
+}
+
+/// `job` naming its title and `owner` as a job from the macOS print dialog does. `lp` sends
+/// neither, and a driver's filter can depend on them: Kyocera's crashes without them, so nothing
+/// prints, while the same file sent with both does (#5743). A value the caller set stands: the
+/// last of a repeated option wins in CUPS, which compares their names without case.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
+    let mut named = job.clone();
+    for (key, value) in [(JOB_NAME_KEY, job.title.as_str()), (JOB_OWNER_KEY, owner.unwrap_or_default())] {
+        if !job.options.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            named.options.push((key.to_string(), job_option_value(value, "PdfCraft")));
+        }
+    }
+    named
+}
+
+/// The job as the system spooler takes it.
+fn spooled(job: &Job) -> Job {
+    #[cfg(target_os = "macos")]
+    {
+        with_job_info(job, std::env::var("USER").ok().as_deref())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        job.clone()
+    }
+}
+
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
+    craft_print::submit(pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
+    craft_print::submit_with_progress(pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {

@@ -93,6 +93,11 @@ pub(crate) struct Bitmap {
     pub(crate) stride: u32,
     /// Packed pixel data, one bit per pixel, row-major order.
     /// Each row is padded to a word boundary.
+    ///
+    /// PdfCraft patch: the padding is 0s, as pixels past the edge are (6.2.5.2, 6.3.5.2). Generic
+    /// and refinement decoding read the rows above their own pixels a word at a time, padding
+    /// included, and a refinement reads its reference the same way: whatever writes whole words
+    /// keeps the padding 0 (see `clear_padding`).
     pub(crate) data: Vec<Word>,
     /// "This four-byte field gives the horizontal offset in pixels of the bitmap
     /// encoded in this segment relative to the page bitmap." (7.4.1.3)
@@ -134,14 +139,37 @@ impl Bitmap {
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
         let data = vec![default_word; stride as usize * height as usize];
-        Ok(Self {
+        let mut bitmap = Self {
             width,
             height,
             stride,
             data,
             x_location,
             y_location,
-        })
+        };
+        if default_pixel {
+            bitmap.clear_padding();
+        }
+        Ok(bitmap)
+    }
+
+    /// PdfCraft patch: clear the bits past `width` in each row's last word. "All pixels lying
+    /// outside the bounds of the actual bitmap or the reference bitmap have the value 0" (6.3.5.2),
+    /// and a refinement reads its reference a word at a time, those bits included: filled whole
+    /// with a default pixel of 1, they read as 1s, so a refinement of the page, or of an
+    /// intermediate text or halftone region, decoded to other pixels than were coded.
+    fn clear_padding(&mut self) {
+        let trailing = self.width % WORD_BITS;
+        // A width of 0 has no words to clear, and `chunks_exact_mut` would take a stride of 0.
+        if trailing == 0 {
+            return;
+        }
+        let mask: Word = !0 << (WORD_BITS - trailing);
+        for row in self.data.chunks_exact_mut(self.stride as usize) {
+            if let Some(last) = row.last_mut() {
+                *last &= mask;
+            }
+        }
     }
 
     pub(crate) fn reinitialize(
@@ -162,6 +190,9 @@ impl Bitmap {
         self.data.clear();
         self.data
             .resize(stride as usize * height as usize, default_word);
+        if default_pixel {
+            self.clear_padding();
+        }
 
         Ok(())
     }
@@ -188,6 +219,17 @@ impl Bitmap {
         let word_idx = (y * self.stride + x / WORD_BITS) as usize;
         let bit_pos = WORD_SHIFT - (x % WORD_BITS);
         self.data[word_idx] |= (value as Word) << bit_pos;
+    }
+
+    /// PdfCraft patch: combine a decoded region into this page at the region's own location.
+    ///
+    /// "Unless otherwise specified, all multi-bit values shall be treated as unsigned values"
+    /// (5.4.4), and a region's location (7.4.1.3, 7.4.1.4) is not specified otherwise. One past
+    /// `i32::MAX` is past any page. Cast to a signed coordinate it read as left of the page or above
+    /// it, and one within a region's size of 2^32 came back onto it.
+    pub(crate) fn combine_region(&mut self, region: &Self, operator: CombinationOperator) {
+        let signed = |location: u32| i32::try_from(location).unwrap_or(i32::MAX);
+        self.combine(region, signed(region.x_location), signed(region.y_location), operator);
     }
 
     /// Combine another bitmap into this one at a specific location.
@@ -275,5 +317,43 @@ impl Bitmap {
         }
 
         self.data[(row * self.stride + word_idx) as usize]
+    }
+
+    /// PdfCraft patch: the `width` × `height` area of this bitmap at `x`, `y`, as a bitmap there.
+    /// It is what a refinement of the page refines: "a bitmap containing the current contents of
+    /// the page buffer, restricted to the area of the page buffer specified by this segment's
+    /// region segment information field" (7.4.7.4). Off this bitmap the area is 0, past its width
+    /// too whatever the padding of its rows holds, and outside the area the refinement reads 0
+    /// (6.3.5.2), where reading the page itself took in the pixels around the area.
+    pub(crate) fn area(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Self> {
+        let mut area = Self::new_with(width, height, x, y, false)?;
+        for row in 0..height {
+            let Some(from_row) = y.checked_add(row).filter(|r| *r < self.height) else {
+                continue;
+            };
+            for word in 0..area.stride {
+                // The first column of this word of the area, in this bitmap; past its width,
+                // or past where a column can be, the rest of the row is 0.
+                let Some(from) = x.checked_add(word * WORD_BITS).filter(|c| *c < self.width) else {
+                    break;
+                };
+                let (index, shift) = (from / WORD_BITS, from % WORD_BITS);
+                let mut bits = self.get_word(from_row, index) << shift;
+                if shift > 0 {
+                    bits |= self.get_word(from_row, index + 1) >> (WORD_BITS - shift);
+                }
+                // Both are above 0: `from` is inside this bitmap, and `word` inside the area.
+                let ours = self.width - from;
+                let theirs = width - word * WORD_BITS;
+                let kept = ours.min(theirs);
+                if kept < WORD_BITS {
+                    bits &= !0 << (WORD_BITS - kept);
+                }
+                if let Some(slot) = area.data.get_mut((row * area.stride + word) as usize) {
+                    *slot = bits;
+                }
+            }
+        }
+        Ok(area)
     }
 }
