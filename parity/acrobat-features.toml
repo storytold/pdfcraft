@@ -1322,8 +1322,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/render/src/inspect/tests.rs::attachments_of_both_kinds_are_listed_and_extracted", "crates/ui-egui/tests/it/attachment_row.rs::the_right_click_menu_opens_saves_and_deletes", "crates/ui-egui/tests/it/attachment_row.rs::double_clicking_a_pdf_attachment_opens_it_in_a_new_tab"]
-notes = "Each row has Save, Open in a new tab (PDFs) and Delete (the document's own attachments) buttons, the same items on a right-click, and a double-click that opens a PDF in a new tab or saves any other file (#3466). Not yet: Acrobat's Search attachments, and opening a non-PDF attachment in another program (it is saved instead)."
+evidence = ["crates/render/src/inspect/tests.rs::attachments_of_both_kinds_are_listed_and_extracted", "crates/ui-egui/tests/it/attachment_row.rs::the_right_click_menu_opens_saves_and_deletes", "crates/ui-egui/tests/it/attachment_row.rs::double_clicking_a_pdf_attachment_opens_it_in_a_new_tab", "crates/ui-egui/tests/it/pickers.rs::a_saved_attachment_carries_the_documents_zone"]
+notes = "Each row has Save, Open in a new tab (PDFs) and Delete (the document's own attachments) buttons, the same items on a right-click, and a double-click that opens a PDF in a new tab or saves any other file (#3466). On Windows a saved attachment keeps the Mark-of-the-Web (Zone.Identifier) of the PDF it came from, or gets the Internet zone when the PDF has none (#3990). Not yet: Acrobat's Search attachments, and opening a non-PDF attachment in another program (it is saved instead)."
 
 [[feature]]
 id = "view.layers-panel"
