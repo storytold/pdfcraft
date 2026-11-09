@@ -141,6 +141,25 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 }
 
 #[test]
+fn page_shadows_are_an_observable_app_wide_preference() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
+    for value in ["false", "true"] {
+        ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": value }));
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], value == "true");
+    }
+    for value in ["off", "1", "False", ""] {
+        assert!(call(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": value })).is_err());
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": false }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
+    h.state_mut().active = None;
+    ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": "false" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [
@@ -459,6 +478,9 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
 
 #[test]
 fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
+    if crate::support::skip_without_catalogs("lithuanian_password_dialog_translates_dynamic_labels_and_validation") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
     ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "protect" }));
@@ -477,6 +499,9 @@ fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
 
 #[test]
 fn lithuanian_inspector_title_updates_through_the_control_channel() {
+    if crate::support::skip_without_catalogs("lithuanian_inspector_title_updates_through_the_control_channel") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
     h.run_steps(2);
@@ -496,6 +521,9 @@ fn lithuanian_inspector_title_updates_through_the_control_channel() {
 /// command ids agents drive stay exactly the same.
 #[test]
 fn language_switch_preserves_document_and_command_ids() {
+    if crate::support::skip_without_catalogs("language_switch_preserves_document_and_command_ids") {
+        return;
+    }
     use pdfcraft_ui_egui::i18n;
     let (mut h, c) = harness();
     let doc = h.state().views[0].id;
@@ -897,6 +925,25 @@ fn middle_button_pans_while_held_outside_linux() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// With Invert middle-button drag on, a held middle drag moves the view the way the pointer goes.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
+    let (mut h, c) = harness();
+    h.state_mut().set_option("zoom", "400").unwrap();
+    ok(&mut h, &c, "ui.set", json!({ "key": "invert_middle_drag", "value": "true" }));
+    h.run_steps(3);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    let p = h.state().views[0].viewport_rect().center();
+    let top = h.state().views[0].page_screen_rect(1).unwrap().top();
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y - 60.0], "steps": 12, "button": "middle" }));
+    h.run_steps(2);
+    let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
+    assert!((moved - (top + 60.0)).abs() < 1.0, "dragging up scrolls up, so the page moves down: {top} -> {moved}");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
 #[test]
 fn state_and_view_options() {
     let (mut h, c) = harness();
@@ -915,6 +962,9 @@ fn state_and_view_options() {
 
 #[test]
 fn japanese_controls_and_search_keep_command_ids() {
+    if crate::support::skip_without_catalogs("japanese_controls_and_search_keep_command_ids") {
+        return;
+    }
     if crate::support::skip_without_glyphs("japanese_controls_and_search_keep_command_ids", "ja", "") {
         return;
     }
@@ -947,6 +997,9 @@ fn japanese_controls_and_search_keep_command_ids() {
 
 #[test]
 fn german_preferences_and_search_keep_command_ids() {
+    if crate::support::skip_without_catalogs("german_preferences_and_search_keep_command_ids") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
     ok(&mut h, &c, "ui.click", json!({ "label": "Konvertieren" }));
@@ -979,6 +1032,9 @@ fn german_preferences_and_search_keep_command_ids() {
 
 #[test]
 fn ukrainian_preferences_and_search_keep_command_ids() {
+    if crate::support::skip_without_catalogs("ukrainian_preferences_and_search_keep_command_ids") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "uk" }));
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
@@ -1012,6 +1068,9 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
 
 #[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
+    if crate::support::skip_without_catalogs("preferences_menu_and_shortcut_allow_switching_interface_languages") {
+        return;
+    }
     if crate::support::skip_without_glyphs("preferences_menu_and_shortcut_allow_switching_interface_languages", "ja", "") {
         return;
     }
@@ -1056,6 +1115,9 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
 
 #[test]
 fn japanese_dialogs_errors_and_custom_action_names() {
+    if crate::support::skip_without_catalogs("japanese_dialogs_errors_and_custom_action_names") {
+        return;
+    }
     if crate::support::skip_without_glyphs("japanese_dialogs_errors_and_custom_action_names", "ja", "") {
         return;
     }
@@ -1099,6 +1161,9 @@ fn japanese_dialogs_errors_and_custom_action_names() {
 
 #[test]
 fn simplified_chinese_about_tabs_and_credit_controls() {
+    if crate::support::skip_without_catalogs("simplified_chinese_about_tabs_and_credit_controls") {
+        return;
+    }
     if crate::support::skip_without_glyphs("simplified_chinese_about_tabs_and_credit_controls", "zh-hans", "") {
         return;
     }
@@ -1131,6 +1196,9 @@ fn simplified_chinese_about_tabs_and_credit_controls() {
 
 #[test]
 fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
+    if crate::support::skip_without_catalogs("simplified_chinese_signature_prompts_and_errors_keep_document_state") {
+        return;
+    }
     if crate::support::skip_without_glyphs("simplified_chinese_signature_prompts_and_errors_keep_document_state", "zh-hans", "") {
         return;
     }
@@ -1733,6 +1801,7 @@ fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
         text: "Unsaved signature note".into(),
         size: 10.0,
         color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
         focus: false,
     });
     h.state_mut().active = None;
@@ -2069,4 +2138,44 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
+}
+
+#[test]
+fn accessible_labels_on_format_text_and_pin_dialog() {
+    let (mut h, c) = harness();
+
+    // 1. Check Dialog::PinTool accessibility labels
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::PinTool);
+    h.run_steps(3);
+
+    let search = ok(&mut h, &c, "ui.inspect", json!({"role": "TextInput", "query": "Search tools…"}));
+    assert!(search["count"].as_u64().unwrap() >= 1, "search box has accessible label: {search}");
+
+    let result_rows = ok(&mut h, &c, "ui.inspect", json!({"query": "Organize Pages"}));
+    assert!(result_rows["count"].as_u64().unwrap() >= 1, "result row has accessible label: {result_rows}");
+
+    let pin_toggles = ok(&mut h, &c, "ui.inspect", json!({"query": "Pin"}));
+    assert!(pin_toggles["count"].as_u64().unwrap() >= 1, "pin toggle has accessible label: {pin_toggles}");
+
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+
+    // 2. Open Add Text so Format text panel is visible
+    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+    h.run_steps(3);
+
+    let font_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font", "role": "ComboBox"}));
+    assert!(font_combo["count"].as_u64().unwrap() >= 1, "format-font has accessible label: {font_combo}");
+
+    let size_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font size"}));
+    assert!(size_combo["count"].as_u64().unwrap() >= 1, "format-size has accessible label: {size_combo}");
+
+    let line_spacing_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Line spacing", "role": "ComboBox"}));
+    assert!(line_spacing_combo["count"].as_u64().unwrap() >= 1, "format-line-spacing has accessible label: {line_spacing_combo}");
+
+    let scale_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Horizontal scale", "role": "SpinButton"}));
+    assert!(scale_spin["count"].as_u64().unwrap() >= 1, "horizontal scale spin button has accessible label: {scale_spin}");
+
+    let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
+    assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }

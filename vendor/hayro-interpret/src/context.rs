@@ -37,6 +37,12 @@ std::thread_local! {
     // PdfCraft patch (18): whether this page's content budget ran out, reported as
     // `InterpreterWarning::ContentTruncated`.
     static CONTENT_TRUNCATED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    // PdfCraft patch (89): the form XObjects being drawn on this page, outermost first, across
+    // the contexts of the tiling patterns, Type 3 glyphs, soft masks and groups painted while
+    // they draw. A form already on it draws itself and is skipped. Its length is bounded by the
+    // nesting limits: every form on it is nested in the ones before it.
+    static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// PdfCraft patch: decoded content-stream bytes one page may hold at once: its contents, and
@@ -218,6 +224,10 @@ impl<'a> Context<'a> {
         NESTED_PAINTS.with(|n| n.set(0));
         CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
+        // PdfCraft patch (89): no form of another page is being drawn.
+        FORMS_DRAWING.with(|forms| forms.borrow_mut().clear());
+        // PdfCraft patch (73): and fresh JBIG2 decoding, which every image of it shares.
+        hayro_syntax::set_page_jbig2_work(settings.jbig2_work);
         // PdfCraft patch (55): a fallback left over from another page is not this page's.
         crate::color::take_color_fallback();
         crate::encode::reset_mesh_budget();
@@ -262,6 +272,56 @@ impl<'a> Context<'a> {
             skipped_saves: Vec::new(),
             stream_floor: 0,
             luminosity_in_device_cmyk: false,
+        }
+    }
+
+    /// PdfCraft patch (89): begins drawing the form `id`; `false` when that form is already
+    /// being drawn, so drawing it again would never end (ISO 32000-2 §8.10.1: a form is a
+    /// self-contained description; one that contains itself describes nothing finite). The
+    /// skip is reported as `InterpreterWarning::ContentTruncated`. A form without an object
+    /// number can't be told apart and is only bounded by the nesting limits.
+    ///
+    /// The forms being drawn are those of this page's context and of every context painting
+    /// inside it (a tiling pattern, a Type 3 glyph, a soft mask or a group), so a form that
+    /// reaches itself through one of those is skipped too, while a form drawn again after it
+    /// has finished draws as usual.
+    pub(crate) fn enter_form(
+        &mut self,
+        id: Option<hayro_syntax::object::ObjectIdentifier>,
+    ) -> bool {
+        let Some(id) = id else {
+            return true;
+        };
+        // The stack is never borrowed across a call, so the borrow succeeds; if it didn't,
+        // the form draws, bounded by the nesting limits as before this patch.
+        let entered = FORMS_DRAWING.with(|forms| {
+            let Ok(mut forms) = forms.try_borrow_mut() else {
+                return None;
+            };
+            if forms.contains(&id) {
+                return Some(false);
+            }
+            forms.push(id);
+            Some(true)
+        });
+        if entered == Some(false) {
+            warn!("form XObject draws itself; the inner drawing is skipped");
+            CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+            return false;
+        }
+        true
+    }
+
+    /// PdfCraft patch (89): ends drawing a form begun with `enter_form`.
+    pub(crate) fn leave_form(&mut self, id: Option<hayro_syntax::object::ObjectIdentifier>) {
+        if let Some(id) = id {
+            FORMS_DRAWING.with(|forms| {
+                if let Ok(mut forms) = forms.try_borrow_mut()
+                    && forms.last() == Some(&id)
+                {
+                    forms.pop();
+                }
+            });
         }
     }
 

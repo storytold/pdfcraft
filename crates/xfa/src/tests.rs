@@ -188,6 +188,46 @@ fn the_template_parses_with_fonts_captions_and_rich_text() {
     assert!(last.break_before_page);
 }
 
+/// A page area that declares far more content areas than any real master keeps only the first
+/// 128, with a warning. `split_block` walks every content area of a page before starting a new
+/// one, re-scanning the unplaced items each time, so tens of thousands of them cost time
+/// quadratic in a splittable subform's paragraphs. Capping the count bounds that walk.
+#[test]
+fn a_page_area_keeps_at_most_a_hundred_and_twenty_eight_content_areas() {
+    let areas = (0..200).map(|i| format!("<contentArea x=\"0.5in\" y=\"{}pt\" w=\"7in\" h=\"1pt\"/>", i)).collect::<String>();
+    let xml = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="front"><medium stock="letter" short="8.5in" long="11in"/>{areas}</pageArea>
+ </pageSet>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    );
+    let (tpl, warnings) = parse(&xml).unwrap();
+    let ps = tpl.root.page_set.as_ref().unwrap();
+    assert_eq!(ps.areas[0].content.len(), 128, "the content areas are capped");
+    assert!(warnings.iter().any(|w| w.contains("content areas")), "a warning records the cap: {warnings:?}");
+    // Still said after a hundred other warnings (CodeRabbit review on #5844): images that can't
+    // be decoded, parsed before the page set, fill the warnings' shared cap first.
+    let bad = "<draw w=\"1in\" h=\"1in\"><value><image contentType=\"image/png\">!!!</image></value></draw>".repeat(120);
+    let crowded = xml.replace("<subform name=\"form\" layout=\"tb\">", &format!("<subform name=\"form\" layout=\"tb\">{bad}"));
+    let (_, warnings) = parse(&crowded).unwrap();
+    assert!(warnings.len() > 100, "the other warnings came first: {}", warnings.len());
+    assert!(warnings.iter().any(|w| w.contains("content areas")), "the cap is still recorded");
+    // Many capped page areas say it once, found without scanning every warning (it comes first).
+    let page_area = |n: usize| format!(r#"<pageArea name="p{n}"><medium stock="letter" short="8.5in" long="11in"/>{areas}</pageArea>"#);
+    let many: String = (0..50).map(page_area).collect();
+    let crowded = crowded.replacen(&page_area(0).replace("p0", "front"), &many, 1);
+    let (_, warnings) = parse(&crowded).unwrap();
+    assert_eq!(warnings.iter().filter(|w| w.contains("content areas")).count(), 1, "said once");
+    assert!(warnings[0].contains("content areas"), "kept first: {:?}", warnings.first());
+}
+
 #[test]
 fn rich_text_max_length_reaches_the_field_and_layout() {
     for (attribute, expected) in [
@@ -676,6 +716,29 @@ fn empty_repeating_subforms_spend_the_layout_budget() {
     // Three levels (125,000 instances) still lay out.
     let tpl = format!("<template><subform layout=\"tb\">{}{}</subform></template>", level.repeat(3), "</subform>".repeat(3));
     assert!(layout_xml(&tpl).is_ok());
+}
+
+#[test]
+fn a_block_split_across_very_many_pages_spends_the_layout_budget() {
+    // One-point content areas slice a flowed subform's paragraphs one line to a page, so the
+    // block is split across hundreds of pages; split_block rescans the still-unplaced
+    // paragraphs once per page, which is quadratic in their number. Fewer paragraphs than this
+    // lay out (188 pages here), so the page limit does not catch it; the rescans spend the
+    // work budget instead.
+    let areas: String = (0..128).map(|i| format!("<contentArea x=\"0.5in\" y=\"{i}pt\" w=\"7in\" h=\"1pt\"/>")).collect();
+    let paras: String = (0..2500).map(|i| format!("<p>Paragraph number {i} with a few words to fill a line.</p>")).collect();
+    let tpl = format!(
+        "<template><subform name=\"form\" layout=\"tb\"><pageSet><pageArea name=\"p\">\
+         <medium stock=\"letter\" short=\"8.5in\" long=\"11in\"/>{areas}</pageArea></pageSet>\
+         <subform name=\"body\" layout=\"tb\"><field name=\"t\" w=\"7in\"><ui><textEdit multiLine=\"1\"/></ui>\
+         <value><exData contentType=\"text/html\"><body xmlns=\"http://www.w3.org/1999/xhtml\">{paras}</body></exData></value>\
+         </field></subform></subform></template>"
+    );
+    match layout_xml(&tpl) {
+        // It says what ran out, not that the form is nested too deeply (CodeRabbit review on #5844).
+        Err(XfaError::TooLarge(m)) => assert!(m.contains("split across"), "{m}"),
+        other => panic!("a block split across very many pages must be refused: {other:?}"),
+    }
 }
 
 #[test]
@@ -2997,6 +3060,52 @@ fn a_radio_button_sits_where_a_check_box_would() {
     }
 }
 
+/// A check box without a width is as wide as its box and caption, at least its minW, not the rest
+/// of its group: two choices side by side in a positioned radio group keep their own boxes.
+#[test]
+fn a_radio_choice_without_a_width_is_as_wide_as_its_content() {
+    let choice = |name: &str, x: &str, item: &str| {
+        format!(
+            r#"<field name="{name}" x="{x}" y="0mm" h="5.906mm" minW="20.32mm"><ui><checkButton shape="round"/></ui><caption reserve="-5.08mm"><value><text>{name}</text></value><para hAlign="center"/></caption><font typeface="Arial" size="10pt"/><items><text>{item}</text></items></field>"#
+        )
+    };
+    let body = format!(
+        r#"<subform name="body" layout="position" w="7.5in" h="1in"><exclGroup name="pick" x="0mm" y="0mm" w="40.64mm">{}{}</exclGroup></subform>"#,
+        choice("Yes", "0mm", "Y"),
+        choice("No", "20.308mm", "N"),
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let laid = widgets(&form.pages[0]);
+    let x = |name: &str| laid.iter().find(|w| w.name == name).map(|w| w.rect.x - 36.0).unwrap_or_else(|| panic!("no radio button {name}"));
+    let mm = 72.0 / 25.4;
+    // A negative reserve (as Designer writes) sizes the caption to its text, so content is
+    // narrower than minW and each box sits at the right end of its own 20.32mm-wide choice.
+    assert!((x("Yes") - (20.32 * mm - 10.0)).abs() < 0.01, "Yes box at {} pt", x("Yes"));
+    assert!((x("No") - ((20.308 + 20.32) * mm - 10.0)).abs() < 0.01, "No box at {} pt", x("No"));
+}
+
+/// Without a width or minW, a check box is exactly its caption's reserve plus its box, whether
+/// placed (its right-aligned box ends there) or flowed (two fit side by side in an lr-tb row).
+#[test]
+fn a_check_box_without_a_width_is_its_caption_and_box() {
+    let check = |name: &str, at: &str| {
+        format!(
+            r#"<field name="{name}" {at} h="0.25in"><ui><checkButton size="10pt"/></ui><caption reserve="0.5in"><value><text>{name}</text></value></caption><para hAlign="right"/><items><integer>1</integer><integer>0</integer></items></field>"#
+        )
+    };
+    let box_at = |body: String, name: &str| {
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0]).iter().find(|w| w.name == name).map(|w| (w.rect.x - 36.0, w.rect.y - 36.0)).unwrap()
+    };
+    let placed = format!(r#"<subform name="body" layout="position" w="7.5in" h="1in">{}</subform>"#, check("placed", r#"x="0in" y="0in""#));
+    let (x, _) = box_at(placed, "placed");
+    assert!((x - 36.0).abs() < 0.01, "the box ends the 46pt field, after the 36pt caption: {x}");
+
+    let flowed = format!(r#"<subform name="body" layout="lr-tb" w="3in">{}{}</subform>"#, check("first", ""), check("second", ""));
+    let (x, y) = box_at(flowed, "second");
+    assert!((x - 82.0).abs() < 0.01 && y.abs() < 0.01, "the second check box follows the first on its row: ({x}, {y})");
+}
+
 /// A caption without a reserve leaves room for the box at the size it is drawn, a box larger than
 /// its field shrinking to fit; and a field without a height is as tall as that caption drawn in
 /// all the box leaves, not at some narrower width.
@@ -4144,4 +4253,400 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!has_password_values(&doc));
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// A form with `draws` in a subform placed by position, on a letter page whose content area is a
+/// quarter inch in, with `master` on the page itself.
+fn form_of_draws(master: &str, draws: &str) -> String {
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><pageSet><pageArea name="p">{master}<contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet><subform name="s" w="8in" h="2.5in">{draws}</subform></subform></template></xdp:xdp>"#
+    )
+}
+
+/// A line from the top-left to the bottom-right of a box 0.7in × 0.4in, as #5561's form draws.
+fn line_draw(x: &str, y: &str, rotate: &str) -> String {
+    format!(r#"<draw x="{x}" y="{y}" w="0.7in" h="0.4in" {rotate}><value><line><edge thickness="2.5pt"/></line></value></draw>"#)
+}
+
+/// `xdp` laid out into its document, and that document's first page.
+fn written(xdp: &str) -> (Document, Dict) {
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let root = doc.get(doc.root().unwrap());
+    let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+    let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
+    let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap());
+    let page = page.as_dict().unwrap().clone();
+    (doc, page)
+}
+
+fn page_content(doc: &Document, page: &Dict) -> String {
+    let contents = doc.get(page.reference(b"Contents").unwrap());
+    let Object::Stream(s) = &*contents else { panic!("not a stream") };
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+/// The ends of each line `content` strokes, on the page: through the matrices around it.
+fn stroked_lines(content: &str) -> Vec<[(f64, f64); 2]> {
+    let (mut stack, mut matrix) = (Vec::new(), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let (mut numbers, mut from, mut lines): (Vec<f64>, _, _) = (Vec::new(), (0.0, 0.0), Vec::new());
+    for token in content.split_whitespace() {
+        let at = |m: [f64; 6], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        let last = |numbers: &[f64]| (numbers[numbers.len() - 2], numbers[numbers.len() - 1]);
+        match token {
+            "q" => stack.push(matrix),
+            "Q" => matrix = stack.pop().unwrap(),
+            "cm" => {
+                let n: [f64; 6] = numbers[numbers.len() - 6..].try_into().unwrap();
+                let m = matrix;
+                matrix = [
+                    n[0] * m[0] + n[1] * m[2],
+                    n[0] * m[1] + n[1] * m[3],
+                    n[2] * m[0] + n[3] * m[2],
+                    n[2] * m[1] + n[3] * m[3],
+                    n[4] * m[0] + n[5] * m[2] + m[4],
+                    n[4] * m[1] + n[5] * m[3] + m[5],
+                ];
+            }
+            "m" => {
+                let (x, y) = last(&numbers);
+                from = at(matrix, x, y);
+            }
+            "l" => {
+                let (x, y) = last(&numbers);
+                lines.push([from, at(matrix, x, y)]);
+            }
+            _ => {}
+        }
+        match token.parse() {
+            Ok(v) => numbers.push(v),
+            Err(_) => numbers.clear(),
+        }
+    }
+    lines
+}
+
+fn turned(page: &Page) -> Vec<&crate::layout::Turned> {
+    page.items.iter().filter_map(|i| if let Item::Turned(t) = i { Some(t.as_ref()) } else { None }).collect()
+}
+
+/// A draw turns counter-clockwise about its anchor. The figures are where Acrobat put these lines
+/// on the page it flattened for #5561's form: from the anchor by (+50.4, -28.8) unturned, and by
+/// (+28.8, +50.4), (-50.4, +28.8) and (-28.8, -50.4) at 90, 180 and 270 degrees.
+#[test]
+fn a_draw_turns_counter_clockwise_about_its_anchor() {
+    let draws = [
+        line_draw("1in", "0.95in", ""),
+        line_draw("3in", "0.95in", r#"rotate="90""#),
+        line_draw("5in", "0.95in", r#"rotate="180""#),
+        line_draw("7in", "0.95in", r#"rotate="270""#),
+    ]
+    .concat();
+    let (doc, page) = written(&form_of_draws("", &draws));
+    let lines = stroked_lines(&page_content(&doc, &page));
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    let top = 792.0 - 18.0 - 0.95 * 72.0;
+    let acrobat = [((90.0, top), (50.4, -28.8)), ((234.0, top), (28.8, 50.4)), ((378.0, top), (-50.4, 28.8)), ((522.0, top), (-28.8, -50.4))];
+    for ([from, to], (anchor, by)) in lines.iter().zip(acrobat) {
+        assert!((from.0 - anchor.0).abs() < 0.01 && (from.1 - anchor.1).abs() < 0.01, "{from:?} for {anchor:?}");
+        let moved = (to.0 - from.0, to.1 - from.1);
+        assert!((moved.0 - by.0).abs() < 0.01 && (moved.1 - by.1).abs() < 0.01, "{moved:?} for {by:?}");
+    }
+}
+
+/// The anchor is the point it turns about, whichever corner that is: a box anchored at its bottom
+/// right stands up and to the left of it, not where a top-left anchor would turn it.
+#[test]
+fn a_draw_turns_about_the_anchor_it_names() {
+    let draw = r#"<draw x="3in" y="1in" w="0.7in" h="0.4in" anchorType="bottomRight" rotate="90"><value><line><edge thickness="1pt"/></line></value></draw>"#;
+    let (doc, page) = written(&form_of_draws("", draw));
+    let lines = stroked_lines(&page_content(&doc, &page));
+    let anchor = (18.0 + 216.0, 792.0 - 18.0 - 72.0);
+    // Its bottom right is 0.7in right and 0.4in down of its top left, here turned to 0.7in up and
+    // 0.4in right: so the top left is that far back from the anchor, and the line ends on it.
+    let [from, to] = lines[0];
+    assert!((to.0 - anchor.0).abs() < 0.01 && (to.1 - anchor.1).abs() < 0.01, "{to:?} for {anchor:?}");
+    assert!((from.0 - (anchor.0 - 28.8)).abs() < 0.01 && (from.1 - (anchor.1 - 50.4)).abs() < 0.01, "{from:?}");
+}
+
+/// Each of the nine anchors stays where it is, and the box goes round it at each turn. What is
+/// asked for comes from the box's corners here, not from layout: from the anchor, y up, the line
+/// runs from the top left to the bottom right, and a quarter turn takes (x, y) to (-y, x).
+#[test]
+fn a_draw_turns_about_each_of_the_nine_anchors() {
+    let (w, h) = (50.4, 28.8);
+    let anchor = (18.0 + 216.0, 792.0 - 18.0 - 72.0);
+    for (name, down) in [("top", 0.0), ("middle", 0.5), ("bottom", 1.0)] {
+        for (side, across) in [("Left", 0.0), ("Center", 0.5), ("Right", 1.0)] {
+            for quarters in 0..4 {
+                let rotate = quarters * 90;
+                let draw = format!(
+                    r#"<draw x="3in" y="1in" w="0.7in" h="0.4in" anchorType="{name}{side}" rotate="{rotate}"><value><line><edge thickness="1pt"/></line></value></draw>"#
+                );
+                let (doc, page) = written(&form_of_draws("", &draw));
+                let lines = stroked_lines(&page_content(&doc, &page));
+                assert_eq!(lines.len(), 1, "{name}{side} at {rotate}: {lines:?}");
+                let (left, top) = (-across * w, down * h);
+                for (got, corner) in lines[0].iter().zip([(left, top), (left + w, top - h)]) {
+                    let turned = (0..quarters).fold(corner, |(x, y), _| (-y, x));
+                    let want = (anchor.0 + turned.0, anchor.1 + turned.1);
+                    assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{name}{side} at {rotate}: {got:?} for {want:?}");
+                }
+            }
+        }
+    }
+}
+
+/// A draw that stands past the edge of the page once turned stays where it turned to: nothing moves
+/// it back or cuts it, as for an upright one. From the page's top left corner of the content area
+/// it goes off to the left and above the page, and from its right side, off to the right.
+#[test]
+fn a_turned_draw_stands_past_the_edge_of_the_page() {
+    for (x, rotate, anchor, by) in [("0in", "180", 18.0, (-50.4, 28.8)), ("8in", "90", 594.0, (28.8, 50.4))] {
+        let draw = line_draw(x, "0in", &format!(r#"rotate="{rotate}""#));
+        let (doc, page) = written(&form_of_draws("", &draw));
+        let content = page_content(&doc, &page);
+        assert!(!content.split_whitespace().any(|t| t == "W" || t == "W*"), "{rotate}: nothing clips it: {content}");
+        let lines = stroked_lines(&content);
+        assert_eq!(lines.len(), 1, "{rotate}: {lines:?}");
+        let [from, to] = lines[0];
+        assert!((from.0 - anchor).abs() < 0.01 && (from.1 - 774.0).abs() < 0.01, "{rotate}: {from:?}");
+        assert!((to.0 - (anchor + by.0)).abs() < 0.01 && (to.1 - (774.0 + by.1)).abs() < 0.01, "{rotate}: {to:?}");
+        assert!(to.0 < 0.0 || to.0 > 612.0, "{rotate}: it does stand past the edge, at {to:?}");
+    }
+}
+
+/// Everything a draw shows turns with it, under one matrix: its text, its picture and its border,
+/// rounded or not, each written as if it stood upright.
+#[test]
+fn text_pictures_and_borders_turn_with_their_draw() {
+    let picture = format!(
+        r#"<draw x="1in" y="1in" w="1in" h="1in" rotate="90"><value><image contentType="image/png">{}</image></value></draw>"#,
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, tiny_png())
+    );
+    for (draw, shows) in [
+        (r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><value><text>upright</text></value></draw>"#.to_string(), "(upright) Tj"),
+        (picture, " Do "),
+        (r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><value><rectangle><edge thickness="1pt"/></rectangle></value></draw>"#.to_string(), " l S"),
+        (
+            r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><value><rectangle><edge thickness="1pt"/><corner radius="5pt"/></rectangle></value></draw>"#.to_string(),
+            " c",
+        ),
+        (r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><border><fill><color value="255,0,0"/></fill></border><value><text>x</text></value></draw>"#.to_string(), " re f"),
+    ] {
+        let (doc, page) = written(&form_of_draws("", &draw));
+        let content = page_content(&doc, &page);
+        let open = content.find("0 1 -1 0 ").unwrap_or_else(|| panic!("no matrix for {draw}: {content}"));
+        let close = open + content[open..].find("\nQ\n").unwrap_or_else(|| panic!("no end for {draw}: {content}"));
+        assert!(content[open..close].contains(shows), "{shows} outside the matrix: {content}");
+    }
+}
+
+/// `rotate` as a multiple of 90 degrees, with a unit or not, past a full turn or below none;
+/// anything else leaves the draw as it stands.
+#[test]
+fn rotate_reads_as_quarter_turns() {
+    let quarters = |rotate: &str| {
+        let form = layout_xml(&form_of_draws("", &line_draw("1in", "1in", &format!(r#"rotate="{rotate}""#)))).unwrap();
+        turned(&form.pages[0]).first().map_or(0, |t| t.quarters)
+    };
+    for (rotate, want) in [("90", 1), ("180", 2), ("270", 3), ("0", 0), ("360", 0), ("450", 1), ("-90", 3), ("90deg", 1), (" 90 ", 1), ("90.0", 1)] {
+        assert_eq!(quarters(rotate), want, "{rotate}");
+    }
+    for rotate in ["45", "89.5", "135", "225", "abc", "", "deg", "NaN", "inf", "-inf"] {
+        assert_eq!(quarters(rotate), 0, "{rotate}");
+    }
+    // Far past what a turn can be told apart at, or just under none: in range whatever it reads as.
+    for rotate in ["1e300", "-1e-300"] {
+        assert!(quarters(rotate) < 4, "{rotate}");
+    }
+}
+
+/// A turned draw is one item: a page break moves it whole, what it holds moving with the point it
+/// turns about, and doesn't cut it, and the draws around it stay where they belong.
+#[test]
+fn a_page_break_moves_a_turned_draw_whole() {
+    let draws = format!(
+        r#"<draw x="6in" y="10.4in" w="1in" h="0.5in"><border><edge thickness="1pt"/></border><value><text>across</text></value></draw><draw x="1in" y="1in" w="2in" h="0.5in"><value><text>first</text></value></draw>{}{}<draw x="1in" y="13in" w="2in" h="0.5in"><value><text>last</text></value></draw>"#,
+        [
+            line_draw("3in", "12in", r#"rotate="90""#),
+            r#"<draw x="5in" y="12in" w="2in" h="0.5in" rotate="90"><border><edge thickness="1pt"/></border><value><text>sideways</text></value></draw>"#.to_string(),
+        ]
+        .concat(),
+        (2..8).map(|y| line_draw("1in", &format!("{y}in"), "")).collect::<String>()
+    );
+    let xdp = form_of_draws("", &draws).replace(r#"h="2.5in""#, r#"h="14in""#);
+    let form = layout_xml(&xdp).unwrap();
+    assert!(form.pages.len() >= 2, "{}", form.pages.len());
+    assert_eq!(texts(&form.pages[0]), ["first"]);
+    // Written after the turned draws, these lines still belong at the top of the block: what the
+    // break knew of the draw's many items mustn't carry over to those that now stand in their places.
+    let lines = form.pages[0].items.iter().filter(|i| matches!(i, Item::Line { .. })).count();
+    assert_eq!(lines, 6, "{:?}", form.pages[0].items);
+    assert_eq!(turned(&form.pages[0]).len(), 0);
+    let moved = turned(&form.pages[1]);
+    assert_eq!(moved.len(), 2, "{:?}", form.pages[1].items);
+    let Item::Line { from, .. } = &moved[0].items[0] else { panic!("not a line") };
+    assert_eq!(*from, moved[0].about, "the line moved with the point it turns about");
+    // Turned 90 degrees, a box 0.7in wide stands 0.7in up from its anchor, on a second page.
+    assert!(moved[0].about.1 < 792.0, "{:?}", moved[0].about);
+    assert!((moved[0].extent.1 - moved[0].about.1).abs() < 0.01, "{:?}", moved[0]);
+    assert!((moved[0].about.1 - moved[0].extent.0 - 50.4).abs() < 0.01, "{:?}", moved[0]);
+    let moved_text = texts(&form.pages[1]);
+    assert!(moved_text.contains(&"last".to_string()) && moved_text.contains(&"across".to_string()), "{moved_text:?}");
+}
+
+/// What a page break goes by is the box as it stands once turned, whichever way, about whichever
+/// corner: from a top-left anchor, it stands up, up or down of it; from a bottom-right one, the
+/// box starts behind the anchor and the same turns take it the other way.
+#[test]
+fn a_turned_draw_knows_where_it_stands() {
+    let box_at = |anchor: &str, rotate: u32| {
+        let draw = format!(
+            r#"<draw x="3in" y="1in" w="0.7in" h="0.4in" {anchor} rotate="{rotate}"><value><line><edge thickness="1pt"/></line></value></draw>"#
+        );
+        let form = layout_xml(&form_of_draws("", &draw)).unwrap();
+        let held = turned(&form.pages[0]);
+        let t = held.first().expect("turned");
+        (t.extent.0 - t.about.1, t.extent.1 - t.about.1)
+    };
+    let close = |got: (f64, f64), want: (f64, f64)| (got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01;
+    for (rotate, want) in [(90, (-50.4, 0.0)), (180, (-28.8, 0.0)), (270, (0.0, 50.4))] {
+        assert!(close(box_at("", rotate), want), "{rotate}: {:?}", box_at("", rotate));
+    }
+    for (rotate, want) in [(90, (0.0, 50.4)), (180, (0.0, 28.8)), (270, (-50.4, 0.0))] {
+        let got = box_at(r#"anchorType="bottomRight""#, rotate);
+        assert!(close(got, want), "{rotate}: {got:?}");
+    }
+}
+
+/// The page count is filled in inside a turned draw too, as it comes last, when every page is known.
+#[test]
+fn the_page_count_reaches_a_turned_draw() {
+    let master = r##"<draw x="7in" y="10in" w="1in" h="0.2in" rotate="90"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>of <span xfa:embed="#pageCount" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/></p></body></exData></value></draw><field name="pageCount" id="pageCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.pageCount();</script></event></field>"##;
+    let form = layout_xml(&form_of_draws(master, &line_draw("1in", "1in", ""))).unwrap();
+    let held = turned(&form.pages[0]);
+    assert_eq!(held.len(), 1, "{:?}", form.pages[0].items);
+    let text: Vec<&str> = held[0].items.iter().filter_map(|i| if let Item::Text(s) = i { Some(s.text.as_str()) } else { None }).collect();
+    assert_eq!(text.concat().trim(), "of 1", "{text:?}");
+}
+
+/// A link in turned text is clicked where the text is drawn, whichever way it turned: the box it
+/// has unturned, turned about the draw's anchor.
+#[test]
+fn a_link_turns_with_its_text() {
+    let rect_at = |rotate: &str| {
+        let draw = format!(
+            r#"<draw x="1in" y="3in" w="2in" h="0.5in" {rotate}><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p><a href="https://example.com/a">a link in turned text</a></p></body></exData></value></draw>"#
+        );
+        let (doc, page) = written(&form_of_draws("", &draw));
+        let annots = page.get(b"Annots").map(|a| doc.resolve(a)).expect("the link");
+        let annot = doc.get(annots.as_array().unwrap()[0].as_ref().unwrap());
+        let rect: Vec<f64> = annot.as_dict().unwrap().get(b"Rect").unwrap().as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        rect
+    };
+    let upright = rect_at("");
+    let (ax, ay) = (18.0 + 72.0, 792.0 - 18.0 - 216.0);
+    let (left, bottom, right, top) = (upright[0] - ax, upright[1] - ay, upright[2] - ax, upright[3] - ay);
+    assert!(left >= -0.01 && top <= 0.01 && right - left > 3.0 * (top - bottom), "it stands right and down of its anchor: {upright:?}");
+    for (rotate, want) in [
+        ("90", [ax - top, ay + left, ax - bottom, ay + right]),
+        ("180", [ax - right, ay - top, ax - left, ay - bottom]),
+        ("270", [ax + bottom, ay - right, ax + top, ay - left]),
+    ] {
+        let got = rect_at(&format!(r#"rotate="{rotate}""#));
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{rotate}: {got:?} for {want:?}");
+    }
+}
+
+/// Only a draw placed by position turns: a field, and a draw in a flow, stand as they did.
+#[test]
+fn only_positioned_draws_turn() {
+    let field = r#"<field name="f" x="1in" y="1in" w="2in" h="0.5in" rotate="90"><ui><textEdit/></ui></field>"#;
+    let form = layout_xml(&form_of_draws("", field)).unwrap();
+    assert!(turned(&form.pages[0]).is_empty());
+    assert_eq!(widgets(&form.pages[0]).len(), 1);
+    let flowed = form_of_draws("", &line_draw("1in", "1in", r#"rotate="90""#))
+        .replace(r#"<subform name="s" w="8in" h="2.5in">"#, r#"<subform name="s" w="8in" layout="tb">"#);
+    let form = layout_xml(&flowed).unwrap();
+    assert!(turned(&form.pages[0]).is_empty(), "{:?}", form.pages[0].items);
+    assert!(form.pages[0].items.iter().any(|i| matches!(i, Item::Line { .. })), "it is still drawn");
+    // A draw that shows nothing has nothing to turn.
+    let form = layout_xml(&form_of_draws("", &line_draw("1in", "1in", r#"rotate="90" presence="invisible""#))).unwrap();
+    assert!(form.pages[0].items.is_empty(), "{:?}", form.pages[0].items);
+}
+
+/// A block carried over to a content area further across takes a turned draw with it, point and
+/// items both.
+#[test]
+fn a_turned_draw_moves_across_with_its_content_area() {
+    let xdp = form_of_draws("", &line_draw("1in", "6in", r#"rotate="90""#))
+        .replace(
+            r#"<contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/>"#,
+            r#"<contentArea x="0.25in" y="0.25in" w="3in" h="5in"/><contentArea x="4in" y="0.25in" w="3in" h="5in"/>"#,
+        )
+        .replace(r#"h="2.5in""#, r#"h="7in""#);
+    let form = layout_xml(&xdp).unwrap();
+    let moved = form.pages.iter().flat_map(turned).next().expect("turned");
+    let Item::Line { from, .. } = &moved.items[0] else { panic!("not a line") };
+    assert_eq!(*from, moved.about);
+    assert!((moved.about.0 - (4.0 + 1.0) * 72.0).abs() < 0.01, "{:?}", moved.about);
+}
+
+/// A positioned subform with no height grows to hold what it holds as it stands, so what comes next
+/// neither runs through a turned draw nor leaves the room its upright box would have had.
+#[test]
+fn a_container_grows_to_a_turned_draw_as_it_stands() {
+    let next = r#"</subform><subform name="next" w="8in" h="1in"><draw x="0in" y="0in" w="2in" h="0.5in"><value><text>next</text></value></draw></subform></subform></template>"#;
+    let baseline = |rotate: &str| {
+        let xdp = form_of_draws("", &line_draw("1in", "1in", rotate)).replace(r#" h="2.5in""#, "").replace("</subform></subform></template>", next);
+        let form = layout_xml(&xdp).unwrap();
+        assert_eq!(form.pages.len(), 1);
+        form.pages[0].items.iter().find_map(|i| if let Item::Text(s) = i { Some(s.baseline) } else { None }).expect("the next block")
+    };
+    // Upright the box ends 0.4in below the anchor, and the next block starts there.
+    let upright = baseline("");
+    for (rotate, bottom) in [("90", 0.0), ("180", 0.0), ("270", 50.4)] {
+        let got = baseline(&format!(r#"rotate="{rotate}""#)) - (upright - 28.8);
+        assert!((got - bottom).abs() < 0.01, "{rotate}: the next block starts {got} below the anchor, not {bottom}");
+    }
+}
+
+/// A subform with no width is as wide as what it holds as it stands, whichever way that turned,
+/// so a neighbour in a row doesn't stand off from it or over it.
+#[test]
+fn a_container_is_as_wide_as_a_turned_draw_stands() {
+    let row = |rotate: &str| {
+        let xdp = form_of_draws(
+            "",
+            &format!(
+                r#"<subform name="turned">{}</subform><subform name="beside" w="1in" h="1in"><draw x="0in" y="0in" w="1in" h="0.5in"><value><text>beside</text></value></draw></subform>"#,
+                line_draw("1in", "1in", rotate)
+            ),
+        )
+        .replace(r#"<subform name="s" w="8in" h="2.5in">"#, r#"<subform name="s" w="8in" h="2.5in" layout="lr-tb">"#);
+        let form = layout_xml(&xdp).unwrap();
+        form.pages[0].items.iter().find_map(|i| if let Item::Text(s) = i { Some(s.x) } else { None }).expect("the neighbour")
+    };
+    let upright = row("");
+    // Upright it ends 0.7in right of the anchor; turned, 0.4in right, at the anchor, and at it again.
+    for (rotate, right) in [("90", 28.8), ("180", 0.0), ("270", 0.0)] {
+        let got = row(&format!(r#"rotate="{rotate}""#)) - (upright - 50.4);
+        assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
+    }
+    // From a bottom-right anchor the box starts behind it, and the same turns take it the other way.
+    for (rotate, right) in [("90", 0.0), ("180", 50.4), ("270", 28.8)] {
+        let got = row(&format!(r#"anchorType="bottomRight" rotate="{rotate}""#)) - (upright - 50.4);
+        assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
+    }
+}
+
+/// Only a template that is a packet of the XDP is the form's: one inside imported data (a
+/// dataset holding XML that looks like a template) is not read, and neither are its scripts.
+#[test]
+fn a_template_inside_the_data_is_not_the_form() {
+    let nested = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"evil\"><event activity=\"initialize\"><script>xfa.host.messageBox(1)</script></event></subform></template></xfa:data></xfa:datasets></xdp:xdp>";
+    assert!(parse(nested).is_err(), "no template packet");
+    let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
+    assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
 }
