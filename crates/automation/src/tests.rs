@@ -3,14 +3,33 @@ use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
 /// `n` pages, page i showing "Page i".
 fn numbered_pages(n: usize) -> Vec<u8> {
+    numbered_pages_with(n, false)
+}
+
+/// [`numbered_pages`]; with `recovered`, each page also shows a word only Copy with formatting
+/// reads ("One", "Two", "Six" in turn), in a font whose glyph names number Latin-1 characters
+/// (`/Differences [1 /C79 /C110 …]`, no `/ToUnicode`).
+fn numbered_pages_with(n: usize, recovered: bool) -> Vec<u8> {
+    let font3 = 4 + 2 * n;
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
     objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
     for i in 0..n {
-        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
-        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        let fonts = if recovered { format!("/F1 3 0 R /F3 {font3} 0 R") } else { "/F1 3 0 R".to_owned() };
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << {fonts} >> >> >>", 5 + 2 * i));
+        let mut body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        if recovered {
+            let first = 1 + 3 * (i % 3);
+            body.push_str(&format!(" BT /F3 24 Tf 20 100 Td <{first:02x}{:02x}{:02x}> Tj ET", first + 1, first + 2));
+        }
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    if recovered {
+        objs.push(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar 9 /Widths [600 600 600 600 600 600 600 600 600] /Encoding << /Type /Encoding /Differences [1 /C79 /C110 /C101 /C84 /C119 /C111 /C83 /C105 /C120] >> >>"
+                .into(),
+        );
     }
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -737,18 +756,26 @@ fn html_extraction_reads_each_page_in_one_pass() {
 /// Review on #6733: a second `text_extract` with HTML reuses the pages' layers read by the first,
 /// and gives the same result; after an edit, the new version of the document is read again
 /// (every page, as the strict text cache drops a changed document's pages) and the result shows
-/// the edit.
+/// the edit, recovered words included, and so does the next call, from the cache.
 #[test]
 fn html_extraction_reuses_the_layers_it_read_until_an_edit() {
     let mut a = Automation::new();
-    let id = search_document(&mut a, 3);
+    let id = a.session.open("recovered.pdf", None, Arc::new(numbered_pages_with(3, true)), None).unwrap();
     let args = json!({ "doc": id.0, "format": "html" });
     let asked = std::cell::RefCell::new(Vec::new());
     let mut count = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
         asked.borrow_mut().extend_from_slice(pages);
         pages::extract_recovering(bytes, password, pages)
     };
+    let html = |out: &Value| -> Vec<String> { out["pages"].as_array().unwrap().iter().map(|p| p["html"].as_str().unwrap().to_owned()).collect() };
+    let words = |pages: &[String], expected: &[&str]| {
+        assert_eq!(pages.len(), expected.len());
+        for (page, word) in pages.iter().zip(expected) {
+            assert!(page.contains(word), "{word} in {page}");
+        }
+    };
     let first = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
+    words(&html(&first), &["One", "Two", "Six"]);
     let again = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
     assert_eq!(*asked.borrow(), [0, 1, 2], "each page is read once");
     assert_eq!(first, again);
@@ -757,6 +784,11 @@ fn html_extraction_reuses_the_layers_it_read_until_an_edit() {
     assert_eq!(*asked.borrow(), [0, 1, 2, 0, 1], "the edited document is read again");
     let texts: Vec<&Value> = edited["pages"].as_array().unwrap().iter().map(|p| &p["text"]).collect();
     assert_eq!(texts, ["Page 2", "Page 3"]);
+    words(&html(&edited), &["Two", "Six"]);
+    assert!(!html(&edited).iter().any(|p| p.contains("One")), "no stale recovered word");
+    let cached = a.text_extract_with(&Args(&args), usize::MAX, &mut count).unwrap();
+    assert_eq!(*asked.borrow(), [0, 1, 2, 0, 1], "the edited version comes from the cache");
+    assert_eq!(cached, edited);
 }
 
 /// Review finding: a page whose recovered-text pass failed fails `text_extract` with HTML, as a
