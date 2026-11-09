@@ -9,6 +9,11 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+# Every app that turns on eframe's `glow` turns this on too: `eframe::App::on_exit` takes a GL
+# context under that feature.
+glow = ["eframe/glow"]
+
 [dependencies]
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
