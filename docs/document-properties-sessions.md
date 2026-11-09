@@ -89,7 +89,7 @@ This integration can be evaluated independently of craft-common-actions #84.
 
 ## Revision history
 
-- 2026-11-09: reconcile current main, preserving the vendor snapshot, local replay, both projects' license notices and the Properties-session, print and split-view test modules.
+- 2026-11-09: reconcile current main, preserving the vendor snapshot, local replay, both projects' license notices and the Properties-session and current upstream test modules.
 
 - 2026-11-05: vendor the original Rust revision with its lifecycle tests and licenses; keep the ten-scenario Python replay local.
 

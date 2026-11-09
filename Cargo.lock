@@ -4272,6 +4272,7 @@ dependencies = [
  "fmv-macos-events",
  "log",
  "pdfcraft-engine",
+ "pdfcraft-platform",
  "pdfcraft-ui-egui",
  "pollster 1.0.1",
  "raw-window-handle",
@@ -4700,6 +4701,7 @@ dependencies = [
  "kurbo 0.13.1",
  "log",
  "lopdf",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "pdfcraft-geom",
@@ -4708,6 +4710,7 @@ dependencies = [
  "skrifa 0.44.0",
  "thiserror 2.0.21",
  "unicode-bidi",
+ "url",
 ]
 
 [[package]]
