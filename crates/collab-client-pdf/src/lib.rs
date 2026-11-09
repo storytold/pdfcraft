@@ -476,7 +476,11 @@ fn annotation_index(document: &Document, page: usize, name: &str) -> Result<usiz
 
 fn field_value(kind: FormFieldKind, text: &str) -> FieldValue {
     match kind {
-        FormFieldKind::CheckBox => FieldValue::Check(matches!(text, "1" | "true" | "on" | "yes")),
+        // The wire carries the button's on state, and a check box's kids may
+        // each have their own (ISO 32000-2 §12.7.5.2.3): a word form
+        // (`true`/`false`) would make a `Yes` or a custom state read as off, so
+        // the engine's name-aware text form is used instead.
+        FormFieldKind::CheckBox => FieldValue::Text(text.to_owned()),
         FormFieldKind::Radio => FieldValue::Radio((!text.is_empty()).then(|| text.to_owned())),
         FormFieldKind::Combo | FormFieldKind::List => FieldValue::Choice(vec![text.to_owned()]),
         _ => FieldValue::Text(text.to_owned()),
@@ -658,7 +662,8 @@ pub fn ops_for_edit(
         }
         Edit::SetFieldValue { name, value } => {
             let target = Target::Field { name: name.clone() };
-            Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, field_value_payload(&field_text(value)))])
+            let text = field_text(document, name, value)?;
+            Ok(vec![merge_op(doc, next_id(client_id, counter)?, base_version, epoch, target, field_value_payload(&text))])
         }
         Edit::RotatePages { pages, degrees } => pages
             .iter()
@@ -956,12 +961,10 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         "field.set_value" => {
             let Target::Field { name } = &op.target else { return Err(ProjectionError::Missing("field target")) };
             let field = document.form.iter().find(|f| f.name == *name).ok_or(ProjectionError::Missing("form field"))?;
+            // The undo names the value the field has now: for a check box that is
+            // the on state of the kid that is on (`Yes`, or a custom name), which
+            // the wire carries as a name now, and `expect` compares it as stored.
             let previous = field.value.first().cloned().unwrap_or_default();
-            let previous = if matches!(field.kind, FormFieldKind::CheckBox) {
-                if previous.is_empty() { "false".to_owned() } else { "true".to_owned() }
-            } else {
-                previous
-            };
             let expect = op.payload.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
             merge_op(doc, op_id, base, epoch, Target::Field { name: name.clone() }, field_value_payload_expecting(&previous, &expect))
         }
@@ -1087,15 +1090,42 @@ fn name_at(document: &Document, page: usize, index: usize) -> Result<String, Pro
         .ok_or(ProjectionError::Missing("annotation /NM"))
 }
 
-fn field_text(value: &FieldValue) -> String {
-    match value {
+fn field_text(document: &Document, name: &str, value: &FieldValue) -> Result<String, ProjectionError> {
+    Ok(match value {
         FieldValue::Text(text) => text.clone(),
         FieldValue::Check(true) => "true".into(),
         FieldValue::Check(false) => "false".into(),
         FieldValue::Radio(Some(state)) => state.clone(),
         FieldValue::Radio(None) => String::new(),
         FieldValue::Choice(values) => values.first().cloned().unwrap_or_default(),
-    }
+        // Selecting a button by its widget (main's `FieldValue::Widget`) travels
+        // as that widget's on state: the adapter turns the state on for every
+        // widget that has it, which is what the engine does for a pick, too.
+        FieldValue::Widget(index) => {
+            let field = document.form.iter().find(|f| f.name == name).ok_or(ProjectionError::Missing("form field"))?;
+            field
+                .widgets
+                .get(*index)
+                .and_then(|w| w.on_state.clone())
+                .ok_or_else(|| ProjectionError::Unsupported(format!("a button with no on state in field {name:?}")))?
+        }
+        // A list pick by position travels as the option's export value. The v1
+        // wire carries one string, so a pick of several options (or of none) is
+        // refused here rather than applied differently on every replica.
+        FieldValue::ChoiceIndices(positions) => {
+            let field = document.form.iter().find(|f| f.name == name).ok_or(ProjectionError::Missing("form field"))?;
+            match positions.as_slice() {
+                [one] => field
+                    .options
+                    .get(*one)
+                    .map(|(export, _)| export.clone())
+                    .ok_or_else(|| ProjectionError::Unsupported(format!("option {} is not in field {name:?}", one.saturating_add(1))))?,
+                _ => {
+                    return Err(ProjectionError::Unsupported("a list pick of several options (the v1 wire carries one value)".into()));
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]

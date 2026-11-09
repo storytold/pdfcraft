@@ -840,7 +840,10 @@ impl PdfAdapter {
             return Err(AdapterError::new(ErrorCode::Conflict, "the field changed since; the undo would overwrite it", false));
         }
         let value = match kind {
-            FormFieldKind::CheckBox => FieldValue::Check(matches!(text.as_str(), "1" | "true" | "on" | "yes")),
+            // A check box's kids may each have an on state (ISO 32000-2
+            // §12.7.5.2.3), so the wire's string is an on-state name at least as
+            // often as a yes/no word; the engine reads both from a text value.
+            FormFieldKind::CheckBox => FieldValue::Text(text.clone()),
             FormFieldKind::Radio => FieldValue::Radio((!text.is_empty()).then_some(text)),
             FormFieldKind::Combo | FormFieldKind::List => FieldValue::Choice(vec![text]),
             _ => FieldValue::Text(text),
