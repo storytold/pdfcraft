@@ -538,7 +538,7 @@ mod tests {
 
     /// An `OWNER RIGHTS` entry replaces what an owner may do implicitly. Granting only *write
     /// owner* that way, the access list can't be replaced although the owner can still be set: the
-    /// file isn't taken as restricted.
+    /// file isn't taken as restricted. Run elevated, it can be replaced, and then must be restricted.
     #[cfg(windows)]
     #[test]
     fn a_file_whose_access_list_cant_be_replaced_is_not_restricted() {
@@ -566,8 +566,22 @@ mod tests {
         // Nothing but the two entries: no Administrators entry for the elevated runner to use.
         let sddl = sddl_of(&file).unwrap();
         assert_eq!(section(&sddl, "D:"), Some(format!("(A;;524288;;;S-1-3-4)(A;;1179785;;;{me})").as_str()), "{sddl}");
-        assert!(restrict_to_owner(&file, &user()).is_err(), "the access list could not be replaced");
+        // An elevated administrator (the windows-latest runner) may replace the list anyway; then the
+        // file must really be the user's alone, since the result is checked before it is trusted.
+        if restrict_to_owner(&file, &user()).is_ok() {
+            let after = sddl_of(&file).unwrap();
+            assert!(elevated(), "the access list could not be replaced: {after}");
+            assert_eq!(foreign_access(&after, &me), None, "{after}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Whether the tests run elevated: `whoami /groups` lists the high (or system) mandatory label.
+    #[cfg(windows)]
+    fn elevated() -> bool {
+        let out = system_tool(WHOAMI).args(["/groups", "/fo", "csv", "/nh"]).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.contains("\"S-1-16-12288\"") || text.contains("\"S-1-16-16384\"")
     }
 
     /// When the tools fail, the functions say so: nothing is taken as restricted or as checked.
