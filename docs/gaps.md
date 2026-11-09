@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -173,7 +174,11 @@ update the numbers.
 ### 7. OCR reads only unaccented Latin
 
 - **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle, background and camera clean-up; MRC compression; pluggable engines; OCR in the
+  despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
+  the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
+  reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
+  and leaves them as they are); MRC compression;
+  pluggable engines; OCR in the
   browser; scanner input.
 - **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
   accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
@@ -343,7 +348,8 @@ update the numbers.
 ### 16. UI precision gaps
 
 - **Missing:** moving several selected objects across pages (same-page moves shipped, #844), single-key tool accelerators,
-  rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
+  rulers, grids and guides, loupe and dynamic zoom, multiple windows and spreadsheet split (split
+  view shipped), comment
   pop-ups that can be moved, connector lines, customisable quick tools; shortcut display and tool-mode bugs (#746, #721), macOS window controls
   (#789).
 - **Estimate:** 30–60 h. **Doc:** [ui-parity.md](ui-parity.md).
@@ -358,9 +364,9 @@ update the numbers.
 ### 18. Print production tools absent
 
 - **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
-  colour conversion, printer marks, fix hairlines, flattener preview, colour management settings;
-  print as image; PostScript output.
-- **Evidence:** 18 print-production features planned (L area).
+  colour conversion, printer marks, flattener preview, colour management settings;
+  print as image; PostScript output. Fix hairlines is in (Print production ▸ Fix hairlines…).
+- **Evidence:** 17 print-production features planned (L area).
 - **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 19. Preferences mostly missing

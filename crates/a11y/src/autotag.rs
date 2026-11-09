@@ -4,11 +4,15 @@
 //! which can then be retagged with the existing tag-property tool after human review.
 
 use pdfcraft_content::{Op, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_OPERATORS: usize = 100_000;
+/// What all pages together may decode and keep: pages can share one stream, so the per-page limits
+/// alone let a small file retain a plan for every page. Real documents stay far under these.
+const MAX_TOTAL_BYTES: usize = 128 * 1024 * 1024;
+const MAX_TOTAL_OPERATORS: usize = 2_000_000;
 const MAX_TEXT_OBJECTS: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,18 +61,24 @@ fn content_bytes(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> R
         let Object::Stream(stream) = &*value else { return Err(unsupported(index, "contents include a non-stream object")) };
         let remaining = MAX_PAGE_BYTES.saturating_sub(all.len().saturating_add(1));
         if remaining == 0 {
-            return Err(unsupported(index, "decoded content exceeds 16 MiB"));
+            return Err(unsupported(index, "decoding the content takes more than 16 MiB"));
         }
-        let chain = stream.filters();
-        let decoded = if chain.is_empty() {
-            if stream.raw.len() > remaining {
-                return Err(unsupported(index, "decoded content exceeds 16 MiB"));
+        // Strictly, and with `/DecodeParms` given by reference: the content is written back from it.
+        let mut budget = DecodeBudget::new(remaining, 0);
+        let decoded = budget.decode_strict(doc, stream).map_err(|e| {
+            // The allowance counts what every filter stage decodes, as a page's does.
+            if budget.remaining() == 0 {
+                unsupported(index, "decoding the content takes more than 16 MiB")
+            } else {
+                // The decoder's own reason: `CosError::Filter`'s text would say again that the data
+                // couldn't be decoded.
+                let why = match e {
+                    pdfcraft_cos::CosError::Filter(why) => why,
+                    other => other.to_string(),
+                };
+                unsupported(index, format!("content cannot be decoded strictly: {why}"))
             }
-            stream.raw.to_vec()
-        } else {
-            pdfcraft_filters::decode(&chain, &stream.raw, remaining)
-                .map_err(|e| unsupported(index, format!("content cannot be decoded strictly: {e}")))?
-        };
+        })?;
         all.extend_from_slice(&decoded);
         all.push(b' ');
     }
@@ -180,6 +190,7 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     }
     let mut out = Vec::with_capacity(pages.len());
     let mut total = 0usize;
+    let (mut total_bytes, mut total_ops) = (0usize, 0usize);
     for (index, page) in pages.iter().enumerate() {
         if page.dict.contains(b"StructParents") {
             return Err(unsupported(index, "page already has a structure parent key"));
@@ -191,9 +202,14 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
             return Err(unsupported(index, "annotations need separate structure tags"));
         }
         let bytes = content_bytes(doc, page, index)?;
+        total_bytes = total_bytes.saturating_add(bytes.len());
         let parsed = parse(&bytes);
         if parsed.skipped > 0 || parsed.ops.len() > MAX_OPERATORS {
             return Err(unsupported(index, "content has malformed or too many operators"));
+        }
+        total_ops = total_ops.saturating_add(parsed.ops.len());
+        if total_bytes > MAX_TOTAL_BYTES || total_ops > MAX_TOTAL_OPERATORS {
+            return Err(unsupported(index, "the document has too much content to auto-tag in one edit"));
         }
         let spans = text_spans(&parsed.ops, index)?;
         total = total.saturating_add(spans.len());
