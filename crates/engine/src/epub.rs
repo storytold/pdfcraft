@@ -163,7 +163,17 @@ mod tests {
     use super::*;
 
     fn item(title: &str, page: Option<usize>, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page, view: Default::default(), children, open: false, color: None, italic: false, bold: false }
+        OutlineItem {
+            title: title.into(),
+            page,
+            view: Default::default(),
+            children,
+            open: false,
+            color: None,
+            italic: false,
+            bold: false,
+            action: None,
+        }
     }
 
     #[test]
