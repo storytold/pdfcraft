@@ -125,9 +125,10 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
 
     let mut global_media: Vec<(String, &Image)> = Vec::new();
     let mut slides: Vec<(String, String)> = Vec::new(); // (slide_xml, slide_rels)
+    let body = crate::layout::body_size(pages);
 
     for p in pages {
-        let (tables, consumed) = crate::tables(&p.blocks);
+        let (tables, consumed) = crate::tables(&p.blocks, &p.rules);
         let title_idx = p
             .blocks
             .iter()
@@ -139,7 +140,7 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
         let mut parts: Vec<([f64; 4], f64, SlideBodyItem)> = Vec::new();
         // The title is a shape of its own, so it joins no paragraph.
         let skip: Vec<bool> = (0..p.blocks.len()).map(|bi| Some(bi) == title_idx || consumed.get(bi).copied().unwrap_or(false)).collect();
-        for runs in crate::paragraphs(&p.blocks, &skip) {
+        for runs in crate::flowing_paragraphs(&p.blocks, &skip, body) {
             let Some(first) = runs.first().map(|r| r.block) else { continue };
             let x1 = runs.iter().map(|r| r.block.rect[2]).fold(first.rect[2], f64::max);
             parts.push(([first.rect[0], first.rect[1], x1, first.rect[3]], first.size, SlideBodyItem::Para(runs)));
