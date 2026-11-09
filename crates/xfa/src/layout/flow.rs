@@ -1,6 +1,8 @@
 use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
 use super::items::Item;
-use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
+use super::{
+    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count,
+};
 
 impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
@@ -75,6 +77,14 @@ impl Layouter<'_> {
         let mut seg_top = top;
         let mut first_segment = true;
         loop {
+            // Each pass rescans every item still to be placed. A block split across very many
+            // content areas, and so across very many pages, would do this once per page, costing
+            // time quadratic in its items; the still-unplaced count spends the work budget so a
+            // crafted template stops rather than run for seconds before the page limit catches it.
+            self.measures.set(self.measures.get().saturating_add(rest.len()));
+            if self.measures.get() > MAX_MEASURES {
+                return Err(XfaError::TooLarge("a subform is split across too many content areas to lay out".into()));
+            }
             let (rect, _, placed) = self.cursor();
             let limit = rect.bottom() + shift;
             let mut cut = limit;
