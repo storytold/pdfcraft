@@ -79,8 +79,10 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }
+        | Edit::DeleteObjects { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
+        | Edit::PrepareText { .. }
         | Edit::EditPageImage { .. }
         | Edit::EnhanceScan { .. }
         | Edit::AddText { .. }
@@ -89,11 +91,16 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
+        | Edit::PasteObjects { .. }
         | Edit::AddHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
-        | Edit::FixHairlines { .. } => Scope::Content,
+        | Edit::FixHairlines { .. }
+        // Recognized text is an invisible text layer stamped on its page, with its font in the
+        // page's resources (#6310): a full re-inspection made applying one word cost seconds on
+        // a large file.
+        | Edit::AddOcrText { .. } => Scope::Content,
         Edit::Batch { edits, .. } => {
             let mut scopes = edits.iter().map(scope_of);
             let first = scopes.next().unwrap_or(Scope::Full);
