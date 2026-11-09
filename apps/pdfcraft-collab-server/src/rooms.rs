@@ -73,7 +73,13 @@ impl Publisher {
     /// that already took the version recognises the duplicate instead of
     /// creating a second one. The same value travels in the body and in the
     /// `Idempotency-Key` header.
-    pub fn publish(&self, file_id: &str, version: u64, expected_version: u64, bytes: &[u8], sha256: &str) -> Result<(), PublishError> {
+    ///
+    /// A `2xx` answer names the version the cabinet created (`{version, etag}`,
+    /// INTEGRATION.md §5.2); when the body carries it, that is the copy the
+    /// room adopts, and it is the `expectedVersion` of the next commit. An
+    /// answer without a usable body falls back to `expectedVersion + 1`: one
+    /// accepted publication is one cabinet version.
+    pub fn publish(&self, file_id: &str, version: u64, expected_version: u64, bytes: &[u8], sha256: &str) -> Result<Published, PublishError> {
         let key = idempotency_key(file_id, version, sha256);
         let body = serde_json::json!({
             "fileId": file_id,
@@ -85,16 +91,26 @@ impl Publisher {
         })
         .to_string();
         let headers = [("Idempotency-Key", key.as_str())];
-        match self.client.post_json(&self.url, self.token.as_deref(), &headers, body.as_bytes()).map(|(status, _)| status) {
-            Ok(status) if (200..300).contains(&status) => Ok(()),
-            Ok(409) => Err(PublishError::Conflict("the cabinet holds another version of the file".into())),
+        match self.client.post_json(&self.url, self.token.as_deref(), &headers, body.as_bytes()) {
+            Ok((status, answer)) if (200..300).contains(&status) => Ok(accepted_copy(&answer, expected_version, sha256)),
+            Ok((409, _)) => Err(PublishError::Conflict("the cabinet holds another version of the file".into())),
             // The cabinet is busy, a proxy timed out, or the file will be there
             // next time: another attempt with the same key may succeed.
-            Ok(status @ 429 | status @ 500..=599) => Err(PublishError::Retryable(format!("the cabinet answered {status}"))),
-            Ok(status) => Err(PublishError::Failed(format!("the cabinet answered {status}"))),
+            Ok((status @ 429, _)) | Ok((status @ 500..=599, _)) => Err(PublishError::Retryable(format!("the cabinet answered {status}"))),
+            Ok((status, _)) => Err(PublishError::Failed(format!("the cabinet answered {status}"))),
             Err(HttpError(message)) => Err(PublishError::Retryable(message)),
         }
     }
+}
+
+/// The cabinet's copy after a `2xx` callback answer. `expectedVersion + 1` is
+/// the fallback when the body is empty or not the documented object.
+fn accepted_copy(answer: &[u8], expected_version: u64, sha256: &str) -> Published {
+    let parsed: Option<serde_json::Value> = serde_json::from_slice(answer).ok();
+    let field = |name: &str| parsed.as_ref().and_then(|value| value.get(name));
+    let version = field("version").and_then(serde_json::Value::as_u64).unwrap_or_else(|| expected_version.saturating_add(1));
+    let etag = field("etag").and_then(serde_json::Value::as_str).map_or_else(|| format!("sha256:{sha256}"), str::to_owned);
+    Published { version, etag }
 }
 
 /// What an idempotent callback is keyed by: the file, the version and the bytes.
@@ -132,7 +148,7 @@ struct CabinetPublication {
 impl Publication for CabinetPublication {
     fn run(&self) -> PublishOutcome {
         match self.publisher.publish(&self.file_id, self.version, self.expected_version, self.bytes.as_slice(), &self.sha256) {
-            Ok(()) => Ok(Some(Published { version: self.version, etag: format!("sha256:{}", self.sha256) })),
+            Ok(published) => Ok(Some(published)),
             Err(PublishError::Conflict(message)) => Err(AdapterError::new(ErrorCode::Conflict, message, false)),
             // The room keeps `publishing` and the queue tries the same body and
             // key again after a backoff (limitation 6).
@@ -220,18 +236,21 @@ impl Adapter for CabinetAdapter {
     }
 
     fn finish_publish(&mut self, version: u64, outcome: PublishOutcome) -> Result<(), AdapterError> {
-        let etag = match outcome {
-            // The cabinet took the bytes: that etag is what it holds.
-            Ok(Some(published)) if self.mirror.is_none() => published.etag,
+        let (etag, expected) = match outcome {
+            // The cabinet took the bytes: that etag is what it holds, and the
+            // version it answered is the one the next commit must expect.
+            Ok(Some(published)) if self.mirror.is_none() => (published.etag, published.version),
             // Dev mode keeps the mirror file as the etag's reference, and with
             // no publisher the local commit is all the publication there is.
-            Ok(_) => Adapter::published(self).map(|published| published.etag).unwrap_or_default(),
+            Ok(_) => (Adapter::published(self).map(|published| published.etag).unwrap_or_default(), self.expected_version.saturating_add(1)),
             // A refused or failed publication leaves the marker alone; the
             // room stays dirty so the next commit retries it.
             Err(_) => return Ok(()),
         };
-        self.pdf.set_published(Some(Published { version, etag }))?;
-        self.expected_version = version;
+        // `version` is the room's; `expected` the cabinet's. They are equal
+        // until an operator resolves a conflict with an external version.
+        self.pdf.set_cabinet(Some(CabinetCopy { version, etag, expected: Some(expected) }))?;
+        self.expected_version = expected;
         Ok(())
     }
 
@@ -244,7 +263,15 @@ impl Adapter for CabinetAdapter {
     }
 
     fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
-        self.pdf.set_published(published)
+        // An operator's resolution names what the cabinet holds now: its
+        // version is the next `expectedVersion`, and the room's version of the
+        // published base (used by the dirty check after a restart) stays what
+        // the marker already had.
+        let base = self.pdf.cabinet().map_or(0, |copy| copy.version);
+        let copy = published.map(|published| CabinetCopy { version: base, etag: published.etag, expected: Some(published.version) });
+        self.pdf.set_cabinet(copy)?;
+        self.expected_version = self.pdf.cabinet().map_or(0, |copy| copy.expected_version());
+        Ok(())
     }
 }
 
@@ -354,7 +381,7 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
                     }
                     // A room seeded before the marker existed adopts the etag
                     // of the file it is resumed from.
-                    None => store.set_cabinet(Some(CabinetCopy { version, etag: etag.clone() }))?,
+                    None => store.set_cabinet(Some(CabinetCopy { version, etag: etag.clone(), expected: None }))?,
                     Some(_) => {}
                 }
             }
@@ -366,7 +393,7 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
                 return Err(RoomError::invalid(format!("the file is larger than the {} byte limit", config.max_source_bytes)));
             }
             store.write_base(0, 0, bytes.as_slice())?;
-            store.set_cabinet(Some(CabinetCopy { version: 0, etag }))?;
+            store.set_cabinet(Some(CabinetCopy { version: 0, etag, expected: None }))?;
             version = 0;
             epoch = 0;
             (bytes.to_vec(), mirror, true)
@@ -374,10 +401,16 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
         (None, None) => return Err(RoomError::Missing(format!("no session and no file for {}", doc.as_str()))),
     };
 
-    let published_version = store.cabinet().map_or(0, |copy| copy.version);
+    // Two numbers travel with the marker: the room's version of the published
+    // base (the dirty check) and the cabinet's numbering (the next
+    // `expectedVersion`). They are equal until an operator resolved a conflict
+    // against a version the cabinet assigned outside the session.
+    let copy = store.cabinet().cloned();
+    let published_version = copy.as_ref().map_or(0, |copy| copy.version);
+    let expected_version = copy.as_ref().map_or(0, CabinetCopy::expected_version);
     let mut pdf = PdfAdapter::open(format!("{}.pdf", doc.as_str()), Arc::new(bytes))?;
     pdf.attach_store(store);
-    let adapter = CabinetAdapter::new(pdf, doc.as_str(), mirror, config.publisher.clone(), published_version);
+    let adapter = CabinetAdapter::new(pdf, doc.as_str(), mirror, config.publisher.clone(), expected_version);
     hub.open_room_at(doc.clone(), adapter, version, epoch).map_err(|e| RoomError::invalid(e.message))?;
     let room = hub.room_mut(&doc).ok_or_else(|| RoomError::invalid("the room was not registered"))?;
     room.mark_published(published_version);
@@ -470,7 +503,7 @@ mod tests {
     };
     use pdfcraft_collab_hub::Hub;
     use pdfcraft_collab_proto::{ActorId, DocKey, ErrorCode, Role};
-    use pdfcraft_collab_server::{Adapter, Room, RoomConfig};
+    use pdfcraft_collab_server::{Adapter, Published, Room, RoomConfig};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -706,6 +739,113 @@ mod tests {
         // No cabinet at all: the connection is the failure, and it is retryable.
         let publisher = Publisher::new("http://127.0.0.1:1/commit", None, Duration::from_millis(200));
         assert!(matches!(publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc"), Err(PublishError::Retryable(_))));
+        Ok(())
+    }
+
+    /// A cabinet that holds one version: a publication whose `expectedVersion`
+    /// is not that version is refused with `409`; an accepted one advances the
+    /// cabinet's version by one and answers `{"version","etag"}`.
+    fn holding_cabinet(version: u64) -> std::io::Result<(String, std::sync::mpsc::Receiver<serde_json::Value>)> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let held = Arc::new(AtomicU64::new(version));
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                });
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; length];
+                if reader.read_exact(&mut body).is_err() {
+                    return;
+                }
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                let expected = request["expectedVersion"].as_u64().unwrap_or(0);
+                let _ = sender.send(request);
+                let (status, answer) = if expected == held.load(Ordering::SeqCst) {
+                    let next = held.fetch_add(1, Ordering::SeqCst) + 1;
+                    (200, format!("{{\"version\":{next},\"etag\":\"sha256:{next:064x}\"}}"))
+                } else {
+                    (409, "{\"code\":\"conflict\"}".to_owned())
+                };
+                let mut stream = match stream.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+                let _ = stream.flush();
+            }
+        });
+        Ok((format!("http://{address}/commit"), receiver))
+    }
+
+    #[test]
+    fn an_operator_resolution_lets_the_next_commits_publish_again() -> Result<(), Box<dyn std::error::Error>> {
+        let root = root("resolve");
+        let (url, requests) = holding_cabinet(7)?;
+        let publisher = Arc::new(Publisher::new(url, None, Duration::from_secs(5)));
+        let config = config(&root, Some(publisher));
+        let doc = DocKey::new("file-1")?;
+        let bytes = Arc::new(fixture("one"));
+        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), mirror: None };
+        let mut hub = Hub::new(RoomConfig::default());
+        open_room(&mut hub, &config, doc.clone(), Some(seed))?;
+        let room = hub.room_mut(&doc).ok_or("no room")?;
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        edit(room, "n0")?;
+        let refused = commit(room, &editor, 1).map(|_| ()).expect_err("the cabinet holds version 7");
+        assert_eq!(refused.code, ErrorCode::Conflict);
+        assert!(room.conflict().is_some());
+
+        // Without a resolution the next commit is refused the same way: the
+        // queue is stopped and the marker still says 0.
+        let again = commit(room, &editor, 1).map(|_| ()).expect_err("nothing changed");
+        assert_eq!(again.code, ErrorCode::Conflict);
+        for _ in 0..2 {
+            let body = requests.recv_timeout(Duration::from_secs(5))?;
+            assert_eq!(body["expectedVersion"], 0, "an unresolved room keeps publishing the old expectation");
+        }
+
+        // The operator says the cabinet is at version 7.
+        room.resolve_conflict(Published { version: 7, etag: "sha256:77".into() })?;
+        assert_eq!(room.conflict(), None);
+        assert!(room.is_dirty(), "the unpublished work is still here");
+
+        edit(room, "n1")?;
+        let result = commit(room, &editor, 2)?;
+        let body = requests.recv_timeout(Duration::from_secs(5))?;
+        assert_eq!(body["version"], 2);
+        assert_eq!(body["expectedVersion"], 7, "the resolved version is what the cabinet expects");
+        assert_eq!(body["idempotencyKey"], format!("file-1:2:{}", result.sha256), "the key stays derived from the payload");
+        // The cabinet answered `{version: 8}`; the next commit expects that,
+        // not the room's number, so the resolution survives the publication.
+        assert_eq!(Adapter::published(room.adapter()).map(|published| published.version), Some(8));
+
+        edit(room, "n2")?;
+        commit(room, &editor, 3)?;
+        let body = requests.recv_timeout(Duration::from_secs(5))?;
+        assert_eq!((body["version"].as_u64(), body["expectedVersion"].as_u64()), (Some(3), Some(8)));
+        let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
 

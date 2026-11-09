@@ -191,8 +191,8 @@ fn render(path: &str, metrics: Result<pdfcraft_collab_ws::Metrics, pdfcraft_coll
         ),
         Ok(metrics) if path == "/metrics" => {
             let mut body = format!(
-                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\npdfcraft_collab_publication_retries_total {}\n",
-                metrics.rooms, metrics.clients, metrics.forced_commits, metrics.publication_retries
+                "pdfcraft_collab_rooms {}\npdfcraft_collab_clients {}\npdfcraft_collab_forced_commits_total {}\npdfcraft_collab_publication_retries_total {}\npdfcraft_collab_conflicts_resolved_total {}\n",
+                metrics.rooms, metrics.clients, metrics.forced_commits, metrics.publication_retries, metrics.conflicts_resolved
             );
             for (room, version, epoch) in metrics.versions {
                 body.push_str(&format!(
@@ -457,6 +457,7 @@ mod tests {
             poisoned: Vec::new(),
             conflict: Vec::new(),
             forced_commits: 4,
+            conflicts_resolved: 1,
             publication_retries: 2,
         };
         let (status, content_type, body) = render("/health", Ok(metrics.clone()));
@@ -468,6 +469,7 @@ mod tests {
         assert!(body.contains("pdfcraft_collab_rooms 2"));
         assert!(body.contains("pdfcraft_collab_forced_commits_total 4"));
         assert!(body.contains("pdfcraft_collab_publication_retries_total 2"));
+        assert!(body.contains("pdfcraft_collab_conflicts_resolved_total 1"));
         assert!(body.contains(r#"pdfcraft_collab_room_version{room="file-1"} 7"#));
         assert!(!body.contains("read_only"), "a healthy room is not reported as read-only");
 
@@ -478,6 +480,7 @@ mod tests {
             poisoned: vec!["file-2".into()],
             conflict: vec!["file-3".into()],
             forced_commits: 0,
+            conflicts_resolved: 0,
             publication_retries: 0,
         };
         let (_, _, body) = render("/health", Ok(broken.clone()));
@@ -497,6 +500,7 @@ mod tests {
                 poisoned: Vec::new(),
                 conflict: Vec::new(),
                 forced_commits: 0,
+                conflicts_resolved: 0,
                 publication_retries: 0,
             }),
         );

@@ -43,10 +43,28 @@ pub struct JournalRecord {
 /// copy. Kept apart from `CURRENT` because a commit writes the base first and
 /// the cabinet accepts it afterwards: between those two steps the base is ahead
 /// of the cabinet, and the room must still know that (it is dirty).
+///
+/// `version` is the room's own version of the published base (what `CURRENT`
+/// counts), while `expected` is the number the cabinet gave that copy. They are
+/// equal until an operator resolves a `conflict` with a version the cabinet
+/// assigned outside the session; after that the next publication must send the
+/// cabinet's number as `expectedVersion` and keep the room's number for the
+/// dirty check after a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CabinetCopy {
     pub version: u64,
     pub etag: String,
+    /// The cabinet's numbering of this copy. Absent in a marker written before
+    /// conflicts could be resolved: then the two numbers agreed.
+    #[serde(default)]
+    pub expected: Option<u64>,
+}
+
+impl CabinetCopy {
+    /// The version to send as `expectedVersion` for the next publication.
+    pub fn expected_version(&self) -> u64 {
+        self.expected.unwrap_or(self.version)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

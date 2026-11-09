@@ -711,6 +711,43 @@ impl<A: Adapter> Room<A> {
         }
     }
 
+    /// An operator resolved a `conflict` room: the cabinet's copy now is
+    /// `published` (its version and etag), so the room adopts that marker and
+    /// clears the flag. The document stays dirty — the work the cabinet never
+    /// took is still in the journal — and the next commit publishes it with the
+    /// adopted version as `expectedVersion`.
+    ///
+    /// This is the only way out of `conflict`: retrying the same
+    /// `expectedVersion` cannot succeed (RFC §8.2). It is refused when there is
+    /// nothing to resolve, so a repeated operator call cannot move the marker
+    /// again, and while a publication is in flight, because the queued attempt
+    /// was addressed to the old marker.
+    pub fn resolve_conflict(&mut self, published: Published) -> Result<(), ServerError> {
+        if self.conflict.is_none() {
+            return Err(server_error(ErrorCode::Conflict, "the session is not in conflict", false));
+        }
+        if self.publishing {
+            return Err(server_error(ErrorCode::Busy, "a publication of this document is in flight; try again", true));
+        }
+        if let Some(current) = self.adapter.published()
+            && published.version <= current.version
+        {
+            // Moving the marker backwards would make the next commit fail with
+            // the same `409`: the operator has to name a version the cabinet
+            // created after the one this session already holds.
+            return Err(server_error(
+                ErrorCode::Invalid,
+                format!("the cabinet's version {} is not newer than the {} this session already holds", published.version, current.version),
+                false,
+            ));
+        }
+        self.adapter
+            .set_published(Some(published))
+            .map_err(|e| server_error(e.code, format!("could not record the cabinet's copy: {}", e.message), e.retryable))?;
+        self.conflict = None;
+        Ok(())
+    }
+
     /// One code path for both commits: write the base and take the publication
     /// out of the adapter. An adapter that refuses because the cabinet's copy
     /// changed leaves the room dirty and flags it, so `/health` can report a
@@ -793,7 +830,7 @@ fn journal_line_bytes(version: u64, actor: &ActorId, op: &Op) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Room, RoomConfig};
+    use super::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published, Room, RoomConfig};
     use pdfcraft_collab_proto::{
         ActorId, BlobRef, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Limits, Op, OpId, OpKind, PageRef, Presence, Role,
         Selection, SessionId, Target, Viewport,
@@ -808,11 +845,13 @@ mod tests {
         /// Accepted operations as the room persisted them, when recording works.
         recorded: Vec<(u64, String, String)>,
         record_error: Option<&'static str>,
+        /// What the adapter believes the cabinet holds.
+        published: Option<Published>,
     }
 
     impl Fake {
         fn new() -> Self {
-            Self { epoch: 0, applied: 0, recorded: Vec::new(), record_error: None }
+            Self { epoch: 0, applied: 0, recorded: Vec::new(), record_error: None, published: None }
         }
     }
 
@@ -842,6 +881,15 @@ mod tests {
 
         fn base(&self) -> Option<BlobRef> {
             Some(BlobRef { sha256: "base".into(), len: 1 })
+        }
+
+        fn published(&self) -> Option<Published> {
+            self.published.clone()
+        }
+
+        fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+            self.published = published;
+            Ok(())
         }
     }
 
@@ -883,14 +931,29 @@ mod tests {
         fn base(&self) -> Option<BlobRef> {
             self.inner.base()
         }
+        fn published(&self) -> Option<Published> {
+            self.inner.published()
+        }
+        fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+            self.inner.set_published(published)
+        }
         fn take_publication(&mut self) -> Option<Box<dyn super::Publication>> {
             Some(Box::new(Counting { runs: self.runs.clone(), failure: self.failure.clone() }))
         }
     }
 
     fn publishing_room(failure: Option<AdapterError>) -> Result<(Room<Publishing>, Arc<AtomicUsize>), Box<dyn std::error::Error>> {
+        publishing_room_with(failure, None)
+    }
+
+    fn publishing_room_with(
+        failure: Option<AdapterError>,
+        published: Option<Published>,
+    ) -> Result<(Room<Publishing>, Arc<AtomicUsize>), Box<dyn std::error::Error>> {
         let runs = Arc::new(AtomicUsize::new(0));
-        let adapter = Publishing { inner: Fake::new(), runs: runs.clone(), failure };
+        let mut inner = Fake::new();
+        inner.published = published;
+        let adapter = Publishing { inner, runs: runs.clone(), failure };
         Ok((Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default()), runs))
     }
 
@@ -1219,6 +1282,93 @@ mod tests {
         assert!(!room.is_dirty(), "the retry advanced what the cabinet holds");
         assert!(!room.is_publishing());
         assert!(commit_and_publish(&mut room, &editor, 1).is_ok(), "the room is free again");
+        Ok(())
+    }
+
+    #[test]
+    fn an_operator_resolution_adopts_the_cabinets_marker_and_clears_the_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut conflicted, _runs) = publishing_room(Some(AdapterError::new(ErrorCode::Conflict, "the cabinet holds another version", false)))?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        conflicted.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        conflicted.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        let commit = conflicted.commit(&editor, 1)?;
+        let outcome = commit.publish();
+        assert!(conflicted.finish(commit, outcome).is_err());
+        assert!(conflicted.conflict().is_some());
+
+        // A resolve of a room that is not in conflict is refused and changes
+        // nothing: the marker is only adopted once.
+        let mut clean = room()?;
+        assert!(matches!(clean.resolve_conflict(Published { version: 9, etag: "sha256:99".into() }), Err(e) if e.code == ErrorCode::Conflict));
+        assert_eq!(clean.adapter().published(), None, "a refused resolve must not move the marker");
+
+        let cabinet = Published { version: 7, etag: "sha256:77".into() };
+        conflicted.resolve_conflict(cabinet.clone())?;
+        assert_eq!(conflicted.conflict(), None, "the operator resolved it");
+        assert_eq!(conflicted.adapter().published(), Some(cabinet), "the room adopted what the cabinet holds");
+        assert!(conflicted.is_dirty(), "the work the cabinet never took is still unpublished");
+        assert!(!conflicted.is_publishing(), "nothing holds the room back from publishing again");
+
+        // A repeated resolve finds no conflict and is refused without a change.
+        assert!(matches!(conflicted.resolve_conflict(Published { version: 11, etag: "sha256:11".into() }), Err(e) if e.code == ErrorCode::Conflict));
+        assert_eq!(conflicted.adapter().published().map(|p| p.version), Some(7), "the refused resolve left the marker alone");
+        Ok(())
+    }
+
+    #[test]
+    fn a_resolution_must_name_a_version_the_cabinet_moved_to() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, _runs) = publishing_room_with(
+            Some(AdapterError::new(ErrorCode::Conflict, "the cabinet holds another version", false)),
+            Some(Published { version: 5, etag: "sha256:55".into() }),
+        )?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        let commit = room.commit(&editor, 1)?;
+        let outcome = commit.publish();
+        assert!(room.finish(commit, outcome).is_err());
+
+        // The session already knows the cabinet holds version 5: a resolve that
+        // repeats it (or goes back) would just fail again.
+        for version in [5, 4, 0] {
+            let refused = room.resolve_conflict(Published { version, etag: "sha256:66".into() }).expect_err("not newer");
+            assert_eq!(refused.code, ErrorCode::Invalid, "version {version}");
+            assert!(room.conflict().is_some(), "a refused resolve changes nothing");
+        }
+        room.resolve_conflict(Published { version: 6, etag: "sha256:66".into() })?;
+        assert_eq!(room.conflict(), None);
+        assert_eq!(room.adapter().published().map(|p| p.version), Some(6));
+        Ok(())
+    }
+
+    #[test]
+    fn a_resolution_waits_for_a_publication_in_flight() -> Result<(), Box<dyn std::error::Error>> {
+        // A conflicted room may still be committed by its editor (a `409` does
+        // not block edits or a retry of the commit). While that publication is
+        // in flight, the marker must not move under it.
+        let (mut room, _runs) = publishing_room(Some(AdapterError::new(ErrorCode::Conflict, "the cabinet holds another version", false)))?;
+        let hello = hello()?;
+        let editor = actor("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello, 0)?;
+        room.apply(&editor, &op("p1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?, 0)?;
+        let commit = room.commit(&editor, 1)?;
+        let outcome = commit.publish();
+        assert!(room.finish(commit, outcome).is_err());
+        assert!(room.conflict().is_some());
+        let second = room.commit(&editor, 1)?;
+        assert!(room.is_publishing());
+
+        let refused = room.resolve_conflict(Published { version: 4, etag: "sha256:44".into() }).expect_err("a publication is in flight");
+        assert_eq!(refused.code, ErrorCode::Busy);
+        assert!(refused.retryable);
+        assert!(room.conflict().is_some(), "the refusal changed nothing");
+        assert_eq!(room.adapter().published(), None);
+
+        let failed = second.publish();
+        assert!(room.finish(second, failed).is_err());
+        assert!(room.conflict().is_some(), "the publication's own answer decides, not the refused resolve");
         Ok(())
     }
 

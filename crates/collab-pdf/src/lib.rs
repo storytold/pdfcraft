@@ -153,19 +153,36 @@ impl PdfAdapter {
         self.store = Some(store);
     }
 
-    /// What the cabinet holds, as last agreed (see `Store::cabinet`).
+    /// What the cabinet holds, as last agreed (see `Store::cabinet`). `version`
+    /// is the cabinet's numbering of its copy: after an operator resolved a
+    /// conflict those are the numbers the next publication expects.
     pub fn published(&self) -> Option<Published> {
-        self.store.as_ref().and_then(Store::cabinet).map(|copy| Published { version: copy.version, etag: copy.etag.clone() })
+        self.store.as_ref().and_then(Store::cabinet).map(|copy| Published { version: copy.expected_version(), etag: copy.etag.clone() })
     }
 
-    /// Record what the cabinet holds (see `Store::set_cabinet`). Without a
-    /// store there is nowhere to keep it, so this is a no-op.
-    pub fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
-        let copy = published.map(|published| CabinetCopy { version: published.version, etag: published.etag });
+    /// The whole marker, both numberings. `None` when there is no store or no
+    /// marker.
+    pub fn cabinet(&self) -> Option<CabinetCopy> {
+        self.store.as_ref().and_then(Store::cabinet).cloned()
+    }
+
+    /// Write the whole marker (see `Store::set_cabinet`). Without a store there
+    /// is nowhere to keep it, so this is a no-op.
+    pub fn set_cabinet(&mut self, copy: Option<CabinetCopy>) -> Result<(), AdapterError> {
         match self.store.as_mut() {
             Some(store) => store.set_cabinet(copy),
             None => Ok(()),
         }
+    }
+
+    /// Record what the cabinet holds (see `Store::set_cabinet`). The version is
+    /// the cabinet's numbering; the room's own version of the published base is
+    /// kept from the marker. Without a store there is nowhere to keep it, so
+    /// this is a no-op.
+    pub fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
+        let base = self.cabinet().map_or(0, |copy| copy.version);
+        let copy = published.map(|published| CabinetCopy { version: base, etag: published.etag, expected: Some(published.version) });
+        self.set_cabinet(copy)
     }
 
     /// The file `commit` last wrote, for a publisher that has to send it on.

@@ -15,5 +15,5 @@
 pub mod serve;
 pub mod token;
 
-pub use serve::{Config, Metrics, PublicationRetries, ServerHandle, TransportError, WsServer};
+pub use serve::{Config, Metrics, PublicationRetries, ResolveError, ServerHandle, TransportError, WsServer};
 pub use token::{Claims, JwtVerifier, TokenError, Verifier};

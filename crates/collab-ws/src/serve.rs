@@ -9,7 +9,7 @@
 use crate::token::{TokenError, Verifier};
 use pdfcraft_collab_hub::{ClientId, Hub, Pending};
 use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Hello, MAX_MESSAGE_BYTES, ServerError, ServerMessage};
-use pdfcraft_collab_server::{Adapter, Publication};
+use pdfcraft_collab_server::{Adapter, Publication, Published};
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -74,6 +74,9 @@ struct Shared<A: Adapter> {
     /// Server-initiated journal compactions so far (limitation 10). A counter,
     /// not a gauge: it only grows, and `/metrics` exposes it as a `_total`.
     forced_commits: u64,
+    /// `conflict` rooms resolved by the operator through the control plane.
+    /// Exposed as `pdfcraft_collab_conflicts_resolved_total`.
+    conflicts_resolved: u64,
     /// Publications that failed retryably, by document. The room stays
     /// `publishing` while an entry exists, so a newer base cannot overtake the
     /// queued one.
@@ -182,6 +185,7 @@ impl<A: Adapter> WsServer<A> {
             sinks: HashMap::new(),
             pending: Vec::new(),
             forced_commits: 0,
+            conflicts_resolved: 0,
             retries: HashMap::new(),
             publication_retries: 0,
             backoff: config.publication_backoff,
@@ -284,6 +288,27 @@ impl<A: Adapter> WsServer<A> {
     pub fn with_hub<T>(&self, step: impl FnOnce(&mut Hub<A>) -> T) -> Result<T, TransportError> {
         let mut shared = lock(&self.shared)?;
         Ok(step(&mut shared.hub))
+    }
+
+    /// An operator resolved a `conflict` room through the control plane: the
+    /// room adopts the cabinet's `published` marker, so the next commit
+    /// publishes again with that version as `expectedVersion`. The marker is
+    /// moved under the hub lock, so a publication cannot run with the old one,
+    /// and a successful resolution is counted for `/metrics`. The answer is the
+    /// room's document version and epoch after the marker moved.
+    pub fn resolve_conflict(&self, doc: &DocKey, published: Published) -> Result<(u64, u64), ResolveError> {
+        let mut shared = lock(&self.shared).map_err(|_| ResolveError::Hub)?;
+        let Some(room) = shared.hub.room_mut(doc) else { return Err(ResolveError::Missing) };
+        room.resolve_conflict(published).map_err(|e| match e.code {
+            ErrorCode::Conflict => ResolveError::NotInConflict,
+            ErrorCode::Busy => ResolveError::Busy,
+            ErrorCode::Invalid => ResolveError::Invalid(e.message),
+            _ => ResolveError::Failed(e.message),
+        })?;
+        let version = room.version();
+        let epoch = room.epoch();
+        shared.conflicts_resolved = shared.conflicts_resolved.saturating_add(1);
+        Ok((version, epoch))
     }
 }
 
@@ -553,6 +578,9 @@ pub struct Metrics {
     /// Server-initiated journal compactions since the process started
     /// (limitation 10), exposed as `pdfcraft_collab_forced_commits_total`.
     pub forced_commits: u64,
+    /// `conflict` rooms resolved by an operator through the control plane,
+    /// exposed as `pdfcraft_collab_conflicts_resolved_total`.
+    pub conflicts_resolved: u64,
     /// Publication retries attempted since the process started (limitation 6),
     /// exposed as `pdfcraft_collab_publication_retries_total`.
     pub publication_retries: u64,
@@ -582,6 +610,7 @@ impl<A: Adapter> WsServer<A> {
             poisoned,
             conflict,
             forced_commits: shared.forced_commits,
+            conflicts_resolved: shared.conflicts_resolved,
             publication_retries: shared.publication_retries,
         })
     }
@@ -653,6 +682,25 @@ pub enum TransportError {
     Room(ServerError),
 }
 
+/// Why an operator's resolution of a `conflict` room was refused
+/// ([`WsServer::resolve_conflict`]). The control plane maps these onto its HTTP
+/// answers; none of them changes the room.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResolveError {
+    #[error("no session for this document")]
+    Missing,
+    #[error("the session is not in conflict")]
+    NotInConflict,
+    #[error("a publication of this document is in flight; try again")]
+    Busy,
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    Failed(String),
+    #[error("the hub is unavailable")]
+    Hub,
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, TransportError> {
     mutex.lock().map_err(|_| TransportError::Hub)
 }
@@ -702,13 +750,13 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, TransportError, WsServer};
+    use super::{Config, ResolveError, TransportError, WsServer};
     use crate::token::{Claims, TokenError, Verifier};
     use pdfcraft_collab_hub::Hub;
     use pdfcraft_collab_proto::{
         ActorId, BlobRef, ClientMessage, ConflictClass, DocKey, ErrorCode, Op, OpId, OpKind, PageRef, Role, ServerMessage, Target,
     };
-    use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, RoomConfig};
+    use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Published, RoomConfig};
     use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
@@ -887,6 +935,20 @@ mod tests {
         };
         assert!(one.lease.ttl_secs > 0);
         assert_eq!(two.lease.ttl_secs, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_resolution_needs_a_room_and_a_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config::default());
+        let published = Published { version: 3, etag: "sha256:33".into() };
+        let missing = DocKey::new("file-2")?;
+        assert_eq!(server.resolve_conflict(&missing, published.clone()), Err(ResolveError::Missing));
+        assert_eq!(server.resolve_conflict(&doc, published), Err(ResolveError::NotInConflict));
+        assert_eq!(server.metrics()?.conflicts_resolved, 0, "a refusal is not counted");
         Ok(())
     }
 }

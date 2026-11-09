@@ -1,8 +1,9 @@
-//! The cabinet control plane: `POST /v1/sessions` (RFC §9).
+//! The cabinet control plane: `POST /v1/sessions` and
+//! `POST /v1/sessions/{fileId}/resolve` (RFC §8.2, §9).
 //!
-//! The cabinet calls this before a user opens the editor. It names the file,
-//! presents a session JWT, and supplies the file either inline (base64) or as a
-//! URL the daemon fetches. The answer is the room's version and etag; the
+//! The cabinet calls the first before a user opens the editor. It names the
+//! file, presents a session JWT, and supplies the file either inline (base64) or
+//! as a URL the daemon fetches. The answer is the room's version and etag; the
 //! client then connects over the WebSocket with the same token.
 //!
 //! Two refusals matter:
@@ -11,14 +12,19 @@
 //!   session is not started (or resumed) over a file the cabinet moved on from.
 //! - `403` when the token names another file, and `401` when it does not verify.
 //!
+//! The second is the operator's way out of a room a commit callback refused
+//! with `409`: it names the version and etag the cabinet holds now, and the room
+//! publishes again on the next commit. A room that is not in conflict is
+//! refused, so a repeated call cannot move the marker twice.
+//!
 //! The listener is a plain HTTP/1.1 socket with a body limit and no keep-alive.
 //! It is off unless `--control` is given; directory provisioning stays as the
 //! dev mode.
 
 use crate::http::{self, Request};
 use crate::rooms::{self, RoomError, RoomsConfig, Seed};
-use pdfcraft_collab_server::Adapter;
-use pdfcraft_collab_ws::{TransportError, Verifier, WsServer};
+use pdfcraft_collab_server::{Adapter, Published};
+use pdfcraft_collab_ws::{ResolveError, TransportError, Verifier, WsServer};
 use serde::Deserialize;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
@@ -55,6 +61,18 @@ struct SessionRequest {
     /// A plain-`http` URL the daemon fetches for the file.
     #[serde(default)]
     url: Option<String>,
+}
+
+/// What the operator says the cabinet holds now, for a room whose commit was
+/// refused with `409`.
+#[derive(Debug, Deserialize)]
+struct ResolveRequest {
+    /// The cabinet's version of its copy. It must be newer than the version
+    /// this session already knows, or the next commit would fail the same way.
+    #[serde(rename = "expectedVersion")]
+    expected_version: u64,
+    /// The etag of the cabinet's copy: `sha256:<hex>`.
+    etag: String,
 }
 
 struct Reply {
@@ -103,10 +121,74 @@ impl Control {
     }
 
     fn dispatch(&self, request: &Request) -> Reply {
-        match (request.method.as_str(), request.path.split('?').next().unwrap_or("/")) {
+        let path = request.path.split('?').next().unwrap_or("/");
+        if let Some(file_id) = path.strip_prefix("/v1/sessions/").and_then(|rest| rest.strip_suffix("/resolve")) {
+            return match request.method.as_str() {
+                "POST" if !file_id.is_empty() && !file_id.contains('/') => self.resolve(file_id, request),
+                _ => Reply::error(404, "not_found", "no such control endpoint"),
+            };
+        }
+        match (request.method.as_str(), path) {
             ("POST", "/v1/sessions") => self.session(&request.body),
             ("GET", "/health") => Reply::json(200, serde_json::json!({ "ok": true })),
             _ => Reply::error(404, "not_found", "no such control endpoint"),
+        }
+    }
+
+    /// `POST /v1/sessions/{fileId}/resolve`: the operator's way out of a
+    /// `conflict` room. The token is the cabinet's service token (the same JWT
+    /// the session uses, `Authorization: Bearer`), it must be for this file,
+    /// and a role that may write (a commenter or viewer session cannot save the
+    /// file, so it cannot resolve it either).
+    ///
+    /// The reply is the room's state after the marker moved. Every refusal
+    /// leaves the room untouched.
+    fn resolve(&self, file_id: &str, request: &Request) -> Reply {
+        let token = match request.header("authorization").and_then(|value| value.strip_prefix("Bearer ")) {
+            Some(token) if !token.is_empty() => token,
+            _ => return Reply::error(401, "auth", "the request needs a service token: Authorization: Bearer <jwt>"),
+        };
+        let claims = match self.verifier.verify(token) {
+            Ok(claims) => claims,
+            Err(e) => return Reply::error(401, "auth", e.to_string()),
+        };
+        if claims.file_id != file_id {
+            return Reply::error(403, "forbidden", "the service token is for another file");
+        }
+        if !claims.role.can_structural() {
+            return Reply::error(403, "forbidden", "this role cannot resolve a conflict");
+        }
+        let body: ResolveRequest = match serde_json::from_slice(&request.body) {
+            Ok(body) => body,
+            Err(e) => return Reply::error(400, "invalid", format!("the body is not a resolve request: {e}")),
+        };
+        let etag = match canonical_etag(&body.etag) {
+            Some(etag) => etag,
+            None => return Reply::error(400, "invalid", "the etag must be sha256:<64 hex digits>"),
+        };
+        let doc = match rooms::doc_key(file_id) {
+            Ok(doc) => doc,
+            Err(e) => return Reply::error(400, "invalid", e),
+        };
+        let published = Published { version: body.expected_version, etag: etag.clone() };
+        match self.server.resolve_conflict(&doc, published) {
+            Ok((version, epoch)) => Reply::json(
+                200,
+                serde_json::json!({
+                    "fileId": file_id,
+                    "version": version,
+                    "epoch": epoch,
+                    "etag": etag,
+                    "cabinetVersion": body.expected_version,
+                    "conflict": false,
+                }),
+            ),
+            Err(ResolveError::Missing) => Reply::error(404, "missing", "no session for this document"),
+            Err(ResolveError::NotInConflict) => Reply::error(409, "not_conflict", "the session is not in conflict"),
+            Err(ResolveError::Busy) => Reply::error(409, "busy", "a publication of this document is in flight; try again"),
+            Err(ResolveError::Invalid(message)) => Reply::error(400, "invalid", message),
+            Err(ResolveError::Failed(message)) => Reply::error(500, "internal", message),
+            Err(ResolveError::Hub) => Reply::error(503, "unavailable", "the hub is unavailable"),
         }
     }
 
@@ -209,6 +291,17 @@ impl Control {
     }
 }
 
+/// The canonical `sha256:<lowercase hex>` form of an etag, or `None` when the
+/// string is not one. A cabinet that sends upper-case hex is normalised, so the
+/// marker compares equal to the daemon's own etags.
+fn canonical_etag(etag: &str) -> Option<String> {
+    let hex = etag.strip_prefix("sha256:")?;
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("sha256:{}", hex.to_ascii_lowercase()))
+}
+
 fn failure(error: RoomError) -> Reply {
     match error {
         RoomError::Conflict { message, etag, version } => {
@@ -297,12 +390,30 @@ mod tests {
                     session_id: "session-9".into(),
                     expires_at: u64::MAX,
                 }),
+                "good-9" => Ok(Claims {
+                    subject: "user-7".into(),
+                    audience: "lzmkm".into(),
+                    file_id: "file-9".into(),
+                    app: "pdfcraft".into(),
+                    role: Role::Editor,
+                    session_id: "session-9".into(),
+                    expires_at: u64::MAX,
+                }),
                 "other-file" => Ok(Claims {
                     subject: "user-7".into(),
                     audience: "lzmkm".into(),
                     file_id: "file-2".into(),
                     app: "pdfcraft".into(),
                     role: Role::Editor,
+                    session_id: "session-9".into(),
+                    expires_at: u64::MAX,
+                }),
+                "viewer" => Ok(Claims {
+                    subject: "user-9".into(),
+                    audience: "lzmkm".into(),
+                    file_id: "file-1".into(),
+                    app: "pdfcraft".into(),
+                    role: Role::Viewer,
                     session_id: "session-9".into(),
                     expires_at: u64::MAX,
                 }),
@@ -327,11 +438,58 @@ mod tests {
     }
 
     fn post(address: std::net::SocketAddr, body: serde_json::Value) -> Result<(u16, serde_json::Value), String> {
-        let token = body.get("jwt").and_then(|jwt| jwt.as_str()).unwrap_or("good").to_owned();
+        post_to(address, "/v1/sessions", Some(body.get("jwt").and_then(|jwt| jwt.as_str()).unwrap_or("good")), &body)
+    }
+
+    fn post_to(address: std::net::SocketAddr, path: &str, token: Option<&str>, body: &serde_json::Value) -> Result<(u16, serde_json::Value), String> {
         let client = Client { timeout: Duration::from_secs(5) };
         let encoded = body.to_string();
-        let (status, body) = client.post_json(&format!("http://{address}/v1/sessions"), Some(&token), &[], encoded.as_bytes()).map_err(|e| e.0)?;
-        Ok((status, serde_json::from_slice(&body).map_err(|e| e.to_string())?))
+        let (status, reply) = client.post_json(&format!("http://{address}{path}"), token, &[], encoded.as_bytes()).map_err(|e| e.0)?;
+        Ok((status, serde_json::from_slice(&reply).map_err(|e| e.to_string())?))
+    }
+
+    /// A cabinet that answers one status to every commit callback.
+    fn always_cabinet(status: u16) -> std::io::Result<String> {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                });
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; length];
+                if reader.read_exact(&mut body).is_err() {
+                    return;
+                }
+                let mut stream = match stream.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                };
+                let answer = "{\"code\":\"conflict\"}";
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+                let _ = stream.flush();
+            }
+        });
+        Ok(format!("http://{address}/commit"))
     }
 
     #[test]
@@ -497,6 +655,106 @@ mod tests {
         assert_eq!(status, 200, "{reply}");
         assert_eq!(reply["version"], 1, "the journal tail was replayed");
         assert_eq!(reply["created"], false);
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// Put the room in `conflict` the way production does: a commit whose
+    /// cabinet callback answers `409`.
+    fn make_conflict(control: &Control, doc: &pdfcraft_collab_proto::DocKey) -> Result<(), String> {
+        use pdfcraft_collab_proto::{ActorId, ClientInfo, ConflictClass, Hello, Op, OpId, OpKind, PageRef, Role as ProtoRole, Target};
+        control
+            .server
+            .with_hub(|hub| -> Result<(), String> {
+                let room = hub.room_mut(doc).ok_or_else(|| "no room".to_owned())?;
+                let editor = ActorId::new("user-7").map_err(|e| e.to_string())?;
+                let hello = Hello {
+                    v: 1,
+                    app: "pdfcraft".into(),
+                    doc: doc.clone(),
+                    jwt: "good".into(),
+                    client: ClientInfo { name: "test".into(), version: "0".into() },
+                };
+                room.hello(editor.clone(), ProtoRole::Editor, &hello, 0).map_err(|e| e.message)?;
+                let op = Op {
+                    op_id: OpId::new("conflict-1").map_err(|e| e.to_string())?,
+                    doc: doc.clone(),
+                    base_version: 0,
+                    epoch: 0,
+                    kind: OpKind::Primitive,
+                    class: ConflictClass::Merge,
+                    target: Target::Page(PageRef { index: 0, epoch: 0 }),
+                    payload: serde_json::json!({"action": "annotation.add", "at": [10.0, 10.0], "contents": "x", "nm": "conflict-1"}),
+                    preview: None,
+                };
+                room.apply(&editor, &op, 0).map_err(|e| e.message)?;
+                let commit = room.commit(&editor, 1).map_err(|e| e.message)?;
+                let outcome = commit.publish();
+                let _ = room.finish(commit, outcome);
+                Ok(())
+            })
+            .map_err(|e| e.to_string())?
+    }
+
+    #[test]
+    fn an_operator_resolves_a_conflict_and_a_second_call_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let root = root("resolve");
+        let url = always_cabinet(409)?;
+        let publisher = Arc::new(Publisher::new(url, None, Duration::from_secs(5)));
+        let rooms =
+            RoomsConfig { data: root.join("data"), publisher: Some(publisher), max_source_bytes: 8 << 20, http_timeout: Duration::from_secs(5) };
+        let hub = Hub::new(RoomConfig::default());
+        let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), WsConfig::default()));
+        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms }));
+        let address = control.bind("127.0.0.1:0")?;
+        let pdf = fixture("one");
+        let body = serde_json::json!({"fileId": "file-1", "jwt": "good", "bytes": rooms::base64_encode(&pdf)});
+        assert_eq!(post(address, body)?.0, 201);
+        let doc = pdfcraft_collab_proto::DocKey::new("file-1")?;
+        make_conflict(&control, &doc)?;
+        let metrics = control.server.metrics()?;
+        assert_eq!(metrics.conflict, vec!["file-1".to_owned()], "the room is flagged");
+
+        let path = "/v1/sessions/file-1/resolve";
+        let etag = |byte: &str| format!("sha256:{}", byte.repeat(32));
+        let (fresh, next, zero) = (etag("44"), etag("55"), etag("00"));
+        let resolve = |version: u64, etag: &str| serde_json::json!({"expectedVersion": version, "etag": etag});
+
+        // No token, another file's token, a viewer's token: refused.
+        let (status, reply) = post_to(address, path, None, &resolve(4, &fresh))?;
+        assert_eq!(status, 401, "{reply}");
+        let (status, reply) = post_to(address, path, Some("other-file"), &resolve(4, &fresh))?;
+        assert_eq!(status, 403, "{reply}");
+        let (status, reply) = post_to(address, path, Some("viewer"), &resolve(4, &fresh))?;
+        assert_eq!(status, 403, "{reply}");
+        // Malformed etag, and a version the session already holds: refused.
+        let (status, reply) = post_to(address, path, Some("good"), &resolve(4, "not-an-etag"))?;
+        assert_eq!(status, 400, "{reply}");
+        let (status, reply) = post_to(address, path, Some("good"), &resolve(0, &zero))?;
+        assert_eq!(status, 400, "{reply}");
+        assert_eq!(control.server.metrics()?.conflict, vec!["file-1".to_owned()], "a refusal changes nothing");
+        // A document with no room: 404.
+        let (status, reply) = post_to(address, "/v1/sessions/file-9/resolve", Some("good-9"), &resolve(4, &fresh))?;
+        assert_eq!(status, 404, "{reply}");
+
+        // The operator's answer: the cabinet is at version 4.
+        let (status, reply) = post_to(address, path, Some("good"), &resolve(4, &fresh))?;
+        assert_eq!(status, 200, "{reply}");
+        assert_eq!(reply["fileId"], "file-1");
+        assert_eq!(reply["version"], 1, "the room's own version is unchanged");
+        assert_eq!(reply["cabinetVersion"], 4);
+        assert_eq!(reply["etag"], fresh);
+        assert_eq!(reply["conflict"], false);
+        let metrics = control.server.metrics()?;
+        assert!(metrics.conflict.is_empty(), "the room is not flagged any more");
+        assert_eq!(metrics.conflicts_resolved, 1);
+        assert_eq!(control.server.with_hub(|hub| hub.room(&doc).map(|room| room.conflict().is_none()))?, Some(true));
+
+        // A second resolve has nothing to resolve and is refused.
+        let (status, reply) = post_to(address, path, Some("good"), &resolve(5, &next))?;
+        assert_eq!(status, 409, "{reply}");
+        assert_eq!(reply["code"], "not_conflict");
+        assert_eq!(control.server.metrics()?.conflicts_resolved, 1, "a refusal is not counted");
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
