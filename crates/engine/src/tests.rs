@@ -1779,6 +1779,45 @@ fn low_resolution_printing_prints_only_the_chosen_content() {
     }
 }
 
+/// A comment and a field the file leaves without an appearance print as the page shows them:
+/// a text box (`/FreeText` with only `/Contents` and `/DA`) and a check box set on with
+/// `/NeedAppearances`. The vector print drew only appearance streams, so both were on screen and
+/// in Print as Image but not on paper (pdf.js `bug1865341`, `freetext_print_no_appearance`).
+/// ISO 32000-2 §12.5.3: an annotation with the Print flag is printed.
+#[test]
+fn comments_and_fields_without_an_appearance_print_as_shown() {
+    let content = "";
+    let pdf = format!(
+        "%PDF-1.7
+         1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) >> >> endobj
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R] >> endobj
+         4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+         5 0 obj << /Type /Annot /Subtype /FreeText /F 4 /P 3 0 R /Rect [10 120 190 190] /DA (/Helv 40 Tf 0 g) /Contents (WWWW) >> endobj
+         6 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (Box) /V /Yes /AS /Yes /F 4 /P 3 0 R /Rect [10 10 110 110] /MK << /CA (8) >> >> endobj
+         trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+    );
+    let mut s = Session::new();
+    let id = s.open("bare.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let settings =
+        print::Settings { pages: vec![0], paper: (200.0, 200.0), layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    let (w, h, rgba) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+    assert_eq!((w, h), (200, 200));
+    // Dark pixels in the text box (top half) and in the check box (bottom half).
+    let dark = |y0: usize, y1: usize| {
+        (y0..y1)
+            .flat_map(|y| (0..w as usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| rgba.get((y * w as usize + x) * 4).is_some_and(|&r| r < 128))
+            .count()
+    };
+    assert!(dark(10, 80) > 50, "the text box prints");
+    assert!(dark(90, 190) > 50, "the check box prints");
+}
+
 #[test]
 fn the_permissions_password_unlocks_an_open_document() {
     // Only a permissions password (#995, #1077): opens without asking. Changes are allowed,
@@ -3120,6 +3159,66 @@ fn setting_the_calculation_order_recalculates_and_undoes() {
     assert!(matches!(s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into()] }), Err(EditError::Form(_))));
 }
 
+/// A Calculate script that sets its own field through the field object, not `event.value`,
+/// gives the field that value, text included; when it sets `event.value` as well, that wins.
+#[test]
+fn a_calculate_script_setting_its_own_field_object_keeps_the_value() {
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["origin", "copy", "both"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    let script = |name: &str, js: &str| Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(js.into()) };
+    s.apply(id, script("copy", "var o = this.getField(\"origin\");\nthis.getField(\"copy\").value = o.value;")).unwrap();
+    s.apply(id, script("both", "this.getField(\"both\").value = \"field\";\nevent.value = this.getField(\"origin\").value + \"!\";")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("abc".into()) }).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
+    assert_eq!(value(&s, "copy").as_deref(), Some("abc"));
+    assert_eq!(value(&s, "both").as_deref(), Some("abc!"), "event.value decides when the script sets both");
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("12".into()) }).unwrap();
+    assert_eq!(value(&s, "copy").as_deref(), Some("12"));
+}
+
+/// A Calculate script that assigns `event.value` the value its field already holds keeps it, even
+/// after writing another value through its field object; and a combo box a script moves to
+/// another option selects that option in `/I` too.
+#[test]
+fn a_calculate_script_assigning_event_value_wins_and_a_combo_keeps_its_selection() {
+    let (mut s, id) = session_with(1);
+    s.apply(
+        id,
+        Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: NewField::Text { multiline: false }, name: Some("origin".into()) },
+    )
+    .unwrap();
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: NewField::Text { multiline: false }, name: Some("kept".into()) })
+        .unwrap();
+    let kind = NewField::Combo { options: vec!["Small".into(), "Large".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 170.0, 180.0, 192.0], kind, name: Some("size".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "size".into(), value: FieldValue::Choice(vec!["Small".into()]) }).unwrap();
+    let script = |name: &str, js: &str| Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(js.into()) };
+    s.apply(
+        id,
+        script(
+            "kept",
+            "var v = event.value;
+this.getField(\"kept\").value = \"field\";
+event.value = v;",
+        ),
+    )
+    .unwrap();
+    s.apply(id, script("size", "event.value = this.getField(\"origin\").value > 5 ? \"Large\" : \"Small\";")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty(), "both scripts ran to the end");
+    let doc = s.get(id).unwrap();
+    let value = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
+    assert_eq!(value("kept").as_deref(), None, "event.value, set to the field's own value, decides");
+    assert_eq!(value("size").as_deref(), Some("Large"));
+    let size = doc.form.iter().find(|f| f.name == "size").map(|f| f.obj).unwrap();
+    let selected = doc.editor.as_ref().unwrap().cos.get(size).as_dict().and_then(|d| d.get(b"I")).cloned();
+    assert_eq!(selected, Some(pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Int(1)])));
+}
+
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {
@@ -4122,7 +4221,9 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
         })
         .unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert_eq!(stages.first(), Some(&OptimizeStage::Discarding));
+    assert_eq!(stages.first(), Some(&OptimizeStage::Reading { done: 0, total: 2 }), "it says what it does first");
+    assert!(!stages.contains(&OptimizeStage::Discarding), "nothing was chosen to discard: {stages:?}");
+    assert!(stages.iter().any(|st| matches!(st, OptimizeStage::Images { .. })), "{stages:?}");
     assert_eq!(&stages[stages.len() - 3..], [OptimizeStage::CleaningUp, OptimizeStage::Merging, OptimizeStage::Writing]);
     let fractions: Vec<f32> = stages.iter().map(|st| st.fraction()).collect();
     assert!(fractions.windows(2).all(|w| w[0] <= w[1]), "the bar never goes back: {fractions:?}");
@@ -4132,6 +4233,20 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
         OptimizeStage::Images { done: 5, total: 5 }.fraction(),
         "no images: no division by zero"
     );
+
+    // What the bar shows before anything is reported says nothing of user data either.
+    assert_eq!(OptimizeStage::default(), OptimizeStage::Reading { done: 0, total: 0 });
+    assert_eq!(OptimizeStage::default().fraction(), 0.0);
+    assert!(OptimizeStage::Reading { done: 2, total: 4 }.fraction() > 0.0, "reading pages moves the bar");
+
+    // Discarding says so when something is. This document has no metadata, which only stops it after
+    // the stage is reported.
+    let mut with_discard = Vec::new();
+    let _ = s.optimize_job(id, &settings, &[crate::Hidden::Metadata]).unwrap().run(|st| {
+        with_discard.push(st);
+        true
+    });
+    assert_eq!(with_discard.first(), Some(&OptimizeStage::Discarding));
 
     // Cancelled at the merge: nothing is written, the open document is untouched.
     let before = s.get(id).unwrap().bytes.clone();
@@ -5234,6 +5349,7 @@ fn sign_prepared_with(
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; reserve], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
     value(&mut v);
+    let certifies = v.get(b"Reference").is_some();
     let sig = doc.add(Object::Dict(v));
     // The field by name, never by number: a full save (encryption, repairs) is
     // free to renumber objects, and a hardcoded reference would stamp the value
@@ -5243,6 +5359,12 @@ fn sign_prepared_with(
     let fields = doc.resolve(&af).as_dict().expect("AcroForm dict").get(b"Fields").cloned().expect("Fields");
     let field = doc.resolve(&fields).as_array().expect("Fields array").iter().filter_map(|o| o.as_ref()).next().expect("signature field");
     doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+    if certifies {
+        // A certification is the signature the catalog's /Perms /DocMDP names (ISO 32000-2, 12.8.2.2).
+        let mut perms = Dict::new();
+        perms.set(b"DocMDP".to_vec(), Object::Ref(sig));
+        doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms))).unwrap();
+    }
     let save = pdfcraft_cos::SaveOptions { object_streams: false, ..pdfcraft_cos::SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(doc, &save).unwrap();
     let mark = format!("0 {} {} {}", LAYERED_BR_MARK[0], LAYERED_BR_MARK[1], LAYERED_BR_MARK[2]);
@@ -9087,6 +9209,46 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
         assert_eq!(Session::content_refresh_lists(Some(edit)), (false, true), "{}", edit.label());
     }
     assert_eq!(Session::content_refresh_lists(None), (true, true), "undo/redo re-read both");
+}
+
+/// Recognized text is an invisible text layer on its page, so applying it refreshes like any
+/// other content edit, not by re-inspecting the whole document (#6310): on a 567-page file with
+/// 60,102 font resources one word took 2.4 s, the full refresh nearly all of it. The page tree,
+/// comments, fields, links and marks stay as they were; the words are on their page, the font
+/// list picks up the OCR font on `refresh_fonts`, undo and redo take the words out and back
+/// without a full refresh either, and a save keeps them.
+#[test]
+fn ocr_words_refresh_only_the_page_content_they_add() {
+    use crate::ocr::{OcrPage, PlacedWord};
+    let (mut s, id) = session_with(3);
+    let words_on = |s: &Session, page: usize| s.get(id).unwrap().text_lines(page).iter().map(|l| l.text.trim().to_string()).collect::<Vec<_>>();
+    let before = s.get(id).unwrap();
+    let view = format!("{:?}", (&before.info.pages, &before.info.annotations, &before.info.fields, &before.links, before.marks()));
+    let others = (words_on(&s, 0), words_on(&s, 2));
+    assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")));
+    take_full_refreshes();
+    let word =
+        PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
+    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
+    assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
+    let after = s.get(id).unwrap();
+    assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);
+    assert!(words_on(&s, 1).iter().any(|w| w == "HELLO"), "{:?}", words_on(&s, 1));
+    assert_eq!((words_on(&s, 0), words_on(&s, 2)), others, "the other pages are untouched");
+    s.refresh_fonts(id);
+    let d = s.get(id).unwrap();
+    let full = pdfcraft_render::inspect(d.bytes.clone(), None).unwrap();
+    assert_eq!(format!("{:?}", d.info.fonts), format!("{:?}", full.fonts), "the font list is what a full inspection reads");
+    assert_eq!(d.info.file_size, full.file_size);
+    s.undo(id).unwrap();
+    assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")), "undo takes the words out");
+    s.redo(id).unwrap();
+    assert!(words_on(&s, 1).iter().any(|w| w == "HELLO"), "redo puts them back");
+    assert_eq!(take_full_refreshes(), 0, "undo and redo refresh the content alone too");
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("saved.pdf", None, saved, None).unwrap();
+    assert!(reopened.get(rid).unwrap().text_lines(1).iter().any(|l| l.text.trim() == "HELLO"), "the save keeps the words");
 }
 
 /// A content edit can add a font (Add text in Times); the narrow refresh leaves the font list

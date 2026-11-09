@@ -103,10 +103,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     };
     if let Some(o) = ptr.pressed() {
         // A press with Shift or ⌘ in Edit text is the objects', whatever lies under it
-        // (`object_ui::modified_hit`): the page's objects are read for it alone.
+        // (`object_ui::modified_hit`): the page's objects are read for it alone. Crop mode holds
+        // it on its page as any other press, so a modified click away applies the crop rather
+        // than taking the picture into a group (#6422).
         let adds = tool == QuickTool::EditText
             && can_modify
             && xf.rect.contains(o)
+            && !hits.cropping(view)
             && crate::object_ui::adds(ptr.modifiers)
             && !crate::object_ui::menu_open(ui, resp);
         let objects = adds.then(|| view.objects.inventory(doc, i));
@@ -532,7 +535,7 @@ impl PageHits<'_> {
             images,
             clip,
         } = *self;
-        // A press with Shift or ⌘ is the objects', crop mode's page included (`object_ui::modified_hit`).
+        // A press with Shift or ⌘ is the objects' (`object_ui::modified_hit`), off crop mode's page.
         if let Some(objects) = objects {
             return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
         }
