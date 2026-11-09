@@ -830,8 +830,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::missing_page_and_garbage_input_fail_gracefully", "crates/render/src/raster/tests.rs::scale_is_clamped_for_huge_pages", "crates/render/src/raster/tests.rs::watchdog_skips_a_stuck_page_and_keeps_rendering"]
-notes = ""
+evidence = ["crates/render/src/raster/tests.rs::missing_page_and_garbage_input_fail_gracefully", "crates/render/src/raster/tests.rs::scale_is_clamped_for_huge_pages", "crates/render/src/raster/tests.rs::watchdog_skips_a_stuck_page_and_keeps_rendering", "crates/render/src/raster/tests/coverage_budget.rs::a_page_past_its_coverage_leaves_the_rest_out_and_says_so"]
+notes = "A page that paints more coverage than the rasterizer can index (one form drawn millions of times over) renders what fitted and says content was left out, rather than failing the page."
 
 [[feature]]
 id = "view.render-priority"
