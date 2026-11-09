@@ -1649,7 +1649,7 @@ $host.gotoURL("https://example.org")"#,
             "for i = 1 upto 100000 do Eval(\"1\") endfor",
             &ev,
             &doc,
-            std::sync::Arc::new(form()),
+            (std::sync::Arc::new(form()), &[]),
             false,
             Limits { loop_iterations: u64::MAX, recursion: 32 },
             Some(std::time::Duration::ZERO),
@@ -1771,6 +1771,7 @@ mod session {
             root: std::sync::Arc::new(form()),
             limits: Limits::default(),
             timeout: std::time::Duration::from_secs(3),
+            props: Vec::new(),
         }
     }
 

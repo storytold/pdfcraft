@@ -1115,6 +1115,23 @@ pub fn property_value_ok(path: &str, attr: Option<&str>, value: &str) -> Result<
     super::prop_rules::check(path, attr, value)
 }
 
+impl XHost {
+    /// Put the property changes earlier scripts of the event made (`sets`) in this script's
+    /// overlay, as if it had made them, without effects and without charging them: they are the
+    /// form as the engine holds it. Changes to objects not in this copy are left out.
+    pub(crate) fn preset(&mut self, sets: &[super::XfaPropSet]) {
+        if sets.is_empty() {
+            return;
+        }
+        let by_som: HashMap<&str, usize> =
+            self.nodes.iter().enumerate().filter(|(_, n)| !n.gone && n.kind != XfaKind::Form).map(|(i, n)| (&*n.som, i)).collect();
+        let found: Vec<(usize, &super::XfaPropSet)> = sets.iter().filter_map(|p| by_som.get(p.som.as_str()).map(|&i| (i, p))).collect();
+        for (i, p) in found {
+            self.put_prop(i, &p.path, p.attr.as_deref(), p.value.clone());
+        }
+    }
+}
+
 /// The overlay: what a script wrote, by node, then by property path.
 pub(crate) type PropWrites = HashMap<usize, HashMap<String, PropWrite>>;
 

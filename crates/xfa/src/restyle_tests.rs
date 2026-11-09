@@ -237,9 +237,9 @@ fn scripts_read_the_changes_back_from_the_live_form() {
     assert_eq!(border.children[0].children[0].attrs[0].1, "1,2,3");
     // In place, as a fresh build gives it.
     let mut stale = crate::form_tree(&t, None, &Overrides::default());
-    assert!(crate::refresh_props(&mut stale.root, &t, &ov, "form[0].plain[0]"));
+    assert!(crate::refresh_props(&mut stale.root, &ov, "form[0].plain[0]"));
     assert_eq!(stale.root.children.iter().find(|n| n.name == "plain").unwrap().props, plain.props);
-    assert!(!crate::refresh_props(&mut stale.root, &t, &ov, "form[0].nothing[0]"));
+    assert!(!crate::refresh_props(&mut stale.root, &ov, "form[0].nothing[0]"));
 }
 
 #[test]

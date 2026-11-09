@@ -470,6 +470,10 @@ struct Runner<'a, 'b> {
     /// `cached` as the scripts get it, made once and sent to each script until the live form
     /// changes in any way (a value too): the script engine reuses what it built from it.
     js_root: Option<Arc<XfaNode>>,
+    /// Property changes made since `js_root` was built, handed to each later script with it, so
+    /// a write needs no new copy of the form (at most [`MAX_PENDING_PROPS`]; past them the copy
+    /// is made again).
+    pending_props: Vec<pdfcraft_js::xfa::XfaPropSet>,
     /// The script engine for this event: one thread for all its scripts, each run in a fresh
     /// context on the form as it is then (`cached`, kept up to date in place for values and
     /// rebuilt when the structure changed).
@@ -515,6 +519,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             fields: None,
             cached: None,
             js_root: None,
+            pending_props: Vec::new(),
             session: None,
             changes: Changes::default(),
             numbered: HashSet::new(),
@@ -527,6 +532,24 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn invalidate(&mut self) {
         self.cached = None;
         self.js_root = None;
+    }
+
+    /// A property change for the scripts that follow in this event: with the copy of the form
+    /// they are given, rather than in a new copy of it, up to [`MAX_PENDING_PROPS`].
+    fn pend_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) {
+        if self.js_root.is_none() {
+            return;
+        }
+        if self.pending_props.len() >= MAX_PENDING_PROPS {
+            self.js_root = None;
+            return;
+        }
+        self.pending_props.push(pdfcraft_js::xfa::XfaPropSet {
+            som: som.to_string(),
+            path: path.to_string(),
+            attr: attr.map(str::to_string),
+            value: value.to_string(),
+        });
     }
 
     /// The script engine for this event.
@@ -558,6 +581,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         if self.cached.is_none() {
             let uses = pdfcraft_xfa::page_area_uses(self.doc, self.tpl);
             let live = pdfcraft_xfa::form_tree_paged(self.tpl, self.data.as_ref(), &self.ov, &uses);
+            #[cfg(test)]
+            counts::bump(&counts::TREES);
             if live.truncated && !self.truncated_warned {
                 self.truncated_warned = true;
                 self.error(format!(
@@ -746,6 +771,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.restyle_pending = false;
         self.flush()?;
         self.embedded_changed = false;
+        #[cfg(test)]
+        counts::bump(&counts::LAYOUTS);
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
@@ -865,9 +892,12 @@ impl<'a, 'b> Runner<'a, 'b> {
                 // How often a subform occurs, or a validation script turned off, changes the
                 // instance managers and events: the tree is rebuilt for those.
                 let structural = path.starts_with("occur#") || (path.starts_with("validate#") && attr == Some("scriptTest"));
+                // A later script in this event reads the change with the copy of the form it is
+                // given, which needs no copying again.
+                self.pend_prop(som, path, attr, value);
                 let refreshed = !structural
                     && match self.cached.as_mut() {
-                        Some(live) => pdfcraft_xfa::refresh_props(&mut live.root, self.tpl, &self.ov, som),
+                        Some(live) => pdfcraft_xfa::refresh_props(&mut live.root, &self.ov, som),
                         None => true,
                     };
                 if !refreshed {
@@ -1021,6 +1051,9 @@ impl<'a, 'b> Runner<'a, 'b> {
         let root = match &self.js_root {
             Some(r) => Arc::clone(r),
             None => {
+                self.pending_props.clear();
+                #[cfg(test)]
+                counts::bump(&counts::SNAPSHOTS);
                 let r = Arc::new(to_js(&self.live().root, tpl));
                 self.js_root = Some(Arc::clone(&r));
                 r
@@ -1033,6 +1066,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             root,
             limits: limits_for(&ev.activity),
             timeout: timeout_for(&ev.activity).saturating_mul(self.run.time_scale),
+            props: self.pending_props.clone(),
         };
         let o = self.session().run(script);
         if o.abandoned {
@@ -1260,6 +1294,31 @@ fn value_unchanged(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, v: O
 /// say); a viewer runs it after every layout. Every layout:ready script runs, but a field that
 /// numbers pages keeps the number the layout gave each page: the value a script writes to it is
 /// dropped (one value would put the same number on every page).
+/// Work an event does, counted for tests: the live form built, the copies of it made for the
+/// scripts, the layouts. Timing-independent, so tests can say the work doesn't grow with the
+/// number of writes.
+#[cfg(test)]
+pub(crate) mod counts {
+    use std::cell::Cell;
+    thread_local! {
+        pub(crate) static TREES: Cell<usize> = const { Cell::new(0) };
+        pub(crate) static SNAPSHOTS: Cell<usize> = const { Cell::new(0) };
+        pub(crate) static LAYOUTS: Cell<usize> = const { Cell::new(0) };
+    }
+    pub(crate) fn bump(c: &'static std::thread::LocalKey<Cell<usize>>) {
+        c.with(|c| c.set(c.get().saturating_add(1)));
+    }
+    /// (trees, snapshots, layouts) since the last call, and start again.
+    pub(crate) fn take() -> (usize, usize, usize) {
+        (TREES.with(|c| c.replace(0)), SNAPSHOTS.with(|c| c.replace(0)), LAYOUTS.with(|c| c.replace(0)))
+    }
+}
+
+/// Most property changes handed to a script with the copy of the form it is given; past them
+/// the copy is made again. A script's start copies the form once and goes through these once,
+/// so this keeps a start's work within a copy's.
+const MAX_PENDING_PROPS: usize = 4_096;
+
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     // The scripts read the live form (template, data and overrides), not the pages, so the
@@ -2251,5 +2310,64 @@ page1.note.presence = "visible""#);
         let saved = s.save_bytes(id).unwrap();
         let mut again = crate::Session::new();
         assert!(again.open("saved.pdf", None, saved, None).is_ok());
+    }
+
+    /// A form of `n` fields, each with an initialize script that colours it (a name holding a
+    /// `.`, as CFIA 5800's `CheckList20.10` does, when `dotted`), opened: the live form built,
+    /// the copies of it made for the scripts and the layouts, counted.
+    fn opening_work(n: usize, dotted: bool) -> (usize, usize, usize) {
+        let fields: String = (0..n)
+            .map(|i| {
+                let name = if dotted { format!("f{i}.x") } else { format!("f{i}") };
+                format!(
+                    r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">this.border.fill.color.value = "51,102,153"; this.assist.toolTip.value = "Tip {i}";</script></event></field>"#
+                )
+            })
+            .collect();
+        let template = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+{fields}</subform></template></xdp:xdp>"#
+        );
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&template))).unwrap();
+        pdfcraft_xfa::render_into(&mut doc).unwrap();
+        let tpl = template_of_doc(&doc);
+        let mut out = JsOutput::default();
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1000, highlight: false };
+        let _ = counts::take();
+        let changes = on_open(&mut doc, &tpl, &mut run).unwrap();
+        assert_eq!(changes.properties, 2 * n, "{changes:?}");
+        counts::take()
+    }
+
+    /// The work an event does doesn't grow with the property changes its scripts make: one live
+    /// form, one copy of it for the scripts and one layout, for 1 field's scripts or 200 (names
+    /// holding a `.` too). Timing-independent: counts, not seconds.
+    #[test]
+    fn property_writes_dont_multiply_the_work_of_an_event() {
+        for dotted in [false, true] {
+            for n in [1, 200] {
+                assert_eq!(opening_work(n, dotted), (1, 1, 1), "{n} fields, dotted names {dotted}");
+            }
+        }
+    }
+
+    /// A later script of the same event reads what an earlier one wrote to a property: the
+    /// change goes with the copy of the form the later script is given.
+    #[test]
+    fn a_later_script_in_the_event_reads_an_earlier_scripts_property_change() {
+        let template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="a" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">b.border.fill.color.value = "51,102,153"; b.assist.toolTip.value = "Set by a";</script></event></field>
+<field name="b" w="4in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">this.rawValue = this.border.fill.color.value + "|" + this.assist.toolTip.value;</script></event></field>
+</subform></template></xdp:xdp>"#;
+        let mut s = crate::Session::new();
+        let id = s.open("later.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        let b = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with('b')).map(|f| f.value.clone()).unwrap_or_default();
+        assert_eq!(b, vec!["51,102,153|Set by a".to_string()]);
     }
 }

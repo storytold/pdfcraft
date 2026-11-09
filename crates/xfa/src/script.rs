@@ -1326,7 +1326,7 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
 /// there is no such node, or it is not one the tree can refresh alone: rebuild the tree. A
 /// change to how often a subform occurs, or one turning a validation's script off, changes
 /// more than the node (the instance manager, the events) and is the caller's to rebuild for.
-pub fn refresh_props(live: &mut FormNode, tpl: &Template, ov: &Overrides, som: &str) -> bool {
+pub fn refresh_props(live: &mut FormNode, ov: &Overrides, som: &str) -> bool {
     /// The node at `som` under `n`, followed down the path: only children on the way to it (whose
     /// SOM path starts it) or sharing their parent's (unnamed ones) are looked into, so finding
     /// one costs the depth, not the form.
@@ -1345,18 +1345,24 @@ pub fn refresh_props(live: &mut FormNode, tpl: &Template, ov: &Overrides, som: &
     }
     let Some(sets) = ov.props.get(som) else { return false };
     let Some(n) = find(live, som, 0) else { return false };
-    match n.kind {
-        Some(NodeKind::Field) => {
-            let Some(f) = crate::data::template_field(tpl, som) else { return false };
-            let f = crate::restyle::restyled_field(f, sets);
-            n.props = Arc::clone(&f.common.props);
-            n.display_picture = f.display_picture;
-        }
-        // The changes are whole values, so applying them again over the node's tree gives what
-        // applying them to the template's does.
-        _ => n.props = Arc::new(crate::restyle::apply_props(&n.props, sets).0),
+    // The changes are whole values, so applying them again over the node's tree gives what
+    // applying them to the template's does; the node needs no template look-up (which a name
+    // holding a `.` defeats) and the tree no rebuild.
+    let props = crate::restyle::apply_props(&n.props, sets).0;
+    if n.kind == Some(NodeKind::Field) {
+        // A field's display picture, as the template reader reads it (`format.picture`).
+        n.display_picture = display_picture_of(&props);
     }
+    n.props = Arc::new(props);
     true
+}
+
+/// The display picture a field's property tree gives (`format` > `picture`, trimmed; none when
+/// empty), as the template reader reads it.
+fn display_picture_of(props: &Props) -> Option<String> {
+    let format = props.elements.iter().find(|e| e.tag == "format")?;
+    let picture = format.children.iter().find(|e| e.tag == "picture")?;
+    picture.text.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
 }
 
 /// The data tree of a document's datasets packet.

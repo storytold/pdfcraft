@@ -132,6 +132,21 @@ pub enum XfaEffect {
     },
 }
 
+/// A property change an earlier script of the same event made ([`XfaEffect::SetProperty`]),
+/// handed to the next script with the form it was given, so the form needn't be copied again
+/// for it (see [`crate::xfa_session::Script::props`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct XfaPropSet {
+    pub som: String,
+    pub path: String,
+    pub attr: Option<String>,
+    pub value: String,
+}
+
+/// The form a script runs on: the copy the caller holds, and the property changes earlier
+/// scripts of the event made since that copy was made ([`XfaPropSet`]).
+pub(crate) type FormCopy<'a> = (std::sync::Arc<XfaNode>, &'a [XfaPropSet]);
+
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct XfaOutcome {
