@@ -403,12 +403,31 @@ impl<'a> Page<'a> {
             return None;
         }
 
-        let media_box = dict.get::<Rect>(MEDIA_BOX).or(ctx.media_box).unwrap_or(A4);
+        // PdfCraft patch (38): a box that encloses no area is no box. A `/MediaBox` without
+        // area (`[0 0 0 0]`) is read as a missing one (A4), and a `/CropBox` that has none, or
+        // none in common with the media box, as a missing one (the media box, ISO 32000-2
+        // §14.11.2, Table 33). Kept, the page's visible region had no area: nothing was drawn
+        // and no text was extracted, where other readers show the page.
+        // A page's own box without area gives way to one it inherits that has some. Each box
+        // set aside is logged, as other repairs of this reader are.
+        let own_media = dict.get::<Rect>(MEDIA_BOX);
+        let media_box = own_media
+            .filter(has_area)
+            .or(ctx.media_box.filter(has_area))
+            .unwrap_or(A4);
+        if own_media.or(ctx.media_box).is_some_and(|m| !has_area(&m)) {
+            warn!("a /MediaBox without area was read as missing");
+        }
 
-        let crop_box = dict
-            .get::<Rect>(CROP_BOX)
-            .or(ctx.crop_box)
+        let shows = |c: &Rect| has_area(&c.intersect(media_box));
+        let own_crop = dict.get::<Rect>(CROP_BOX);
+        let crop_box = own_crop
+            .filter(shows)
+            .or(ctx.crop_box.filter(shows))
             .unwrap_or(media_box);
+        if own_crop.or(ctx.crop_box).is_some_and(|c| !shows(&c)) {
+            warn!("a /CropBox with no area in the media box was read as missing");
+        }
 
         let rotation = match dict
             .get::<i32>(ROTATE)
@@ -797,6 +816,18 @@ impl<'a> Resources<'a> {
 // <https://github.com/apache/pdfbox/blob/a53a70db16ea3133994120bcf1e216b9e760c05b/pdfbox/src/main/java/org/apache/pdfbox/pdmodel/common/PDRectangle.java#L38>
 const POINTS_PER_INCH: f64 = 72.0;
 const POINTS_PER_MM: f64 = 1.0 / (10.0 * 2.54) * POINTS_PER_INCH;
+
+/// PdfCraft patch (38): whether `r` encloses some area: finite, and wider and taller than
+/// nothing.
+fn has_area(r: &Rect) -> bool {
+    let (w, h) = (r.width() as f32, r.height() as f32);
+    w.is_finite()
+        && h.is_finite()
+        && w > 0.0
+        && h > 0.0
+        && !w.is_nearly_zero()
+        && !h.is_nearly_zero()
+}
 
 /// The dimension of an A4 page.
 pub const A4: Rect = Rect {
