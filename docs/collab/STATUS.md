@@ -45,7 +45,7 @@
 | `crates/collab-proto` | Wire envelope: `Op`, `Applied`, `Welcome`, `Presence`, `Snapshot`, `CommitRequest`, error codes, size limits |
 | `crates/collab-server` | Authoritative `Room`: version, epoch, `opId` window, lease, roles, journal tail, participants/ops limits, `replay`, poisoned-read-only and commit-`conflict` state, the journal operation/byte threshold for a forced commit (`forced_commit_due`) |
 | `crates/collab-hub` | In-memory delivery: clients of a document, broadcast, presence fan-out, lease release on disconnect, and the server-initiated commits (last leave, forced compaction) whose publication runs outside the lock |
-| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
+| `crates/collab-pdf` | PDF adapter over `engine`: annotations, form values, page rotate/move/delete/insert/duplicate, restores from server-side copies of deleted comments/pages; durable `Store` (versioned bases, journal, `CABINET` marker) |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, fill) + text, with the v1 subset and its limits |
 | `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
@@ -232,6 +232,74 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Page insert and duplicate — §5 p.3 (2026-11-09, local; not pushed)
+
+`b13933e9b` on `d01adcad4`. Structural coverage was rotate, move and delete
+(§5 p.3). Now:
+
+- `page.insert` (target `Target::Page` at the insertion position in the current
+  epoch, `index ≤ page count`) and `page.duplicate` (target is the source page;
+  the copy goes at the payload's `at`, or right after the source when it names
+  none) carry the page as a one-page PDF inside the operation: `payload.bytes`
+  (base64) and `payload.at`. Both apply through `Edit::InsertPagesFrom`, bump
+  the epoch and are journaled with the copy, so every replica and a restart
+  insert the same bytes without a second channel.
+- The copy is bounded by `MAX_RESTORE_PAGE_BYTES` (160 KiB, now
+  `pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES` so the client uses the same
+  number). A page over it is refused with `limit` **before** `apply_edit`: no
+  partial insert, no epoch bump, no journal entry. The client refuses the same
+  page in `ops_for_edit` (`ProjectionError::TooLarge`) and in `edit_for`, so the
+  edit is never applied locally either.
+- A foreign epoch on the address is `stale` and retryable (`insert_position`
+  and `page_index`), so the client resyncs and re-addresses the page; a merge
+  edit someone else made to the source page does not move the address.
+- Undo: `inverse_for` turns an insert or a duplicate into a `page.delete` of the
+  page it put there, so the page count returns to what it was; the redo is the
+  original operation.
+- Client projection: `edit_for` applies both actions; `ops_for_edit` builds them
+  from `Edit::InsertPagesFrom` (one operation per page, each cut with the
+  engine's own one-page copy) and `Edit::DuplicatePages` (copies cut from the
+  document as it stands); `insert_page_payload` / `duplicate_page_payload` are
+  the wire helpers.
+
+Gates at `b13933e9b` (host `agents`, rustc 1.99.1, `-j 8`/`-j 10`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy, whole workspace | `cargo clippy --all-targets -- -D warnings` | pass |
+| Tests, the three named packages | `cargo test -p pdfcraft-collab-pdf -p pdfcraft-collab-ws -p pdfcraft-collab-session` | pass — pdf 26, ws 6 unit + 9 e2e, session 5 |
+| Tests, client projection | `cargo test -p pdfcraft-collab-client-pdf` | pass — 15 |
+| Tests, the collab list | proto 12, server 22, hub 5, client 12, client-pdf 15, session 5, ws 6 + 9 e2e, pdf 26, annot 10, daemon 28 + 1 crash | pass — **151** |
+| wasm, client projection | `cargo check --target wasm32-unknown-unknown -p pdfcraft-collab-client-pdf` | pass |
+| App wiring | `cargo check -p pdfcraft --features collab` | pass |
+
+New tests:
+
+- `collab-pdf` — `an_inserted_page_lands_at_its_address` (the copy lands at 0,
+  the original moves to 1, the committed PDF reads "Page 3" then "Page 1"),
+  `a_duplicate_lands_at_the_position_it_names`,
+  `a_page_over_the_limit_is_refused_before_the_document_changes` (`limit`; page
+  count, epoch and version unchanged),
+  `an_insert_addressed_to_another_epoch_is_retryable` (`stale`, retryable),
+  `the_undo_of_an_insert_returns_the_original_page_count`, and
+  `an_insert_replays_from_its_operation` (a fresh adapter replays the journal).
+- `collab-client-pdf` —
+  `an_insert_and_a_duplicate_become_addressable_operations` (payload, address,
+  the inverse is a `page.delete`, and the replica applies both) and
+  `a_page_over_the_limit_is_refused_on_this_side_too`.
+- `collab-ws` e2e — `two_clients_insert_and_duplicate_a_page_and_converge`: two
+  clients over a socket; Bo comments on page 0, Ada inserts a copy of page 1 at
+  0 (both replicas read "Page 2" at 0 and "Page 1" at 1), the undo returns the
+  page count, Ada duplicates page 0 (both read "Page 1" at 1), and an insert
+  addressed to epoch 0 after the epoch moved is `stale` and retryable with
+  nothing changed.
+
+What this does **not** cover: `page.insert_blank` (a blank page needs no copy
+but has no operation yet), replace, split/combine, and duplicating a page larger
+than the budget (refused, not shared). Nothing was pushed: the fork and PR #6622
+still describe `81035bf2`.
 
 ### Forced journal commit — §6.1 limitation 10 (2026-11-09, local; not pushed)
 
@@ -750,9 +818,14 @@ Ordered by the risk they pose to production.
    with `unsupported` (RFC §3.1.1). Comment replies that carry a status
    (`/State`) and edits that only change an annotation's style are not shared
    yet.
-3. **Structural coverage.** Only page rotate, move and delete. Insert,
-   duplicate, replace, split/combine, bookmarks, layers, attachments, form
-   structure and content edits are not shared.
+3. **Structural coverage.** Page rotate, move, delete and restore, and now
+   insert and duplicate (§4, `b13933e9b`). An insert or a duplicate carries the
+   page as a one-page PDF inside the operation (base64, ≤
+   `MAX_RESTORE_PAGE_BYTES` = 160 KiB); a page over that is refused with
+   `limit` before the document changes and is not applied locally. Both bump the
+   epoch, so an operation addressed to a passed epoch is `stale` (retryable).
+   Replace, split/combine, blank insert, bookmarks, layers, attachments, form
+   structure and content edits are still not shared.
 4. **Presence has cursors, not selections.** The pointer over a page is sent and
    drawn (ADR-0006); a text selection, `/NM` or rect selection is not sent yet.
 5. **Undo of a deletion is best effort.** A comment the room added comes back
@@ -1109,7 +1182,8 @@ lift the 160 KiB page cap and make a page restore independent of one frame.
   `conflict` room, WSS/TLS behind a reverse proxy, page restore capped at
   160 KiB, text selections not shared, and signatures / custom stamps /
   redaction / attachments / page insert-duplicate-split refused as
-  `unsupported`.
+  `unsupported` (insert and duplicate are shared since `b13933e9b`, §4; the
+  body and the pushed head still say the old list).
 - Update `docs/collab/RFC.md` §16 as items close — done for §6.4, §6.5 and
   limitation 11 (§8.2, §9, §16 p. 9).
 - Add an automation/parity entry once the feature is user-facing.
