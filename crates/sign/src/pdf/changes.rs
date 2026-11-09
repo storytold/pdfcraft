@@ -651,13 +651,14 @@ fn form_fill_roles(old: &Document) -> HashMap<u32, FormRole> {
     roles
 }
 
-/// Whether the dictionary `now` keeps every entry of `before`: the same value, or an inline
-/// dictionary that itself only gained entries. A reference stays the same reference, so an entry
-/// pointed at another object, however alike, is a change.
+/// Whether the dictionary `now` keeps every entry of `before`: the same value ([`same_object`],
+/// so a string or number only respelled is kept), or an inline dictionary that itself only gained
+/// entries. A reference stays the same reference, so an entry pointed at another object, however
+/// alike, is a change.
 fn only_gained_entries(before: &Object, now: &Object, depth: u8) -> bool {
     match (before, now) {
         (Object::Dict(b), Object::Dict(n)) => {
-            b.iter().all(|(k, v)| n.get(k).is_some_and(|nv| nv == v || (depth < 4 && only_gained_entries(v, nv, depth + 1))))
+            b.iter().all(|(k, v)| n.get(k).is_some_and(|nv| same_object(nv, v) || (depth < 4 && only_gained_entries(v, nv, depth + 1))))
         }
         _ => false,
     }

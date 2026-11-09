@@ -455,3 +455,31 @@ fn an_appearance_the_signed_signature_widget_shares_is_not_a_form_fill() {
         assert_eq!(verdict(&redrawn(&shared).open(), shared.open(), Some(p)), Modification::Disallowed(vec![super::kind::OTHER]), "P={p}");
     }
 }
+
+/// The AcroForm's default resources, rewritten in place by a form fill that adds a font, keep
+/// every signed entry when a writer respells one of their numbers (a whole real saved as an
+/// integer) or strings (literal saved as hexadecimal): those are the same values (ISO 32000-2
+/// §7.3.3, §7.3.4.1), so the rewrite is still a form fill. An entry whose value did change is not
+/// (#3442).
+#[test]
+fn default_resources_respelled_while_gaining_a_font_are_a_form_fill() {
+    let helv = |first: &str, name: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar {first} /Name {name} >>");
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR 6 0 R /DA (/Helv 0 Tf 0 g) >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, TEXT_FIELD)),
+        (6, Row::Obj(0, 0, &format!("<< /Font << /Helv {} >> >>", helv("32.0", "(Helv)")))),
+    ]);
+    let rewritten = |first: &str, name: &str| {
+        let dr = format!("<< /Font << /Helv {} /ZaDb << /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >> >> >>", helv(first, name));
+        signed.clone().revision(&[(6, Row::Obj(0, 0, &dr))]).open()
+    };
+    for (first, name) in [("32.0", "(Helv)"), ("32", "(Helv)"), ("32.0", "<48656C76>"), ("32", "<48656C76>")] {
+        assert_eq!(verdict(&rewritten(first, name), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]), "{first} {name}");
+    }
+    for (first, name) in [("33", "(Helv)"), ("32", "(Helw)")] {
+        assert!(matches!(verdict(&rewritten(first, name), signed.open(), Some(2)), Modification::Disallowed(_)), "{first} {name}");
+    }
+}
