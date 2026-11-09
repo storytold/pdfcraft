@@ -360,6 +360,7 @@ impl Automation {
             ("discard_thumbnails", &mut settings.discard_thumbnails),
             ("discard_alternate_images", &mut settings.discard_alternate_images),
             ("discard_tags", &mut settings.discard_tags),
+            ("discard_search_index", &mut settings.discard_search_index),
             ("discard_print_settings", &mut settings.discard_print_settings),
             ("discard_form_actions", &mut settings.discard_form_actions),
             ("flate_unencoded", &mut settings.flate_unencoded),
@@ -367,6 +368,7 @@ impl Automation {
             ("lzw_to_flate", &mut settings.lzw_to_flate),
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
+            ("discard_external_refs", &mut settings.discard_external_refs),
         ] {
             if let Some(b) = a.opt_bool(key)? {
                 *flag = b;
@@ -471,6 +473,7 @@ impl Automation {
             "image_bytes_after": o.image_bytes_after,
             "thumbnails": o.thumbnails,
             "alternate_images": o.alternate_images,
+            "search_indexes": o.search_indexes,
             "tags_removed": o.tags_removed,
             "print_settings": o.print_settings,
             "form_actions": o.form_actions,
@@ -479,6 +482,8 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "external_links": o.external_links,
+            "external_bookmarks": o.external_bookmarks,
             "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
@@ -626,11 +631,33 @@ impl Automation {
                 replace,
                 file: self.mark_file(a)?,
             },
+            "doc_printer_marks" => {
+                use pdfcraft_engine::PrinterMarks;
+                let flag = |k: &str, default: bool| -> Result<bool> { Ok(a.opt_bool(k)?.unwrap_or(default)) };
+                let (y, m, d) = self.session.today();
+                let settings = PrinterMarks {
+                    trim: flag("trim", true)?,
+                    bleed: flag("bleed", true)?,
+                    registration: flag("registration", true)?,
+                    color_bars: flag("color_bars", true)?,
+                    page_info: flag("page_info", true)?,
+                    line_weight: a.opt_num("line_weight")?.unwrap_or(0.25),
+                    make_room: match a.opt_num("make_room")? {
+                        Some(r) if r < 0.0 => None,
+                        Some(r) => Some(r),
+                        None => Some(36.0),
+                    },
+                    label: a.opt_str("label")?.map(str::to_string).unwrap_or_else(|| self.doc(a).map(|d| d.name.clone()).unwrap_or_default()),
+                    date: a.opt_str("date")?.map(str::to_string).unwrap_or_else(|| format!("{y:04}-{m:02}-{d:02}")),
+                };
+                Edit::AddPrinterMarks { pages, settings, replace: a.opt_bool("replace")?.unwrap_or(true) }
+            }
             _ => {
                 let kind = match a.str("kind")? {
                     "header_footer" => MarkKind::HeaderFooter,
                     "watermark" => MarkKind::Watermark,
                     "background" => MarkKind::Background,
+                    "printer_marks" => MarkKind::PrinterMarks,
                     other => return Err(ToolError::InvalidArgs(format!("unknown kind {other:?}"))),
                 };
                 Edit::RemoveMarks { kind }
