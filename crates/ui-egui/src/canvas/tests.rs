@@ -2134,6 +2134,40 @@ fn a_page_found_cut_after_a_dismissal_is_still_named() {
     h.get_by_label_contains("2 pages hold more content than PdfCraft can read, page 1 first");
 }
 
+/// Ctrl+wheel zooms a visible window that another application has focus over, as plain
+/// wheel scrolling does; the palette still blocks it.
+#[test]
+fn ctrl_wheel_zooms_an_unfocused_window() {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(3);
+    let center = h.state().views[0].viewport_rect().center();
+    h.hover_at(center);
+    h.input_mut().focused = false;
+    h.run_steps(2);
+    let ctrl_wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    h.state_mut().palette_open = true;
+    let before = h.state().views[0].zoom;
+    h.event(ctrl_wheel.clone());
+    h.run_steps(10);
+    assert_eq!(h.state().views[0].zoom, before, "the palette still blocks zoom");
+    h.state_mut().palette_open = false;
+    h.run_steps(2);
+    h.event(ctrl_wheel);
+    h.run_steps(10);
+    assert!(h.state().views[0].zoom > before, "Ctrl+wheel zooms without window focus");
+}
+
 #[test]
 fn virtualized_organizer_keeps_insert_gaps_at_document_positions() {
     use egui_kittest::kittest::Queryable;
