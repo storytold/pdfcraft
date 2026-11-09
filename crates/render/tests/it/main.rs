@@ -3,6 +3,7 @@
 mod cid_cff_unusable_font_dict;
 mod cid_fallback_query;
 mod fill_stroke_knockout;
+mod indexed_lookup;
 mod inline_image_ei;
 mod jbig2_invariants;
 mod knockout_backdrop;

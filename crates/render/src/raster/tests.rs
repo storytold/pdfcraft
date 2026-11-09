@@ -9282,6 +9282,10 @@ fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
 mod icc_profile_cache;
 
+// An Indexed resource named by many inline images reads its lookup once (vendored
+// hayro-interpret patch 80).
+mod indexed_lookup_cache;
+
 // A Type 3 glyph shown again decodes its procedure once (vendored hayro-interpret patch 87).
 mod type3_proc_cache;
 
