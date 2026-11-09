@@ -300,7 +300,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
-**2026-11-09 · patch:** M4 #4594: reconcile upstream license notices and roadmap entries without changing the Document Properties draft guard or dependency policy. Estimates unchanged.
+**2026-11-09 · patch:** M4 #4594: reconcile upstream license notices, roadmap entries and UI test modules without changing the Document Properties draft guard or dependency policy. Estimates unchanged.
 
 **2026-10-31 · minor:** M3/M4 #5330: direct quick-toolbar Crop pages action reuses command permissions and the existing crop tool. Estimates unchanged.
 
