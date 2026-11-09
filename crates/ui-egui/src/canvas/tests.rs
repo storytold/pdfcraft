@@ -2650,6 +2650,7 @@ fn esc_with_a_field_being_filled_leaves_the_selection() {
     v.all_text = true;
     v.forms.focus = Some(crate::forms_ui::Focus {
         name: "agree".into(),
+        obj: None,
         widget: 0,
         text: String::new(),
         picked: Vec::new(),
@@ -2659,6 +2660,7 @@ fn esc_with_a_field_being_filled_leaves_the_selection() {
         calendar: None,
         calendar_rect: None,
         calendar_text: None,
+        list: Default::default(),
         had_focus: true,
     });
     let ctx = egui::Context::default();
