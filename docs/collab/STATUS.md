@@ -21,13 +21,17 @@
   `ca9e3c2c3` (which contains the requested `cde331fb7`), with the local head
   before that STATUS commit at `0e839a4b1`. A later session rebased it again
   onto `origin/main` `b6cbf9bb3` (307 commits on; 64 branch commits moved, four
-  conflicts; §4) with the field-projection fix `e0d200af5` at the tip: the
-  local head before this STATUS commit is `e0d200af5`, 65 ahead and 0 behind,
-  all §6.6 gates are green, and nothing was pushed, so PR #6622 still describes
-  `81035bf2`.
+  conflicts; §4) with the field-projection fix `e0d200af5` at the tip and the
+  docs commit `4bcb5b85b` recording that rebase: the local head before this
+  STATUS commit is `4bcb5b85b`, 66 ahead and 0 behind `b6cbf9bb3`, all §6.6 gates are green
+  (re-run at `4bcb5b85b`, §4), and nothing was pushed. The body of PR #6622 was
+  replaced with the text of `PR-DRAFT.md` updated to this base (§4); its head
+  is still the pushed `4eea573be`, so `gh pr view 6622` keeps reporting
+  `CONFLICTING` / `DIRTY` until the force-push.
   **§6.3 (web host bridge) is done locally in `81a92f32f`** — the transport trait,
   the browser transport and the five host messages (§4, §6.3) — and is not
-  pushed either: the fork, PR #6622 and its body still describe `81035bf2`.
+  pushed either: PR #6622 still has the pushed head `4eea573be` (its body was
+  later updated to the rebased base, §4).
   **§6.1 limitation 10 (forced journal commit) is done locally in `8fc898bae`**
   (§4, §6.1): a live room compacts its journal at an operation or byte
   threshold, with the base under the hub lock and the cabinet POST outside it;
@@ -68,16 +72,16 @@
   the rest — `annotation.font_size` over `Edit::FontSizeAnnotation` and
   `annotation.info` (author, subject, note icon) over `Edit::SetAnnotationInfo`,
   each with a compare-and-set undo and a refusal that changes neither the
-  document nor the version. Nothing was pushed: the fork, PR #6622 and its body
-  still describe `81035bf2`.
+  document nor the version. Nothing was pushed: PR #6622 still has the pushed
+  head `4eea573be`.
 - **§5 p.3 / limitation 3 (page replacement and blank insert) is done locally in
   `e9756d138`** (§4, RFC §3.1.4): `page.replace` addresses the page, carries the
   new one-page PDF (base64, ≤ `MAX_RESTORE_PAGE_BYTES`), keeps the page it
   replaced for an exact undo (a page over the budget has no copy and its undo is
   a `conflict`), and `page.insert_blank` carries the size of the page it adds.
   Both bump the epoch, so a passed epoch is `stale`; a bad payload is refused
-  before the document changes. The pushed head, the fork, PR #6622 and its body
-  are unchanged.
+  before the document changes. The pushed head and the fork are unchanged (the
+  PR body was later updated to this base, §4).
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -1142,8 +1146,9 @@ Rebased head before the STATUS commit: `e0d200af5` (the 64 replayed commits
 plus the field fix). The branch is 65 commits ahead of `b6cbf9bb3` and 0
 behind; `git merge-tree --write-tree origin/main HEAD` exits 0 with no
 conflicted paths. Nothing was pushed, so the fork, PR #6622 and its body still
-describe `81035bf2` and the PR stays `CONFLICTING`/`DIRTY` until the owner
-force-pushes.
+describe `81035bf2` and the PR stayed `CONFLICTING`/`DIRTY` until the owner
+force-pushed. The body was later replaced with the text of
+`pdfcraft/PR-DRAFT.md` at this base (see the re-verification below).
 
 Gates at `e0d200af5` (host `agents`, rustc 1.99.1, `-j 12`):
 
@@ -1167,6 +1172,30 @@ session 5, ws 26, pdf 41, annot 18, daemon 34), so no test is duplicated by
 the rebase. The UI suite was not re-run for this rebase; the last full run is
 §6.6 below, and clippy with `--features collab` plus
 `cargo check -p pdfcraft --features collab` are green on the merged files.
+
+Re-verified at `4bcb5b85b` — the docs commit that records the `b6cbf9bb3`
+rebase, one docs commit on top of `e0d200af5` — in a later pass on 2026-11-09.
+The tree was clean, `git merge-tree --write-tree origin/main HEAD` exited 0 and
+wrote tree `0653eecff`, and the §6.6 gates were re-run green on the host
+(`agents`, rustc 1.99.1, `-j 12`): `cargo fmt --all -- --check`; clippy for the
+nine collab crates plus the daemon and for `pdfcraft-ui-egui --features collab`
+with `--all-targets -- -D warnings`; the collaboration suites — **209** tests
+in 8 s on the warm target (proto 12, server 27, hub 5, client 13,
+client-pdf 28, session 5, ws 8 unit, pdf 41, annot 18, daemon 31 + the
+conflict-resolve, crash-recovery and publication-retry tests) — and the 18 e2e
+on their own; `cargo check -p pdfcraft --features collab`; `cargo xtask layers`
+(50 crates, no violations). The code at `4bcb5b85b` is `e0d200af5`'s plus
+nothing, so this is the same tree the earlier table measured, timed again on a
+warm target rather than the earlier cold one.
+
+The PR body was then replaced (a body edit, not a push) with the text of
+`pdfcraft/PR-DRAFT.md`, updated to the current base: the web host bridge,
+presence selections, page insert/duplicate/replace/blank insert, the
+publication queue and the conflict-resolution endpoint moved out of the
+"Limitations" list, the test section names the 209 tests and the e2e run, and
+the body now names `main` `b6cbf9bb3` as the base. Nothing was pushed: PR
+#6622 still has the pushed head `4eea573be` and reads `CONFLICTING` / `DIRTY`
+until the owner or chair force-pushes this branch.
 
 ### SIGKILL crash recovery — `999da5ec` (limitation 1, closed)
 
@@ -1860,7 +1889,8 @@ comments, per-line range geometry, caret).
   per-kid check-box on states (§4). The pre-rebase head is kept as
   `backup/pre-rebase-4eea573b`; the rebased head before this STATUS commit is
   `e0d200af5`, 65 ahead of `origin/main` and 0 behind. Nothing was pushed, so
-  the fork, PR #6622 and its body still describe `81035bf2`.
+  the fork and the PR head still describe `81035bf2`; the PR body was replaced
+  later that day, at `4bcb5b85b` (§4).
 - **Gates at `e0d200af5` are green** (§4): `cargo fmt --all -- --check`; clippy
   for the nine collab crates plus the daemon and for `pdfcraft-ui-egui
   --features collab`, `--all-targets -- -D warnings`; 209 collab/e2e tests
@@ -1908,8 +1938,9 @@ comments, per-line range geometry, caret).
 - **The PR body was replaced** on 2026-11-09 with the text in
   `pdfcraft/PR-DRAFT.md` (from `## What` on); the body on the PR is byte for
   byte that text plus CodeRabbit's appended summary block. Every claim in it
-  describes the feature at the pushed head `81035bf2`; the rebase only changed
-  the base, not the features it describes. What it fixes: cursors and their TTL,
+  described the feature at the then-pushed head `81035bf2`; the rebase only
+  changed the base, not the features it describes. (Superseded on 2026-11-09:
+  the body was replaced again with the text updated to `b6cbf9bb3`, §4.) What it fixes: cursors and their TTL,
   the typed annotation set, undo of deleted comments and pages from server
   copies, the control plane, the commit callback running outside the hub lock,
   and the SIGKILL crash-recovery test.
