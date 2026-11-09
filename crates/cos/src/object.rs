@@ -351,10 +351,12 @@ impl Stream {
     }
 
     /// Decoded data, tolerating truncated or corrupt encodings the way viewers do (the data
-    /// decoded before the damage is returned). Streams with image codecs fail with
+    /// decoded before the damage is returned). Decoding past
+    /// [`crate::budget::MAX_PAGE_DECODED`] (256 MiB), the most the renderer reads from one
+    /// stream, is an error. Streams with image codecs fail with
     /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage.
     pub fn decoded(&self) -> Result<Vec<u8>, CosError> {
-        self.decoded_within(MAX_DECODED)
+        self.decoded_within(crate::budget::MAX_PAGE_DECODED)
     }
 
     /// Like [`Stream::decoded`], for a stream whose decoded size has a tighter bound than
@@ -778,6 +780,13 @@ mod tests {
         assert!(matches!(&result, Err(CosError::Filter(detail)) if detail.contains("exceeds the limit of 0 bytes")), "{result:?}");
         assert_eq!(stream.decoded_within(1).unwrap(), b"A");
         assert_eq!(stream.decoded_strict().unwrap(), b"A");
+    }
+
+    #[test]
+    fn decoded_stops_at_renderer_cap_of_256_mib() {
+        let data = vec![0u8; (256 << 20) + 1];
+        let stream = Stream::flate(Dict::new(), &data);
+        assert!(matches!(stream.decoded(), Err(CosError::Filter(_))));
     }
 
     #[test]

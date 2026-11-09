@@ -2975,6 +2975,510 @@ fn invalid_links_and_unreferenced_destinations_go() {
     assert_eq!(optimize(&mut again, &off).unwrap().invalid_links, 0);
 }
 
+mod external_refs {
+    use super::*;
+
+    /// An action dictionary of type `s`, followed by `next` when given.
+    fn action(s: &str, next: Option<Object>) -> Object {
+        let mut d = Dict::new();
+        d.set(b"S".to_vec(), Object::name(s));
+        match s {
+            "GoToR" | "Launch" => d.set(b"F".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"other.pdf".to_vec()))),
+            "URI" => d.set(b"URI".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"https://example.com".to_vec()))),
+            _ => {}
+        }
+        if let Some(n) = next {
+            d.set(b"Next".to_vec(), n);
+        }
+        Object::Dict(d)
+    }
+
+    fn link_with(a: Option<Object>, dest: Option<Object>) -> Object {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        if let Some(a) = a {
+            d.set(b"A".to_vec(), a);
+        }
+        if let Some(dest) = dest {
+            d.set(b"Dest".to_vec(), dest);
+        }
+        Object::Dict(d)
+    }
+
+    /// The action types an `/A` value runs, in order (depth-first through `/Next`), at most 1,000.
+    fn chain(doc: &Document, a: &Object) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![a.clone()];
+        while let Some(o) = stack.pop() {
+            if out.len() >= 1_000 {
+                break;
+            }
+            match doc.resolve(&o).as_ref() {
+                Object::Array(items) => stack.extend(items.iter().rev().cloned()),
+                Object::Dict(d) => {
+                    out.push(
+                        d.get(b"S")
+                            .map(|s| doc.resolve(s))
+                            .and_then(|s| s.as_name().map(|n| String::from_utf8_lossy(n).into_owned()))
+                            .unwrap_or_default(),
+                    );
+                    if let Some(n) = d.get(b"Next") {
+                        stack.push(n.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A one-page document whose page holds `annots`, with one bookmark per action in `bookmarks`.
+    fn linked_doc(annots: impl FnOnce(&mut Document, ObjRef) -> Vec<Object>, bookmarks: &[Object]) -> (Document, ObjRef, Vec<ObjRef>) {
+        let mut doc = Document::new_empty();
+        let p = page(&mut doc, &[], "BT ET");
+        let annots = annots(&mut doc, p);
+        doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+        let outlines = doc.add(Object::Null);
+        let items: Vec<ObjRef> = bookmarks.iter().map(|_| doc.add(Object::Null)).collect();
+        for (i, (r, a)) in items.iter().zip(bookmarks).enumerate() {
+            let mut item = Dict::new();
+            item.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(format!("Item {i}").into_bytes())));
+            item.set(b"Parent".to_vec(), Object::Ref(outlines));
+            item.set(b"A".to_vec(), a.clone());
+            if let Some(n) = items.get(i + 1) {
+                item.set(b"Next".to_vec(), Object::Ref(*n));
+            }
+            doc.set(*r, Object::Dict(item));
+        }
+        let mut o = Dict::new();
+        if let (Some(first), Some(last)) = (items.first(), items.last()) {
+            o.set(b"First".to_vec(), Object::Ref(*first));
+            o.set(b"Last".to_vec(), Object::Ref(*last));
+        }
+        doc.set(outlines, Object::Dict(o));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Outlines".to_vec(), Object::Ref(outlines))).unwrap();
+        (doc, p, items)
+    }
+
+    fn annots_of(doc: &Document, p: ObjRef) -> Vec<Dict> {
+        let annots = doc.get(p).as_dict().unwrap().get(b"Annots").cloned().unwrap();
+        doc.resolve(&annots).as_array().unwrap().iter().map(|a| doc.resolve(a).as_dict().unwrap().clone()).collect()
+    }
+
+    #[test]
+    fn links_and_bookmarks_to_other_documents_are_discarded_and_links_within_stay() {
+        let (doc, p, items) = linked_doc(
+            |doc, p| {
+                let here = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+                let mut goto = Dict::new();
+                goto.set(b"S".to_vec(), Object::name("GoTo"));
+                goto.set(b"D".to_vec(), here.clone());
+                let remote = doc.add(link_with(Some(action("GoToR", None)), None));
+                vec![
+                    Object::Ref(remote),
+                    link_with(Some(action("Launch", None)), None),
+                    link_with(Some(action("GoToE", None)), None),
+                    link_with(Some(action("URI", None)), None),
+                    link_with(Some(Object::Dict(goto)), None),
+                    link_with(None, Some(here)),
+                    link_with(Some(action("GoToR", Some(action("URI", None)))), None),
+                ]
+            },
+            &[action("GoToR", None), action("Named", None)],
+        );
+        let on = Settings { discard_external_refs: true, ..Settings::default() };
+        // Off by default: nothing changes.
+        let mut off = doc.clone();
+        let report = optimize(&mut off, &Settings::default()).unwrap();
+        assert_eq!((report.external_links, report.external_bookmarks), (0, 0));
+        assert_eq!(annots_of(&off, p).len(), 7);
+        let mut doc = doc;
+        let report = optimize(&mut doc, &on).unwrap();
+        assert_eq!((report.external_links, report.external_bookmarks, report.invalid_links), (4, 1, 0), "{report:?}");
+        let left: Vec<Vec<String>> = annots_of(&doc, p).iter().map(|d| d.get(b"A").map(|a| chain(&doc, a)).unwrap_or_default()).collect();
+        assert_eq!(
+            left,
+            [vec!["URI"], vec!["GoTo"], vec![], vec!["URI"]],
+            "the web link, the jump within and the /Dest link stay; the chained web link keeps its URI"
+        );
+        assert!(annots_of(&doc, p)[2].get(b"Dest").is_some());
+        let bookmark = |doc: &Document, r: ObjRef| doc.get(r).as_dict().unwrap().clone();
+        assert!(bookmark(&doc, items[0]).get(b"A").is_none(), "the bookmark stays, without its action");
+        assert_eq!(bookmark(&doc, items[0]).get(b"Next"), Some(&Object::Ref(items[1])), "and its place in the outline");
+        assert_eq!(chain(&doc, bookmark(&doc, items[1]).get(b"A").unwrap()), ["Named"]);
+    }
+
+    #[test]
+    fn discarding_a_remote_action_keeps_the_links_local_destination() {
+        let (mut doc, p, _) =
+            linked_doc(|_, p| vec![link_with(Some(action("GoToR", None)), Some(Object::Array(vec![Object::Ref(p), Object::name("Fit")])))], &[]);
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1);
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let links = annots_of(&reopened, p);
+        assert_eq!(links.len(), 1);
+        assert!(links[0].get(b"A").is_none());
+        assert_eq!(links[0].get(b"Dest"), Some(&Object::Array(vec![Object::Ref(p), Object::name("Fit")])));
+    }
+
+    #[test]
+    fn repeated_indirect_remote_link_is_removed_from_one_page() {
+        let (mut doc, p, _) = linked_doc(
+            |doc, _| {
+                let link = doc.add(link_with(Some(action("GoToR", None)), None));
+                vec![Object::Ref(link), Object::Ref(link)]
+            },
+            &[],
+        );
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        assert!(annots_of(&doc, p).is_empty(), "both references leave the page");
+    }
+
+    #[test]
+    fn shared_indirect_remote_link_with_empty_next_is_removed_from_every_page() {
+        let (mut doc, first, items) = linked_doc(|_, _| Vec::new(), &[action("Named", None), action("GoToR", None)]);
+        let second = page(&mut doc, &[], "BT ET");
+        let link = doc.add(link_with(Some(action("GoToR", Some(Object::Array(vec![Object::Null])))), None));
+        for p in [first, second] {
+            doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+        }
+        doc.update_dict(items[0], |d| d.set(b"First".to_vec(), Object::Ref(items[1]))).unwrap();
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        assert_eq!(report.external_bookmarks, 1, "{report:?}");
+        assert!(doc.get(items[1]).as_dict().unwrap().get(b"A").is_none(), "the shared bookmark has no action");
+        assert!(annots_of(&doc, first).is_empty(), "the first page loses the link");
+        assert!(annots_of(&doc, second).is_empty(), "the second page loses the link");
+        assert!(doc.get(link).as_dict().unwrap().get(b"A").is_none(), "the shared link has no action");
+    }
+
+    #[test]
+    fn an_action_to_another_document_hands_its_place_to_the_actions_after_it() {
+        let (doc, p, _) = linked_doc(
+            |doc, p| {
+                let here = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+                // A shared Launch, stored on its own with an indirect /S, followed by a web link.
+                let launch_name = doc.add(Object::name("Launch"));
+                let Object::Dict(mut launch) = action("Launch", Some(action("URI", None))) else { panic!("action() builds a dictionary") };
+                launch.set(b"S".to_vec(), Object::Ref(launch_name));
+                let launch = doc.add(Object::Dict(launch));
+                let mut goto = Dict::new();
+                goto.set(b"S".to_vec(), Object::name("GoTo"));
+                goto.set(b"D".to_vec(), here);
+                goto.set(
+                    b"Next".to_vec(),
+                    Object::Array(vec![action("GoToR", Some(action("JavaScript", None))), Object::Ref(launch), action("Named", None)]),
+                );
+                // A remote go-to whose web link comes back to it.
+                let (a1, a2) = (doc.add(Object::Null), doc.add(Object::Null));
+                doc.set(a1, action("GoToR", Some(Object::Ref(a2))));
+                doc.set(a2, action("URI", Some(Object::Ref(a1))));
+                // A remote go-to that leads a list: the rest follow the first action left.
+                let list = action("GoToR", Some(Object::Array(vec![action("SubmitForm", Some(action("Named", None))), action("URI", None)])));
+                vec![
+                    link_with(Some(Object::Dict(goto)), None),
+                    link_with(Some(Object::Ref(a1)), None),
+                    link_with(Some(list), None),
+                    link_with(Some(Object::Ref(launch)), None),
+                ]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 4, "{report:?}");
+        let left: Vec<Vec<String>> = annots_of(&doc, p).iter().map(|d| chain(&doc, d.get(b"A").unwrap())).collect();
+        assert_eq!(
+            left,
+            [vec!["GoTo", "JavaScript", "URI", "Named"], vec!["URI"], vec!["SubmitForm", "Named", "URI"], vec!["URI"]],
+            "the actions after a removed one run in their order, and a chain that comes back ends there"
+        );
+    }
+
+    #[test]
+    fn entries_that_are_not_actions_do_not_take_the_place_of_a_removed_action() {
+        let (doc, p, items) = linked_doc(
+            |doc, _| {
+                // A null, then a reference to an empty object, before the web link.
+                let empty = doc.add(Object::Null);
+                let next = Object::Array(vec![Object::Null, Object::Ref(empty), action("URI", None), Object::Null]);
+                vec![link_with(Some(action("GoToR", Some(next))), None)]
+            },
+            &[
+                action("Launch", Some(Object::Array(vec![Object::Null, action("URI", None)]))),
+                action("GoToR", Some(Object::Array(vec![Object::Null, Object::Null]))),
+            ],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!((report.external_links, report.external_bookmarks), (1, 2), "{report:?}");
+        let links = annots_of(&doc, p);
+        assert_eq!(links.len(), 1, "the link keeps its web link, so it stays on the page");
+        assert_eq!(chain(&doc, links[0].get(b"A").unwrap()), ["URI"]);
+        let bookmark = |r: ObjRef| doc.get(r).as_dict().unwrap().clone();
+        assert_eq!(chain(&doc, bookmark(items[0]).get(b"A").unwrap()), ["URI"]);
+        assert!(bookmark(items[1]).get(b"A").is_none(), "a chain of nulls alone leaves no action");
+    }
+
+    #[test]
+    fn a_chain_deeper_than_the_limit_loses_its_tail_and_one_without_a_remote_action_stays() {
+        let deep = |n: usize, last: &str| (0..n).fold(action(last, None), |next, _| action("URI", Some(next)));
+        let (doc, p, _) = linked_doc(|_, _| vec![link_with(Some(deep(600, "GoToR")), None), link_with(Some(deep(600, "Named")), None)], &[]);
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let left: Vec<Vec<String>> = annots_of(&doc, p).iter().map(|d| chain(&doc, d.get(b"A").unwrap())).collect();
+        assert!(left[0].len() < 600 && left[0].iter().all(|s| s == "URI"), "cut before the remote go-to: {} actions", left[0].len());
+        assert_eq!(left[1].len(), 601, "a deep chain with nothing to remove is kept whole");
+    }
+
+    #[test]
+    fn a_long_chain_of_indirect_actions_stays_indirect_and_reads_back_after_saving() {
+        // 130 indirect web links, then a remote go-to: the parser reads at most 128 nested levels.
+        let mut tail = None;
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let mut r = doc.add(action("GoToR", None));
+                for _ in 0..130 {
+                    r = doc.add(action("URI", Some(Object::Ref(r))));
+                }
+                tail = Some(r);
+                vec![link_with(Some(Object::Ref(r)), None)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let a = annots_of(&doc, p)[0].get(b"A").cloned().unwrap();
+        assert!(matches!(a, Object::Ref(r) if Some(r) != tail), "a new indirect action: {a:?}");
+        let old = Object::Ref(tail.unwrap());
+        assert_eq!(chain(&doc, &old).last().map(String::as_str), Some("GoToR"), "the old chain is not edited");
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let a = annots_of(&reopened, p)[0].get(b"A").cloned().unwrap();
+        assert_eq!(chain(&reopened, &a), vec!["URI"; 130], "every web link reads back");
+    }
+
+    #[test]
+    fn promoted_action_chains_read_back_after_saving() {
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let tail = (0..126).fold(action("Named", None), |next, _| action("Named", Some(next)));
+                let first = doc.add(tail);
+                let next = Object::Array(vec![Object::Ref(first), action("URI", None)]);
+                let link = doc.add(link_with(Some(action("GoToR", Some(next))), None));
+                vec![Object::Ref(link)]
+            },
+            &[],
+        );
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let mut doc = Document::open(Arc::new(bytes)).unwrap();
+        let original = annots_of(&doc, p)[0].get(b"A").cloned().unwrap();
+        assert_eq!(chain(&doc, &original).len(), 129);
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1);
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let a = annots_of(&reopened, p)[0].get(b"A").cloned().unwrap();
+        let expected: Vec<_> = std::iter::repeat_n("Named".to_string(), 127).chain(["URI".to_string()]).collect();
+        assert_eq!(chain(&reopened, &a), expected);
+    }
+
+    #[test]
+    fn shared_actions_that_multiply_stop_the_optimization_when_one_opens_another_document() {
+        use pdfcraft_optimize::OptimizeError;
+        // Forty levels of indirect actions, each listing the next level twice: 2^40 paths.
+        let shared = |doc: &mut Document, last: &str| {
+            let mut r = doc.add(action(last, None));
+            for _ in 0..40 {
+                r = doc.add(action("URI", Some(Object::Array(vec![Object::Ref(r), Object::Ref(r)]))));
+            }
+            r
+        };
+        let mut link = None;
+        let (doc, _, _) = linked_doc(
+            |doc, _| {
+                let a = shared(doc, "GoToR");
+                let r = doc.add(link_with(Some(Object::Ref(a)), None));
+                link = Some(r);
+                vec![Object::Ref(r)]
+            },
+            &[],
+        );
+        let on = Settings { discard_external_refs: true, ..Settings::default() };
+        let r = optimize(&mut doc.clone(), &on);
+        assert!(matches!(r, Err(OptimizeError::ExternalRefLimit(o)) if Some(o) == link), "{r:?}");
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let a = shared(doc, "Named");
+                vec![link_with(Some(Object::Ref(a)), None)]
+            },
+            &[],
+        );
+        let before = annots_of(&doc, p);
+        let mut doc = doc;
+        let report = optimize(&mut doc, &on).unwrap();
+        assert_eq!(report.external_links, 0, "{report:?}");
+        assert_eq!(annots_of(&doc, p), before, "nothing to remove, however the actions are shared");
+    }
+
+    #[test]
+    fn a_shared_chain_without_remote_actions_is_looked_at_once() {
+        // 600 levels that each list a 2,000-action chain of web links sixty times, then a remote go-to.
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let mut g = doc.add(action("URI", None));
+                for _ in 0..2_000 {
+                    g = doc.add(action("URI", Some(Object::Ref(g))));
+                }
+                let a = (0..600).fold(action("GoToR", None), |next, _| {
+                    let mut list = vec![Object::Ref(g); 60];
+                    list.push(next);
+                    action("URI", Some(Object::Array(list)))
+                });
+                vec![link_with(Some(a), None)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let left = annots_of(&doc, p);
+        assert!(!chain(&doc, left[0].get(b"A").unwrap()).iter().any(|s| s == "GoToR"));
+    }
+
+    #[test]
+    fn a_link_named_through_an_indirect_subtype_is_discarded_and_a_form_field_keeps_its_action() {
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let name = doc.add(Object::name("Link"));
+                let Object::Dict(mut indirect) = link_with(Some(action("GoToR", None)), None) else { panic!("link_with() builds a dictionary") };
+                indirect.set(b"Subtype".to_vec(), Object::Ref(name));
+                let Object::Dict(mut widget) = link_with(Some(action("GoToR", None)), None) else { panic!("link_with() builds a dictionary") };
+                widget.set(b"Subtype".to_vec(), Object::name("Widget"));
+                vec![Object::Dict(indirect), Object::Dict(widget)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let left = annots_of(&doc, p);
+        assert_eq!(left.len(), 1, "the link goes");
+        assert_eq!(left[0].name(b"Subtype"), Some(&b"Widget"[..]));
+        assert_eq!(chain(&doc, left[0].get(b"A").unwrap()), ["GoToR"], "the form field keeps its action");
+    }
+
+    #[test]
+    fn thread_actions_into_another_file_and_data_imports_are_discarded_and_threads_here_stay() {
+        let with_file = |s: &str| {
+            let Object::Dict(mut d) = action(s, None) else { panic!("action() builds a dictionary") };
+            d.set(b"F".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"other.pdf".to_vec())));
+            d.set(b"D".to_vec(), Object::Int(0));
+            Object::Dict(d)
+        };
+        let here = {
+            let Object::Dict(mut d) = action("Thread", None) else { panic!("action() builds a dictionary") };
+            d.set(b"D".to_vec(), Object::Int(0));
+            Object::Dict(d)
+        };
+        let (doc, p, _) = linked_doc(
+            |_, _| {
+                vec![link_with(Some(with_file("Thread")), None), link_with(Some(here.clone()), None), link_with(Some(with_file("ImportData")), None)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 2, "{report:?}");
+        let left = annots_of(&doc, p);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].get(b"A"), Some(&here), "the thread in this document stays");
+    }
+
+    #[test]
+    fn an_outline_over_the_limit_stops_the_optimization() {
+        use pdfcraft_optimize::OptimizeError;
+        let bookmarks = vec![action("Named", None); 100_001];
+        let (doc, _, _) = linked_doc(|_, _| Vec::new(), &bookmarks);
+        let r = optimize(&mut doc.clone(), &Settings { discard_external_refs: true, ..Settings::default() });
+        assert!(matches!(r, Err(OptimizeError::ExternalRefLimit(_))), "{r:?}");
+    }
+
+    #[test]
+    fn bookmarks_stored_inside_other_bookmarks_lose_their_actions_too() {
+        let (mut doc, _, _) = linked_doc(|_, _| Vec::new(), &[]);
+        let bookmark = |title: &str, a: Object| {
+            let mut d = Dict::new();
+            d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(title.as_bytes().to_vec())));
+            d.set(b"A".to_vec(), a);
+            d
+        };
+        let third = doc.add(Object::Dict(bookmark("C", action("GoToR", None))));
+        let mut second = bookmark("B", action("Launch", None));
+        second.set(b"First".to_vec(), Object::Ref(third));
+        let mut first = bookmark("A", action("GoToR", Some(action("Named", None))));
+        first.set(b"Next".to_vec(), Object::Dict(second));
+        let mut outlines = Dict::new();
+        outlines.set(b"First".to_vec(), Object::Dict(first));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Outlines".to_vec(), Object::Dict(outlines))).unwrap();
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_bookmarks, 3, "{report:?}");
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        let first = catalog.get(b"Outlines").and_then(Object::as_dict).and_then(|o| o.get(b"First")).and_then(Object::as_dict).cloned().unwrap();
+        assert_eq!(chain(&doc, first.get(b"A").unwrap()), ["Named"]);
+        let second = first.get(b"Next").and_then(Object::as_dict).cloned().unwrap();
+        assert!(second.get(b"A").is_none());
+        assert!(doc.get(third).as_dict().unwrap().get(b"A").is_none());
+    }
+
+    #[test]
+    fn a_removed_link_kept_by_the_structure_tree_reads_back_without_its_action() {
+        let mut link = None;
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let r = doc.add(link_with(Some(action("GoToR", None)), None));
+                link = Some(r);
+                vec![Object::Ref(r)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let mut objr = Dict::new();
+        objr.set(b"Type".to_vec(), Object::name("OBJR"));
+        objr.set(b"Obj".to_vec(), Object::Ref(link.unwrap()));
+        objr.set(b"Pg".to_vec(), Object::Ref(p));
+        let mut element = Dict::new();
+        element.set(b"S".to_vec(), Object::name("Link"));
+        element.set(b"K".to_vec(), Object::Dict(objr));
+        let mut tree = Dict::new();
+        tree.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
+        tree.set(b"K".to_vec(), Object::Dict(element));
+        let tree = doc.add(Object::Dict(tree));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"StructTreeRoot".to_vec(), Object::Ref(tree))).unwrap();
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        assert!(annots_of(&doc, p).is_empty(), "the link leaves its page");
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let catalog = reopened.get(reopened.root().unwrap()).as_dict().cloned().unwrap();
+        let tree = reopened.dict(catalog.get(b"StructTreeRoot").unwrap()).unwrap();
+        let element = reopened.dict(tree.get(b"K").unwrap()).unwrap();
+        let objr = reopened.dict(element.get(b"K").unwrap()).unwrap();
+        let kept = reopened.dict(objr.get(b"Obj").unwrap()).unwrap();
+        assert_eq!(kept.name(b"Subtype"), Some(&b"Link"[..]));
+        assert!(kept.get(b"A").is_none(), "the link's object holds no action to another document: {kept:?}");
+    }
+}
+
 #[test]
 fn progress_is_reported_per_image_and_a_refusal_cancels() {
     use pdfcraft_optimize::{OptimizeError, Stage, optimize_with_progress};
@@ -3986,6 +4490,135 @@ fn named_dest_keys(doc: &Document) -> Vec<Vec<u8>> {
     arr.chunks(2).filter_map(|c| doc.resolve(&c[0]).as_string().map(|s| s.bytes.clone())).collect()
 }
 
+/// A `/PieceInfo` data dictionary holding `private`.
+fn app_data(private: Object) -> Object {
+    let mut d = Dict::new();
+    d.set(b"LastModified".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"D:20260101000000Z".to_vec())));
+    d.set(b"Private".to_vec(), private);
+    Object::Dict(d)
+}
+
+fn marked(doc: &mut Document, marker: &str, extra: &[(&str, Object)]) -> ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Marker".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(marker.as_bytes().to_vec())));
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    doc.add(Object::Dict(d))
+}
+
+fn saved(doc: &Document) -> Vec<u8> {
+    write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap()
+}
+
+fn contains(bytes: &[u8], text: &str) -> bool {
+    bytes.windows(text.len()).any(|w| w == text.as_bytes())
+}
+
+#[test]
+fn search_indexes_in_the_catalog_go_and_other_application_data_stays() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    // The first index holds two objects that refer to each other, and one the page also uses.
+    let shared = marked(&mut doc, "SHARED-DATA", &[]);
+    let a = marked(&mut doc, "INDEX-A", &[("Shared", Object::Ref(shared))]);
+    let b = marked(&mut doc, "INDEX-B", &[("Next", Object::Ref(a))]);
+    doc.update_dict(a, |d| d.set(b"Next".to_vec(), Object::Ref(b))).unwrap();
+    let c = marked(&mut doc, "INDEX-C", &[]);
+    let keep = marked(&mut doc, "KEEP-APP", &[]);
+    let mut info = Dict::new();
+    info.set(b"IBM-ODIndexes".to_vec(), app_data(Object::Ref(a)));
+    info.set(b"MySearchINDEX".to_vec(), app_data(Object::Ref(c)));
+    info.set(b"Illustrator".to_vec(), app_data(Object::Ref(keep)));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Dict(info))).unwrap();
+    let mut page_info = Dict::new();
+    page_info.set(b"PageIndexer".to_vec(), app_data(Object::Ref(shared)));
+    doc.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Dict(page_info))).unwrap();
+
+    // Off by default: nothing changes.
+    let mut untouched = doc.clone();
+    assert!(!Settings::default().discard_search_index);
+    assert_eq!(optimize(&mut untouched, &Settings::default()).unwrap().search_indexes, 0);
+    let bytes = saved(&untouched);
+    assert!(["INDEX-A", "INDEX-B", "INDEX-C", "KEEP-APP"].iter().all(|m| contains(&bytes, m)));
+
+    let r = optimize(&mut doc, &Settings { discard_search_index: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.search_indexes, 2);
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let info = cat.get(b"PieceInfo").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!(info.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), vec![b"Illustrator".to_vec()]);
+    // The saved file leaves out the objects only the indexes held, the cycle included; the
+    // object the page also uses, the other application's data and the page's own entry stay.
+    let bytes = saved(&doc);
+    assert!(!["INDEX-A", "INDEX-B", "INDEX-C"].iter().any(|m| contains(&bytes, m)));
+    assert!(["SHARED-DATA", "KEEP-APP", "PageIndexer"].iter().all(|m| contains(&bytes, m)));
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let cat = reopened.get(reopened.root().unwrap()).as_dict().cloned().unwrap();
+    let info = reopened.dict(cat.get(b"PieceInfo").unwrap()).unwrap();
+    assert!(info.contains(b"Illustrator") && info.len() == 1);
+}
+
+#[test]
+fn an_indirect_piece_info_is_left_for_its_other_users() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let idx = marked(&mut doc, "INDEX-DATA", &[]);
+    let mut info = Dict::new();
+    info.set(b"Index".to_vec(), app_data(Object::Ref(idx)));
+    let info = doc.add(Object::Dict(info));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    doc.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    let settings = Settings { discard_search_index: true, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    // The catalog's only entry was an index, so /PieceInfo goes; the page keeps the shared one.
+    assert_eq!(r.search_indexes, 1);
+    assert!(!doc.get(root).as_dict().unwrap().contains(b"PieceInfo"));
+    assert!(doc.get(info).as_dict().unwrap().contains(b"Index"));
+    assert!(contains(&saved(&doc), "INDEX-DATA"));
+
+    // A /PieceInfo that is not a dictionary is left as it is.
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "BT ET");
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Int(7))).unwrap();
+    assert_eq!(optimize(&mut doc, &settings).unwrap().search_indexes, 0);
+    assert_eq!(doc.get(root).as_dict().unwrap().int(b"PieceInfo"), Some(7));
+}
+
+#[test]
+fn retained_deep_application_data_reads_back_after_discarding_an_index() {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "BT ET");
+    let deep = (0..127).fold(Object::Int(7), |child, _| {
+        let mut d = Dict::new();
+        d.set(b"Child".to_vec(), child);
+        Object::Dict(d)
+    });
+    let mut info = Dict::new();
+    info.set(b"Index".to_vec(), app_data(Object::Int(0)));
+    info.set(b"OtherApp".to_vec(), deep);
+    let info = doc.add(Object::Dict(info));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    let retained = |doc: &Document| {
+        let catalog = doc.get(doc.root().unwrap());
+        let info = doc.resolve(catalog.as_dict().unwrap().get(b"PieceInfo").unwrap());
+        let mut value = info.as_dict().unwrap().get(b"OtherApp").unwrap().clone();
+        for _ in 0..127 {
+            value = doc.resolve(&value).as_dict().unwrap().get(b"Child").unwrap().clone();
+        }
+        value
+    };
+    let mut doc = Document::open(Arc::new(saved(&doc))).unwrap();
+    assert_eq!(retained(&doc), Object::Int(7));
+    let report = optimize(&mut doc, &Settings { discard_search_index: true, ..Settings::default() }).unwrap();
+    assert_eq!(report.search_indexes, 1);
+    let reopened = Document::open(Arc::new(saved(&doc))).unwrap();
+    assert_eq!(retained(&reopened), Object::Int(7));
+}
+
 /// Page content long enough for LZW codes to grow past 9 bits, where `EarlyChange` matters.
 fn lzw_ops() -> Vec<u8> {
     (0..300).flat_map(|i| format!("{} {} m {} {} l S\n", i % 97, i * 7 % 389, i * 13 % 612, i * 31 % 792).into_bytes()).collect()
@@ -4682,6 +5315,32 @@ fn dictionary_destinations_broken_named_destinations_and_both_dest_tables() {
     assert_eq!(named_dest_keys(&doc), vec![b"dict_ok".to_vec()]);
     let left_old = doc.get(old_dests).as_dict().cloned().unwrap();
     assert!(left_old.contains(b"old_ok") && !left_old.contains(b"broken_old"), "{left_old:?}");
+}
+
+/// Recolouring keeps a picture's soft mask, but not a picture whose mask has a `/Matte`: that is
+/// a colour in the picture's own space.
+#[test]
+fn recolouring_keeps_soft_masks_and_leaves_matted_pictures() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    use pdfcraft_optimize::{ImageTarget, recolour_image};
+    let mut doc = Document::new_empty();
+    let picture = |mask| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(1));
+        d.set(b"Height".to_vec(), Object::Int(1));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::flate(d, &[255, 0, 0])
+    };
+    let plain = doc.add(Object::Stream(Stream::flate(Dict::new(), &[128])));
+    let new = recolour_image(&doc, &picture(plain), ImageTarget::Gray).unwrap();
+    assert_eq!(new.dict.get(b"SMask"), Some(&Object::Ref(plain)));
+    let mut matted = Dict::new();
+    matted.set(b"Matte".to_vec(), Object::Array(vec![Object::Int(0); 3]));
+    let matted = doc.add(Object::Stream(Stream::flate(matted, &[128])));
+    assert!(recolour_image(&doc, &picture(matted), ImageTarget::Gray).is_none());
 }
 
 /// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.

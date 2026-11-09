@@ -340,6 +340,7 @@ fn tool_input(
         by_line,
         can_crop,
         can_modify,
+        custom_line,
         custom_stamp,
         date_text,
         doc,
@@ -368,7 +369,7 @@ fn tool_input(
     }
     if let Some(cs) = custom_stamp.as_ref()
         && allowed
-        && crate::stamps_ui::place_custom(cx, cs, author, free, view)
+        && crate::stamps_ui::place_custom(cx, cs, custom_line, author, free, view)
     {
         frame.out.stamp_placed = true;
     }
@@ -445,7 +446,7 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
         };
-        comments::context(hits.pcx, comment, view);
+        comments::context(hits.pcx, p, comment, view);
     }
     if let Some(Owner::PrepareField { field, widget }) = context {
         crate::prepare::context(hits.form, field, widget, view);
@@ -869,6 +870,13 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
     }
 }
 
+/// Full screen is turning to the current page, or waiting for it to render: the page under the
+/// pointer isn't the one on screen, so its links, fields, text and comments take no input.
+/// Turning the page (a click, a key) is handled apart and still works.
+pub(super) fn veiled(view: &DocView) -> bool {
+    view.presentation.is_some() && !view.presenter.settled_on(view.current)
+}
+
 /// Everything drawn over the page after its text: pictures, comments, content, links, fields, marks
 /// and badges.
 pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
@@ -914,8 +922,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
-    // A cancelled press ends no selection: no markup or redaction is made from it.
-    if !view.press_cancelled {
+    // A cancelled press ends no selection: no markup or redaction is made from it, nor from a
+    // page full screen doesn't show yet.
+    if !view.press_cancelled && !veiled(view) {
         comments::page_after_text(resp, &pcx, view);
         if tool == QuickTool::Redact && can_modify {
             crate::redact_ui::after_text(resp, i, info, view);
